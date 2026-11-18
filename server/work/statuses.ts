@@ -77,6 +77,7 @@ export async function changeStatuses(
 
     checkNames(board);
     checkKinds(board, statuses);
+    await checkNoTicketsIn(tx, project, board);
     await checkOutcomeTargets(tx, project, board);
     await write(tx, clock, project, board);
     live.publish(tx, project.workspaceId, { type: "statuses.changed", projectId: project.id });
@@ -153,7 +154,8 @@ async function checkOutcomeTargets(tx: Tx, project: Project, board: Draft[]): Pr
   }
 }
 
-async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Promise<void> {
+/** A Status holding Tickets can't go: they'd be left without a Status. */
+async function checkNoTicketsIn(tx: Tx, project: Project, board: Draft[]): Promise<void> {
   const kept = board.flatMap((s) => (s.id ? [s.id] : []));
   const { rows: occupied } = await tx.query<{ name: string; ticketCount: number }>(
     `select statuses.name, count(*)::int as "ticketCount"
@@ -172,6 +174,10 @@ async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Pr
         : `${name} holds ${ticketCount} Tickets. Move them to another Status before removing ${name}.`,
     );
   }
+}
+
+async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Promise<void> {
+  const kept = board.flatMap((s) => (s.id ? [s.id] : []));
   // Steps go with their Statuses; removed first, so no Outcome of theirs is left targeting a removed Status.
   await tx.query("delete from steps where project_id = $1 and not (status_id = any($2::uuid[]))", [project.id, kept]);
   await tx.query("delete from statuses where project_id = $1 and not (id = any($2::uuid[]))", [project.id, kept]);

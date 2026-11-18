@@ -242,32 +242,32 @@ describe("removing a Status that holds Tickets", () => {
     const { cookie, project, statusId } = await newProject();
     for (const title of ["First", "Second"]) {
       const ticket = await createTicket(cookie, project.id, { title });
-      expect((await edit(cookie, ticket.id, { statusId: statusId("Investigate") })).status).toBe(200);
+      expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
     }
 
-    const refused = await removeStatus(cookie, project.id, statusId("Investigate"));
+    const refused = await removeStatus(cookie, project.id, statusId("Ready"));
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({
       error: {
         code: "status_has_tickets",
-        message: "Investigate holds 2 Tickets. Move them to another Status before removing Investigate.",
+        message: "Ready holds 2 Tickets. Move them to another Status before removing Ready.",
       },
     });
 
     const after = await cronk.request("GET", `/api/projects/${project.id}`, { cookie });
-    expect((await after.json()).statuses.map((s: { name: string }) => s.name)).toContain("Investigate");
-    expect(await ticketsIn(cookie, project.id, statusId("Investigate"))).toEqual(["First", "Second"]);
+    expect((await after.json()).statuses.map((s: { name: string }) => s.name)).toContain("Ready");
+    expect(await ticketsIn(cookie, project.id, statusId("Ready"))).toEqual(["First", "Second"]);
   });
 
   test("names a single Ticket in the singular", async () => {
     const { cookie, project, statusId } = await newProject();
     const ticket = await createTicket(cookie, project.id, { title: "Alone" });
-    expect((await edit(cookie, ticket.id, { statusId: statusId("Investigate") })).status).toBe(200);
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
 
-    const refused = await removeStatus(cookie, project.id, statusId("Investigate"));
+    const refused = await removeStatus(cookie, project.id, statusId("Ready"));
     expect(refused.status).toBe(409);
     expect((await refused.json()).error.message).toBe(
-      "Investigate holds 1 Ticket. Move it to another Status before removing Investigate.",
+      "Ready holds 1 Ticket. Move it to another Status before removing Ready.",
     );
   });
 
