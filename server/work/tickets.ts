@@ -41,6 +41,11 @@ export const TicketSummary = Type.Object({
   delegateId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Assignee's Agent the Ticket is delegated to; only a delegated Ticket gets Runs.",
   }),
+  autonomousDelegation: Type.Union([Type.Boolean(), Type.Null()], {
+    description:
+      "Whether a Step may complete the Ticket itself, as Unverified, instead of stopping for a User. Null until a User " +
+      "sets it or the Ticket is first delegated, when it takes its Project's default; Sub-Tickets take their parent's.",
+  }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Ticket this is a Sub-Ticket of, in the same Project.",
   }),
@@ -71,7 +76,8 @@ export type Ticket = Static<typeof Ticket>;
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
-  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId", tickets.parent_id as "parentId",
+  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId",
+  tickets.autonomous_delegation as "autonomousDelegation", tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
@@ -229,8 +235,8 @@ export async function createTicket(
          returning next_ticket_number - 1 as number
        )
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
-         assignee_id, delegate_id)
-       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9 from numbered
+         assignee_id, delegate_id, autonomous_delegation)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $10 from numbered
        returning id`,
       [
         project.workspaceId,
@@ -242,6 +248,8 @@ export async function createTicket(
         now,
         delegate ? userId : null,
         delegate,
+        // Delegated from the start, it takes its Project's Autonomous Delegation at once.
+        delegate ? project.autonomousDelegationDefault : null,
       ],
     );
     const ticket = (await findTicketRow(tx, userViewer(userId), rows[0]!.id))!;
@@ -316,6 +324,7 @@ export interface TicketEdit {
   labels?: string[];
   assigneeId?: string | null;
   delegateId?: string | null;
+  autonomousDelegation?: boolean;
   dueDate?: string | null;
   estimate?: number | null;
   statusId?: string;
@@ -379,13 +388,31 @@ export async function editTicket(
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
     }
+    if (edit.autonomousDelegation !== undefined) {
+      await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
+    } else {
+      // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
+      const inherited = next.parentId !== ticket.parentId && next.parentId !== null
+        ? await autonomousDelegationOf(tx, next.parentId)
+        : null;
+      if (inherited !== null) {
+        await change("autonomousDelegation", "autonomousDelegation", inherited);
+      } else if (next.delegateId !== null && next.autonomousDelegation === null) {
+        const { rows } = await tx.query<{ value: boolean }>(
+          "select autonomous_delegation_default as value from projects where id = $1",
+          [ticket.projectId],
+        );
+        await change("autonomousDelegation", "autonomousDelegation", rows[0]!.value);
+      }
+    }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11 where id = $1`,
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11, autonomous_delegation = $12
+       where id = $1`,
       [
         ticket.id,
         next.title,
@@ -398,6 +425,7 @@ export async function editTicket(
         next.statusId,
         next.parentId,
         next.delegateId,
+        next.autonomousDelegation,
       ],
     );
     const now = clock.now();
@@ -418,12 +446,54 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
+    if (next.autonomousDelegation !== ticket.autonomousDelegation && next.autonomousDelegation !== null) {
+      await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
+    }
     // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
     const entered = next.statusId !== ticket.statusId;
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
     if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, next);
   });
+}
+
+async function autonomousDelegationOf(tx: Tx, ticketId: string): Promise<boolean | null> {
+  const { rows } = await tx.query<{ value: boolean | null }>(
+    "select autonomous_delegation as value from tickets where id = $1",
+    [ticketId],
+  );
+  return rows[0]?.value ?? null;
+}
+
+/** Gives the Ticket's Sub-Tickets, however deep, its Autonomous Delegation, recording a Change on each that differed. */
+async function passAutonomousDelegationDown(
+  { live }: Context,
+  tx: Tx,
+  ticket: TicketRow,
+  value: boolean,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const { rows } = await tx.query<{ id: string; from: boolean | null }>(
+    `with recursive descendants (id) as (
+       select id from tickets where parent_id = $1
+       union
+       select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
+     ),
+     changed as (
+       select tickets.id, tickets.autonomous_delegation as from from tickets join descendants using (id)
+       where tickets.autonomous_delegation is distinct from $2
+       for update of tickets
+     )
+     update tickets set autonomous_delegation = $2 from changed where tickets.id = changed.id
+     returning tickets.id, changed.from`,
+    [ticket.id, value],
+  );
+  for (const row of rows) {
+    const subTicket = { id: row.id, workspaceId: ticket.workspaceId };
+    await recordChanges(tx, subTicket, userId, now, [{ field: "autonomousDelegation", from: row.from, to: value }]);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: row.id });
+  }
 }
 
 /** A Status or User, looked up by the query, as `{ id, name }` as it is named now; or null for no id. */

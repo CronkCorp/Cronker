@@ -22,6 +22,7 @@ export const changeFields = [
   "blockedBy",
   "relatesTo",
   "delegate",
+  "autonomousDelegation",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 

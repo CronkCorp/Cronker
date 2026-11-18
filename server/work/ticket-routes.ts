@@ -139,6 +139,13 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
                 }),
               ),
             ),
+            autonomousDelegation: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Lets a Step complete the Ticket itself, as Unverified, or stops that. Only Users set it; " +
+                  "its Sub-Tickets take it too.",
+              }),
+            ),
             dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
             estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
             statusId: Type.Optional(
