@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   api,
   priorities,
@@ -17,7 +17,16 @@ import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 
 /** A Ticket: its fields, its description, its Comments and its timeline of Changes. */
-export function TicketScreen({ workspace, ticketId }: { workspace: Workspace; ticketId: string }) {
+export function TicketScreen({
+  workspace,
+  ticketId,
+  onOtherWorkspace,
+}: {
+  workspace: Workspace;
+  ticketId: string;
+  /** Offered a Ticket of another Workspace; returns whether the screen switches to that Workspace. */
+  onOtherWorkspace?: (workspaceId: string) => boolean;
+}) {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -25,6 +34,8 @@ export function TicketScreen({ workspace, ticketId }: { workspace: Workspace; ti
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const otherWorkspace = useRef(onOtherWorkspace);
+  otherWorkspace.current = onOtherWorkspace;
 
   const loadTimeline = useCallback(() => api.timeline(ticketId).then(setTimeline), [ticketId]);
 
@@ -33,7 +44,10 @@ export function TicketScreen({ workspace, ticketId }: { workspace: Workspace; ti
     api.ticket(ticketId).then(async (found) => {
       const ticketProject = await api.project(found.projectId);
       // A Ticket of another of the User's Workspaces isn't shown under this one's name.
-      if (ticketProject.workspaceId !== workspace.id) return setFailure("No such Ticket.");
+      if (ticketProject.workspaceId !== workspace.id) {
+        if (!otherWorkspace.current?.(ticketProject.workspaceId)) setFailure("No such Ticket.");
+        return;
+      }
       setProject(ticketProject);
       setTicket(found);
     }, fail);
@@ -165,9 +179,9 @@ function Fields({
           onChange={(e) => void onSave({ assigneeId: e.target.value || null })}
         >
           <option value="">Nobody</option>
-          {members.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.name}
+          {members.map(({ user }) => (
+            <option key={user.id} value={user.id}>
+              {user.email}
             </option>
           ))}
         </select>

@@ -13,6 +13,16 @@ Open the public address, enter the setup code from the log, and create the first
 
 Cronk itself doesn't need Docker: it is a Node.js (22+) server and a Postgres (16+) database. `npm ci && npm run build && npm start` runs it anywhere, configured by the same environment variables.
 
+### When nobody can sign in
+
+A server command prints a one-time password reset link for any User, valid 7 days:
+
+```sh
+docker compose exec cronk node dist/server/command.js reset-link ada@example.com
+```
+
+Without Docker, run `npm run command -- reset-link ada@example.com` with the server's environment variables.
+
 ### Configuration
 
 | Variable | Required | Meaning |

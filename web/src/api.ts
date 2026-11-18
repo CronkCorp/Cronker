@@ -16,6 +16,23 @@ export interface Workspace {
   name: string;
 }
 
+export interface Member {
+  user: User;
+  isAdmin: boolean;
+}
+
+export interface Link {
+  url: string;
+  expiresAt: string;
+}
+
+export interface LinkDetails {
+  kind: "join" | "reset";
+  email: string;
+  workspace: Workspace | null;
+  setsPassword: boolean;
+}
+
 export type StatusKind = "backlog" | "active" | "review" | "done" | "canceled";
 
 export const statusKinds: { kind: StatusKind; label: string }[] = [
@@ -41,12 +58,6 @@ export interface ProjectSummary {
 
 export interface Project extends ProjectSummary {
   statuses: Status[];
-}
-
-export interface Member {
-  id: string;
-  name: string;
-  isAdmin: boolean;
 }
 
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
@@ -162,7 +173,20 @@ export const api = {
   signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password }),
   signOut: () => call<void>("DELETE", "/api/sign-in"),
   me: () => call<{ user: User; workspaces: WorkspaceSummary[] }>("GET", "/api/me"),
-  workspace: (id: string) => call<Workspace>("GET", `/api/workspaces/${encodeURIComponent(id)}`),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
+  workspace: (id: string) => call<Workspace>("GET", ws(id)),
+  createWorkspace: (name: string) => call<WorkspaceSummary>("POST", "/api/workspaces", { name }),
+  renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
+  members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
+  addMember: (id: string, email: string) =>
+    call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email }),
+  setAdmin: (id: string, userId: string, isAdmin: boolean) =>
+    call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
+  removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
+  resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
+  lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
+  useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
   projects: (workspaceId: string) =>
     call<ProjectSummary[]>("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`),
   createProject: (workspaceId: string, input: { name: string; key: string }) =>
@@ -178,7 +202,6 @@ export const api = {
     ),
   removeStatus: (projectId: string, statusId: string) =>
     call<Project>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`),
-  members: (workspaceId: string) => call<Member[]>("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/members`),
   tickets: (projectId: string, filter: TicketFilter = {}) => {
     const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value));
     const search = query.size ? `?${query}` : "";
@@ -193,3 +216,7 @@ export const api = {
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
+
+function ws(id: string) {
+  return `/api/workspaces/${encodeURIComponent(id)}`;
+}

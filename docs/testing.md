@@ -24,10 +24,11 @@ What a seam can't see, such as that only hashes of secrets are stored, is kept b
   - `request(method, path, { body, cookie, origin, headers })`: a `fetch` against it. It sends no `Origin` unless asked, like a non-browser client.
   - `clock`: the test's clock (below).
   - `logs` and `setupCode()`: everything Cronk logged, and the setup code a fresh installation logs.
+  - `command(...args)`: runs a server command (`server/command.ts`) in a child process against this Cronk's database, as an operator would, and returns its exit code, stdout and stderr.
   - `stop()`: closes Cronk and drops its database. Call it in `afterEach`.
 - **Disposable Postgres per test** (`database.ts`). Each `startCronk()` copies a fresh database from a migrated template (`create database … template …`), so tests share nothing and none pays for migrations. The template's name carries a hash of `migrations/`, so changing a migration builds a new template on the next run.
 - **The injectable clock** (`clock.ts`). Cronk reads the time only through its `Clock`. `TestClock` starts at a fixed instant and moves only on `clock.advance(ms)`; `days(n)` helps. Use it for anything that expires.
-- **Flows** (`flows.ts`): `setUp(cronk)` and `signIn(cronk)` for tests whose subject comes after them. Keep them few; a test about setup or sign-in itself spells the requests out.
+- **Flows** (`flows.ts`): `setUp(cronk)`, `signIn(cronk)` and `addMember(cronk, adminCookie, workspaceId, email)` (added by email, joined through the link, signed in) for tests whose subject comes after them. Keep them few; a test about setup or sign-in itself spells the requests out.
 
 Faults and external services are staged through the harness, never by mocking Cronk's own modules: later tickets add the fake Runner and stand-in HTTP servers as `startCronk` options.
 

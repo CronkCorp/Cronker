@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ComponentProps, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent } from "react";
 import {
   api,
   priorities,
@@ -78,17 +78,33 @@ type View = "board" | "list" | "settings";
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
 /** A Project of the Workspace on screen, as a board, as a list, or its settings. */
-export function ProjectScreen({ workspace, projectId, view }: { workspace: Workspace; projectId: string; view: View }) {
+export function ProjectScreen({
+  workspace,
+  projectId,
+  view,
+  onOtherWorkspace,
+}: {
+  workspace: Workspace;
+  projectId: string;
+  view: View;
+  /** Offered a Project of another Workspace; returns whether the screen switches to that Workspace. */
+  onOtherWorkspace?: (workspaceId: string) => boolean;
+}) {
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
   const [filter, setFilter] = useState<TicketFilter>({});
   const [failure, setFailure] = useState<string | null>(null);
+  const otherWorkspace = useRef(onOtherWorkspace);
+  otherWorkspace.current = onOtherWorkspace;
 
   useEffect(() => {
     api.project(projectId).then(
       // A Project of another of the User's Workspaces isn't shown under this one's name.
-      (found) => (found.workspaceId === workspace.id ? setProject(found) : setFailure("No such Project.")),
+      (found) => {
+        if (found.workspaceId === workspace.id) setProject(found);
+        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Project.");
+      },
       (e: Error) => setFailure(e.message),
     );
     api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
@@ -201,9 +217,9 @@ function Filters({
         <select value={filter.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || undefined })}>
           <option value="">Anyone</option>
           <option value="none">Nobody</option>
-          {members.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.name}
+          {members.map(({ user }) => (
+            <option key={user.id} value={user.id}>
+              {user.email}
             </option>
           ))}
         </select>
@@ -239,11 +255,11 @@ function TicketItem({
   members: Member[];
   draggable?: boolean;
 }) {
-  const assignee = members.find((m) => m.id === ticket.assigneeId);
+  const assignee = members.find((m) => m.user.id === ticket.assigneeId)?.user;
   const details = [
     ticket.priority === "none" ? null : priorityLabel(ticket.priority),
     ...ticket.labels,
-    assignee?.name,
+    assignee?.email,
   ].filter(Boolean);
   return (
     <Link

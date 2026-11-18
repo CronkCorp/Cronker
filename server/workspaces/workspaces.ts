@@ -1,9 +1,12 @@
 import { Type, type Static } from "typebox";
-import type { Db } from "../db.js";
+import { transaction, type Db } from "../db.js";
+import type { Clock } from "../clock.js";
 import { isUuid } from "../http/ids.js";
 
 export const Workspace = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
 export type Workspace = Static<typeof Workspace>;
+
+export const WorkspaceName = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 
 export const Membership = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -35,20 +38,27 @@ export async function findWorkspace(db: Db, userId: string, workspaceId: string)
   return rows[0];
 }
 
-export const Member = Type.Object({
-  id: Type.String({ format: "uuid" }),
-  name: Type.String({ description: "How to show the User: their email." }),
-  isAdmin: Type.Boolean(),
-});
-export type Member = Static<typeof Member>;
+/** Creates a Workspace with the User as its first Admin. */
+export async function createWorkspace(db: Db, clock: Clock, userId: string, name: string): Promise<Membership> {
+  return transaction(db, async (tx) => {
+    const now = clock.now();
+    const { rows } = await tx.query<Workspace>(
+      "insert into workspaces (name, created_at) values ($1, $2) returning id, name",
+      [name.trim(), now],
+    );
+    const workspace = rows[0]!;
+    await tx.query(
+      "insert into memberships (workspace_id, user_id, is_admin, created_at) values ($1, $2, true, $3)",
+      [workspace.id, userId, now],
+    );
+    return { ...workspace, isAdmin: true };
+  });
+}
 
-/** The Users who belong to a Workspace. */
-export async function membersOf(db: Db, workspaceId: string): Promise<Member[]> {
-  const { rows } = await db.query<Member>(
-    `select users.id, users.email as name, memberships.is_admin as "isAdmin"
-     from memberships join users on users.id = memberships.user_id
-     where memberships.workspace_id = $1 order by lower(users.email), users.id`,
-    [workspaceId],
-  );
-  return rows;
+export async function renameWorkspace(db: Db, workspaceId: string, name: string): Promise<Workspace> {
+  const { rows } = await db.query<Workspace>("update workspaces set name = $1 where id = $2 returning id, name", [
+    name.trim(),
+    workspaceId,
+  ]);
+  return rows[0]!;
 }
