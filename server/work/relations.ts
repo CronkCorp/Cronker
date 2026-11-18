@@ -4,13 +4,18 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer, type Viewer } from "../identity/viewers.js";
+import type { AgentCaller, Caller } from "../identity/callers.js";
+import { ownerName } from "../agents/tokens.js";
 import { startUnblocked } from "../runs/runs.js";
-import { recordChanges } from "./changes.js";
+import { recordChanges, type ChangeActor } from "./changes.js";
 import {
   findTicketRef,
   findTicketRefByKey,
+  discoveringAgent,
+  holdsDiscoveredTicket,
   findTicketRow,
   ticketNotFound,
+  type TicketRow,
   TicketRef,
   ticketRefColumn,
   unknownTicket,
@@ -34,15 +39,21 @@ export const TicketRelations = Type.Object({
 });
 export type TicketRelations = Static<typeof TicketRelations>;
 
+/**
+ * Relates the Ticket to another of its Workspace. A User adds any Relation; an Agent only blocks from a Discovered
+ * Ticket it filed, until a User delegates, moves or dismisses it.
+ */
 export async function addRelation(
   context: Context,
-  userId: string,
+  caller: Caller,
   ticketId: string,
   input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string }),
 ): Promise<Relation> {
   return transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId);
+    const ticket = await findTicketRow(tx, caller, ticketId);
     if (!ticket) throw ticketNotFound();
+    if (caller.kind === "agent") checkAgentRelation(caller, ticket, input.kind);
+    const actor: ChangeActor = caller.kind === "user" ? caller.id : await discoveringAgent(tx, caller, ticket);
     const other =
       "ticketId" in input
         ? await findTicketRef(tx, ticket.workspaceId, input.ticketId)
@@ -58,17 +69,43 @@ export async function addRelation(
       );
     }
     const { rows } = await tx.query<{ id: string }>(
-      `insert into relations (workspace_id, kind, ticket_id, other_ticket_id, created_by, created_at)
-       values ($1, $2, $3, $4, $5, $6)
+      `insert into relations (workspace_id, kind, ticket_id, other_ticket_id, created_by, created_by_agent_id, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7)
        on conflict (kind, least(ticket_id, other_ticket_id), greatest(ticket_id, other_ticket_id)) do nothing
        returning id`,
-      [ticket.workspaceId, storedKind[input.kind], from, to, userId, context.clock.now()],
+      [
+        ticket.workspaceId,
+        storedKind[input.kind],
+        from,
+        to,
+        caller.kind === "user" ? caller.id : null,
+        caller.kind === "agent" ? caller.id : null,
+        context.clock.now(),
+      ],
     );
     if (!rows[0]) throw new ApiError(409, "relation_exists", "These Tickets already have that Relation.");
     const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
-    await recordRelationChanges(context, tx, ticket.workspaceId, userId, input.kind, self, other, "added");
+    await recordRelationChanges(context, tx, ticket.workspaceId, actor, input.kind, self, other, "added");
     return { id: rows[0]!.id, kind: input.kind, ticket: other };
   });
+}
+
+/** Refuses an Agent's Relation unless it blocks from a waiting Discovered Ticket the Agent filed. */
+function checkAgentRelation(agent: AgentCaller, ticket: TicketRow, kind: RelationKind): void {
+  if (!holdsDiscoveredTicket(agent, ticket)) {
+    throw new ApiError(403, "not_your_discovered_ticket", `${agent.name} didn't file ${ticket.key}, or a User has taken it up.`, {
+      rule:
+        "An Agent adds Relations only from a Discovered Ticket it filed, until a User delegates, moves or dismisses it; " +
+        "other Relations are for Users.",
+      advice: `Leave a Comment on ${ticket.key} asking ${ownerName(agent)}, ${agent.name}'s Owner, to relate it.`,
+    });
+  }
+  if (kind !== "blocks") {
+    throw new ApiError(403, "agent_adds_only_blocks", `${agent.name} is an Agent, and Agents add only blocks.`, {
+      rule: "From a Discovered Ticket it filed, an Agent adds blocks from it to other Tickets; other Relations are for Users.",
+      advice: `Add \`blocks\` from ${ticket.key} to the Ticket that waits on it, or leave a Comment instead.`,
+    });
+  }
 }
 
 /** How a Relation is stored: a block always from the blocking Ticket to the blocked one. */
@@ -120,7 +157,7 @@ async function recordRelationChanges(
   { clock, live }: Context,
   tx: Tx,
   workspaceId: string,
-  userId: string,
+  actor: ChangeActor,
   kind: RelationKind,
   ticket: TicketRef,
   other: TicketRef,
@@ -133,7 +170,7 @@ async function recordRelationChanges(
     [ticket, kind, other],
     [other, opposite[kind], ticket],
   ] as const) {
-    await recordChanges(tx, { id: one.id, workspaceId }, userId, at, [change(field, otherOne)]);
+    await recordChanges(tx, { id: one.id, workspaceId }, actor, at, [change(field, otherOne)]);
     live.publish(tx, workspaceId, { type: "ticket.changed", projectId: one.projectId, ticketId: one.id });
   }
 }

@@ -18,7 +18,8 @@ const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: Er
 const kindRule = "Refused if it would leave any Status kind without a Status.";
 const outcomeRules =
   "Exactly one Outcome is the default and exactly one, another, is *needs you*; neither may target a Done or " +
-  "Canceled Status, and no Outcome may target a Canceled Status.";
+  "Canceled Status, and no Outcome may target a Canceled Status. The *needs you* Outcome may not target the Status " +
+  "the Step is on either.";
 const StepBody = Type.Object({
   brief: Type.String({ minLength: 1, maxLength: 50_000, pattern: "\\S", description: "Markdown." }),
   model: Type.String({
@@ -126,6 +127,12 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           body: Type.Object({
             newTicketsDelegated: Type.Optional(
               Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
+            ),
+            autonomousDelegationDefault: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it on the Ticket already.",
+              }),
             ),
           }),
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },

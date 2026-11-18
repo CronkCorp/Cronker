@@ -106,7 +106,9 @@ describe("starting Runs", () => {
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
         "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
-          "and write Reports on it; leave everything else to its Users.",
+          "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
+        "- File anything you find that isn't part of CRONK-1's work with `file_ticket`, giving your Run id: it waits " +
+          "for CRONK-1's Assignee as a Discovered Ticket.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );
@@ -388,10 +390,10 @@ describe("Runners and Agents", () => {
 
     const unknown = await call("POST", "/api/runners", ada, { name: "Mystery", kind: "mystery" });
     expect(unknown.status).toBe(400);
-    expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has fake." });
+    expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has subscription, fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
-      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, createdAt: expect.any(String) },
+      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, pausedUntil: null, triggers: [], createdAt: expect.any(String) },
     ]);
     const notOwn = await call("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: "00000000-0000-0000-0000-000000000000" });
     expect(notOwn.json.error.code).toBe("unknown_runner");

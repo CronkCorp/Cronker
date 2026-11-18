@@ -274,7 +274,7 @@ describe("Agents and Steps", () => {
         code: "agent_not_allowed",
         message: expect.any(String),
         rule:
-          "Agents may read their Workspace and comment on its Tickets; during their running Run on a Ticket they may also edit it, write Reports on it and finish the Run. Everything else needs a User.",
+          "Agents may read their Workspace, comment on its Tickets and file Tickets; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
@@ -395,6 +395,40 @@ describe("Outcome refusals", () => {
         message: "The Outcome drop can't move Tickets to Canceled, a Canceled Status: agents never cancel work.",
       },
     });
+  });
+
+  test("a needs you Outcome targeting the Status its Step is on is refused, naming the Outcome and the Status", async () => {
+    expect(
+      await attempt((id) => [outcome("planned", id("Investigate"), { default: true }), outcome("ask", id("Ready"), { needsYou: true })]),
+    ).toEqual({
+      status: 409,
+      error: {
+        code: "outcome_target_not_allowed",
+        message:
+          "The needs you Outcome ask can't move Tickets to Ready, the Status its Step is on: " +
+          "asking a User must hand the Ticket back, not start the next Run at once.",
+      },
+    });
+  });
+
+  test("a default Outcome or one counting as a round may still target the Status its Step is on", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const step = {
+      brief: "Plan the work.",
+      model: "sonnet",
+      roundLimit: 2,
+      labelRule: null,
+      outcomes: [
+        outcome("again", id("Ready"), { default: true }),
+        outcome("retry", id("Ready"), { countsAsRound: true }),
+        outcome("needs you", id("Backlog"), { needsYou: true }),
+      ],
+    };
+
+    const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, { cookie, body: step });
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step).toEqual(step);
   });
 
   test("an Outcome targeting a Status outside the Project is refused", async () => {
@@ -581,7 +615,9 @@ describe("the Brief preview", () => {
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
         "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
-          "and write Reports on it; leave everything else to its Users.",
+          "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
+        "- File anything you find that isn't part of CRONK-1's work with `file_ticket`, giving your Run id: it waits " +
+          "for CRONK-1's Assignee as a Discovered Ticket.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );

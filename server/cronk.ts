@@ -11,13 +11,14 @@ import { migrate } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
-import { checkForLostRuns, runReports } from "./runs/runs.js";
+import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
+import { subscriptionRunner } from "./runs/subscription.js";
 
 export interface CronkOptions {
   config: Config;
   clock?: Clock;
   logStream?: Writable;
-  /** The kinds of Runner Users may set up, by name. */
+  /** Further kinds of Runner Users may set up, by name, beside the built-in `subscription`. */
   runnerKinds?: Record<string, RunnerKind>;
 }
 
@@ -26,6 +27,8 @@ export interface Cronk {
   listen(): Promise<void>;
   /** Makes lost the Runs nothing has named for their Workspace's lost-Run threshold. */
   checkForLostRuns(): Promise<void>;
+  /** Resumes the queues of rate-limited Runners whose pause has passed. */
+  resumePausedRunners(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -36,6 +39,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
     await migrate(db);
     const context: Context = { config, db, clock, live: new Live(), runners: {} };
     const reports = runReports(context);
+    context.runners.subscription = subscriptionRunner(context);
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
     endConnectionsOnClose(app);
@@ -46,6 +50,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
         await app.listen({ host: config.host, port: config.port });
       },
       checkForLostRuns: () => checkForLostRuns(context),
+      resumePausedRunners: () => resumePausedRunners(context),
       async close() {
         await app.close();
         await endPool(db);

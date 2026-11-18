@@ -11,8 +11,9 @@ import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../work/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
-import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
+import { Brief, buildBrief, completes, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
+import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 
@@ -158,6 +159,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     labels: string[];
     delegateId: string | null;
     delegateRemoved: boolean;
+    autonomousDelegation: boolean | null;
     agentName: string | null;
     runnerId: string | null;
     runnerOwnerId: string | null;
@@ -169,7 +171,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
        tickets.labels, tickets.delegate_id as "delegateId", agents.removed_at is not null as "delegateRemoved",
-       agents.name as "agentName", runners.id as "runnerId",
+       tickets.autonomous_delegation as "autonomousDelegation", agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
        tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
      from tickets join projects on projects.id = tickets.project_id
@@ -202,7 +204,10 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
     skipped.add(status.id);
     const target = statuses.find((s) => s.id === outcome.statusId)!;
-    await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticketId, target.id, now]);
+    await tx.query(
+      "update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null where id = $1",
+      [ticketId, target.id, now],
+    );
     const named = ({ id, name }: Status) => ({ id, name });
     await recordChanges(tx, { id: ticketId, workspaceId: ticket.workspaceId }, { kind: "cronk" }, now, [
       { field: "stepSkipped", from: null, to: { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name } },
@@ -222,7 +227,14 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   await waitForRun(false);
 
   const runId = randomUUID();
-  const brief = buildBrief(context.config, ticket.key, statuses, status as Status & { step: Step }, runId);
+  const brief = buildBrief(
+    context.config,
+    ticket.key,
+    statuses,
+    status as Status & { step: Step },
+    ticket.autonomousDelegation === true,
+    runId,
+  );
   const refusal = !ticket.runnerId
     ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
     : !runner
@@ -277,12 +289,16 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
           result.reference.url ?? null,
         ]);
       } else if (result.refusal.kind === "rate_limited") {
-        // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits for a slot of its Runner,
-        // rather than showing as couldn't-start. Its slot is freed without handing it on at once, which would
-        // only meet the same limit; the next Run its Runner ends hands it on, as for any waiting Ticket.
-        await lockSlotOf(tx, runId);
+        // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits, rather than showing as
+        // couldn't-start. The Runner's queue pauses until the limit passes, so none of its waiting Tickets meet
+        // the same limit meanwhile; the periodic check resumes it then (`resumePausedRunners`).
+        const runnerId = await lockSlotOf(tx, runId);
         const { rowCount } = await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
         if (rowCount) await tx.query("update tickets set waits_for_run = true where id = $1", [ticketId]);
+        await tx.query("update runners set paused_until = greatest(paused_until, $2) where id = $1", [
+          runnerId,
+          result.refusal.retryAt,
+        ]);
       } else {
         await freeSlot(context, tx, runId);
         await tx.query(
@@ -300,10 +316,11 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
  * Holds the Runner's slots still until the transaction ends: everything that starts or ends a Run through
  * it takes this lock, so counting its running Runs and waiting Tickets gives the answer that stands.
  */
-async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number }> {
-  const { rows } = await tx.query<{ limit: number }>("select run_limit as limit from runners where id = $1 for update", [
-    runnerId,
-  ]);
+async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number; paused: boolean }> {
+  const { rows } = await tx.query<{ limit: number; paused: boolean }>(
+    "select run_limit as limit, paused_until is not null as paused from runners where id = $1 for update",
+    [runnerId],
+  );
   return rows[0]!;
 }
 
@@ -326,9 +343,13 @@ async function lockSlotOf(tx: Tx, runId: string): Promise<string | null> {
   return runnerId;
 }
 
-/** Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue. */
+/**
+ * Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue:
+ * none while its queue is paused by a rate limit.
+ */
 async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<boolean> {
-  const { limit } = await lockRunner(tx, runnerId);
+  const { limit, paused } = await lockRunner(tx, runnerId);
+  if (paused) return false;
   const { rows } = await tx.query<{ taken: number }>(
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
@@ -415,6 +436,15 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
     if (!next) return;
     if ((await recheck(context, next.id)) === "waiting") return;
   }
+}
+
+/** Resumes the queues of rate-limited Runners whose pause has passed, giving out their free slots. */
+export async function resumePausedRunners(context: Context): Promise<void> {
+  const { rows } = await context.db.query<{ id: string }>(
+    "update runners set paused_until = null where paused_until <= $1 returning id",
+    [context.clock.now()],
+  );
+  for (const { id } of rows) await startWaitingRuns(context, id);
 }
 
 /**
@@ -510,7 +540,7 @@ export async function finishRun(
     }
     const statuses = await statusesOf(tx, ticket.projectId);
     const step = statuses.find((s) => s.id === run.statusId)?.step;
-    const offered = step ? offeredOutcomes(step, statuses) : [];
+    const offered = step ? offeredOutcomes(step, statuses, ticket.autonomousDelegation === true) : [];
     const outcome = offered.find((o) => o.name.toLowerCase() === input.outcome.trim().toLowerCase());
     if (!outcome) {
       throw new ApiError(400, "outcome_not_offered", `${input.outcome} isn't an Outcome this Run may choose.`, {
@@ -519,6 +549,13 @@ export async function finishRun(
           offered.length > 0
             ? `Finish with one of these Outcomes: ${offered.map((o) => o.name).join(", ")}.`
             : `The Step this Run was of is gone, so it offers no Outcome: leave a Comment for the Ticket's Assignee instead.`,
+      });
+    }
+
+    if (outcome.needsYou && !input.question?.trim()) {
+      throw new ApiError(400, "question_needed", `${outcome.name} hands ${ticket.key} back to its Assignee, so it takes a Question.`, {
+        rule: "A Run that finishes with its Step's needs you Outcome says what it needs in a Question.",
+        advice: `Finish with ${outcome.name} again, giving a Question that says what you need from the Assignee.`,
       });
     }
 
@@ -559,17 +596,34 @@ export async function finishRun(
     if (input.report !== undefined) {
       await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
     }
+    // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, stays on the Run.
+    if (applied.needsYou && questionBy === "agent") {
+      const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
+      await askQuestion(context, tx, ticket, asking, question!, now);
+    }
     if (applied.statusId !== ticket.statusId) {
-      await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [
+      // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
+      await tx.query("update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = $4 where id = $1", [
         ticket.id,
         applied.statusId,
         now,
+        applied.needsYou ? run.id : null,
       ]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [
         { field: "status", from: named(ticket.statusId), to: named(applied.statusId) },
       ]);
       await startUnblocked(context, tx, [ticket.id]);
+    }
+    if (completes(applied, statuses)) {
+      // A Run completing its Ticket leaves it Unverified, until a User Accepts or Reopens it.
+      await tx.query("update tickets set verification = 'unverified', completed_from_status_id = $2 where id = $1", [
+        ticket.id,
+        run.statusId,
+      ]);
+      await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [
+        { field: "verification", from: ticket.verification, to: "unverified" },
+      ]);
     }
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     // Moving into a Status by an Outcome counts as entering it.

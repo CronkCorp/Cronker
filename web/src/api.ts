@@ -113,6 +113,8 @@ export interface ProjectSummary {
 
 export interface Project extends ProjectSummary {
   newTicketsDelegated: boolean;
+  /** Whether a Ticket takes Autonomous Delegation when first delegated. */
+  autonomousDelegationDefault: boolean;
   statuses: Status[];
 }
 
@@ -144,14 +146,20 @@ export interface TicketSummary {
   labels: string[];
   assigneeId: string | null;
   delegateId: string | null;
+  /** Null until a User sets it or the Ticket is first delegated. */
+  autonomousDelegation: boolean | null;
+  /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
+  verification: "unverified" | "verified" | null;
   parentId: string | null;
+  /** For a Discovered Ticket: the Agent that filed it, from which Ticket and Run, and whether it waits for a User. */
+  discovered: { agentId: string; sourceTicket: TicketRef | null; runId: string | null; waiting: boolean } | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
   createdAt: string;
   lastRun: { id: string; state: RunState } | null;
   /** What it waits for before it gets the Run it needs, if it needs one. */
-  waiting: "runnerSlot" | "blocked" | null;
+  waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
 }
 
 export interface Ticket extends TicketSummary {
@@ -166,6 +174,7 @@ export interface TicketEdit {
   labels?: string[];
   assigneeId?: string | null;
   delegateId?: string | null;
+  autonomousDelegation?: boolean;
   dueDate?: string | null;
   estimate?: number | null;
   parentId?: string | null;
@@ -210,6 +219,28 @@ export interface Agent {
   createdAt: string;
 }
 
+/** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
+export interface Trigger {
+  id: string;
+  model: string;
+  /** The Project it overrides the Runner's own trigger on; null for all Projects. */
+  projectId: string | null;
+  triggerId: string;
+  createdAt: string;
+}
+
+/** A way for Cronk to start Runs of the User's Agents with their own credentials. */
+export interface Runner {
+  id: string;
+  name: string;
+  kind: string;
+  limit: number;
+  /** Until when a rate limit pauses its queue. */
+  pausedUntil: string | null;
+  triggers: Trigger[];
+  createdAt: string;
+}
+
 export type TokenAccess = "full" | "read";
 
 export interface AgentToken {
@@ -233,6 +264,8 @@ export interface Comment {
   actor: Actor;
   createdAt: string;
   mentions: Mention[];
+  /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
+  questionId: string | null;
 }
 
 /** Markdown a Run wrote on its Ticket. */
@@ -267,10 +300,13 @@ export interface Change {
     | "subTicket"
     | "delegate"
     | "stepSkipped"
+    | "autonomousDelegation"
+    | "verification"
+    | "dismissed"
     | RelationKind;
   from: unknown;
   to: unknown;
-  /** The Run an Agent made the Change in; null for a User's. */
+  /** The Run an Agent made the Change in; null for a User's, or an Agent's outside a Run. */
   runId: string | null;
 }
 
@@ -300,6 +336,38 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
+/** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
+export interface UnverifiedItem {
+  kind: "unverified";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  /** The Step that completed it, by its Status; null once that Status is removed. */
+  completedBy: { id: string; name: string } | null;
+}
+
+/** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
+export interface QuestionItem {
+  kind: "question";
+  ticket: TicketSummary;
+  question: {
+    id: string;
+    commentId: string;
+    body: string;
+    agent: { id: string; name: string };
+    step: { statusId: string | null; name: string };
+    askedAt: string;
+  };
+}
+
+/** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
+export interface NeedsYouItem {
+  kind: "needsYou";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  outcome: string;
+  step: { statusId: string | null; name: string };
+}
+
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */
 export interface RunItem {
   kind: "run";
@@ -307,7 +375,21 @@ export interface RunItem {
   run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
 }
 
-export type InboxItem = ReviewItem | RunItem;
+/** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
+export interface DiscoveredItem {
+  kind: "discovered";
+  ticket: TicketSummary;
+  agent: { id: string; name: string };
+}
+
+/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
+export interface ReassignItem {
+  kind: "reassign";
+  ticket: TicketSummary;
+  formerAssignee: User;
+}
+
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem | ReassignItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
@@ -389,7 +471,7 @@ export const api = {
   createProject: (workspaceId: string, input: { name: string; key: string }) =>
     call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
-  editProject: (id: string, edit: { newTicketsDelegated?: boolean }) =>
+  editProject: (id: string, edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
@@ -424,14 +506,26 @@ export const api = {
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
+  acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
+  reopenTicket: (id: string, comment: string) =>
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment }),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
+  dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
+  setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId }),
+  runners: () => call<Runner[]>("GET", "/api/runners"),
+  createRunner: (input: { name: string; kind: string }) => call<Runner>("POST", "/api/runners", input),
+  setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
+  saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
+    call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
+  removeTrigger: (runnerId: string, triggerId: string) =>
+    call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),
   tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
   issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
@@ -446,12 +540,17 @@ export const api = {
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
+  dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
+
+function runner(id: string) {
+  return `/api/runners/${encodeURIComponent(id)}`;
+}
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;

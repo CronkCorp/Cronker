@@ -5,6 +5,8 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
+import { answerQuestion } from "../runs/questions.js";
+import { insertComment } from "./comment-writes.js";
 import { Actor, actorColumn } from "./actors.js";
 import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
 
@@ -16,19 +18,23 @@ export const Comment = Type.Object({
   actor: Actor,
   createdAt: Type.String({ format: "date-time" }),
   mentions: Type.Array(Mention, { description: "Ticket keys the body mentions." }),
+  questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
+  }),
 });
 export type Comment = Static<typeof Comment>;
 
 type Row = Omit<Comment, "createdAt" | "mentions"> & { createdAt: Date };
 
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.reply_to_id as "replyToId", comments.body,
-  ${actorColumn("users", "agents")} as actor, comments.created_at as "createdAt"`;
+  ${actorColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId"`;
 
 async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promise<Row[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from comments
      left join users on users.id = comments.actor_user_id
      left join agents on agents.id = comments.actor_agent_id
+     left join questions on questions.comment_id = comments.id
      where comments.ticket_id = $1 ${commentId ? "and comments.id = $2" : ""}
      order by comments.seq`,
     commentId ? [ticketId, commentId] : [ticketId],
@@ -49,13 +55,14 @@ export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Prom
 }
 
 export async function addComment(
-  { db, clock, live }: Context,
+  context: Context,
   actor: Caller,
   ticketId: string,
   input: { body: string; replyToId?: string },
 ): Promise<Comment> {
-  return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, actor, ticketId);
+  return transaction(context.db, async (tx) => {
+    // A reply may answer a Question, moving the Ticket, so it locks the Ticket as moves do.
+    const ticket = await findTicketRow(tx, actor, ticketId, { lock: input.replyToId !== undefined });
     if (!ticket) throw ticketNotFound();
     if (input.replyToId !== undefined) {
       const { rowCount } = isUuid(input.replyToId)
@@ -63,26 +70,11 @@ export async function addComment(
         : { rowCount: 0 };
       if (rowCount === 0) throw new ApiError(400, "unknown_comment", "Replies go to a Comment on the same Ticket.");
     }
-    const { rows } = await tx.query<{ id: string }>(
-      `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-      [
-        ticket.workspaceId,
-        ticket.id,
-        input.replyToId ?? null,
-        actor.kind === "user" ? actor.id : null,
-        actor.kind === "agent" ? actor.id : null,
-        input.body,
-        clock.now(),
-      ],
-    );
-    const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, rows[0]!.id));
-    live.publish(tx, ticket.workspaceId, {
-      type: "comment.added",
-      projectId: ticket.projectId,
-      ticketId: ticket.id,
-      commentId: comment!.id,
-    });
+    const commentId = await insertComment(context, tx, ticket, actor, input.body, input.replyToId ?? null);
+    if (actor.kind === "user" && input.replyToId !== undefined) {
+      await answerQuestion(context, tx, ticket, actor.id, input.replyToId, commentId);
+    }
+    const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, commentId));
     return comment!;
   });
 }

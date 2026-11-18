@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
+import { api, nameOf, type DiscoveredItem, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
 import { useLatest, useLiveEvents } from "./live.js";
+import { Markdown } from "./markdown.js";
 import { Link } from "./router.js";
 
 /**
@@ -49,7 +50,7 @@ export function InboxScreen({ workspace }: { workspace: Workspace }) {
         ) : (
           <ul className="inbox" aria-label="Inbox">
             {inbox.items.map((item) => (
-              <Item key={`${item.kind} ${item.ticket.id}`} item={item} />
+              <Item key={`${item.kind} ${item.kind === "question" ? item.question.id : item.ticket.id}`} item={item} />
             ))}
           </ul>
         ))}
@@ -63,7 +64,7 @@ function Item({ item }: { item: InboxItem }) {
       <Link to={`/tickets/${item.ticket.id}`}>
         <span className="muted">{item.ticket.key}</span> {item.ticket.title}
       </Link>
-      {item.kind === "review" ? <small>Waiting for your review in {item.status.name}</small> : <WentWrong item={item} />}
+      <ItemDetail item={item} />
     </li>
   );
 }
@@ -95,6 +96,89 @@ function WentWrong({ item }: { item: RunItem }) {
       {error && <p role="alert">{error}</p>}
       <button type="button" onClick={retry} disabled={busy} aria-label={`Retry ${item.ticket.key}`}>
         Retry
+      </button>
+    </>
+  );
+}
+
+/** What an Inbox item waits on the User for. */
+function ItemDetail({ item }: { item: InboxItem }) {
+  const [failure, setFailure] = useState<string | null>(null);
+  switch (item.kind) {
+    case "question":
+      return (
+        <>
+          <small>
+            {item.question.agent.name} asks, from the {item.question.step.name} Step; reply to the Question on the Ticket to answer
+          </small>
+          <blockquote className="question">
+            <Markdown text={item.question.body} mentions={[]} />
+          </blockquote>
+          <div>
+            <button
+              type="button"
+              className="link"
+              onClick={() => api.dismissQuestion(item.question.id).catch((e: Error) => setFailure(e.message))}
+            >
+              Dismiss
+            </button>
+          </div>
+          {failure && <p role="alert">{failure}</p>}
+        </>
+      );
+    case "needsYou":
+      return (
+        <small>
+          Handed back to you in {item.status.name}: the {item.step.name} Step finished with {item.outcome}
+        </small>
+      );
+    case "review":
+      return <small>Waiting for your review in {item.status.name}</small>;
+    case "unverified":
+      return (
+        <small>Completed by the {item.completedBy?.name ?? "removed"} Step, Unverified: Accept or Reopen it</small>
+      );
+    case "run":
+      return <WentWrong item={item} />;
+    case "discovered":
+      return <Discovered item={item} />;
+    case "reassign":
+      return <small>{nameOf(item.formerAssignee)} was removed from the Workspace: assign it to someone</small>;
+  }
+}
+
+/** A Discovered Ticket an Agent filed, and Dismiss; delegating or moving it from its page also takes it away. */
+function Discovered({ item }: { item: DiscoveredItem }) {
+  const source = item.ticket.discovered?.sourceTicket;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dismiss = () => {
+    setBusy(true);
+    setError(null);
+    // The Inbox reloads on the live event dismissing causes, which takes this item away.
+    api.dismiss(item.ticket.id).then(
+      () => setBusy(false),
+      (e: Error) => {
+        setBusy(false);
+        setError(e.message);
+      },
+    );
+  };
+  return (
+    <>
+      <small>
+        Discovered by {item.agent.name}
+        {source && (
+          <>
+            {" "}
+            while on <Link to={`/tickets/${source.id}`}>{source.key}</Link>
+          </>
+        )}
+        : delegate, move or dismiss it
+      </small>
+      {error && <p role="alert">{error}</p>}
+      <button type="button" onClick={dismiss} disabled={busy} aria-label={`Dismiss ${item.ticket.key}`}>
+        Dismiss
       </button>
     </>
   );
