@@ -36,11 +36,10 @@ async function projectSettings(page: Page, cronk: StartedCronk) {
 test("attach, edit and remove Steps in Project settings, and preview a Ticket's Brief", async ({ page, cronk }) => {
   await projectSettings(page, cronk);
   const steps = page.getByRole("region", { name: "Steps" });
-  // The summary line of one Status's Step. Several Statuses can share a summary (Implement starts as
+  // The summary line of one Status. Several Statuses can share a Step's summary (Implement starts as
   // "opus, 2 Outcomes"), so each check names its Status.
-  const summary = (status: string) =>
-    steps.locator("summary").filter({ has: page.locator("strong", { hasText: new RegExp(`^${status}$`) }) });
-  const open = (status: string) => summary(status).locator("strong").click();
+  const summary = (status: string) => steps.locator("summary").filter({ has: page.getByText(status, { exact: true }) });
+  const open = (status: string) => summary(status).getByText(status, { exact: true }).click();
 
   await expect(summary("Triage")).toContainText("haiku, 2 Outcomes");
   await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
