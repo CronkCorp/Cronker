@@ -15,14 +15,14 @@ describe("signing in", () => {
   test("the first User signs in with a 30-day SameSite=Strict cookie and sees their empty Workspace", async () => {
     const { user, workspace } = await setUp(cronk);
 
-    const response = await cronk.request("POST", "/api/session", {
+    const response = await cronk.request("POST", "/api/sign-in", {
       body: { email: firstUser.email, password: firstUser.password },
     });
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ user });
     const setCookie = response.headers.get("set-cookie")!;
-    expect(setCookie).toMatch(/^cronk_session=cronk_session_[A-Za-z0-9_-]{20,};/);
+    expect(setCookie).toMatch(/^cronk_sign_in=cronk_sign_in_[A-Za-z0-9_-]{20,};/);
     expect(setCookie).toContain("Max-Age=2592000");
     expect(setCookie).toContain("Path=/");
     expect(setCookie).toContain("HttpOnly");
@@ -50,7 +50,7 @@ describe("refusals", () => {
       { email: firstUser.email, password: "not the password" },
       { email: "nobody@example.com", password: firstUser.password },
     ]) {
-      const response = await cronk.request("POST", "/api/session", { body });
+      const response = await cronk.request("POST", "/api/sign-in", { body });
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: { code: "invalid_credentials", message: expect.any(String) } });
       expect(response.headers.get("set-cookie")).toBeNull();
@@ -61,7 +61,7 @@ describe("refusals", () => {
     const { workspace } = await setUp(cronk);
 
     for (const path of ["/api/me", `/api/workspaces/${workspace.id}`]) {
-      const response = await cronk.request("GET", path, { cookie: "cronk_session=cronk_session_madeup" });
+      const response = await cronk.request("GET", path, { cookie: "cronk_sign_in=cronk_sign_in_madeup" });
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: { code: "not_signed_in", message: expect.any(String) } });
     }
@@ -83,10 +83,10 @@ describe("signing out and expiry", () => {
     await setUp(cronk);
     const cookie = await signIn(cronk);
 
-    const response = await cronk.request("DELETE", "/api/session", { cookie });
+    const response = await cronk.request("DELETE", "/api/sign-in", { cookie });
 
     expect(response.status).toBe(204);
-    expect(response.headers.get("set-cookie")).toMatch(/^cronk_session=;.*Expires=Thu, 01 Jan 1970/);
+    expect(response.headers.get("set-cookie")).toMatch(/^cronk_sign_in=;.*Expires=Thu, 01 Jan 1970/);
     expect((await cronk.request("GET", "/api/me", { cookie })).status).toBe(401);
   });
 

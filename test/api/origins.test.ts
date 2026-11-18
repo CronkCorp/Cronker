@@ -15,21 +15,30 @@ describe("state-changing requests from other Origins", () => {
     await setUp(cronk);
     const cookie = await signIn(cronk);
 
-    const signOut = await cronk.request("DELETE", "/api/session", { cookie, origin: "https://evil.example" });
+    const signOut = await cronk.request("DELETE", "/api/sign-in", { cookie, origin: "https://evil.example" });
     expect(signOut.status).toBe(403);
     expect(await signOut.json()).toEqual({ error: { code: "cross_origin", message: expect.any(String) } });
     expect((await cronk.request("GET", "/api/me", { cookie })).status).toBe(200);
 
-    const signInElsewhere = await cronk.request("POST", "/api/session", {
+    const signInElsewhere = await cronk.request("POST", "/api/sign-in", {
       origin: "http://localhost:1234",
       body: { email: firstUser.email, password: firstUser.password },
     });
     expect(signInElsewhere.status).toBe(403);
   });
 
+  test("are refused from sandboxed pages, whose Origin is null", async () => {
+    await setUp(cronk);
+    const response = await cronk.request("POST", "/api/sign-in", {
+      origin: "null",
+      body: { email: firstUser.email, password: firstUser.password },
+    });
+    expect(response.status).toBe(403);
+  });
+
   test("are refused when the browser marks them cross-site without an Origin", async () => {
     await setUp(cronk);
-    const response = await cronk.request("POST", "/api/session", {
+    const response = await cronk.request("POST", "/api/sign-in", {
       headers: { "sec-fetch-site": "cross-site" },
       body: { email: firstUser.email, password: firstUser.password },
     });
@@ -38,12 +47,17 @@ describe("state-changing requests from other Origins", () => {
 
   test("from Cronk's own Origin, or from clients that send none, go through", async () => {
     await setUp(cronk);
-    const fromBrowser = await cronk.request("POST", "/api/session", {
+    const credentials = { email: firstUser.email, password: firstUser.password };
+
+    const fromBrowser = await cronk.request("POST", "/api/sign-in", {
       origin: cronk.url,
       headers: { "sec-fetch-site": "same-origin" },
-      body: { email: firstUser.email, password: firstUser.password },
+      body: credentials,
     });
     expect(fromBrowser.status).toBe(200);
+
+    const fromScript = await cronk.request("POST", "/api/sign-in", { body: credentials });
+    expect(fromScript.status).toBe(200);
   });
 
   test("reads from other Origins are not state-changing and go through", async () => {

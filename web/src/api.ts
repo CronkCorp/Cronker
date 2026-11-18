@@ -46,8 +46,8 @@ export const api = {
   setupNeeded: () => call<{ needed: boolean }>("GET", "/api/setup").then((r) => r.needed),
   setUp: (input: { setupCode: string; email: string; password: string; workspaceName: string }) =>
     call<{ user: User; workspace: Workspace }>("POST", "/api/setup", input),
-  signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/session", { email, password }),
-  signOut: () => call<void>("DELETE", "/api/session"),
+  signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password }),
+  signOut: () => call<void>("DELETE", "/api/sign-in"),
   me: () => call<{ user: User; workspaces: WorkspaceSummary[] }>("GET", "/api/me"),
   workspace: (id: string) => call<Workspace>("GET", `/api/workspaces/${encodeURIComponent(id)}`),
 };

@@ -28,7 +28,23 @@ export function App() {
     void load();
   }, [load]);
 
-  if (failure) return <Centered title="Cronk can't be reached">{failure}</Centered>;
+  if (failure) {
+    return (
+      <Centered title="Cronk can't be reached">
+        <p role="alert">{failure}</p>
+        <button
+          type="button"
+          onClick={() => {
+            setFailure(null);
+            setScreen({ kind: "loading" });
+            void load();
+          }}
+        >
+          Try again
+        </button>
+      </Centered>
+    );
+  }
   switch (screen.kind) {
     case "loading":
       return <Centered title="Cronk">Loading…</Centered>;
@@ -79,7 +95,7 @@ const field = (form: FormData, name: string) => String(form.get(name) ?? "");
 function SetupScreen({ onDone }: { onDone: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     await api.setUp({
-      setupCode: field(form, "setupCode").trim(),
+      setupCode: field(form, "setupCode"),
       email: field(form, "email"),
       password: field(form, "password"),
       workspaceName: field(form, "workspaceName"),
@@ -150,7 +166,7 @@ function WorkspaceScreen({
   workspace: Workspace | null;
   onSignedOut: () => void;
 }) {
-  const { busy, onSubmit } = useSubmit(async () => {
+  const { error, busy, onSubmit } = useSubmit(async () => {
     await api.signOut();
     onSignedOut();
   });
@@ -167,6 +183,7 @@ function WorkspaceScreen({
         </form>
       </header>
       <main>
+        {error && <p role="alert">{error}</p>}
         {workspace ? (
           <>
             <h1>{workspace.name}</h1>

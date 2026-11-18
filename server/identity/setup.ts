@@ -4,6 +4,8 @@ import { transaction, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { hashPassword } from "./passwords.js";
 import { hashSecret, issueSecret, secretMatches } from "./secrets.js";
+import type { User } from "./user.js";
+import type { Workspace } from "../workspaces/workspaces.js";
 
 /**
  * Setup turns a fresh installation into one with its first User and Workspace.
@@ -40,8 +42,8 @@ export interface SetupInput {
 }
 
 export interface SetupResult {
-  user: { id: string; email: string };
-  workspace: { id: string; name: string };
+  user: User;
+  workspace: Workspace;
 }
 
 export async function runSetup(db: Db, clock: Clock, input: SetupInput): Promise<SetupResult> {
@@ -54,17 +56,16 @@ export async function runSetup(db: Db, clock: Clock, input: SetupInput): Promise
     if (!installation || installation.set_up_at) {
       throw new ApiError(409, "already_set_up", "This installation is already set up.");
     }
-    if (!installation.setup_code_hash || !secretMatches(input.setupCode, installation.setup_code_hash)) {
+    if (!installation.setup_code_hash || !secretMatches(input.setupCode.trim(), installation.setup_code_hash)) {
       throw new ApiError(403, "invalid_setup_code", "That setup code is not right. Use the latest one in Cronk's log.");
     }
 
     const now = clock.now();
-    const email = input.email.trim();
-    const user = await tx.query<{ id: string; email: string }>(
+    const user = await tx.query<User>(
       "insert into users (email, password_hash, created_at) values ($1, $2, $3) returning id, email",
-      [email, passwordHash, now],
+      [input.email, passwordHash, now],
     );
-    const workspace = await tx.query<{ id: string; name: string }>(
+    const workspace = await tx.query<Workspace>(
       "insert into workspaces (name, created_at) values ($1, $2) returning id, name",
       [input.workspaceName.trim(), now],
     );

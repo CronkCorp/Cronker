@@ -17,7 +17,7 @@ export async function setUp(cronk: StartedCronk) {
 
 /** Signs in and returns the `Cookie` header value to send with later requests. */
 export async function signIn(cronk: StartedCronk, email = firstUser.email, password = firstUser.password) {
-  const response = await cronk.request("POST", "/api/session", { body: { email, password } });
+  const response = await cronk.request("POST", "/api/sign-in", { body: { email, password } });
   expect(response.status).toBe(200);
   const setCookie = response.headers.get("set-cookie") ?? "";
   return setCookie.split(";")[0]!;

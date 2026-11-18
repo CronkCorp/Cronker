@@ -3,15 +3,11 @@ import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { verifyPassword } from "./passwords.js";
 import { hashSecret, issueSecret } from "./secrets.js";
+import type { User } from "./user.js";
 
 /** A sign-in lasts 30 days from when the User signed in. */
-export const sessionLifetimeSeconds = 30 * 24 * 60 * 60;
-export const sessionCookie = "cronk_session";
-
-export interface SignedInUser {
-  id: string;
-  email: string;
-}
+export const signInLifetimeSeconds = 30 * 24 * 60 * 60;
+export const signInCookie = "cronk_sign_in";
 
 // Hashed once so that an unknown email costs as much as a wrong password.
 const decoyPasswordHash =
@@ -22,10 +18,10 @@ export async function signIn(
   reply: FastifyReply,
   email: string,
   password: string,
-): Promise<SignedInUser> {
+): Promise<User> {
   const { rows } = await db.query<{ id: string; email: string; password_hash: string | null }>(
     "select id, email, password_hash from users where lower(email) = lower($1)",
-    [email.trim()],
+    [email],
   );
   const user = rows[0];
   const ok = await verifyPassword(password, user?.password_hash ?? decoyPasswordHash);
@@ -33,37 +29,39 @@ export async function signIn(
     throw new ApiError(401, "invalid_credentials", "That email and password don't match a User.");
   }
 
-  const token = issueSecret("session");
+  const token = issueSecret("sign_in");
   const now = clock.now();
-  await db.query("insert into sessions (user_id, token_hash, created_at, expires_at) values ($1, $2, $3, $4)", [
+  // Expired sign-ins are no use to anyone; drop the User's while adding a new one.
+  await db.query("delete from sign_ins where user_id = $1 and expires_at <= $2", [user.id, now]);
+  await db.query("insert into sign_ins (user_id, token_hash, created_at, expires_at) values ($1, $2, $3, $4)", [
     user.id,
     hashSecret(token),
     now,
-    new Date(now.getTime() + sessionLifetimeSeconds * 1000),
+    new Date(now.getTime() + signInLifetimeSeconds * 1000),
   ]);
-  reply.setCookie(sessionCookie, token, {
+  reply.setCookie(signInCookie, token, {
     path: "/",
     httpOnly: true,
     sameSite: "strict",
     secure: config.publicUrl.protocol === "https:",
-    maxAge: sessionLifetimeSeconds,
+    maxAge: signInLifetimeSeconds,
   });
   return { id: user.id, email: user.email };
 }
 
 export async function signOut({ db }: Context, request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const token = request.cookies[sessionCookie];
-  if (token) await db.query("delete from sessions where token_hash = $1", [hashSecret(token)]);
-  reply.clearCookie(sessionCookie, { path: "/" });
+  const token = request.cookies[signInCookie];
+  if (token) await db.query("delete from sign_ins where token_hash = $1", [hashSecret(token)]);
+  reply.clearCookie(signInCookie, { path: "/" });
 }
 
 /** The User the request's sign-in cookie belongs to, or a 401 refusal. */
-export async function requireUser({ db, clock }: Context, request: FastifyRequest): Promise<SignedInUser> {
-  const token = request.cookies[sessionCookie];
+export async function requireUser({ db, clock }: Context, request: FastifyRequest): Promise<User> {
+  const token = request.cookies[signInCookie];
   if (token) {
-    const { rows } = await db.query<SignedInUser>(
-      `select users.id, users.email from sessions join users on users.id = sessions.user_id
-       where sessions.token_hash = $1 and sessions.expires_at > $2`,
+    const { rows } = await db.query<User>(
+      `select users.id, users.email from sign_ins join users on users.id = sign_ins.user_id
+       where sign_ins.token_hash = $1 and sign_ins.expires_at > $2`,
       [hashSecret(token), clock.now()],
     );
     if (rows[0]) return rows[0];

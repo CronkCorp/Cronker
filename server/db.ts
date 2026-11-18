@@ -1,11 +1,9 @@
 import { readdir, readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { repoPath } from "./paths.js";
 
 /** SQL migrations in the repository's `migrations/`, applied in file-name order, each once. */
-const migrationsDir = fileURLToPath(
-  new URL(import.meta.url.includes("/dist/server/") ? "../../migrations/" : "../migrations/", import.meta.url),
-);
+const migrationsDir = repoPath("migrations/");
 
 async function migrationFiles(): Promise<{ name: string; sql: string }[]> {
   const names = (await readdir(migrationsDir)).filter((n) => n.endsWith(".sql")).sort();

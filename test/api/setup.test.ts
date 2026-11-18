@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { firstUser } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -8,8 +9,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await cronk?.stop();
 });
-
-const firstUser = { email: "ada@example.com", password: "correct horse battery", workspaceName: "Ada's Workspace" };
 
 describe("setup", () => {
   test("a fresh installation logs a setup code, and setup with it creates the first User and Workspace", async () => {

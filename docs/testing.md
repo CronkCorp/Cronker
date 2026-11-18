@@ -1,6 +1,6 @@
 # Testing
 
-Tests exercise Cronk from the outside, the way a User or Agent does: they call the HTTP API (or drive the web client) and assert on responses and on what later calls return. They never read tables, import internal modules or call private functions, so the inside can be refactored freely. Rules are not tested through lower-level unit seams.
+Tests exercise Cronk from the outside, the way a User or Agent does: they call the HTTP API (or drive the web client) and assert on responses and on what later calls return. They never read tables, import internal modules or call private functions, so the inside can be refactored freely. Only the harness reaches in, and only for what starting Cronk takes: `createCronk` and the migrations that build its template database. Rules are not tested through lower-level unit seams.
 
 ## Seams
 
@@ -62,7 +62,7 @@ Then:
 | --- | --- |
 | `npm run typecheck` | The type checker over the server, web client and tests |
 | `npm test` | The API tests (Vitest) |
-| `npx vitest run test/api/sessions.test.ts` | One test file |
+| `npx vitest run test/api/sign-in.test.ts` | One test file |
 | `npm run test:e2e` | Builds the web client, then the Playwright smoke tests. The first time, install a browser with `npx playwright install chromium` |
 
 Test databases are dropped when each test stops; templates (`cronk_template_*`) are kept for the next run and can be dropped at any time.

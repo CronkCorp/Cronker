@@ -2,11 +2,11 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
-import { requireUser, signIn, signOut } from "./sessions.js";
+import { requireUser, signIn, signOut } from "./sign-ins.js";
 import { isSetUp, runSetup } from "./setup.js";
+import { User } from "./user.js";
+import { Membership, Workspace, workspacesOf } from "../workspaces/workspaces.js";
 
-const User = Type.Object({ id: Type.String({ format: "uuid" }), email: Type.String() });
-const Workspace = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
 const Email = Type.String({ format: "email", maxLength: 320 });
 const Password = Type.String({ minLength: 8, maxLength: 1024 });
 
@@ -49,10 +49,10 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
     );
 
     app.post(
-      "/api/session",
+      "/api/sign-in",
       {
         schema: {
-          tags: ["Sessions"],
+          tags: ["Sign-in"],
           summary: "Sign in with email and password",
           description: "Sets a sign-in cookie lasting 30 days.",
           body: Type.Object({ email: Type.String(), password: Type.String() }),
@@ -66,10 +66,10 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
     );
 
     app.delete(
-      "/api/session",
+      "/api/sign-in",
       {
         schema: {
-          tags: ["Sessions"],
+          tags: ["Sign-in"],
           summary: "Sign out",
           response: { 204: Type.Null() },
         },
@@ -84,12 +84,12 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
       "/api/me",
       {
         schema: {
-          tags: ["Sessions"],
+          tags: ["Sign-in"],
           summary: "The signed-in User and the Workspaces they belong to",
           response: {
             200: Type.Object({
               user: User,
-              workspaces: Type.Array(Type.Object({ id: Type.String(), name: Type.String(), isAdmin: Type.Boolean() })),
+              workspaces: Type.Array(Membership),
             }),
             401: ErrorBody,
           },
@@ -97,13 +97,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        const { rows } = await db.query<{ id: string; name: string; isAdmin: boolean }>(
-          `select workspaces.id, workspaces.name, memberships.is_admin as "isAdmin"
-           from memberships join workspaces on workspaces.id = memberships.workspace_id
-           where memberships.user_id = $1 order by workspaces.name, workspaces.id`,
-          [user.id],
-        );
-        return { user, workspaces: rows };
+        return { user, workspaces: await workspacesOf(db, user.id) };
       },
     );
   };

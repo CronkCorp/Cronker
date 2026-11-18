@@ -1,13 +1,14 @@
 # Starts Cronk and its Postgres. Cronk is configured only by environment variables;
 # set CRONK_PUBLIC_URL to the public HTTPS address it is reached at (a tunnel in
-# development, a server in real use). http://localhost:3000 works for a local try.
+# development, a server in real use). Left unset, it is http://localhost:<CRONK_PORT>
+# for a local try.
 services:
   cronk:
     build: .
     ports:
       - "${CRONK_PORT:-3000}:3000"
     environment:
-      CRONK_PUBLIC_URL: ${CRONK_PUBLIC_URL:-http://localhost:3000}
+      CRONK_PUBLIC_URL: ${CRONK_PUBLIC_URL:-http://localhost:${CRONK_PORT:-3000}}
       DATABASE_URL: postgres://cronk:${POSTGRES_PASSWORD:-cronk}@postgres:5432/cronk
     depends_on:
       postgres:

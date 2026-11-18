@@ -6,7 +6,7 @@ import fastifyStatic from "@fastify/static";
 import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
-import { ApiError } from "./http/errors.js";
+import { ApiError, sendError } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { identityRoutes } from "./identity/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
@@ -19,22 +19,15 @@ export interface AppOptions {
 export async function buildApp(context: Context, { logStream }: AppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: logStream ? { stream: logStream } : true,
-    trustProxy: true,
   }).withTypeProvider<TypeBoxTypeProvider>();
 
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof ApiError) {
-      return reply.code(error.statusCode).send({ error: { code: error.code, message: error.message } });
-    }
-    const fastifyError = error as { validation?: unknown; statusCode?: number; message: string };
-    if (fastifyError.validation) {
-      return reply.code(400).send({ error: { code: "invalid_request", message: fastifyError.message } });
-    }
-    if (fastifyError.statusCode && fastifyError.statusCode < 500) {
-      return reply.code(fastifyError.statusCode).send({ error: { code: "invalid_request", message: fastifyError.message } });
-    }
+    if (error instanceof ApiError) return sendError(reply, error.statusCode, error.code, error.message);
+    const { validation, statusCode, message } = error as { validation?: unknown; statusCode?: number; message: string };
+    if (validation) return sendError(reply, 400, "invalid_request", message);
+    if (statusCode && statusCode < 500) return sendError(reply, statusCode, "invalid_request", message);
     request.log.error(error);
-    return reply.code(500).send({ error: { code: "internal", message: "Something went wrong inside Cronk." } });
+    return sendError(reply, 500, "internal", "Something went wrong inside Cronk.");
   });
 
   refuseOtherOrigins(app, context.config.publicUrl);
@@ -59,7 +52,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     if (webRoot && request.method === "GET" && !request.url.startsWith("/api/")) {
       return reply.sendFile("index.html");
     }
-    return reply.code(404).send({ error: { code: "not_found", message: "Nothing is here." } });
+    return sendError(reply, 404, "not_found", "Nothing is here.");
   });
 
   return app;
