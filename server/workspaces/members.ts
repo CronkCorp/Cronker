@@ -8,7 +8,8 @@ import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
-import { stopRunningRun } from "../runs/runs.js";
+import { startRunIfNeeded, stopRunningRun } from "../runs/runs.js";
+import { recordChanges } from "../work/changes.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
@@ -217,14 +218,38 @@ export async function removeMember(context: Context, adminId: string, workspaceI
     );
     const now = clock.now();
     const reason = `${await nameOf(tx, adminId)} removed ${await nameOf(tx, userId)} from the Workspace.`;
-    const { rows: running } = await tx.query<{ ticketId: string }>(
-      `select tickets.id as "ticketId" from tickets
-       where tickets.id in (select runs.ticket_id from runs join agents on agents.id = runs.agent_id
-         where runs.workspace_id = $1 and runs.state = 'running' and agents.owner_id = $2)
-       order by tickets.id for update`,
+    // Their Tickets, and any delegated to their Agents, lose them: a running Run is stopped, and the Admin's
+    // Changes record the Assignee and Delegate taken away.
+    const { rows: tickets } = await tx.query<{
+      id: string;
+      projectId: string;
+      assignee: { id: string; name: string } | null;
+      delegate: { id: string; name: string } | null;
+    }>(
+      `select tickets.id, tickets.project_id as "projectId",
+         case when tickets.assignee_id = $2 then json_build_object('id', users.id, 'name', users.email) end as assignee,
+         case when agents.owner_id = $2 then json_build_object('id', agents.id, 'name', agents.name) end as delegate
+       from tickets left join users on users.id = tickets.assignee_id
+       left join agents on agents.id = tickets.delegate_id
+       where tickets.workspace_id = $1 and (tickets.assignee_id = $2 or agents.owner_id = $2)
+       order by tickets.id for update of tickets`,
       [workspaceId, userId],
     );
-    for (const { ticketId } of running) await stopRunningRun(context, tx, ticketId, reason, now);
+    for (const ticket of tickets) {
+      if (ticket.delegate) await stopRunningRun(context, tx, ticket.id, reason, now);
+      await tx.query(
+        `update tickets set assignee_id = case when $2 then null else assignee_id end,
+           delegate_id = case when $3 then null else delegate_id end where id = $1`,
+        [ticket.id, ticket.assignee !== null, ticket.delegate !== null],
+      );
+      await recordChanges(tx, { id: ticket.id, workspaceId }, adminId, now, [
+        ...(ticket.assignee ? [{ field: "assignee" as const, from: ticket.assignee, to: null }] : []),
+        ...(ticket.delegate ? [{ field: "delegate" as const, from: ticket.delegate, to: null }] : []),
+      ]);
+      // Losing its Delegate ends a Ticket's wait for a Run.
+      if (ticket.delegate) await startRunIfNeeded(context, tx, ticket.id, now);
+      live.publish(tx, workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
     live.endAfterCommit(tx, (stream) => stream.workspaceId === workspaceId && stream.userId === userId);
   });
 }

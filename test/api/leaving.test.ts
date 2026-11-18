@@ -65,4 +65,35 @@ describe("removing a User from a Workspace", () => {
     expect(stopped).toMatchObject({ id: run.id, state: "stopped", endReason: "ada@example.com removed bea@example.com from the Workspace." });
     expect(cronk.runner.stops.map((s) => s.runId)).toEqual([run.id]);
   });
+
+  test("refuses their Agents in that Workspace afterwards", async () => {
+    const { ticket, agent, remove } = await beaAtWork();
+    expect((await call("GET", `/api/tickets/${ticket.id}`, agent.as)).status).toBe(200);
+
+    await remove();
+
+    const refused = await call("GET", `/api/tickets/${ticket.id}`, agent.as);
+    expect(refused).toEqual({ status: 401, json: { error: expect.objectContaining({ code: "invalid_token" }) } });
+  });
+
+  test("unassigns and undelegates every Ticket they were Assignee of, as the Admin's Changes", async () => {
+    const { ada, bea, project, ticket, agent, remove } = await beaAtWork();
+    const idle = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Bea's later work" });
+    await ok("PATCH", `/api/tickets/${idle.id}`, ada, { assigneeId: bea.id });
+    const adas = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Ada's work" });
+    await ok("PATCH", `/api/tickets/${adas.id}`, ada, { assigneeId: ada.id });
+
+    await remove();
+
+    for (const t of [ticket, idle]) {
+      expect(await ok("GET", `/api/tickets/${t.id}`, ada)).toMatchObject({ assigneeId: null, delegateId: null });
+    }
+    expect(await ok("GET", `/api/tickets/${adas.id}`, ada)).toMatchObject({ assigneeId: ada.id });
+    const changes = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    const byAda = { kind: "user", id: ada.id, name: "ada@example.com" };
+    expect(changes.slice(-2)).toMatchObject([
+      { actor: byAda, field: "assignee", from: { id: bea.id, name: "bea@example.com" }, to: null },
+      { actor: byAda, field: "delegate", from: { id: agent.id, name: "bea-claude" }, to: null },
+    ]);
+  });
 });
