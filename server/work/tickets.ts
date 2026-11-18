@@ -128,16 +128,46 @@ export async function createTicket(
   });
 }
 
-export async function listTickets(db: Db, userId: string, projectId: string): Promise<TicketSummary[]> {
+/** Narrows a list of Tickets; every filter given must match. */
+export interface TicketFilter {
+  statusId?: string;
+  /** A User's id, or `none` for Tickets without an Assignee. */
+  assigneeId?: string;
+  priority?: Priority;
+  /** Matched ignoring case. */
+  label?: string;
+}
+
+export async function listTickets(
+  db: Db,
+  userId: string,
+  projectId: string,
+  filter: TicketFilter = {},
+): Promise<TicketSummary[]> {
   const project = await findProject(db, userId, projectId);
   if (!project) throw projectNotFound();
+  const params: unknown[] = [project.id];
+  const where = ["tickets.project_id = $1"];
+  const match = (condition: (param: string) => string, value: unknown) => {
+    params.push(value);
+    where.push(condition(`$${params.length}`));
+  };
+  const { statusId, assigneeId, priority, label } = filter;
+  // An id that can't be a record's id matches nothing, like one of another Project.
+  if (statusId !== undefined) match((p) => `tickets.status_id::text = ${p}`, statusId);
+  if (assigneeId === "none") where.push("tickets.assignee_id is null");
+  else if (assigneeId !== undefined) match((p) => `tickets.assignee_id::text = ${p}`, assigneeId);
+  if (priority !== undefined) match((p) => `tickets.priority = ${p}`, priority);
+  if (label !== undefined) {
+    match((p) => `exists (select 1 from unnest(tickets.labels) as l where lower(l) = lower(${p}))`, label.trim());
+  }
   const { rows } = await db.query<Row>(
     `select ${columns}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
-     where tickets.project_id = $1
+     where ${where.join(" and ")}
      order by statuses.position, tickets.number`,
-    [project.id],
+    params,
   );
   return rows.map(summary);
 }

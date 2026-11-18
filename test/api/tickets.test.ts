@@ -245,3 +245,52 @@ describe("moving a Ticket", () => {
     expect(removed.status).toBe(200);
   });
 });
+
+describe("listing and filtering Tickets", () => {
+  async function fourTickets() {
+    const context = await newProject();
+    const { user, cookie, project, statusId } = context;
+    const make = async (title: string, body: Record<string, unknown>) => {
+      const ticket = await createTicket(cookie, project.id, { title });
+      expect((await edit(cookie, ticket.id, body)).status).toBe(200);
+    };
+    await make("Urgent bug", { priority: "urgent", labels: ["Bug"], assigneeId: user.id });
+    await make("Ready feature", { statusId: statusId("Ready"), labels: ["feature", "ui"] });
+    await make("Done bug", { statusId: statusId("Done"), labels: ["bug", "UI"], assigneeId: user.id });
+    await make("Plain", {});
+    const titles = async (query: string) => {
+      const response = await cronk.request("GET", `/api/projects/${project.id}/tickets${query}`, { cookie });
+      expect(response.status, query).toBe(200);
+      return (await response.json()).map((t: { title: string }) => t.title);
+    };
+    return { ...context, titles };
+  }
+
+  test("a Project's Tickets are listed in board order, then by key", async () => {
+    const { titles } = await fourTickets();
+    expect(await titles("")).toEqual(["Urgent bug", "Plain", "Ready feature", "Done bug"]);
+  });
+
+  test("Tickets are filtered by Status, Assignee, Priority and Label, all at once", async () => {
+    const { user, statusId, titles } = await fourTickets();
+
+    expect(await titles(`?statusId=${statusId("Ready")}`)).toEqual(["Ready feature"]);
+    expect(await titles(`?assigneeId=${user.id}`)).toEqual(["Urgent bug", "Done bug"]);
+    expect(await titles("?assigneeId=none")).toEqual(["Plain", "Ready feature"]);
+    expect(await titles("?priority=urgent")).toEqual(["Urgent bug"]);
+    expect(await titles("?priority=none")).toEqual(["Plain", "Ready feature", "Done bug"]);
+    expect(await titles(`?label=BUG&assigneeId=${user.id}&statusId=${statusId("Done")}`)).toEqual(["Done bug"]);
+  });
+
+  test("a Label filter matches ignoring case", async () => {
+    const { titles } = await fourTickets();
+    expect(await titles("?label=bug")).toEqual(["Urgent bug", "Done bug"]);
+    expect(await titles("?label=Ui")).toEqual(["Ready feature", "Done bug"]);
+  });
+
+  test("an unknown Priority filter is refused", async () => {
+    const { cookie, project } = await fourTickets();
+    const response = await cronk.request("GET", `/api/projects/${project.id}/tickets?priority=critical`, { cookie });
+    expect(response.status).toBe(400);
+  });
+});

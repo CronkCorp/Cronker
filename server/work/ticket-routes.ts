@@ -47,14 +47,22 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "The Project's Tickets",
-          description: "In board order of their Statuses, then by key.",
+          description: "In board order of their Statuses, then by key, narrowed by whichever filters are given.",
           params: Type.Object({ projectId: Type.String() }),
+          querystring: Type.Object({
+            statusId: Type.Optional(Type.String()),
+            assigneeId: Type.Optional(
+              Type.String({ description: "A User's id, or `none` for Tickets without an Assignee." }),
+            ),
+            priority: Type.Optional(Priority),
+            label: Type.Optional(Type.String({ description: "Matched ignoring case." })),
+          }),
           response: { 200: Type.Array(TicketSummary), 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return listTickets(db, user.id, request.params.projectId);
+        return listTickets(db, user.id, request.params.projectId, request.query);
       },
     );
 
