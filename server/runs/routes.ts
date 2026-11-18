@@ -5,7 +5,7 @@ import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
-import { createRunner, RunnerRecord, runnersOf } from "./runners.js";
+import { createRunner, RunnerRecord, runnersOf, setRunnerLimit } from "./runners.js";
 import { briefOfRun, findRun, finishRun, Run, runsOf } from "./runs.js";
 
 export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -119,6 +119,26 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         return reply.code(201).send(await createRunner(context, user.id, request.body));
+      },
+    );
+
+    app.patch(
+      "/api/runners/:runnerId",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Set your Runner's limit on Runs at once",
+          description:
+            "Tickets needing a Run beyond the limit wait for a slot, highest Priority first, then the one that entered " +
+            "its Status first. Raising the limit starts waiting Tickets at once; lowering it stops no running Run.",
+          params: Type.Object({ runnerId: Type.String() }),
+          body: Type.Object({ limit: Type.Integer({ minimum: 1, maximum: 100 }) }),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return setRunnerLimit(context, user.id, request.params.runnerId, request.body.limit);
       },
     );
   };

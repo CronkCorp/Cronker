@@ -13,6 +13,7 @@ import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { RunState } from "./states.js";
+import { isBlocked } from "./waiting.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -107,13 +108,19 @@ export async function briefOfRun(db: Db, viewer: Viewer, runId: string): Promise
   return row.brief;
 }
 
+/** What `startRunIfNeeded` did: recorded a Run (running or refused), left the Ticket waiting, or neither. */
+export type RunNeed = "started" | "waiting" | "none";
+
 /**
  * Starts a Run on the Ticket if it needs one: it is delegated, sits in a Status with a Step and
  * has no running Run. Call it, in the transaction that locked the Ticket, after the Ticket entered
- * its Status or was delegated. The Run is recorded as running at once, and the Runner is asked to
+ * its Status or its Delegate changed. The Run is recorded as running at once, and the Runner is asked to
  * start it once the transaction commits. A Delegate using no Runner gets a Run refused at once.
+ *
+ * A Ticket that needs a Run but is blocked, or whose Runner has no slot for it, waits instead: a slot
+ * goes to the highest Priority waiting Ticket first, then to the one that entered its Status first.
  */
-export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<void> {
+export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<RunNeed> {
   const { rows } = await tx.query<{
     workspaceId: string;
     projectId: string;
@@ -127,11 +134,14 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
     runnerOwnerId: string | null;
     runnerName: string | null;
     runnerKind: string | null;
+    waits: boolean;
+    blocked: boolean;
   }>(
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
        tickets.delegate_id as "delegateId", agents.name as "agentName", runners.id as "runnerId",
-       runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind"
+       runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
+       tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
      from tickets join projects on projects.id = tickets.project_id
      left join agents on agents.id = tickets.delegate_id
      left join runners on runners.id = agents.runner_id
@@ -139,17 +149,33 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
     [ticketId],
   );
   const ticket = rows[0];
-  if (!ticket?.delegateId) return;
+  if (!ticket) return "none";
+  /** Marks whether the Ticket waits for a Run, telling the Workspace's streams if that changed its card. */
+  const waitForRun = async (waits: boolean) => {
+    if (ticket.waits === waits) return;
+    await tx.query("update tickets set waits_for_run = $2 where id = $1", [ticketId, waits]);
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
+  };
+  const needsNone = async () => {
+    await waitForRun(false);
+    return "none" as const;
+  };
+  if (!ticket.delegateId) return needsNone();
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;
-  if (!status.step) return;
+  if (!status.step) return needsNone();
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
   const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
-  if (running) return;
+  if (running) return needsNone();
+  const runner = ticket.runnerKind ? context.runners[ticket.runnerKind] : undefined;
+  if (ticket.blocked || (runner && !(await hasSlotFor(tx, ticket.runnerId!, ticketId)))) {
+    await waitForRun(true);
+    return "waiting";
+  }
+  await waitForRun(false);
 
   const runId = randomUUID();
   const brief = buildBrief(context.config, ticket.key, statuses, status as Status & { step: Step }, runId);
-  const runner = ticket.runnerKind ? context.runners[ticket.runnerKind] : undefined;
   const refusal = !ticket.runnerId
     ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
     : !runner
@@ -177,7 +203,8 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
       refusal ? now : null,
     ],
   );
-  if (inserted.rowCount === 0 || !runner) return;
+  if (inserted.rowCount === 0) return "none";
+  if (!runner) return "started";
 
   const start: RunToStart = {
     runId,
@@ -203,14 +230,65 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
           result.reference.url ?? null,
         ]);
       } else {
+        await lockRunner(tx, ticket.runnerId!);
         await tx.query(
           "update runs set state = 'refused', end_reason = $2, ended_at = $3 where id = $1 and state = 'running'",
           [runId, result.refusal.message, context.clock.now()],
         );
+        afterCommit(tx, () => startWaitingRuns(context, ticket.runnerId!));
       }
       context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
     });
   });
+  return "started";
+}
+
+/**
+ * Holds the Runner's slots still until the transaction ends: everything that starts or ends a Run through
+ * it takes this lock, so counting its running Runs and waiting Tickets gives the answer that stands.
+ */
+async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number }> {
+  const { rows } = await tx.query<{ limit: number }>("select run_limit as limit from runners where id = $1 for update", [
+    runnerId,
+  ]);
+  return rows[0]!;
+}
+
+/** Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue. */
+async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<boolean> {
+  const { limit } = await lockRunner(tx, runnerId);
+  const { rows } = await tx.query<{ taken: number }>(
+    `select (select count(*) from runs where runner_id = $1 and state = 'running')
+       + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
+          where agents.runner_id = $1 and waiting.waits_for_run and waiting.id <> $2 and not ${isBlocked("waiting")}
+            and (waiting.priority, waiting.status_entered_at, waiting.id)
+              < (select priority, status_entered_at, id from tickets where id = $2)) as taken`,
+    [runnerId, ticketId],
+  );
+  return Number(rows[0]!.taken) < limit;
+}
+
+/**
+ * Gives the Runner's free slots to its waiting Tickets, highest Priority first, then the one that entered its
+ * Status first, until it is full. Call it once a transaction that freed a slot or unblocked a Ticket commits.
+ * Each Ticket is started in a transaction of its own, so no two Tickets are held at once.
+ */
+export async function startWaitingRuns(context: Context, runnerId: string): Promise<void> {
+  for (;;) {
+    const { rows } = await context.db.query<{ id: string }>(
+      `select tickets.id from tickets join agents on agents.id = tickets.delegate_id
+       where agents.runner_id = $1 and tickets.waits_for_run and not ${isBlocked("tickets")}
+       order by tickets.priority, tickets.status_entered_at, tickets.id limit 1`,
+      [runnerId],
+    );
+    const next = rows[0];
+    if (!next) return;
+    const need = await transaction(context.db, async (tx) => {
+      await tx.query("select 1 from tickets where id = $1 for update", [next.id]);
+      return startRunIfNeeded(context, tx, next.id, context.clock.now());
+    });
+    if (need === "waiting") return;
+  }
 }
 
 /**
@@ -272,7 +350,11 @@ export async function finishRun(
       [run.id, outcome.name, input.question ?? null, input.report ?? null, now],
     );
     if (outcome.statusId !== ticket.statusId) {
-      await tx.query("update tickets set status_id = $2 where id = $1", [ticket.id, outcome.statusId]);
+      await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [
+        ticket.id,
+        outcome.statusId,
+        now,
+      ]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id }, now, [
         { field: "status", from: named(ticket.statusId), to: named(outcome.statusId) },

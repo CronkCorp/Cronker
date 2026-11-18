@@ -8,6 +8,7 @@ import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
 import { startRunIfNeeded } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
+import { Waiting, waitingColumn } from "../runs/waiting.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -58,6 +59,7 @@ export const TicketSummary = Type.Object({
     ],
     { description: "The Ticket's latest Run, for marking the board's card; its Runs list them all." },
   ),
+  waiting: Waiting,
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
@@ -75,7 +77,8 @@ export const ticketColumns = `tickets.id, tickets.project_id as "projectId", pro
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
-   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun"`;
+   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
+  ${waitingColumn("tickets")} as waiting`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -229,8 +232,8 @@ export async function createTicket(
          returning next_ticket_number - 1 as number
        )
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
-         assignee_id, delegate_id)
-       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9 from numbered
+         assignee_id, delegate_id, status_entered_at)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7 from numbered
        returning id`,
       [
         project.workspaceId,
@@ -383,9 +386,11 @@ export async function editTicket(
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
 
+    const now = clock.now();
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11 where id = $1`,
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
+       status_entered_at = case when status_id = $9 then status_entered_at else $12 end where id = $1`,
       [
         ticket.id,
         next.title,
@@ -398,9 +403,9 @@ export async function editTicket(
         next.statusId,
         next.parentId,
         next.delegateId,
+        now,
       ],
     );
-    const now = clock.now();
     await recordChanges(tx, ticket, userId, now, changes);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     if (next.parentId !== ticket.parentId) {
@@ -418,10 +423,11 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
-    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
+    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
+    // leaving it, or losing its Delegate, ends its wait for one.
     const entered = next.statusId !== ticket.statusId;
-    const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
-    if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
+    const delegateChanged = next.delegateId !== ticket.delegateId;
+    if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, next);
   });
 }
