@@ -557,11 +557,11 @@ function Members({
           <table aria-labelledby="pending-adds">
             <tbody>
               {pending.map((add) => (
-                <tr key={`${add.user.id} ${add.addedBy}`}>
+                <tr key={`${add.user.id} ${add.addedVia}`}>
                   <td>{nameOf(add.user)}</td>
                   <td className="muted">
-                    {add.addedBy === "email"
-                      ? `by email, link valid until ${new Date(add.expiresAt!).toLocaleString()}`
+                    {add.addedVia === "email"
+                      ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
                       : "by GitHub login, joins at their next sign-in"}
                   </td>
                   <td className="actions">

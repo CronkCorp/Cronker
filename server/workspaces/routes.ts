@@ -123,7 +123,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Workspaces"],
           summary: "Cancel a pending add (Admins only)",
           description:
-            "Ends the person's unused links to join the Workspace and their add by GitHub login, so they can join by neither. They can be added again.",
+            "Ends the User's unused links to join the Workspace and their add by GitHub login, so they can join by neither. They can be added again.",
           params: Type.Object({ workspaceId: Type.String(), userId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },

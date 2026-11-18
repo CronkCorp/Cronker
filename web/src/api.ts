@@ -34,13 +34,9 @@ export interface Member {
   isAdmin: boolean;
 }
 
-export interface PendingAdd {
-  user: User;
-  addedBy: "email" | "github";
-  addedAt: string;
-  /** When the last of their join links expires; null for an add by GitHub login. */
-  expiresAt: string | null;
-}
+export type PendingAdd =
+  | { user: User; addedVia: "email"; addedAt: string; /** When the last of their links to join expires. */ expiresAt: string }
+  | { user: User; addedVia: "github"; addedAt: string };
 
 export interface Link {
   url: string;

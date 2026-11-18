@@ -297,7 +297,7 @@ describe("pending adds", () => {
 
     expect(pending.status).toBe(200);
     expect(await pending.json()).toEqual([
-      { user: bea.user, addedBy: "email", addedAt: "2026-01-01T09:00:00.000Z", expiresAt: "2026-01-08T09:00:00.000Z" },
+      { user: bea.user, addedVia: "email", addedAt: "2026-01-01T09:00:00.000Z", expiresAt: "2026-01-08T09:00:00.000Z" },
     ]);
     const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
     expect(members.map((m: { user: { email: string } }) => m.user.email)).toEqual(["ada@example.com", "cy@example.com"]);
@@ -336,7 +336,7 @@ describe("pending adds", () => {
     expect(await again.json()).toEqual({ error: { code: "not_found", message: expect.any(String) } });
   });
 
-  test("cancelling an add leaves the person's other Workspaces alone, and they can be added again", async () => {
+  test("cancelling an add leaves the User's other Workspaces alone, and they can be added again", async () => {
     const { workspace } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const friends = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
@@ -363,7 +363,8 @@ describe("pending adds", () => {
     const response = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${ada.id}`, { cookie });
 
     expect(response.status).toBe(404);
-    expect((await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).status).toBe(200);
+    const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(members).toEqual([{ user: ada, isAdmin: true }]);
   });
 });
 

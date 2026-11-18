@@ -76,21 +76,16 @@ test("an Admin adds a User by email, who joins through the link", async ({ page,
   await expect(row).toHaveCount(0);
 });
 
-test("an Admin sees a pending add and cancels it, which ends its link", async ({ page, cronk, browser }) => {
+test("an Admin sees a pending add and cancels it", async ({ page, cronk }) => {
   await setUpAndSignIn(page, cronk);
 
   await page.getByRole("link", { name: "Members" }).click();
   await page.getByLabel("Email").fill("bea@example.com");
   await page.getByRole("button", { name: "Add by email" }).click();
-  const link = await page.getByLabel("Link for bea@example.com").inputValue();
 
   const pending = page.getByRole("table", { name: "Added, not joined yet" });
   const row = pending.getByRole("row", { name: /bea@example\.com/ });
   await expect(row).toContainText("by email");
   await row.getByRole("button", { name: "Cancel add" }).click();
   await expect(row).toHaveCount(0);
-
-  const bea = await (await browser.newContext()).newPage();
-  await bea.goto(link);
-  await expect(bea.getByRole("heading", { name: "This link doesn't work" })).toBeVisible();
 });

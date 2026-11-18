@@ -45,24 +45,32 @@ export async function membersOf(db: Db, workspaceId: string): Promise<Member[]> 
   return rows.map(({ is_admin, ...user }) => ({ user, isAdmin: is_admin }));
 }
 
-export const PendingAdd = Type.Object({
-  user: User,
-  addedBy: Type.Union([Type.Literal("email"), Type.Literal("github")], {
-    description: "`email`: they join through a one-time link. `github`: they join at their next sign-in with GitHub.",
-  }),
-  addedAt: Type.String({ format: "date-time" }),
-  expiresAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
-    description: "When the last of their join links expires; null for an add by GitHub login, which doesn't.",
-  }),
-});
+const AddedAt = Type.String({ format: "date-time" });
+
+/** Someone an Admin added to a Workspace who hasn't joined it yet, and how they were added. */
+export const PendingAdd = Type.Union([
+  Type.Object(
+    {
+      user: User,
+      addedVia: Type.Literal("email"),
+      addedAt: AddedAt,
+      expiresAt: Type.String({ format: "date-time", description: "When the last of their links to join expires." }),
+    },
+    { description: "Added by email: they join through a one-time link." },
+  ),
+  Type.Object(
+    { user: User, addedVia: Type.Literal("github"), addedAt: AddedAt },
+    { description: "Added by GitHub login: they join at their next sign-in with GitHub." },
+  ),
+]);
 export type PendingAdd = Static<typeof PendingAdd>;
 
 /** Everyone an Admin added to the Workspace who hasn't joined it yet, oldest add first. */
 export async function pendingAddsOf({ db, clock }: Context, workspaceId: string): Promise<PendingAdd[]> {
-  const { rows } = await db.query<UserRecord & { added_by: "email" | "github"; added_at: Date; expires_at: Date | null }>(
-    `select ${userColumns}, pending.added_by, pending.added_at, pending.expires_at
+  const { rows } = await db.query<UserRecord & { added_via: "email" | "github"; added_at: Date; expires_at: Date | null }>(
+    `select ${userColumns}, pending.added_via, pending.added_at, pending.expires_at
      from (
-       select user_id, 'email' as added_by, min(created_at) as added_at, max(expires_at) as expires_at
+       select user_id, 'email' as added_via, min(created_at) as added_at, max(expires_at) as expires_at
        from links where kind = 'join' and workspace_id = $1 and used_at is null and expires_at > $2
        group by user_id
        union all
@@ -73,18 +81,17 @@ export async function pendingAddsOf({ db, clock }: Context, workspaceId: string)
      order by pending.added_at, lower(coalesce(users.email, users.github_login))`,
     [workspaceId, clock.now()],
   );
-  return rows.map(({ added_by, added_at, expires_at, ...user }) => ({
-    user,
-    addedBy: added_by,
-    addedAt: added_at.toISOString(),
-    expiresAt: expires_at?.toISOString() ?? null,
-  }));
+  return rows.map(({ added_via, added_at, expires_at, ...user }) =>
+    added_via === "email"
+      ? { user, addedVia: "email", addedAt: added_at.toISOString(), expiresAt: expires_at!.toISOString() }
+      : { user, addedVia: "github", addedAt: added_at.toISOString() },
+  );
 }
 
 /**
- * Cancels an add the person hasn't joined by yet: their unused links to join the Workspace
- * end, and so does their add by GitHub login, so they can join by neither. 404 if there is
- * no such add.
+ * Cancels every add of the User to the Workspace they haven't joined by yet: their unused
+ * links to join it end, and so does their add by GitHub login, so they can join by neither.
+ * 404 if there is no such add.
  */
 export async function cancelPendingAdd({ db, clock }: Context, workspaceId: string, userId: string): Promise<void> {
   await transaction(db, async (tx) => {

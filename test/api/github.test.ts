@@ -268,7 +268,7 @@ describe("pending adds by GitHub login", () => {
     const pending = await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie });
 
     expect(await pending.json()).toEqual([
-      { user: { id: user.id, email: null, githubLogin: "bea" }, addedBy: "github", addedAt: "2026-01-01T09:00:00.000Z", expiresAt: null },
+      { user: { id: user.id, email: null, githubLogin: "bea" }, addedVia: "github", addedAt: "2026-01-01T09:00:00.000Z" },
     ]);
     await signInWithGitHub(cronk, bea);
     expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie })).json()).toEqual([]);
@@ -292,6 +292,21 @@ describe("pending adds by GitHub login", () => {
     expect(me.workspaces).toEqual([]);
     const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
     expect(members.map((m: { user: { id: string } }) => m.user.id)).not.toContain(user.id);
+  });
+
+  test("a cancelled add by email isn't joined by signing in with the GitHub account of that email either", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const { user } = await (
+      await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } })
+    ).json();
+
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${user.id}`, { cookie });
+
+    const signedIn = await signInWithGitHub(cronk, cronk.github.account("bea", "bea@example.com"));
+    const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
+    expect(me.workspaces).toEqual([]);
   });
 
   test("cancelling one Workspace's add by GitHub login leaves the others", async () => {
