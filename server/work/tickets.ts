@@ -555,28 +555,30 @@ export async function editTicket(
       const owner = await ownerOf(tx, next.delegateId);
       if (owner !== next.assigneeId) await change("delegateId", "delegate", null, agentNamed);
     }
+    /** The parent the Ticket was just put under, if any. */
+    let newParent: TicketRef | null = null;
+    /** Whether the Ticket took its new parent's Delegation. */
+    let delegationInherited = false;
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
+      if (parent && parent.id !== ticket.parentId) newParent = parent;
       // A new Sub-Ticket takes a delegated parent's Delegation, and so its Assignee, whose Agent the Delegate is,
       // even over a Delegation of its own; under an undelegated parent it keeps its own. An Assignee or Delegate
       // given along with the parent wins.
-      const given = edit.assigneeId !== undefined || edit.delegateId !== undefined;
-      const delegation = next.parentId !== ticket.parentId && next.parentId !== null && !given
-        ? await heldDelegationOf(tx, next.parentId)
-        : null;
+      const delegationGiven = edit.assigneeId !== undefined || edit.delegateId !== undefined;
+      const delegation = newParent && !delegationGiven ? await heldDelegationOf(tx, newParent.id) : null;
       if (delegation) {
         await change("assigneeId", "assignee", delegation.assigneeId, userNamed);
         await change("delegateId", "delegate", delegation.delegateId, agentNamed);
+        delegationInherited = true;
       }
     }
     if (edit.autonomousDelegation !== undefined) {
       await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
     } else {
       // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
-      const inherited = next.parentId !== ticket.parentId && next.parentId !== null
-        ? await autonomousDelegationOf(tx, next.parentId)
-        : null;
+      const inherited = newParent ? await autonomousDelegationOf(tx, newParent.id) : null;
       if (inherited !== null) {
         await change("autonomousDelegation", "autonomousDelegation", inherited);
       } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
@@ -660,9 +662,11 @@ export async function editTicket(
       const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
       const reason = moved
         ? `${who} moved ${ticket.key} to ${moved.name}.`
-        : delegate
-          ? `${who} delegated ${ticket.key} to ${delegate.name}.`
-          : `${who} undelegated ${ticket.key}.`;
+        : delegate && delegationInherited
+          ? `${who} put ${ticket.key} under ${newParent!.key}, delegating it to ${delegate.name}.`
+          : delegate
+            ? `${who} delegated ${ticket.key} to ${delegate.name}.`
+            : `${who} undelegated ${ticket.key}.`;
       await stopRunningRun(context, tx, ticket.id, reason, now);
     }
     // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
@@ -885,14 +889,12 @@ async function heldDelegationOf(
   tx: Tx,
   ticketId: string,
 ): Promise<{ assigneeId: string; delegateId: string } | null> {
-  const { rows } = await tx.query<{ assigneeId: string; delegateId: string }>(
-    `select tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId"
-     from tickets join agents on agents.id = tickets.delegate_id
-     where tickets.id = $1 and agents.removed_at is null
-     for share of agents`,
+  const { rows } = await tx.query<{ assigneeId: string; delegateId: string | null }>(
+    `select assignee_id as "assigneeId", delegate_id as "delegateId" from tickets where id = $1`,
     [ticketId],
   );
-  return rows[0] ?? null;
+  const { assigneeId, delegateId } = rows[0]!;
+  return delegateId !== null && (await holdAgentInUse(tx, delegateId)) ? { assigneeId, delegateId } : null;
 }
 
 async function ownerOf(tx: Tx, agentId: string): Promise<string | undefined> {
