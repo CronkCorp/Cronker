@@ -225,25 +225,75 @@ describe("moving a Ticket", () => {
       });
     }
   });
+});
 
-  test("a Status that holds Tickets can't be removed until they move out", async () => {
+describe("removing a Status that holds Tickets", () => {
+  async function removeStatus(cookie: string, projectId: string, statusId: string) {
+    return cronk.request("DELETE", `/api/projects/${projectId}/statuses/${statusId}`, { cookie });
+  }
+
+  async function ticketsIn(cookie: string, projectId: string, statusId: string): Promise<string[]> {
+    const response = await cronk.request("GET", `/api/projects/${projectId}/tickets?statusId=${statusId}`, { cookie });
+    expect(response.status).toBe(200);
+    return (await response.json()).map((t: { title: string }) => t.title);
+  }
+
+  test("is refused, naming how many Tickets are in it, and nothing changes", async () => {
     const { cookie, project, statusId } = await newProject();
-    const ticket = await createTicket(cookie, project.id, { title: "Ready to go" });
-    await edit(cookie, ticket.id, { statusId: statusId("Ready") });
+    for (const title of ["First", "Second"]) {
+      const ticket = await createTicket(cookie, project.id, { title });
+      expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+    }
 
-    const refused = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
-      cookie,
-    });
+    const refused = await removeStatus(cookie, project.id, statusId("Ready"));
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({
-      error: { code: "status_has_tickets", message: "Ready still holds Tickets. Move them to another Status first." },
+      error: {
+        code: "status_has_tickets",
+        message: "Ready holds 2 Tickets. Move them to another Status before removing Ready.",
+      },
     });
 
-    await edit(cookie, ticket.id, { statusId: statusId("Backlog") });
-    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
-      cookie,
-    });
-    expect(removed.status).toBe(200);
+    const after = await cronk.request("GET", `/api/projects/${project.id}`, { cookie });
+    expect((await after.json()).statuses.map((s: { name: string }) => s.name)).toContain("Ready");
+    expect(await ticketsIn(cookie, project.id, statusId("Ready"))).toEqual(["First", "Second"]);
+  });
+
+  test("names a single Ticket in the singular", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Alone" });
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+
+    const refused = await removeStatus(cookie, project.id, statusId("Ready"));
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error.message).toBe(
+      "Ready holds 1 Ticket. Move it to another Status before removing Ready.",
+    );
+  });
+
+  test("once its Tickets move out it is removed, and they stay where they moved", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Moving on" });
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Triage") })).status).toBe(200);
+
+    expect((await removeStatus(cookie, project.id, statusId("Ready"))).status).toBe(200);
+    expect(await ticketsIn(cookie, project.id, statusId("Triage"))).toEqual(["Moving on"]);
+  });
+
+  test("renaming, moving or changing the kind of a Status that holds Tickets leaves them in it", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Staying put" });
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+
+    for (const body of [{ name: "Todo" }, { position: 0 }, { kind: "active" }]) {
+      const changed = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+        cookie,
+        body,
+      });
+      expect(changed.status, JSON.stringify(body)).toBe(200);
+      expect(await ticketsIn(cookie, project.id, statusId("Ready")), JSON.stringify(body)).toEqual(["Staying put"]);
+    }
   });
 });
 
