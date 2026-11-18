@@ -5,6 +5,7 @@ import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
+import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
   editTicket,
@@ -152,6 +153,63 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         return reply.code(201).send(await addComment(db, clock, user.id, request.params.ticketId, request.body));
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/relations",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Relations, parent and Sub-Tickets",
+          description: "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: TicketRelations, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return relationsOf(db, user.id, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/relations",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Relate a Ticket to another",
+          description:
+            "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            kind: RelationKind,
+            ticketId: Type.String({ description: "The other Ticket." }),
+          }),
+          response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        return reply.code(201).send(await addRelation(db, clock, user.id, request.params.ticketId, request.body));
+      },
+    );
+
+    app.delete(
+      "/api/tickets/:ticketId/relations/:relationId",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Remove a Relation",
+          description: "Removes a Relation of this Ticket, whichever of its two Tickets it was made from.",
+          params: Type.Object({ ticketId: Type.String(), relationId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        await removeRelation(db, user.id, request.params.ticketId, request.params.relationId);
+        return reply.code(204).send(null);
       },
     );
 
