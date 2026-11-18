@@ -113,3 +113,13 @@ export async function useLink(context: Context, token: string, password: string 
     return { id: link.user_id, email: link.email };
   });
 }
+
+/** A reset link for whichever User has the email, for an operator when nobody can sign in. */
+export async function issueResetLinkByEmail(context: Context, email: string): Promise<{ user: User; link: Link }> {
+  return transaction(context.db, async (tx) => {
+    const { rows } = await tx.query<User>("select id, email from users where lower(email) = lower($1)", [email.trim()]);
+    const user = rows[0];
+    if (!user) throw new ApiError(404, "not_found", `No User has the email ${email.trim()}.`);
+    return { user, link: await issueLink(context, tx, "reset", user.id) };
+  });
+}

@@ -13,6 +13,7 @@
     "build:server": "tsc -p tsconfig.build.json",
     "build:web": "vite build",
     "start": "node dist/server/main.js",
+    "command": "node dist/server/command.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build:web && playwright test --trace off"

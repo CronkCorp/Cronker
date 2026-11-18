@@ -55,3 +55,39 @@ describe("changing one's own password", () => {
     expect(anonymous.status).toBe(401);
   });
 });
+
+describe("the reset-link server command", () => {
+  test("issues a reset link for any User, for when nobody can sign in", async () => {
+    const { user } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+
+    const result = await cronk.command("reset-link", "ADA@example.com");
+
+    expect(result.code).toBe(0);
+    const url = result.stdout.match(/https?:\/\/\S+/)?.[0];
+    expect(url).toMatch(new RegExp(`^${cronk.url}/link#cronk_reset_[A-Za-z0-9_-]{20,}$`));
+    expect(result.stdout).toContain("ada@example.com");
+    const token = new URL(url!).hash.slice(1);
+    const used = await cronk.request("POST", "/api/links/use", { body: { token, password: "recovered at last" } });
+    expect(await used.json()).toEqual({ user });
+    expect((await cronk.request("GET", "/api/me", { cookie })).status).toBe(401);
+    await signIn(cronk, firstUser.email, "recovered at last");
+  });
+
+  test("says so when no User has the email", async () => {
+    await setUp(cronk);
+
+    const result = await cronk.command("reset-link", "nobody@example.com");
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("No User has the email nobody@example.com");
+  });
+
+  test("explains its usage", async () => {
+    const result = await cronk.command();
+
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("reset-link <email>");
+  });
+});

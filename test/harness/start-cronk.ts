@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { createServer } from "node:net";
 import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { createCronk, type Cronk } from "../../server/cronk.js";
 import { TestClock } from "./clock.js";
 import { createTestDatabase } from "./database.js";
@@ -30,7 +32,15 @@ export interface StartedCronk {
   /** The setup code from the server log. */
   setupCode(): string;
   request(method: string, path: string, options?: RequestOptions): Promise<Response>;
+  /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
+  command(...args: string[]): Promise<CommandResult>;
   stop(): Promise<void>;
+}
+
+export interface CommandResult {
+  code: number;
+  stdout: string;
+  stderr: string;
 }
 
 export interface StartCronkOptions {
@@ -38,6 +48,8 @@ export interface StartCronkOptions {
   /** Directory of the built web client to serve, if any. */
   webRoot?: string;
 }
+
+const commandScript = fileURLToPath(new URL("../../server/command.ts", import.meta.url));
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -99,6 +111,16 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
         method,
         headers: all,
         body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    },
+    command(...args) {
+      return new Promise((resolve) => {
+        execFile(
+          process.execPath,
+          ["--import", "tsx", commandScript, ...args],
+          { env: { ...process.env, DATABASE_URL: database.url, CRONK_PUBLIC_URL: url } },
+          (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }),
+        );
       });
     },
     async stop() {
