@@ -202,6 +202,10 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
           result.reference.sessionId ?? null,
           result.reference.url ?? null,
         ]);
+      } else if (result.refusal.kind === "rate_limited") {
+        // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits for its Runner,
+        // as it would for a free slot, rather than showing as couldn't-start.
+        await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
       } else {
         await tx.query(
           "update runs set state = 'refused', end_reason = $2, ended_at = $3 where id = $1 and state = 'running'",
@@ -282,6 +286,46 @@ export async function finishRun(
     // Moving into a Status by an Outcome counts as entering it.
     await startRunIfNeeded(context, tx, ticket.id, now);
     return present((await findRunRow(tx, caller, run.id))!);
+  });
+}
+
+/** The Run states a User may Retry from: the Run went wrong, and nothing retries it by itself. */
+const retriable = ["failed", "lost", "refused"];
+
+/**
+ * Starts a fresh Run of the same Step on a Ticket whose latest Run failed, was lost or couldn't
+ * start, while the Ticket is still delegated and in that Run's Status. Only a User retries.
+ */
+export async function retryRun(context: Context, viewer: Viewer, ticketId: string): Promise<Run> {
+  return transaction(context.db, async (tx) => {
+    const ticket = await findTicketRow(tx, viewer, ticketId, { lock: true });
+    if (!ticket) throw ticketNotFound();
+    const { rows } = await tx.query<{ state: string; statusId: string | null }>(
+      `select state, status_id as "statusId" from runs where ticket_id = $1 order by seq desc limit 1`,
+      [ticket.id],
+    );
+    const latest = rows[0];
+    const rule = `Retry starts a fresh Run on a delegated Ticket whose latest Run failed, was lost or couldn't start, while it is still in that Run's Status.`;
+    if (!latest || !retriable.includes(latest.state) || latest.statusId !== ticket.statusId || !ticket.delegateId) {
+      const why = !latest
+        ? `${ticket.key} has had no Run`
+        : !retriable.includes(latest.state)
+          ? `${ticket.key}'s latest Run is ${latest.state}`
+          : latest.statusId !== ticket.statusId
+            ? `${ticket.key} has moved on from the Status its latest Run was in`
+            : `${ticket.key} isn't delegated`;
+      throw new ApiError(409, "nothing_to_retry", `${why}, so there is nothing to retry.`, {
+        rule,
+        advice: "Move the Ticket into a Status with a Step, or delegate it, to start a Run there.",
+      });
+    }
+    await startRunIfNeeded(context, tx, ticket.id, context.clock.now());
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    const { rows: started } = await tx.query<Row>(
+      `select ${columns} from runs join agents on agents.id = runs.agent_id where runs.ticket_id = $1 order by runs.seq desc limit 1`,
+      [ticket.id],
+    );
+    return present(started[0]!);
   });
 }
 
