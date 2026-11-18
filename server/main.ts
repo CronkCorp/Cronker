@@ -3,10 +3,11 @@ import { fileURLToPath } from "node:url";
 import { ConfigError, loadConfig } from "./config.js";
 import { createCronk } from "./cronk.js";
 
-// The built web client sits next to the built server (dist/web beside dist/server).
-const builtWebRoot = fileURLToPath(new URL("../web/", import.meta.url));
-const devWebRoot = fileURLToPath(new URL("../dist/web/", import.meta.url));
-const webRoot = [builtWebRoot, devWebRoot].find((dir) => existsSync(`${dir}index.html`));
+// The built web client is dist/web: beside the built server (dist/server), or under
+// the repository root when the server runs from source.
+const fromDist = import.meta.url.includes("/dist/server/");
+const builtWeb = fileURLToPath(new URL(fromDist ? "../web/" : "../dist/web/", import.meta.url));
+const webRoot = existsSync(`${builtWeb}index.html`) ? builtWeb : undefined;
 
 let config;
 try {

@@ -2,26 +2,14 @@ import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
-/** SQL migrations, applied in file-name order, each once. */
-const migrationsDir = fileURLToPath(new URL("../migrations/", import.meta.url));
-
-// The build puts the server in dist/server, two levels down instead of one.
-async function resolveMigrationsDir(): Promise<string> {
-  for (const dir of [migrationsDir, fileURLToPath(new URL("../../migrations/", import.meta.url))]) {
-    try {
-      await readdir(dir);
-      return dir;
-    } catch {
-      // try the next
-    }
-  }
-  throw new Error("migrations directory not found");
-}
+/** SQL migrations in the repository's `migrations/`, applied in file-name order, each once. */
+const migrationsDir = fileURLToPath(
+  new URL(import.meta.url.includes("/dist/server/") ? "../../migrations/" : "../migrations/", import.meta.url),
+);
 
 async function migrationFiles(): Promise<{ name: string; sql: string }[]> {
-  const dir = await resolveMigrationsDir();
-  const names = (await readdir(dir)).filter((n) => n.endsWith(".sql")).sort();
-  return Promise.all(names.map(async (name) => ({ name, sql: await readFile(dir + name, "utf8") })));
+  const names = (await readdir(migrationsDir)).filter((n) => n.endsWith(".sql")).sort();
+  return Promise.all(names.map(async (name) => ({ name, sql: await readFile(migrationsDir + name, "utf8") })));
 }
 
 /** A string that changes whenever any migration changes. */
