@@ -179,7 +179,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
                   format: "uuid",
                   description:
                     "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; " +
-                    "never of itself or of one of its own Sub-Tickets.",
+                    "never of itself or of one of its own Sub-Tickets. Under a delegated parent it takes the parent's " +
+                    "Assignee and Delegate, replacing its own and stopping its running Run, unless `assigneeId` or " +
+                    "`delegateId` is given too; under an undelegated parent it keeps its own.",
                 }),
               ),
             ),

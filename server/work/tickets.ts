@@ -558,8 +558,11 @@ export async function editTicket(
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
-      // A new Sub-Ticket takes its parent's Delegation, and so its Assignee, whose Agent the Delegate is.
-      const delegation = next.parentId !== ticket.parentId && next.parentId !== null && next.delegateId === null
+      // A new Sub-Ticket takes a delegated parent's Delegation, and so its Assignee, whose Agent the Delegate is,
+      // even over a Delegation of its own; under an undelegated parent it keeps its own. An Assignee or Delegate
+      // given along with the parent wins.
+      const given = edit.assigneeId !== undefined || edit.delegateId !== undefined;
+      const delegation = next.parentId !== ticket.parentId && next.parentId !== null && !given
         ? await heldDelegationOf(tx, next.parentId)
         : null;
       if (delegation) {
