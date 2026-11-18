@@ -39,6 +39,18 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     openapi: {
       info: { title: "Cronk API", version: "0.0.0" },
       servers: [{ url: context.config.publicUrl.origin }],
+      components: {
+        securitySchemes: {
+          signIn: { type: "apiKey", in: "cookie", name: "cronk_sign_in", description: "A User's sign-in." },
+          agentToken: {
+            type: "http",
+            scheme: "bearer",
+            description:
+              "An Agent's token. Agents may read their Workspace and comment on its Tickets; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+          },
+        },
+      },
+      security: [{ signIn: [] }, { agentToken: [] }],
     },
   });
   await app.register(swaggerUi, { routePrefix: "/api/docs" });

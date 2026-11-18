@@ -17,6 +17,10 @@ test("OpenAPI documentation is generated from the routes and served", async () =
   expect(document.openapi).toMatch(/^3\./);
   expect(document.servers).toEqual([{ url: cronk.url }]);
   expect(Object.keys(document.paths).sort()).toEqual([
+    "/api/agent",
+    "/api/agents/{agentId}",
+    "/api/agents/{agentId}/tokens",
+    "/api/agents/{agentId}/tokens/{tokenId}",
     "/api/links/lookup",
     "/api/links/use",
     "/api/me",
@@ -32,11 +36,14 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/tickets/{ticketId}/timeline",
     "/api/workspaces",
     "/api/workspaces/{workspaceId}",
+    "/api/workspaces/{workspaceId}/agents",
     "/api/workspaces/{workspaceId}/members",
     "/api/workspaces/{workspaceId}/members/{userId}",
     "/api/workspaces/{workspaceId}/members/{userId}/reset-link",
     "/api/workspaces/{workspaceId}/projects",
+    "/api/workspaces/{workspaceId}/tickets/{key}",
   ]);
+  expect(document.components.securitySchemes.agentToken).toEqual(expect.objectContaining({ type: "http", scheme: "bearer" }));
   expect(Object.keys(document.paths["/api/sign-in"]).sort()).toEqual(["delete", "post"]);
   expect(document.paths["/api/setup"].post.requestBody.content["application/json"].schema.required).toEqual(
     expect.arrayContaining(["setupCode", "email", "password", "workspaceName"]),

@@ -3,6 +3,7 @@ import type { Clock } from "../clock.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
 
@@ -67,27 +68,38 @@ export function ticketNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Ticket.");
 }
 
-/** A Ticket, if the User belongs to its Workspace; otherwise nothing, as if it didn't exist. */
+/** A Ticket in the Viewer's view; otherwise nothing, as if it didn't exist. */
 export async function findTicketRow(
   db: Db | Tx,
-  userId: string,
+  viewer: Viewer,
   ticketId: string,
   { lock = false } = {},
 ): Promise<TicketRow | undefined> {
   if (!isUuid(ticketId)) return undefined;
+  const view = inView(viewer, "tickets.workspace_id", "$2");
   const { rows } = await db.query<Row>(
     `select ${columns}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
-     join memberships on memberships.workspace_id = tickets.workspace_id and memberships.user_id = $2
-     where tickets.id = $1 ${lock ? "for update of tickets" : ""}`,
-    [ticketId, userId],
+     where tickets.id = $1 and ${view.sql} ${lock ? "for update of tickets" : ""}`,
+    [ticketId, view.value],
   );
   return rows[0];
 }
 
-export async function findTicket(db: Db, userId: string, ticketId: string): Promise<Ticket | undefined> {
-  const row = await findTicketRow(db, userId, ticketId);
+export async function findTicket(db: Db, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
+  const row = await findTicketRow(db, viewer, ticketId);
   return row && withMentions(db, row);
+}
+
+/** A Ticket of a Workspace in the Viewer's view, by its key, ignoring case. */
+export async function findTicketByKey(
+  db: Db,
+  viewer: Viewer,
+  workspaceId: string,
+  key: string,
+): Promise<Ticket | undefined> {
+  const [mention] = isUuid(workspaceId) ? await mentionsIn(db, workspaceId, key) : [];
+  return mention && mention.text === key ? findTicket(db, viewer, mention.ticketId) : undefined;
 }
 
 async function withMentions(db: Db | Tx, row: Row): Promise<Ticket> {
@@ -130,7 +142,7 @@ export async function createTicket(
   input: { title: string; description?: string },
 ): Promise<Ticket> {
   return transaction(db, async (tx) => {
-    const project = await findProject(tx, userId, projectId, { lock: true });
+    const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
     const backlog = project.statuses.find((s) => s.kind === "backlog")!;
     const now = clock.now();
@@ -144,7 +156,7 @@ export async function createTicket(
        returning id`,
       [project.workspaceId, project.id, input.title.trim(), input.description ?? "", backlog.id, userId, now],
     );
-    const ticket = (await findTicketRow(tx, userId, rows[0]!.id))!;
+    const ticket = (await findTicketRow(tx, userViewer(userId), rows[0]!.id))!;
     await recordChanges(tx, ticket, userId, now, [{ field: "created", from: null, to: null }]);
     return withMentions(tx, ticket);
   });
@@ -162,11 +174,11 @@ export interface TicketFilter {
 
 export async function listTickets(
   db: Db,
-  userId: string,
+  viewer: Viewer,
   projectId: string,
   filter: TicketFilter = {},
 ): Promise<TicketSummary[]> {
-  const project = await findProject(db, userId, projectId);
+  const project = await findProject(db, viewer, projectId);
   if (!project) throw projectNotFound();
   const params: unknown[] = [project.id];
   const where = ["tickets.project_id = $1"];
@@ -217,7 +229,7 @@ export async function editTicket(
   edit: TicketEdit,
 ): Promise<Ticket> {
   return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, userId, ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     const next = { ...ticket };
     const changes: NewChange[] = [];
