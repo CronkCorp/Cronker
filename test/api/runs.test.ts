@@ -646,3 +646,28 @@ describe("Runs live", () => {
     stream.close();
   });
 });
+
+describe("the answer to editing a Ticket", () => {
+  test("delegating a Ticket into a Status with a Step answers with the Run it started, as a GET shows it", async () => {
+    const { ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+
+    const delegated = await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+
+    const [run] = await runsOf(ticket.id, ada);
+    expect(delegated.lastRun).toEqual({ id: run.id, state: "running" });
+    expect(delegated).toEqual(await ok("GET", `/api/tickets/${ticket.id}`, ada));
+  });
+
+  test("moving a delegated Ticket with an unfinished Sub-Ticket into a Status with a Step answers that it waits, blocked", async () => {
+    const { ada, project, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "First half", parentId: ticket.id });
+
+    const moved = await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+
+    expect(moved.waiting).toBe("blocked");
+    expect(moved.lastRun).toBeNull();
+    expect(moved).toEqual(await ok("GET", `/api/tickets/${ticket.id}`, ada));
+  });
+});
