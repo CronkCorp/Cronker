@@ -51,9 +51,14 @@ export async function signIn(
   return { id: user.id, email: user.email };
 }
 
-export async function signOut({ db }: Context, request: FastifyRequest, reply: FastifyReply): Promise<void> {
+/** Ends the request's sign-in, and the event streams opened with it. */
+export async function signOut({ db, live }: Context, request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const token = request.cookies[signInCookie];
-  if (token) await db.query("delete from sign_ins where token_hash = $1", [hashSecret(token)]);
+  if (token) {
+    const hash = hashSecret(token);
+    await db.query("delete from sign_ins where token_hash = $1", [hash]);
+    live.end((stream) => stream.signIn === hash);
+  }
   reply.clearCookie(signInCookie, { path: "/" });
 }
 
@@ -95,6 +100,7 @@ export async function changePassword(
   await transaction(context.db, async (tx) => {
     await tx.query("update users set password_hash = $1 where id = $2", [newHash, user.id]);
     await tx.query("delete from sign_ins where user_id = $1 and token_hash <> $2", [user.id, thisSignIn]);
+    context.live.endAfterCommit(tx, (stream) => stream.userId === user.id && stream.signIn !== thisSignIn);
     await endResetLinks(tx, user.id);
   });
 }

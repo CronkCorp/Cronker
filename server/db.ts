@@ -46,17 +46,31 @@ export async function migrate(pool: pg.Pool): Promise<void> {
 export type Db = pg.Pool;
 export type Tx = pg.PoolClient;
 
+const committed = new WeakMap<Tx, (() => void)[]>();
+
 export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   const client = await db.connect();
+  const onCommit: (() => void)[] = [];
+  committed.set(client, onCommit);
+  let result: T;
   try {
     await client.query("begin");
-    const result = await fn(client);
+    result = await fn(client);
     await client.query("commit");
-    return result;
   } catch (error) {
     await client.query("rollback");
     throw error;
   } finally {
+    committed.delete(client);
     client.release();
   }
+  for (const callback of onCommit) callback();
+  return result;
+}
+
+/** Runs `callback` once the transaction commits; never if it rolls back. */
+export function afterCommit(tx: Tx, callback: () => void): void {
+  const onCommit = committed.get(tx);
+  if (!onCommit) throw new Error("afterCommit called outside a transaction");
+  onCommit.push(callback);
 }

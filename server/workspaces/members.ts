@@ -94,9 +94,9 @@ export async function setAdmin(db: Db, workspaceId: string, userId: string, isAd
 
 /**
  * Removes a member, who then sees nothing of the Workspace. Their unused links to join
- * it end too. Refused if it would leave the Workspace without an Admin.
+ * it end too, and so do their streams of its events. Refused if it would leave the Workspace without an Admin.
  */
-export async function removeMember(db: Db, workspaceId: string, userId: string): Promise<void> {
+export async function removeMember({ db, live }: Context, workspaceId: string, userId: string): Promise<void> {
   await transaction(db, async (tx) => {
     const members = await lockMembers(tx, workspaceId);
     const member = members.find((m) => m.user_id === userId);
@@ -107,6 +107,7 @@ export async function removeMember(db: Db, workspaceId: string, userId: string):
       "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null",
       [workspaceId, userId],
     );
+    live.endAfterCommit(tx, (stream) => stream.workspaceId === workspaceId && stream.userId === userId);
   });
 }
 

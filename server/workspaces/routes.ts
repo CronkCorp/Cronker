@@ -147,7 +147,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
-        await removeMember(db, workspace.id, request.params.userId);
+        await removeMember(context, workspace.id, request.params.userId);
         return reply.code(204).send(null);
       },
     );
