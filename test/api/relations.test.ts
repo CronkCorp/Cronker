@@ -530,6 +530,20 @@ describe("a Sub-Ticket's Delegation", () => {
     ]);
   });
 
+  test("a Ticket put under a delegated parent passes the parent's Delegation on to its own Sub-Tickets", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Relations", "Ticket view", "Board view");
+    const [parent, view, boardView] = tickets as [TicketRef, TicketRef, TicketRef];
+    await edit(cookie, boardView.id, { parentId: view.id });
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const beasAgent = await createAgent(bea.cookie, workspace.id, "bea-bot");
+    await edit(bea.cookie, parent.id, { delegateId: beasAgent.id });
+
+    await edit(cookie, view.id, { parentId: parent.id });
+
+    const subTicket = await (await cronk.request("GET", `/api/tickets/${boardView.id}`, { cookie })).json();
+    expect(subTicket).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
+  });
+
   test("undelegating a parent leaves a Sub-Ticket delegated to another Agent as it is", async () => {
     const { user, cookie, workspace, tickets } = await withTickets("Relations", "Ticket view");
     const [parent, view] = tickets as [TicketRef, TicketRef];
