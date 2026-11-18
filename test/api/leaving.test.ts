@@ -96,4 +96,28 @@ describe("removing a User from a Workspace", () => {
       { actor: byAda, field: "delegate", from: { id: agent.id, name: "bea-claude" }, to: null },
     ]);
   });
+
+  test("puts their Tickets in every Admin's Inbox to be reassigned, and no one else's", async () => {
+    const { workspace, ada, bea, project, ticket, remove } = await beaAtWork();
+    const idle = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Bea's later work" });
+    await ok("PATCH", `/api/tickets/${idle.id}`, ada, { assigneeId: bea.id });
+    const cy = await addMember(cronk, ada.cookie, workspace.id, "cy@example.com");
+    await ok("PATCH", `/api/workspaces/${workspace.id}/members/${cy.user.id}`, ada, { isAdmin: true });
+    const dee = await addMember(cronk, ada.cookie, workspace.id, "dee@example.com");
+    const inbox = (as: Request) => ok("GET", `/api/workspaces/${workspace.id}/inbox`, as);
+
+    await remove();
+
+    const formerAssignee = { id: bea.id, email: "bea@example.com", githubLogin: null };
+    const expected = {
+      count: 2,
+      items: [
+        { kind: "reassign", ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", assigneeId: null }), formerAssignee },
+        { kind: "reassign", ticket: expect.objectContaining({ id: idle.id, key: "CRONK-2", assigneeId: null }), formerAssignee },
+      ],
+    };
+    expect(await inbox(ada)).toEqual(expected);
+    expect(await inbox({ cookie: cy.cookie })).toEqual(expected);
+    expect(await inbox({ cookie: dee.cookie })).toEqual({ count: 0, items: [] });
+  });
 });

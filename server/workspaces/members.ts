@@ -219,7 +219,8 @@ export async function removeMember(context: Context, adminId: string, workspaceI
     const now = clock.now();
     const reason = `${await nameOf(tx, adminId)} removed ${await nameOf(tx, userId)} from the Workspace.`;
     // Their Tickets, and any delegated to their Agents, lose them: a running Run is stopped, and the Admin's
-    // Changes record the Assignee and Delegate taken away.
+    // Changes record the Assignee and Delegate taken away. Tickets left without an Assignee wait in every
+    // Admin's Inbox until someone assigns them.
     const { rows: tickets } = await tx.query<{
       id: string;
       projectId: string;
@@ -239,8 +240,9 @@ export async function removeMember(context: Context, adminId: string, workspaceI
       if (ticket.delegate) await stopRunningRun(context, tx, ticket.id, reason, now);
       await tx.query(
         `update tickets set assignee_id = case when $2 then null else assignee_id end,
+           former_assignee_id = case when $2 then $4::uuid else former_assignee_id end,
            delegate_id = case when $3 then null else delegate_id end where id = $1`,
-        [ticket.id, ticket.assignee !== null, ticket.delegate !== null],
+        [ticket.id, ticket.assignee !== null, ticket.delegate !== null, userId],
       );
       await recordChanges(tx, { id: ticket.id, workspaceId }, adminId, now, [
         ...(ticket.assignee ? [{ field: "assignee" as const, from: ticket.assignee, to: null }] : []),
