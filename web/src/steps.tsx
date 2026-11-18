@@ -2,10 +2,14 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 
-/** A new Step's starting point: sends Tickets on to the next Status, or back to the first one for a User. */
+/**
+ * A new Step's starting point: sends Tickets on to the next Status, or back to the first other one for a User,
+ * since *needs you* may not leave a Ticket on its Step's own Status.
+ */
 function newStep(project: Project, status: Status): Step {
   const at = project.statuses.findIndex((s) => s.id === status.id);
   const next = project.statuses[at + 1] ?? project.statuses[0]!;
+  const back = project.statuses.find((s) => s.id !== status.id)!;
   return {
     brief: "",
     model: "sonnet",
@@ -13,7 +17,7 @@ function newStep(project: Project, status: Status): Step {
     labelRule: null,
     outcomes: [
       { name: "done", statusId: next.id, default: true, needsYou: false, countsAsRound: false },
-      { name: "needs you", statusId: project.statuses[0]!.id, default: false, needsYou: true, countsAsRound: false },
+      { name: "needs you", statusId: back.id, default: false, needsYou: true, countsAsRound: false },
     ],
   };
 }
