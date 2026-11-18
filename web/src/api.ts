@@ -57,10 +57,36 @@ export const statusKinds: { kind: StatusKind; label: string }[] = [
   { kind: "canceled", label: "Canceled" },
 ];
 
+/** One of the named ways a Step's Run may end, moving the Ticket to a Status. */
+export interface Outcome {
+  name: string;
+  statusId: string;
+  default: boolean;
+  needsYou: boolean;
+  countsAsRound: boolean;
+}
+
+/** The agent work a Status asks for. */
+export interface Step {
+  brief: string;
+  model: string;
+  roundLimit: number;
+  outcomes: Outcome[];
+}
+
 export interface Status {
   id: string;
   name: string;
   kind: StatusKind;
+  step: Step | null;
+}
+
+/** The Brief a Run would start from, in its three parts and joined. */
+export interface Brief {
+  preamble: string;
+  brief: string;
+  ticketKey: string;
+  text: string;
 }
 
 export interface ProjectSummary {
@@ -289,6 +315,20 @@ export const api = {
     ),
   removeStatus: (projectId: string, statusId: string) =>
     call<Project>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`),
+  putStep: (projectId: string, statusId: string, step: Step) =>
+    call<Project>(
+      "PUT",
+      `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}/step`,
+      step,
+    ),
+  removeStep: (projectId: string, statusId: string) =>
+    call<Project>(
+      "DELETE",
+      `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}/step`,
+    ),
+  ticketByKey: (workspaceId: string, key: string) =>
+    call<Ticket>("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/tickets/${encodeURIComponent(key)}`),
+  brief: (ticketId: string) => call<Brief>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/brief`),
   tickets: (projectId: string, filter: TicketFilter = {}) => {
     const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value));
     const search = query.size ? `?${query}` : "";

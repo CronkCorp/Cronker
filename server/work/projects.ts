@@ -4,6 +4,8 @@ import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, type Viewer } from "../identity/viewers.js";
+import { defaultSteps } from "./default-steps.js";
+import { defaultRoundLimit, Step, stepsOf, writeStep } from "./steps.js";
 
 /** What a Status means, whatever its name. Every Project keeps at least one Status of each kind. */
 export const statusKinds = ["backlog", "active", "review", "done", "canceled"] as const;
@@ -14,6 +16,9 @@ export const Status = Type.Object({
   id: Type.String({ format: "uuid" }),
   name: Type.String(),
   kind: StatusKind,
+  step: Type.Union([Step, Type.Null()], {
+    description: "The agent work the Status asks for; without one, Tickets in it wait for a User.",
+  }),
 });
 export type Status = Static<typeof Status>;
 
@@ -32,7 +37,7 @@ export const Project = Type.Object({
 });
 export type Project = Static<typeof Project>;
 
-/** The default board every new Project starts with. Steps come later. */
+/** The default board every new Project starts with; `default-steps.ts` holds its Steps. */
 const defaultStatuses: { name: string; kind: StatusKind }[] = [
   { name: "Backlog", kind: "backlog" },
   { name: "Triage", kind: "active" },
@@ -56,11 +61,12 @@ export async function projectsOf(db: Db, workspaceId: string): Promise<ProjectSu
 }
 
 export async function statusesOf(db: Db | Tx, projectId: string): Promise<Status[]> {
-  const { rows } = await db.query<Status>(
+  const { rows } = await db.query<Omit<Status, "step">>(
     "select id, name, kind from statuses where project_id = $1 order by position",
     [projectId],
   );
-  return rows;
+  const steps = await stepsOf(db, projectId);
+  return rows.map((status) => ({ ...status, step: steps.get(status.id) ?? null }));
 }
 
 /**
@@ -113,6 +119,23 @@ export async function createProject(
       );
     for (const [position, status] of defaultStatuses.entries()) {
       await insertStatus(tx, project, status, position, now);
+    }
+    const statuses = await statusesOf(tx, project.id);
+    const idOf = (name: string) => statuses.find((s) => s.name === name)!.id;
+    for (const [name, { brief, model, outcomes }] of Object.entries(defaultSteps)) {
+      const step: Step = {
+        brief,
+        model,
+        roundLimit: defaultRoundLimit,
+        outcomes: outcomes.map(({ name, status, ...flags }) => ({
+          name,
+          statusId: idOf(status),
+          default: flags.default ?? false,
+          needsYou: flags.needsYou ?? false,
+          countsAsRound: flags.countsAsRound ?? false,
+        })),
+      };
+      await writeStep(tx, project, idOf(name), step, now);
     }
     live.publish(tx, workspaceId, { type: "project.created", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };

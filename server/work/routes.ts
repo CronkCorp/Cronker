@@ -8,12 +8,35 @@ import { requireCaller } from "../identity/callers.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
+import { changeStep } from "./step-changes.js";
+import { defaultRoundLimit, Outcome } from "./steps.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
 const StatusParams = Type.Object({ projectId: Type.String(), statusId: Type.String() });
 const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody };
 const kindRule = "Refused if it would leave any Status kind without a Status.";
+const outcomeRules =
+  "Exactly one Outcome is the default and exactly one, another, is *needs you*; neither may target a Done or " +
+  "Canceled Status, and no Outcome may target a Canceled Status.";
+const StepBody = Type.Object({
+  brief: Type.String({ minLength: 1, maxLength: 50_000, pattern: "\\S", description: "Markdown." }),
+  model: Type.String({
+    minLength: 1,
+    maxLength: 50,
+    pattern: "^\\S+$",
+    description: "The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`.",
+  }),
+  roundLimit: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      maximum: 100,
+      default: defaultRoundLimit,
+      description: "How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*.",
+    }),
+  ),
+  outcomes: Type.Array(Outcome, { minItems: 2, maxItems: 20 }),
+});
 
 export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
@@ -147,6 +170,46 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
         return changeStatuses(context, user.id, projectId, { type: "remove", statusId });
+      },
+    );
+
+    app.put(
+      "/api/projects/:projectId/statuses/:statusId/step",
+      {
+        schema: {
+          tags: ["Projects"],
+          summary: "Attach or edit a Status's Step",
+          description:
+            "Gives the Status this Step, replacing any it had: Tickets entering it get Runs. " +
+            `${outcomeRules} Returns the Project.`,
+          params: StatusParams,
+          body: StepBody,
+          response: { 200: Project, ...statusRefusals },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const { projectId, statusId } = request.params;
+        const { roundLimit = defaultRoundLimit, ...step } = request.body;
+        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit } });
+      },
+    );
+
+    app.delete(
+      "/api/projects/:projectId/statuses/:statusId/step",
+      {
+        schema: {
+          tags: ["Projects"],
+          summary: "Remove a Status's Step",
+          description: "Takes the Step off the Status, so Tickets in it wait for a User. Returns the Project.",
+          params: StatusParams,
+          response: { 200: Project, ...statusRefusals },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const { projectId, statusId } = request.params;
+        return changeStep(context, user.id, projectId, statusId, { type: "remove" });
       },
     );
   };

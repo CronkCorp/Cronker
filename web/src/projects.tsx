@@ -16,6 +16,7 @@ import {
 import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
+import { BriefPreview, StepsSettings } from "./steps.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
 
@@ -173,7 +174,13 @@ export function ProjectScreen({
           filtered={Object.values(filter).some((value) => value !== undefined)}
         />
       )}
-      {view === "settings" && <Settings project={project} onChange={setProject} />}
+      {view === "settings" && (
+        <>
+          <Settings project={project} onChange={setProject} />
+          <StepsSettings project={project} onChange={setProject} />
+          <BriefPreview project={project} />
+        </>
+      )}
     </>
   );
 }

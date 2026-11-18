@@ -175,6 +175,64 @@ form.inline {
   align-items: center;
   gap: 0.5rem;
 }
+.steps {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+.steps details {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+.steps summary {
+  cursor: pointer;
+}
+.steps .step {
+  margin-top: 0.75rem;
+}
+.outcomes {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+.outcomes li {
+  flex-wrap: wrap;
+  align-items: center;
+}
+div.inline,
+li.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+}
+fieldset {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+fieldset > button {
+  justify-self: start;
+}
+legend {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.brief pre {
+  white-space: pre-wrap;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
 .statuses li button[aria-label^="Move"] {
   padding: 0.5rem 0.7rem;
 }

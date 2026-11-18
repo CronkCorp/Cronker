@@ -274,10 +274,10 @@ describe("removing a Status that holds Tickets", () => {
   test("once its Tickets move out it is removed, and they stay where they moved", async () => {
     const { cookie, project, statusId } = await newProject();
     const ticket = await createTicket(cookie, project.id, { title: "Moving on" });
-    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Investigate") })).status).toBe(200);
     expect((await edit(cookie, ticket.id, { statusId: statusId("Triage") })).status).toBe(200);
 
-    expect((await removeStatus(cookie, project.id, statusId("Ready"))).status).toBe(200);
+    expect((await removeStatus(cookie, project.id, statusId("Investigate"))).status).toBe(200);
     expect(await ticketsIn(cookie, project.id, statusId("Triage"))).toEqual(["Moving on"]);
   });
 
