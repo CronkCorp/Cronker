@@ -6,6 +6,7 @@ import { systemClock, type Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import { migrate } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
+import { createLive } from "./live/live.js";
 
 export interface CronkOptions {
   config: Config;
@@ -24,7 +25,7 @@ export async function createCronk({ config, clock = systemClock, logStream }: Cr
   const db = new pg.Pool({ connectionString: config.databaseUrl });
   try {
     await migrate(db);
-    const app = await buildApp({ config, db, clock }, { logStream });
+    const app = await buildApp({ config, db, clock, live: createLive() }, { logStream });
     await issueSetupCode(db, app.log);
     return {
       app,

@@ -19,7 +19,7 @@ import { createWorkspace, findWorkspace, Membership, renameWorkspace, Workspace,
 import { Link } from "../identity/links.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, clock } = context;
+  const { db, clock, live } = context;
   return async (app) => {
     app.post(
       "/api/workspaces",
@@ -148,6 +148,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
         await removeMember(db, workspace.id, request.params.userId);
+        live.changed(workspace.id);
         return reply.code(204).send(null);
       },
     );

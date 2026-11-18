@@ -24,7 +24,7 @@ const Label = Type.String({ minLength: 1, maxLength: 50, pattern: "\\S" });
 const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(schema: T) => Type.Union([Type.Null(), schema]);
 
 export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, clock } = context;
+  const { db, clock, live } = context;
   return async (app) => {
     app.post(
       "/api/projects/:projectId/tickets",
@@ -114,7 +114,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return editTicket(db, clock, user.id, request.params.ticketId, request.body);
+        const { workspaceId, ...ticket } = await editTicket(db, clock, user.id, request.params.ticketId, request.body);
+        live.changed(workspaceId);
+        return ticket;
       },
     );
 

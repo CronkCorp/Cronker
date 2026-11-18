@@ -209,14 +209,17 @@ export interface TicketEdit {
   statusId?: string;
 }
 
-/** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
+/**
+ * Changes whichever of a Ticket's fields are given, recording a Change for each that differs.
+ * Returns the Ticket with its Workspace, for reporting the change once it has committed.
+ */
 export async function editTicket(
   db: Db,
   clock: Clock,
   userId: string,
   ticketId: string,
   edit: TicketEdit,
-): Promise<Ticket> {
+): Promise<Ticket & { workspaceId: string }> {
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
@@ -250,7 +253,8 @@ export async function editTicket(
     }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
-    if (changes.length === 0) return withMentions(tx, ticket);
+    const { workspaceId } = ticket;
+    if (changes.length === 0) return { ...(await withMentions(tx, ticket)), workspaceId };
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
@@ -268,7 +272,7 @@ export async function editTicket(
       ],
     );
     await recordChanges(tx, ticket, userId, clock.now(), changes);
-    return withMentions(tx, next);
+    return { ...(await withMentions(tx, next)), workspaceId };
   });
 }
 

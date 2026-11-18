@@ -4,6 +4,7 @@ import { ConfigError, loadConfig } from "./config.js";
 import { migrate } from "./db.js";
 import { ApiError } from "./http/errors.js";
 import { issueResetLinkByEmail } from "./identity/links.js";
+import { createLive } from "./live/live.js";
 
 /**
  * Server commands, for whoever runs Cronk, configured by the same environment variables
@@ -34,7 +35,7 @@ async function main(args: string[]): Promise<number> {
   const db = new pg.Pool({ connectionString: config.databaseUrl });
   try {
     await migrate(db);
-    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock }, email);
+    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: createLive() }, email);
     console.log(`Pass this link to ${user.email}. It sets a new password, works once and expires ${link.expiresAt}:`);
     console.log(link.url);
     return 0;

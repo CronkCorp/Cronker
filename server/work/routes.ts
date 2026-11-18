@@ -15,7 +15,7 @@ const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: Er
 const kindRule = "Refused if it would leave any Status kind without a Status.";
 
 export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, clock } = context;
+  const { db, clock, live } = context;
 
   async function requireWorkspace(request: FastifyRequest, workspaceId: string): Promise<Workspace> {
     const user = await requireUser(context, request);
@@ -101,6 +101,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           type: "add",
           ...request.body,
         });
+        live.changed(project.workspaceId);
         return reply.code(201).send(project);
       },
     );
@@ -124,7 +125,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        return changeStatuses(db, clock, user.id, projectId, { type: "edit", statusId, ...request.body });
+        const project = await changeStatuses(db, clock, user.id, projectId, { type: "edit", statusId, ...request.body });
+        live.changed(project.workspaceId);
+        return project;
       },
     );
 
@@ -142,7 +145,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        return changeStatuses(db, clock, user.id, projectId, { type: "remove", statusId });
+        const project = await changeStatuses(db, clock, user.id, projectId, { type: "remove", statusId });
+        live.changed(project.workspaceId);
+        return project;
       },
     );
   };
