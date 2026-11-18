@@ -5,6 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
+import { answerQuestion } from "../runs/questions.js";
 import { Actor, actorColumn } from "./actors.js";
 import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
 
@@ -59,7 +60,8 @@ export async function addComment(
   input: { body: string; replyToId?: string },
 ): Promise<Comment> {
   return transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, actor, ticketId);
+    // A reply may answer a Question, moving the Ticket, so it locks the Ticket as moves do.
+    const ticket = await findTicketRow(tx, actor, ticketId, { lock: input.replyToId !== undefined });
     if (!ticket) throw ticketNotFound();
     if (input.replyToId !== undefined) {
       const { rowCount } = isUuid(input.replyToId)
@@ -68,6 +70,9 @@ export async function addComment(
       if (rowCount === 0) throw new ApiError(400, "unknown_comment", "Replies go to a Comment on the same Ticket.");
     }
     const commentId = await insertComment(context, tx, ticket, actor, input.body, input.replyToId ?? null);
+    if (actor.kind === "user" && input.replyToId !== undefined) {
+      await answerQuestion(context, tx, ticket, actor.id, input.replyToId, commentId);
+    }
     const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, commentId));
     return comment!;
   });

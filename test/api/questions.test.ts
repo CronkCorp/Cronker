@@ -107,3 +107,54 @@ describe("where a Question shows", () => {
     });
   });
 });
+
+describe("answering a Question", () => {
+  test("the first User's reply moves the Ticket back to the asking Step's Status and starts a new Run", async () => {
+    const setup = await investigating();
+    const { workspace, ada, ticket, status } = setup;
+    const item = await ask(setup, "Blue or green?");
+
+    const answer = await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Green.", replyToId: item.question.commentId });
+
+    expect(answer).toEqual(expect.objectContaining({ body: "Green.", replyToId: item.question.commentId, questionId: null }));
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    expect(runs.map((r: { step: { name: string }; state: string; outcome: string | null }) => [r.step.name, r.state, r.outcome])).toEqual([
+      ["Investigate", "finished", "needs you"],
+      ["Investigate", "running", null],
+    ]);
+    expect(cronk.runner.starts).toHaveLength(2);
+    // The User who answered moved it back.
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.at(-1)).toEqual(
+      expect.objectContaining({
+        actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }),
+        field: "status",
+        from: { id: status("Backlog"), name: "Backlog" },
+        to: { id: status("Investigate"), name: "Investigate" },
+      }),
+    );
+    // Answered, the Question leaves the Inbox.
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items).toEqual([]);
+  });
+
+  test("only the first User's reply answers: a second one, or an Agent's, is just a Comment", async () => {
+    const setup = await investigating();
+    const { workspace, ada, ticket, asAgent, status } = setup;
+    const item = await ask(setup, "Blue or green?");
+
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, asAgent, { body: "Still wondering.", replyToId: item.question.commentId });
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items).toContainEqual(
+      expect.objectContaining({ kind: "question" }),
+    );
+
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Green.", replyToId: item.question.commentId });
+    // The new Run asks again before Ada replies a second time to the first Question.
+    await ask(setup, "Which green?");
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "And bold.", replyToId: item.question.commentId });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+    expect(cronk.runner.starts).toHaveLength(2);
+  });
+});
