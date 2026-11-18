@@ -82,6 +82,17 @@ describe("Sub-Tickets an Agent creates in its Run", () => {
     );
   });
 
+  test("inherit the parent's Autonomous Delegation", async () => {
+    const { ada, project, ticket, run, asAgent } = await runningRun();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: true });
+
+    const sub = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Half", parentId: ticket.id });
+    const found = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found", runId: run.id });
+
+    expect(sub.autonomousDelegation).toBe(true);
+    expect(found.autonomousDelegation).toBeNull();
+  });
+
   test("the parent gets no Run until its Sub-Tickets are finished", async () => {
     const { ada, project, ticket, run, asAgent, status } = await runningRun();
     const sub = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "First half", parentId: ticket.id });
