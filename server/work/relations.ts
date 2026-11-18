@@ -11,7 +11,8 @@ import { recordChanges, type ChangeActor } from "./changes.js";
 import {
   findTicketRef,
   findTicketRefByKey,
-  filedByAgent,
+  discoveringAgent,
+  holdsDiscoveredTicket,
   findTicketRow,
   ticketNotFound,
   type TicketRow,
@@ -52,7 +53,7 @@ export async function addRelation(
     const ticket = await findTicketRow(tx, caller, ticketId);
     if (!ticket) throw ticketNotFound();
     if (caller.kind === "agent") checkAgentRelation(caller, ticket, input.kind);
-    const actor: ChangeActor = caller.kind === "user" ? caller.id : { kind: "agent", id: caller.id, runId: null };
+    const actor: ChangeActor = caller.kind === "user" ? caller.id : await discoveringAgent(tx, caller, ticket);
     const other =
       "ticketId" in input
         ? await findTicketRef(tx, ticket.workspaceId, input.ticketId)
@@ -91,7 +92,7 @@ export async function addRelation(
 
 /** Refuses an Agent's Relation unless it blocks from a waiting Discovered Ticket the Agent filed. */
 function checkAgentRelation(agent: AgentCaller, ticket: TicketRow, kind: RelationKind): void {
-  if (!filedByAgent(agent, ticket)) {
+  if (!holdsDiscoveredTicket(agent, ticket)) {
     throw new ApiError(403, "not_your_discovered_ticket", `${agent.name} didn't file ${ticket.key}, or a User has taken it up.`, {
       rule:
         "An Agent adds Relations only from a Discovered Ticket it filed, until a User delegates, moves or dismisses it; " +

@@ -456,9 +456,11 @@ export async function editTicket(
     let actor: ChangeActor = editor.id;
     if (editor.kind === "agent") {
       // The Agent that filed a Discovered Ticket edits it, outside any Run, until a User takes it up.
-      const filed = filedByAgent(editor, ticket);
+      const filed = holdsDiscoveredTicket(editor, ticket);
       checkAgentFields(editor, edit, filed);
-      actor = { kind: "agent", id: editor.id, runId: filed ? null : await runOfAgent(tx, editor, ticket) };
+      actor = filed
+        ? await discoveringAgent(tx, editor, ticket)
+        : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
     }
     // Only Users get this far with fields that name a User.
     const userId = editor.id;
@@ -610,9 +612,18 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
   });
 }
 
-/** Whether the Ticket is a Discovered Ticket the Agent filed that still waits for a User. */
-export function filedByAgent(agent: AgentCaller, ticket: TicketRow): boolean {
+/** Whether the Ticket is a Discovered Ticket the Agent filed that still waits for a User, so the Agent may change it. */
+export function holdsDiscoveredTicket(agent: AgentCaller, ticket: TicketRow): boolean {
   return ticket.discovered?.waiting === true && ticket.discovered.agentId === agent.id;
+}
+
+/** The Agent changing a Discovered Ticket it filed, in the Run it filed it in while that Run is still running. */
+export async function discoveringAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<ChangeActor> {
+  const runId = ticket.discovered?.runId ?? null;
+  const { rowCount } = runId
+    ? await tx.query("select 1 from runs where id = $1 and state = 'running'", [runId])
+    : { rowCount: 0 };
+  return { kind: "agent", id: agent.id, runId: rowCount ? runId : null };
 }
 
 /** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */

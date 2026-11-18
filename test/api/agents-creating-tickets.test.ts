@@ -217,6 +217,21 @@ describe("the filing Agent and its Discovered Ticket", () => {
     ]);
   });
 
+  test("while the Run it was filed in still runs, its Changes name that Run", async () => {
+    const { ada, ticket, project, run, asAgent } = await runningRun();
+    const found = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found it", runId: run.id });
+
+    await ok("PATCH", `/api/tickets/${found.id}`, asAgent, { priority: "high" });
+    await ok("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketId: ticket.id });
+
+    const timeline = await ok("GET", `/api/tickets/${found.id}/timeline`, ada);
+    expect(timeline.map((c: { field: string; runId: string | null }) => [c.field, c.runId])).toEqual([
+      ["created", run.id],
+      ["priority", run.id],
+      ["blocks", run.id],
+    ]);
+  });
+
   test("still doesn't set its Assignee, Delegation, parent or Status", async () => {
     const { user, found, asAgent, status } = await discovered();
 
