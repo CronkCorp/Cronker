@@ -71,7 +71,16 @@ export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promis
     committed.delete(client);
     client.release();
   }
-  for (const callback of onCommit) await callback();
+  // Every callback runs, even after one fails, since the change has committed regardless.
+  const failures: unknown[] = [];
+  for (const callback of onCommit) {
+    try {
+      await callback();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
   return result;
 }
 
