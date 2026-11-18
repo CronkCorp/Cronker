@@ -190,7 +190,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     await waitForRun(false);
     return "none" as const;
   };
-  // A removed Agent's Runs could never call back: its tokens are refused. Removing it undelegates its Tickets.
+  // A removed Agent's Runs could never call back: its tokens are refused. Removing it undelegates its Tickets,
+  // so this guards only Tickets left delegated to it some other way.
   if (!ticket.delegateId || ticket.delegateRemoved) return needsNone();
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;

@@ -126,6 +126,8 @@ export async function setAgentRunner(context: Context, agent: Agent, runnerId: s
 export async function removeAgent(context: Context, agent: Agent): Promise<void> {
   await transaction(context.db, async (tx) => {
     const now = context.clock.now();
+    // Its Tickets first, then the Agent: the order editing a Ticket takes them in, delegating it.
+    await tx.query("select 1 from tickets where delegate_id = $1 order by id for update", [agent.id]);
     const { rowCount } = await tx.query("update agents set removed_at = $2 where id = $1 and removed_at is null", [
       agent.id,
       now,

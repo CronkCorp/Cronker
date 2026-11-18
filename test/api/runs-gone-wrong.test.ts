@@ -474,7 +474,27 @@ describe("removing an Agent", () => {
 
     expect(moved).toEqual(expect.objectContaining({ delegateId: null, waiting: null }));
     expect(await runsOf(ticket.id, ada)).toEqual([]);
+    expect((await ok("GET", `/api/tickets/${other.id}`, ada)).delegateId).toBeNull();
     expect(cronk.runner.starts).toEqual([]);
+  });
+
+  test("a Ticket delegated to it while it is being removed ends up undelegated", async () => {
+    const { ada, project, agent, status } = await adaWithAgent();
+    // With no Runner its Runs are refused at once, so nothing runs on after the test ends.
+    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
+    const tickets = [];
+    for (let i = 0; i < 20; i++) {
+      tickets.push(await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: `Race ${i}` }));
+    }
+
+    await Promise.all([
+      ...tickets.map((t) => call("PATCH", `/api/tickets/${t.id}`, ada, { delegateId: agent.id, statusId: status("Triage") })),
+      ok("DELETE", `/api/agents/${agent.id}`, ada),
+    ]);
+
+    for (const t of tickets) {
+      expect((await ok("GET", `/api/tickets/${t.id}`, ada)).delegateId).toBeNull();
+    }
   });
 
   test("a Ticket waiting for its Runner's slot stops waiting, and the slot goes to the next Agent's Ticket", async () => {
