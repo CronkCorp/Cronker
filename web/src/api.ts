@@ -115,8 +115,25 @@ export interface TicketFilter {
   label?: string;
 }
 
+export interface Agent {
+  id: string;
+  workspaceId: string;
+  name: string;
+  owner: User;
+  createdAt: string;
+}
+
+export type TokenAccess = "full" | "read";
+
+export interface AgentToken {
+  id: string;
+  name: string;
+  access: TokenAccess;
+  createdAt: string;
+}
+
 export interface Actor {
-  kind: "user";
+  kind: "user" | "agent";
   id: string;
   name: string;
 }
@@ -214,9 +231,22 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
+  createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
+  renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
+  removeAgent: (id: string) => call<void>("DELETE", agent(id)),
+  tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
+  issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
+    call<{ token: AgentToken; secret: string }>("POST", `${agent(agentId)}/tokens`, input),
+  revokeToken: (agentId: string, tokenId: string) =>
+    call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;
+}
+
+function agent(id: string) {
+  return `/api/agents/${encodeURIComponent(id)}`;
 }

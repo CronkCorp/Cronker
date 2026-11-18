@@ -8,6 +8,7 @@ import {
   type User,
   type WorkspaceSummary,
 } from "./api.js";
+import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
@@ -234,7 +235,7 @@ function SignedIn({
     await api.signOut();
     onSignedOut();
   });
-  const workspacePath = /^\/workspaces\/([^/]+)(\/members)?\/?$/.exec(path);
+  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|agents)(?:\/([^/]+))?)?\/?$/.exec(path);
   const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings))?\/?$/.exec(path);
   const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
@@ -292,7 +293,11 @@ function SignedIn({
         }}
       />
     );
-  } else if (current && workspacePath?.[2]) {
+  } else if (current && workspacePath?.[2] === "agents" && workspacePath[3]) {
+    page = <AgentScreen key={`${current.id} ${workspacePath[3]}`} workspace={current} agentId={workspacePath[3]} />;
+  } else if (current && workspacePath?.[2] === "agents") {
+    page = <Agents key={current.id} user={user} workspace={current} />;
+  } else if (current && workspacePath?.[2] === "members" && !workspacePath[3]) {
     page = (
       <Members
         key={current.id}
@@ -333,6 +338,7 @@ function SignedIn({
         )}
         <nav>
           {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}
+          {current && <Link to={`/workspaces/${current.id}/agents`}>Agents</Link>}
           <Link to="/workspaces/new">New Workspace</Link>
         </nav>
         <span className="spacer" />
