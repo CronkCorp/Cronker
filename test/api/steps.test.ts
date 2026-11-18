@@ -390,6 +390,52 @@ describe("Outcome refusals", () => {
   });
 });
 
+describe("no Step on finished or canceled work", () => {
+  test("a Step on a Done or Canceled Status is refused, naming the Status, and nothing changes", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    for (const name of ["Done", "Canceled"]) {
+      const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id(name)}/step`, {
+        cookie,
+        body: {
+          brief: "Wrap up.",
+          model: "haiku",
+          outcomes: [outcome("again", id("In Review"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
+        },
+      });
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toEqual({
+        code: "step_on_done_or_canceled_status",
+        message:
+          `${name} is a ${name} Status, so it can't have a Step: ` +
+          "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs.",
+      });
+    }
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
+  });
+
+  test("making a Status with a Step Done or Canceled is refused, naming the Status and its Step, until the Step is removed", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const kindOf = (name: string, kind: string) =>
+      cronk.request("PATCH", `/api/projects/${project.id}/statuses/${id(name)}`, { cookie, body: { kind } });
+
+    for (const kind of ["Done", "Canceled"]) {
+      const response = await kindOf("Investigate", kind.toLowerCase());
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toEqual({
+        code: "step_on_done_or_canceled_status",
+        message:
+          `Investigate has a Step, so it can't be a ${kind} Status: ` +
+          "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs. " +
+          "Remove Investigate's Step first.",
+      });
+    }
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
+
+    await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${id("Investigate")}/step`, { cookie });
+    expect((await kindOf("Investigate", "done")).status).toBe(200);
+  });
+});
+
 describe("Status changes keep Outcomes valid", () => {
   test("removing a Status an Outcome moves Tickets to is refused, naming the Outcome", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
@@ -457,7 +503,6 @@ describe("Status changes keep Outcomes valid", () => {
     });
 
     expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
-    expect((await kindOf("Investigate", "done")).status).toBe(200);
   });
 });
 

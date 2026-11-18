@@ -8,7 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
-import type { Step } from "../work/steps.js";
+import { mayHaveStep, type Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
@@ -144,7 +144,8 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
   if (!ticket?.delegateId) return;
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;
-  if (!status.step) return;
+  // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.
+  if (!status.step || !mayHaveStep(status.kind)) return;
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
   const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
   if (running) return;
