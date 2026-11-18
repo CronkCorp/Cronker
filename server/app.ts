@@ -8,6 +8,7 @@ import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
 import { ApiError, sendError } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
+import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
 import { inboxRoutes } from "./inbox/routes.js";
 import { liveRoutes } from "./live/routes.js";
@@ -47,6 +48,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
 
   await app.register(cookie);
   await app.register(identityRoutes(context));
+  await app.register(githubRoutes(context));
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));

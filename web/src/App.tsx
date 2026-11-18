@@ -5,10 +5,12 @@ import {
   type Link as LinkInfo,
   type LinkDetails,
   type Member,
+  nameOf,
   type User,
   type WorkspaceSummary,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { InboxLink, InboxScreen, useInboxSignal } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
@@ -17,12 +19,18 @@ import { TicketScreen } from "./tickets.js";
 type Screen =
   | { kind: "loading" }
   | { kind: "setup" }
+  | { kind: "connectGitHub" }
   | { kind: "signIn"; notice?: string }
   | { kind: "signedIn"; user: User; workspaces: WorkspaceSummary[] };
 
 export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: "loading" });
   const [failure, setFailure] = useState<string | null>(null);
+  // Cronk sends the browser back here with `github_error` when signing in with GitHub failed.
+  const [githubNotice] = useState(() => {
+    const code = takeQueryParameter("github_error");
+    return code ? githubErrorMessage(code) : undefined;
+  });
   const path = usePath();
   // Links Cronk hands out open `/link`, with their secret in the fragment.
   const onLinkPage = path === "/link";
@@ -33,10 +41,12 @@ export function App() {
       const me = await api.me();
       setScreen({ kind: "signedIn", user: me.user, workspaces: me.workspaces });
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) return setScreen({ kind: "signIn", notice });
+      if (error instanceof ApiError && error.status === 401) {
+        return setScreen({ kind: "signIn", notice: notice ?? githubNotice });
+      }
       setFailure(error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [githubNotice]);
 
   useEffect(() => {
     if (!onLinkPage) void load();
@@ -74,7 +84,9 @@ export function App() {
     case "loading":
       return <Centered title="Cronk">Loading…</Centered>;
     case "setup":
-      return <SetupScreen onDone={() => setScreen({ kind: "signIn", notice: "Cronk is set up. Sign in to continue." })} />;
+      return <SetupScreen onDone={() => setScreen({ kind: "connectGitHub" })} />;
+    case "connectGitHub":
+      return <GitHubSetupStep onSkip={() => load()} />;
     case "signIn":
       return <SignInScreen notice={screen.notice} onSignedIn={() => load()} />;
     case "signedIn":
@@ -101,12 +113,16 @@ function Centered({ title, children }: { title: string; children: ReactNode }) {
 
 function SetupScreen({ onDone }: { onDone: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
+    const email = field(form, "email");
+    const password = field(form, "password");
     await api.setUp({
       setupCode: field(form, "setupCode"),
-      email: field(form, "email"),
-      password: field(form, "password"),
+      email,
+      password,
       workspaceName: field(form, "workspaceName"),
     });
+    // Signed in, the first User can go on to create the GitHub App.
+    await api.signIn(email, password);
     onDone();
   });
   return (
@@ -160,6 +176,9 @@ function SignInScreen({ notice, onSignedIn }: { notice?: string; onSignedIn: () 
           Sign in
         </button>
       </form>
+      <p className="or">
+        <GitHubSignIn />
+      </p>
     </Centered>
   );
 }
@@ -190,14 +209,24 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
     );
   }
   const joining = details.kind === "join";
+  if (details.signInWithGitHub) {
+    return (
+      <Centered title={`Join ${details.workspace?.name}`}>
+        <p>
+          You're joining as <strong>{details.email}</strong>, who signs in with GitHub. Signing in with GitHub joins you.
+        </p>
+        <GitHubSignIn />
+      </Centered>
+    );
+  }
   return (
     <Centered title={joining ? `Join ${details.workspace?.name}` : "Set a new password"}>
       <p>
         {joining ? "You're joining as " : "For "}
-        <strong>{details.email}</strong>.
+        <strong>{details.email ?? "your GitHub account"}</strong>.
       </p>
       <form onSubmit={onSubmit}>
-        <input type="hidden" name="username" value={details.email} autoComplete="username" />
+        <input type="hidden" name="username" value={details.email ?? ""} autoComplete="username" />
         {details.setsPassword ? (
           <label>
             Choose a password
@@ -267,6 +296,8 @@ function SignedIn({
     );
   } else if (path === "/password") {
     page = <ChangePassword />;
+  } else if (path === "/github") {
+    page = <GitHubPage workspaces={workspaces} />;
   } else if (current && projectPath) {
     page = (
       <ProjectScreen
@@ -341,9 +372,10 @@ function SignedIn({
           )}
           {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}
           <Link to="/workspaces/new">New Workspace</Link>
+          <Link to="/github">GitHub</Link>
         </nav>
         <span className="spacer" />
-        <Link to="/password">{user.email}</Link>
+        <Link to="/password">{nameOf(user)}</Link>
         <form onSubmit={onSubmit}>
           <button type="submit" disabled={busy}>
             Sign out
@@ -460,8 +492,14 @@ function Members({
     const email = field(form, "email");
     const { user: added, link } = await api.addMember(workspace.id, email);
     element.reset();
-    setNotice(<IssuedLink label={`Link for ${added.email}`} link={link} />);
+    setNotice(<IssuedLink label={`Link for ${nameOf(added)}`} link={link} />);
     refresh();
+  });
+  const addByGitHub = useSubmit(async (form, element) => {
+    setNotice(null);
+    const { user: added } = await api.addMemberByGitHub(workspace.id, field(form, "login").trim().replace(/^@/, ""));
+    element.reset();
+    setNotice(<p role="status">{nameOf(added)} joins at their next sign-in with GitHub.</p>);
   });
 
   return (
@@ -486,7 +524,17 @@ function Members({
             </label>
             {add.error && <p role="alert">{add.error}</p>}
             <button type="submit" disabled={add.busy}>
-              Add
+              Add by email
+            </button>
+          </form>
+          <form onSubmit={addByGitHub.onSubmit}>
+            <label>
+              GitHub login
+              <input name="login" required autoComplete="off" />
+            </label>
+            {addByGitHub.error && <p role="alert">{addByGitHub.error}</p>}
+            <button type="submit" disabled={addByGitHub.busy}>
+              Add by GitHub login
             </button>
           </form>
         </div>
@@ -501,7 +549,8 @@ function Members({
             {members.map((member) => (
               <tr key={member.user.id}>
                 <td>
-                  {member.user.email}
+                  {nameOf(member.user)}
+                  {member.user.githubLogin && member.user.email && <span className="muted"> @{member.user.githubLogin}</span>}
                   {member.user.id === user.id && " (you)"}
                 </td>
                 <td>{member.isAdmin ? "Admin" : ""}</td>
@@ -524,7 +573,7 @@ function Members({
                       onClick={() =>
                         act(async () => {
                           const link = await api.resetLink(workspace.id, member.user.id);
-                          setNotice(<IssuedLink label={`Reset link for ${member.user.email}`} link={link} />);
+                          setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
                         })
                       }
                     >

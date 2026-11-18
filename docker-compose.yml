@@ -10,6 +10,9 @@ services:
     environment:
       CRONK_PUBLIC_URL: ${CRONK_PUBLIC_URL:-http://localhost:${CRONK_PORT:-3000}}
       DATABASE_URL: postgres://cronk:${POSTGRES_PASSWORD:-cronk}@postgres:5432/cronk
+      # Encrypts the secrets Cronk keeps, such as the GitHub App's credentials. Set it to
+      # something like `openssl rand -base64 32` and keep it: without it, sign-in with GitHub stops.
+      CRONK_SECRET_KEY: ${CRONK_SECRET_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
