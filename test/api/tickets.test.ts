@@ -121,3 +121,80 @@ describe("creating a Ticket", () => {
     }
   });
 });
+
+const edit = (cookie: string, ticketId: string, body: unknown) =>
+  cronk.request("PATCH", `/api/tickets/${ticketId}`, { cookie, body });
+
+describe("editing a Ticket", () => {
+  test("title, description, Priority, Labels, Assignee, due date and estimate are set and cleared", async () => {
+    const { user, cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Draft" });
+
+    const response = await edit(cookie, ticket.id, {
+      title: "Final title",
+      description: "New *description*",
+      priority: "high",
+      labels: ["UI", "board"],
+      assigneeId: user.id,
+      dueDate: "2026-02-01",
+      estimate: 3.5,
+    });
+
+    expect(response.status).toBe(200);
+    const edited = await response.json();
+    expect(edited).toEqual({
+      ...ticket,
+      title: "Final title",
+      description: "New *description*",
+      priority: "high",
+      labels: ["UI", "board"],
+      assigneeId: user.id,
+      dueDate: "2026-02-01",
+      estimate: 3.5,
+    });
+    expect(await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json()).toEqual(edited);
+
+    const cleared = await edit(cookie, ticket.id, { assigneeId: null, dueDate: null, estimate: null, labels: [] });
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toMatchObject({ assigneeId: null, dueDate: null, estimate: null, labels: [] });
+  });
+
+  test("Labels that differ only in case are one Label, kept as first written", async () => {
+    const { cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Labelled" });
+
+    const response = await edit(cookie, ticket.id, { labels: ["Bug", " bug ", "BUG", "no-review"] });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).labels).toEqual(["Bug", "no-review"]);
+  });
+
+  test("an Assignee who isn't a member of the Workspace is refused", async () => {
+    const { cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Who?" });
+
+    const response = await edit(cookie, ticket.id, { assigneeId: "00000000-0000-4000-8000-000000000000" });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: { code: "assignee_not_member", message: "An Assignee must be a member of this Workspace." },
+    });
+    expect((await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json()).assigneeId).toBeNull();
+  });
+
+  test("an unknown Priority, a malformed due date or a negative estimate is refused", async () => {
+    const { cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Bad input" });
+
+    for (const body of [{ priority: "critical" }, { dueDate: "next week" }, { estimate: -1 }, { title: "" }]) {
+      const response = await edit(cookie, ticket.id, body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  test("a Ticket the User can't see answers 404", async () => {
+    const { cookie } = await newProject();
+    const response = await edit(cookie, "00000000-0000-4000-8000-000000000000", { title: "Mine now" });
+    expect(response.status).toBe(404);
+  });
+});

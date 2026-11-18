@@ -8,7 +8,13 @@ import { findProject, projectNotFound } from "./projects.js";
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
 export type Priority = (typeof priorities)[number];
-export const Priority = Type.Union(priorities.map((p) => Type.Literal(p)));
+export const Priority = Type.Union([
+  Type.Literal("urgent"),
+  Type.Literal("high"),
+  Type.Literal("medium"),
+  Type.Literal("low"),
+  Type.Literal("none"),
+]);
 
 /** A Ticket key written in Markdown that names a Ticket of the Workspace. */
 export const Mention = Type.Object({
@@ -134,4 +140,62 @@ export async function listTickets(db: Db, userId: string, projectId: string): Pr
     [project.id],
   );
   return rows.map(summary);
+}
+
+export interface TicketEdit {
+  title?: string;
+  description?: string;
+  priority?: Priority;
+  labels?: string[];
+  assigneeId?: string | null;
+  dueDate?: string | null;
+  estimate?: number | null;
+}
+
+/** Changes whichever of a Ticket's fields are given. */
+export async function editTicket(
+  db: Db,
+  userId: string,
+  ticketId: string,
+  edit: TicketEdit,
+): Promise<Ticket> {
+  return transaction(db, async (tx) => {
+    const ticket = await findRow(tx, userId, ticketId, { lock: true });
+    if (!ticket) throw ticketNotFound();
+    const next = { ...ticket };
+    if (edit.title !== undefined) next.title = edit.title.trim();
+    if (edit.description !== undefined) next.description = edit.description;
+    if (edit.priority !== undefined) next.priority = edit.priority;
+    if (edit.labels !== undefined) next.labels = distinctLabels(edit.labels);
+    if (edit.assigneeId !== undefined) {
+      if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
+      next.assigneeId = edit.assigneeId;
+    }
+    if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
+    if (edit.estimate !== undefined) next.estimate = edit.estimate;
+
+    await tx.query(
+      `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
+       due_date = $7, estimate = $8 where id = $1`,
+      [ticket.id, next.title, next.description, next.priority, next.labels, next.assigneeId, next.dueDate, next.estimate],
+    );
+    return withMentions(tx, next);
+  });
+}
+
+/** Labels are matched ignoring case: one of each, kept as first written. */
+function distinctLabels(labels: string[]): string[] {
+  const seen = new Map<string, string>();
+  for (const label of labels) {
+    const trimmed = label.trim();
+    if (!seen.has(trimmed.toLowerCase())) seen.set(trimmed.toLowerCase(), trimmed);
+  }
+  return [...seen.values()];
+}
+
+async function checkMember(tx: Tx, workspaceId: string, userId: string): Promise<void> {
+  const { rowCount } = isUuid(userId)
+    ? await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [workspaceId, userId])
+    : { rowCount: 0 };
+  if (rowCount === 0) throw new ApiError(400, "assignee_not_member", "An Assignee must be a member of this Workspace.");
 }

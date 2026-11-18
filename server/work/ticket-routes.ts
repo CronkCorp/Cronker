@@ -3,10 +3,22 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { createTicket, findTicket, listTickets, Ticket, ticketNotFound, TicketSummary } from "./tickets.js";
+import {
+  createTicket,
+  editTicket,
+  findTicket,
+  listTickets,
+  Priority,
+  Ticket,
+  ticketNotFound,
+  TicketSummary,
+} from "./tickets.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Description = Type.String({ maxLength: 100_000, description: "Markdown." });
+const Label = Type.String({ minLength: 1, maxLength: 50, pattern: "\\S" });
+// Null comes first: the body's type coercion would otherwise turn null into 0 or "".
+const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(schema: T) => Type.Union([Type.Null(), schema]);
 
 export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -61,6 +73,34 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         const ticket = await findTicket(db, user.id, request.params.ticketId);
         if (!ticket) throw ticketNotFound();
         return ticket;
+      },
+    );
+
+    app.patch(
+      "/api/tickets/:ticketId",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Edit a Ticket",
+          description:
+            "Changes whichever fields are given; `null` clears a field. Labels that differ only in case are kept once, " +
+            "as first written. An Assignee must be a member of the Ticket's Workspace.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            title: Type.Optional(Title),
+            description: Type.Optional(Description),
+            priority: Type.Optional(Priority),
+            labels: Type.Optional(Type.Array(Label, { maxItems: 50 })),
+            assigneeId: Type.Optional(nullable(Type.String({ format: "uuid" }))),
+            dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
+            estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
+          }),
+          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return editTicket(db, user.id, request.params.ticketId, request.body);
       },
     );
   };
