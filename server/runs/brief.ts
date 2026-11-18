@@ -35,13 +35,17 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
       `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a User, and get no Run.`,
     );
   }
-  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step });
+  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, ticket.autonomousDelegation === true);
 }
 
-/** The Outcomes a Run of the Step may choose: those completing work need Autonomous Delegation, which no Ticket has yet. */
-export function offeredOutcomes(step: Step, statuses: Status[]): Outcome[] {
-  const kindOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.kind;
-  return step.outcomes.filter((o) => kindOf(o.statusId) !== "done");
+/** The Outcomes a Run of the Step may choose: those to a Done Status only on a Ticket under Autonomous Delegation. */
+export function offeredOutcomes(step: Step, statuses: Status[], autonomous: boolean): Outcome[] {
+  return step.outcomes.filter((o) => autonomous || !completes(o, statuses));
+}
+
+/** Whether the Outcome completes its Ticket, moving it to a Done Status. */
+export function completes(outcome: Outcome, statuses: Status[]): boolean {
+  return statuses.find((s) => s.id === outcome.statusId)!.kind === "done";
 }
 
 /** The Brief of a Run of the Status's Step on the Ticket; without a Run id, as a preview. */
@@ -50,12 +54,16 @@ export function buildBrief(
   ticketKey: string,
   statuses: Status[],
   status: Status & { step: Step },
+  autonomous: boolean,
   runId?: string,
 ): Brief {
   const step = status.step;
   const nameOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.name;
   const outcomeLine = (o: Outcome) => {
     const moves = `- **${o.name}**: moves ${ticketKey} to ${nameOf(o.statusId)}`;
+    if (completes(o, statuses)) {
+      return `${moves}, completing it as Unverified until its Assignee Accepts or Reopens it.`;
+    }
     if (o.needsYou) return `${moves} and hands it back to its Assignee. Give a Question saying what you need.`;
     if (o.countsAsRound) {
       return `${moves}. It counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
@@ -73,7 +81,7 @@ export function buildBrief(
     "",
     "End the Run by calling `finish` with your Run id and one of these Outcomes:",
     "",
-    ...offeredOutcomes(step, statuses).map(outcomeLine),
+    ...offeredOutcomes(step, statuses, autonomous).map(outcomeLine),
     "",
     "Rules:",
     "",

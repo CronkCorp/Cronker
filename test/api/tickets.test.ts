@@ -61,6 +61,8 @@ describe("creating a Ticket", () => {
       labels: [],
       assigneeId: null,
       delegateId: null,
+      autonomousDelegation: null,
+      verification: null,
       parentId: null,
       discovered: null,
       dueDate: null,
@@ -369,6 +371,7 @@ describe("Comments", () => {
       actor: { kind: "user", id: user.id, name: user.email },
       createdAt: "2026-01-01T09:00:00.000Z",
       mentions: [],
+      questionId: null,
     });
 
     cronk.clock.advance(60_000);

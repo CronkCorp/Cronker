@@ -68,6 +68,16 @@ export const TicketSummary = Type.Object({
   delegateId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Assignee's Agent the Ticket is delegated to; only a delegated Ticket gets Runs.",
   }),
+  autonomousDelegation: Type.Union([Type.Boolean(), Type.Null()], {
+    description:
+      "Whether a Step may complete the Ticket itself, as Unverified, instead of stopping for a User. Null until a User " +
+      "sets it or the Ticket is first delegated, when it takes its Project's default; Sub-Tickets take their parent's.",
+  }),
+  verification: Type.Union([Type.Literal("unverified"), Type.Literal("verified"), Type.Null()], {
+    description:
+      "For a Ticket a Run completed: `unverified` until a User Accepts it (`verified`) or Reopens it. " +
+      "Null for a Ticket no Run completed.",
+  }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Ticket this is a Sub-Ticket of, in the same Project.",
   }),
@@ -110,7 +120,8 @@ export const ticketRefColumn = (tickets: string, projects: string) =>
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
-  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId", tickets.parent_id as "parentId",
+  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId",
+  tickets.autonomous_delegation as "autonomousDelegation", tickets.verification, tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
@@ -253,7 +264,8 @@ export interface NewTicket {
 }
 
 /**
- * Creates a Ticket in the Project's first Backlog Status. A Sub-Ticket takes its parent's Assignee and Delegation;
+ * Creates a Ticket in the Project's first Backlog Status. A Sub-Ticket takes its parent's Assignee, Delegation and
+ * Autonomous Delegation;
  * an Agent creates one only under the Ticket of its own running Run. Any other Ticket an Agent files is a
  * Discovered Ticket: undelegated, assigned to the Assignee of the Ticket of the Run it names (or, naming none, to
  * the Agent's Owner) and waiting in their Inbox. Otherwise a User's new Ticket starts delegated to their first
@@ -281,6 +293,7 @@ export async function createTicket(
     let actor: ChangeActor = creator.id;
     let assigneeId: string | null = null;
     let delegateId: string | null = null;
+    let autonomousDelegation: boolean | null = null;
     let discovery: { runId: string | null; sourceTicketId: string | null } | null = null;
     let parent: TicketRow | undefined;
     if (input.parentId !== undefined) {
@@ -290,9 +303,11 @@ export async function createTicket(
         throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
       }
       if (creator.kind === "agent") actor = { kind: "agent", id: creator.id, runId: await runOfAgent(tx, creator, parent) };
-      // A Sub-Ticket inherits its parent's Delegation, and so its Assignee, whose Agent the Delegate is.
+      // A Sub-Ticket inherits its parent's Delegation and Autonomous Delegation, and so its Assignee, whose Agent the
+      // Delegate is.
       assigneeId = parent.assigneeId;
       delegateId = parent.delegateId;
+      autonomousDelegation = parent.autonomousDelegation;
     } else if (creator.kind === "agent") {
       const run = input.runId === undefined ? null : await runningRunOf(tx, creator, input.runId);
       actor = { kind: "agent", id: creator.id, runId: run?.id ?? null };
@@ -301,7 +316,11 @@ export async function createTicket(
     } else if (project.newTicketsDelegated) {
       // In a Project whose new Tickets start delegated, the creator's first Agent takes it, assigning them.
       delegateId = await firstAgentOf(tx, creator.id, project.workspaceId);
-      if (delegateId) assigneeId = creator.id;
+      if (delegateId) {
+        assigneeId = creator.id;
+        // Delegated from the start, it takes its Project's Autonomous Delegation at once.
+        autonomousDelegation = project.autonomousDelegationDefault;
+      }
     }
     const { rows } = await tx.query<{ id: string }>(
       `with numbered as (
@@ -309,9 +328,9 @@ export async function createTicket(
          returning next_ticket_number - 1 as number
        )
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
-         assignee_id, delegate_id, status_entered_at, parent_id, discovered_by_agent_id, discovered_from_ticket_id,
-         discovered_in_run_id, discovery_waits)
-       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7, $10, $11, $12, $13, $14 from numbered
+         assignee_id, delegate_id, status_entered_at, autonomous_delegation, parent_id, discovered_by_agent_id,
+         discovered_from_ticket_id, discovered_in_run_id, discovery_waits)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7, $10, $11, $12, $13, $14, $15 from numbered
        returning id`,
       [
         project.workspaceId,
@@ -323,6 +342,7 @@ export async function createTicket(
         now,
         assigneeId,
         delegateId,
+        autonomousDelegation,
         parent?.id ?? null,
         discovery ? creator.id : null,
         discovery?.sourceTicketId ?? null,
@@ -429,6 +449,7 @@ export interface TicketEdit {
   labels?: string[];
   assigneeId?: string | null;
   delegateId?: string | null;
+  autonomousDelegation?: boolean;
   dueDate?: string | null;
   estimate?: number | null;
   statusId?: string;
@@ -486,7 +507,23 @@ export async function editTicket(
     if (edit.description !== undefined) await change("description", "description", edit.description);
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
+      if (edit.statusId !== ticket.statusId && ticket.verification === "unverified") {
+        throw new ApiError(
+          409,
+          "ticket_unverified",
+          `${ticket.key} was completed by a Run and is Unverified: it leaves Done only by Accept or Reopen.`,
+          {
+            rule: "A Ticket a Run completed stays in its Done Status until a User Accepts or Reopens it.",
+            advice: "Accept it to keep it done, or Reopen it with a Comment saying why to send it back to the Step that completed it.",
+          },
+        );
+      }
       await change("statusId", "status", edit.statusId, statusNamed);
+      // Leaving its Done Status, an Accepted Ticket is no longer Verified: Verification is of that completion.
+      if (next.statusId !== ticket.statusId && ticket.verification !== null) {
+        next.verification = null;
+        changes.push({ field: "verification", from: ticket.verification, to: null });
+      }
     }
     if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
     if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
@@ -510,6 +547,23 @@ export async function editTicket(
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
     }
+    if (edit.autonomousDelegation !== undefined) {
+      await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
+    } else {
+      // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
+      const inherited = next.parentId !== ticket.parentId && next.parentId !== null
+        ? await autonomousDelegationOf(tx, next.parentId)
+        : null;
+      if (inherited !== null) {
+        await change("autonomousDelegation", "autonomousDelegation", inherited);
+      } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
+        const { rows } = await tx.query<{ value: boolean }>(
+          "select autonomous_delegation_default as value from projects where id = $1",
+          [ticket.projectId],
+        );
+        await change("autonomousDelegation", "autonomousDelegation", rows[0]!.value);
+      }
+    }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
@@ -524,7 +578,12 @@ export async function editTicket(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
        status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
-       discovery_waits = $13 where id = $1`,
+       -- Moving the Ticket ends its waiting from a needs you Outcome.
+       needs_you_run_id = case when status_id = $9 then needs_you_run_id end,
+       autonomous_delegation = $13, verification = $14,
+       completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end,
+       discovery_waits = $15
+       where id = $1`,
       [
         ticket.id,
         next.title,
@@ -538,6 +597,8 @@ export async function editTicket(
         next.parentId,
         next.delegateId,
         now,
+        next.autonomousDelegation,
+        next.verification,
         next.discovered?.waiting ?? false,
       ],
     );
@@ -557,6 +618,9 @@ export async function editTicket(
       };
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
+    }
+    if (next.autonomousDelegation !== ticket.autonomousDelegation && next.autonomousDelegation !== null) {
+      await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
     }
     // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
     // Only Users get here with either change: Agents set neither a Status nor a Delegate.
@@ -587,6 +651,45 @@ export async function editTicket(
     if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
     return withMentions(tx, next);
   });
+}
+
+async function autonomousDelegationOf(tx: Tx, ticketId: string): Promise<boolean | null> {
+  const { rows } = await tx.query<{ value: boolean | null }>(
+    "select autonomous_delegation as value from tickets where id = $1",
+    [ticketId],
+  );
+  return rows[0]?.value ?? null;
+}
+
+/** Gives the Ticket's Sub-Tickets, however deep, its Autonomous Delegation, recording a Change on each that differed. */
+async function passAutonomousDelegationDown(
+  { live }: Context,
+  tx: Tx,
+  ticket: TicketRow,
+  value: boolean,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const { rows } = await tx.query<{ id: string; from: boolean | null }>(
+    `with recursive descendants (id) as (
+       select id from tickets where parent_id = $1
+       union
+       select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
+     ),
+     changed as (
+       select tickets.id, tickets.autonomous_delegation as from from tickets join descendants using (id)
+       where tickets.autonomous_delegation is distinct from $2
+       for update of tickets
+     )
+     update tickets set autonomous_delegation = $2 from changed where tickets.id = changed.id
+     returning tickets.id, changed.from`,
+    [ticket.id, value],
+  );
+  for (const row of rows) {
+    const subTicket = { id: row.id, workspaceId: ticket.workspaceId };
+    await recordChanges(tx, subTicket, userId, now, [{ field: "autonomousDelegation", from: row.from, to: value }]);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: row.id });
+  }
 }
 
 /**

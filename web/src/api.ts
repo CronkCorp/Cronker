@@ -113,6 +113,8 @@ export interface ProjectSummary {
 
 export interface Project extends ProjectSummary {
   newTicketsDelegated: boolean;
+  /** Whether a Ticket takes Autonomous Delegation when first delegated. */
+  autonomousDelegationDefault: boolean;
   statuses: Status[];
 }
 
@@ -144,6 +146,10 @@ export interface TicketSummary {
   labels: string[];
   assigneeId: string | null;
   delegateId: string | null;
+  /** Null until a User sets it or the Ticket is first delegated. */
+  autonomousDelegation: boolean | null;
+  /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
+  verification: "unverified" | "verified" | null;
   parentId: string | null;
   /** For a Discovered Ticket: the Agent that filed it, from which Ticket and Run, and whether it waits for a User. */
   discovered: { agentId: string; sourceTicket: TicketRef | null; runId: string | null; waiting: boolean } | null;
@@ -168,6 +174,7 @@ export interface TicketEdit {
   labels?: string[];
   assigneeId?: string | null;
   delegateId?: string | null;
+  autonomousDelegation?: boolean;
   dueDate?: string | null;
   estimate?: number | null;
   parentId?: string | null;
@@ -235,6 +242,8 @@ export interface Comment {
   actor: Actor;
   createdAt: string;
   mentions: Mention[];
+  /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
+  questionId: string | null;
 }
 
 /** Markdown a Run wrote on its Ticket. */
@@ -269,6 +278,8 @@ export interface Change {
     | "subTicket"
     | "delegate"
     | "stepSkipped"
+    | "autonomousDelegation"
+    | "verification"
     | "dismissed"
     | RelationKind;
   from: unknown;
@@ -303,6 +314,38 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
+/** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
+export interface UnverifiedItem {
+  kind: "unverified";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  /** The Step that completed it, by its Status; null once that Status is removed. */
+  completedBy: { id: string; name: string } | null;
+}
+
+/** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
+export interface QuestionItem {
+  kind: "question";
+  ticket: TicketSummary;
+  question: {
+    id: string;
+    commentId: string;
+    body: string;
+    agent: { id: string; name: string };
+    step: { statusId: string | null; name: string };
+    askedAt: string;
+  };
+}
+
+/** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
+export interface NeedsYouItem {
+  kind: "needsYou";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  outcome: string;
+  step: { statusId: string | null; name: string };
+}
+
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */
 export interface RunItem {
   kind: "run";
@@ -317,7 +360,7 @@ export interface DiscoveredItem {
   agent: { id: string; name: string };
 }
 
-export type InboxItem = ReviewItem | RunItem | DiscoveredItem;
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
@@ -399,7 +442,7 @@ export const api = {
   createProject: (workspaceId: string, input: { name: string; key: string }) =>
     call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
-  editProject: (id: string, edit: { newTicketsDelegated?: boolean }) =>
+  editProject: (id: string, edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
@@ -434,11 +477,15 @@ export const api = {
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
+  acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
+  reopenTicket: (id: string, comment: string) =>
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment }),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
+  dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
