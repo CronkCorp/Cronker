@@ -38,6 +38,7 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 - **Agents creating Tickets.** A Run may split its Ticket into Sub-Tickets, which inherit the Delegation; a parent gets no Runs while a Sub-Ticket is unfinished. Any other Ticket an agent files is a Discovered Ticket: Backlog, undelegated, assigned to the source Ticket's Assignee, in their Inbox until they delegate, move or dismiss it.
 - **Inbox** per User: Questions, *needs you* Outcomes, failed and lost Runs, Unverified completions, Tickets in a Review Status, Discovered Tickets. No shared Triage view.
 - **Leaving a Workspace.** Removing a User stops their Agents' Runs there and unassigns and undelegates their Tickets, which go to the Admins' Inbox.
+- **Removing an Agent.** Its Owner's removal undelegates each Ticket delegated to it, recorded as their Change; the Tickets keep their Assignee and Status. Its running Runs stop, as on any undelegation, and no Run ever starts for a removed Agent.
 
 ### Tickets
 

@@ -96,7 +96,8 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Agents"],
           summary: "Remove one's own Agent",
           description:
-            "Its tokens are refused at once. What it did still shows its name. Only the Agent's Owner can remove it (`not_owner` otherwise).",
+            "Its tokens are refused at once, and each Ticket delegated to it is undelegated, keeping its Assignee, which stops its running Runs. " +
+            "What it did still shows its name. Only the Agent's Owner can remove it (`not_owner` otherwise).",
           params: AgentParams,
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
@@ -104,7 +105,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         const agent = await requireOwnAgent(db, user.id, request.params.agentId);
-        await removeAgent(db, clock, agent);
+        await removeAgent(context, agent);
         return reply.code(204).send(null);
       },
     );

@@ -468,6 +468,38 @@ export async function editTicket(
   });
 }
 
+/**
+ * Undelegates every Ticket delegated to one of the Agents, because the User took the Agents away: each Ticket
+ * keeps its Assignee, records the undelegation as the User's Change, and its running Run stops with the reason.
+ * Call it in a transaction, after the Agents can no longer be delegated to.
+ */
+export async function undelegateTickets(
+  context: Context,
+  tx: Tx,
+  userId: string,
+  agentIds: string[],
+  reason: string,
+  now: Date,
+): Promise<void> {
+  const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string; delegateId: string; agentName: string }>(
+    `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
+       tickets.delegate_id as "delegateId", agents.name as "agentName"
+     from tickets join agents on agents.id = tickets.delegate_id
+     where tickets.delegate_id = any($1::uuid[]) order by tickets.id for update of tickets`,
+    [agentIds],
+  );
+  for (const ticket of rows) {
+    await tx.query("update tickets set delegate_id = null where id = $1", [ticket.id]);
+    await recordChanges(tx, ticket, userId, now, [
+      { field: "delegate", from: { id: ticket.delegateId, name: ticket.agentName }, to: null },
+    ]);
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    await stopRunningRun(context, tx, ticket.id, reason, now);
+    // Losing its Delegate ends the Ticket's wait for a Run.
+    await startRunIfNeeded(context, tx, ticket.id, now);
+  }
+}
+
 /** Refuses an Agent's edit of a field only Users edit. */
 function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
   const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
