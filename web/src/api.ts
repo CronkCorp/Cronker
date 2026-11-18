@@ -222,6 +222,17 @@ export interface Comment {
   mentions: Mention[];
 }
 
+/** Markdown a Run wrote on its Ticket. */
+export interface Report {
+  id: string;
+  ticketId: string;
+  runId: string;
+  agent: { id: string; name: string };
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
 export interface Change {
   id: string;
   actor: Actor;
@@ -242,6 +253,8 @@ export interface Change {
     | RelationKind;
   from: unknown;
   to: unknown;
+  /** The Run an Agent made the Change in; null for a User's. */
+  runId: string | null;
 }
 
 export type RunState = "running" | "finished" | "failed" | "refused";
@@ -381,6 +394,7 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
