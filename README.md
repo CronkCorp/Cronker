@@ -11,6 +11,12 @@ docker compose logs cronk | grep "setup code"
 
 Open the public address, enter the setup code from the log, and create the first User and their Workspace. The setup code works once; each start of a fresh installation logs a new one.
 
+### Signing in with GitHub
+
+Right after setup, Cronk offers to create the installation's GitHub App through GitHub's manifest flow: GitHub asks you to confirm the App (under your account or an organization you name), then sends you back to Cronk, which stores the App's credentials encrypted with `CRONK_SECRET_KEY`. You can skip it and have any Admin create it later from the **GitHub** page. An installation has one App; it is used only for signing in for now.
+
+Once it exists, Users can sign in with GitHub. A GitHub account is linked to its User at the first sign-in: the User an Admin added by that GitHub login, or else the User whose email is the account's verified primary email. Admins add people by GitHub login on the Members page; they join at their next sign-in with GitHub. GitHub accounts no User has are refused. A User may sign in both ways.
+
 Cronk itself doesn't need Docker: it is a Node.js (22+) server and a Postgres (16+) database. `npm ci && npm run build && npm start` runs it anywhere, configured by the same environment variables.
 
 ### When nobody can sign in
@@ -32,8 +38,11 @@ Without Docker, run `npm run command -- reset-link ada@example.com` with the ser
 | `PORT` | no | Port to listen on (default `3000`). |
 | `HOST` | no | Address to listen on (default `0.0.0.0`). |
 | `CRONK_WEB_ROOT` | no | Directory of the built web client (default: `dist/web`). |
+| `CRONK_SECRET_KEY` | for GitHub | At least 32 characters, such as the output of `openssl rand -base64 32`. Encrypts the secrets Cronk keeps, such as the GitHub App's credentials. Keep it: a different key can't read what the old one encrypted. |
+| `CRONK_GITHUB_URL` | no | GitHub's web address (default `https://github.com`), for GitHub Enterprise Server. |
+| `CRONK_GITHUB_API_URL` | no | GitHub's API address (default `https://api.github.com`), such as `https://github.example.com/api/v3`. |
 
-The Compose file also reads `CRONK_PORT` (published port, default `3000`) and `POSTGRES_PASSWORD`.
+The Compose file also reads `CRONK_PORT` (published port, default `3000`), `POSTGRES_PASSWORD` and `CRONK_SECRET_KEY`.
 
 The API is documented at `/api/docs` (OpenAPI at `/api/openapi.json`).
 

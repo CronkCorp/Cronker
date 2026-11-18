@@ -53,6 +53,22 @@ button {
   color: white;
   cursor: pointer;
 }
+a.button {
+  display: inline-block;
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+}
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+}
+.or {
+  text-align: center;
+}
 button:disabled {
   opacity: 0.6;
 }
