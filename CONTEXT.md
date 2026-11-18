@@ -169,5 +169,5 @@ A way for Cronk to start Runs, set up by a User with their own credentials: thei
 _Avoid_: Provider, backend, executor
 
 **Run**:
-One agent execution Cronk starts for one Ticket, acting as an Agent through one of its Owner's Runners. It is **running** until the agent reports it **finished**, or it becomes **failed** (the Runner says it ended without finishing) or **lost** (no word from it for too long). A Ticket has at most one running Run.
+One agent execution Cronk starts for one Ticket, acting as an Agent through one of its Owner's Runners. It is **running** until the agent reports it **finished**, or it becomes **failed** (the Runner says it ended without finishing) or **lost** (no word from it for too long); a Run its Runner wouldn't start is **refused**. A Ticket has at most one running Run.
 _Avoid_: Session, job, claim, task
