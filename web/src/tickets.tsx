@@ -31,10 +31,10 @@ export function TicketScreen({ workspace, ticketId }: { workspace: Workspace; ti
   useEffect(() => {
     const fail = (e: Error) => setFailure(e.message);
     api.ticket(ticketId).then(async (found) => {
-      const owner = await api.project(found.projectId);
+      const ticketProject = await api.project(found.projectId);
       // A Ticket of another of the User's Workspaces isn't shown under this one's name.
-      if (owner.workspaceId !== workspace.id) return setFailure("No such Ticket.");
-      setProject(owner);
+      if (ticketProject.workspaceId !== workspace.id) return setFailure("No such Ticket.");
+      setProject(ticketProject);
       setTicket(found);
     }, fail);
     api.members(workspace.id).then(setMembers, fail);
@@ -251,8 +251,8 @@ function Comments({
         return (
           <article key={comment.id} className="comment" style={{ marginLeft: `${Math.min(depth, 4) * 1.5}rem` }}>
             <div className="comment-meta">
-              <strong>{comment.author.name}</strong> <When at={comment.createdAt} />
-              {parent && <span className="muted"> in reply to {parent.author.name}</span>}
+              <strong>{comment.actor.name}</strong> <When at={comment.createdAt} />
+              {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
             {replyingTo === comment.id ? (

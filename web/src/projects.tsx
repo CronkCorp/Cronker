@@ -230,7 +230,7 @@ function Filters({
   );
 }
 
-function TicketCard({
+function TicketItem({
   ticket,
   members,
   draggable,
@@ -248,7 +248,7 @@ function TicketCard({
   return (
     <Link
       to={`/tickets/${ticket.id}`}
-      className="card"
+      className="ticket-item"
       draggable={draggable}
       onDragStart={(event: DragEvent<HTMLAnchorElement>) => {
         event.dataTransfer.setData(ticketDrag, ticket.id);
@@ -313,7 +313,7 @@ function Board({
             {tickets
               .filter((ticket) => ticket.statusId === status.id)
               .map((ticket) => (
-                <TicketCard key={ticket.id} ticket={ticket} members={members} draggable />
+                <TicketItem key={ticket.id} ticket={ticket} members={members} draggable />
               ))}
           </section>
         ))}
@@ -345,7 +345,7 @@ function List({
               <span className="muted">{inStatus.length}</span>
             </div>
             {inStatus.map((ticket) => (
-              <TicketCard key={ticket.id} ticket={ticket} members={members} />
+              <TicketItem key={ticket.id} ticket={ticket} members={members} />
             ))}
           </section>
         );

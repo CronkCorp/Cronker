@@ -311,7 +311,7 @@ describe("Comments", () => {
       ticketId: ticket.id,
       replyToId: null,
       body: "Shall we use **SSE**?",
-      author: { kind: "user", id: user.id, name: user.email },
+      actor: { kind: "user", id: user.id, name: user.email },
       createdAt: "2026-01-01T09:00:00.000Z",
       mentions: [],
     });
@@ -325,6 +325,16 @@ describe("Comments", () => {
     const listed = await cronk.request("GET", `/api/tickets/${ticket.id}/comments`, { cookie });
     expect(listed.status).toBe(200);
     expect(await listed.json()).toEqual([question, reply]);
+  });
+
+  test("Comments made at the same instant are listed in the order they were made", async () => {
+    const { cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Busy" });
+    const bodies = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+    for (const body of bodies) expect((await comment(cookie, ticket.id, { body })).status).toBe(201);
+
+    const listed = await (await cronk.request("GET", `/api/tickets/${ticket.id}/comments`, { cookie })).json();
+    expect(listed.map((c: { body: string }) => c.body)).toEqual(bodies);
   });
 
   test("a reply to a Comment on another Ticket is refused", async () => {

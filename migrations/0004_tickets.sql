@@ -35,17 +35,19 @@ alter table tickets add constraint tickets_id_workspace_key unique (id, workspac
 -- Comments on a Ticket, each by an Actor; only Users so far. A reply is to a Comment on the same Ticket.
 create table comments (
   id uuid primary key default gen_random_uuid(),
+  -- Orders Comments made at the same instant in the order they were made.
+  seq bigint generated always as identity,
   workspace_id uuid not null references workspaces (id),
   ticket_id uuid not null,
   reply_to_id uuid,
-  author_user_id uuid not null references users (id),
+  actor_user_id uuid not null references users (id),
   body text not null,
   created_at timestamptz not null,
   foreign key (ticket_id, workspace_id) references tickets (id, workspace_id),
   constraint comments_id_ticket_key unique (id, ticket_id),
   foreign key (reply_to_id, ticket_id) references comments (id, ticket_id)
 );
-create index comments_ticket_id_idx on comments (ticket_id, created_at);
+create index comments_ticket_id_idx on comments (ticket_id, seq);
 
 -- Every Change to a Ticket: who made it, when, and the field's value before and after.
 -- Statuses and Assignees are kept as they were named then, so renaming or removing them later

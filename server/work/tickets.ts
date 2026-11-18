@@ -54,7 +54,9 @@ const columns = `tickets.id, tickets.project_id as "projectId", projects.key || 
   tickets.assignee_id as "assigneeId", to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt"`;
 
-type Row = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
+/** A Ticket as stored, with the Workspace it belongs to. */
+export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
+type Row = TicketRow;
 
 const summary = ({ workspaceId: _, createdAt, ...row }: Row): TicketSummary => ({
   ...row,
@@ -66,7 +68,12 @@ export function ticketNotFound(): ApiError {
 }
 
 /** A Ticket, if the User belongs to its Workspace; otherwise nothing, as if it didn't exist. */
-export async function findTicketRow(db: Db | Tx, userId: string, ticketId: string, { lock = false } = {}) {
+export async function findTicketRow(
+  db: Db | Tx,
+  userId: string,
+  ticketId: string,
+  { lock = false } = {},
+): Promise<TicketRow | undefined> {
   if (!isUuid(ticketId)) return undefined;
   const { rows } = await db.query<Row>(
     `select ${columns}, tickets.workspace_id as "workspaceId"
@@ -87,21 +94,32 @@ async function withMentions(db: Db | Tx, row: Row): Promise<Ticket> {
   return { ...summary(row), mentions: await mentionsIn(db, row.workspaceId, row.description) };
 }
 
+const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;
+
+/** Ticket keys as written in Markdown, each once, in order of first mention. */
+const keysWritten = (markdown: string) => [...new Set([...markdown.matchAll(writtenKey)].map((m) => m[0]))];
+
 /** Ticket keys in Markdown that name Tickets of the Workspace, each once, in order of first mention. */
 export async function mentionsIn(db: Db | Tx, workspaceId: string, markdown: string): Promise<Mention[]> {
-  const written = [...new Set([...markdown.matchAll(/\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g)].map((m) => m[0]))];
-  if (written.length === 0) return [];
+  return (await mentionsInEach(db, workspaceId, [markdown]))[0]!;
+}
+
+/** The mentions in each of several Markdown texts, looked up together. */
+export async function mentionsInEach(db: Db | Tx, workspaceId: string, texts: string[]): Promise<Mention[][]> {
+  const written = texts.map(keysWritten);
+  const all = [...new Set(written.flat())];
+  if (all.length === 0) return texts.map(() => []);
   const { rows } = await db.query<Mention>(
     `select written.text, projects.key || '-' || tickets.number as key, tickets.id as "ticketId"
-     from unnest($2::text[]) with ordinality as written (text, n)
+     from unnest($2::text[]) as written (text)
      join projects on projects.workspace_id = $1
        and lower(projects.key) = lower(split_part(written.text, '-', 1))
      join tickets on tickets.project_id = projects.id
-       and tickets.number = split_part(written.text, '-', 2)::integer
-     order by written.n`,
-    [workspaceId, written],
+       and tickets.number = split_part(written.text, '-', 2)::integer`,
+    [workspaceId, all],
   );
-  return rows;
+  const found = new Map(rows.map((mention) => [mention.text, mention]));
+  return written.map((keys) => keys.flatMap((text) => found.get(text) ?? []));
 }
 
 export async function createTicket(
@@ -158,9 +176,12 @@ export async function listTickets(
   };
   const { statusId, assigneeId, priority, label } = filter;
   // An id that can't be a record's id matches nothing, like one of another Project.
-  if (statusId !== undefined) match((p) => `tickets.status_id::text = ${p}`, statusId);
+  const unknownStatus = statusId !== undefined && !isUuid(statusId);
+  const unknownAssignee = assigneeId !== undefined && assigneeId !== "none" && !isUuid(assigneeId);
+  if (unknownStatus || unknownAssignee) return [];
+  if (statusId !== undefined) match((p) => `tickets.status_id = ${p}`, statusId);
   if (assigneeId === "none") where.push("tickets.assignee_id is null");
-  else if (assigneeId !== undefined) match((p) => `tickets.assignee_id::text = ${p}`, assigneeId);
+  else if (assigneeId !== undefined) match((p) => `tickets.assignee_id = ${p}`, assigneeId);
   if (priority !== undefined) match((p) => `tickets.priority = ${p}`, priority);
   if (label !== undefined) {
     match((p) => `exists (select 1 from unnest(tickets.labels) as l where lower(l) = lower(${p}))`, label.trim());
@@ -200,39 +221,34 @@ export async function editTicket(
     if (!ticket) throw ticketNotFound();
     const next = { ...ticket };
     const changes: NewChange[] = [];
-    const set = <K extends keyof Row & keyof TicketEdit>(key: K, field: NewChange["field"], value: Row[K]) => {
-      if (JSON.stringify(value) === JSON.stringify(ticket[key])) return false;
+    /** Sets a field and records the Change, if the value differs; `shown` gives how the Change shows a value. */
+    const change = async <K extends keyof Row & keyof TicketEdit>(
+      key: K,
+      field: NewChange["field"],
+      value: Row[K],
+      shown: (value: Row[K]) => unknown = (v) => v,
+    ) => {
+      if (JSON.stringify(value) === JSON.stringify(ticket[key])) return;
       next[key] = value;
-      changes.push({ field, from: ticket[key], to: value });
-      return true;
+      changes.push({ field, from: await shown(ticket[key]), to: await shown(value) });
     };
+    const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
+    const userNamed = (id: string | null) => named(tx, "select id, email as name from users where id = $1", id);
 
-    if (edit.title !== undefined) set("title", "title", edit.title.trim());
-    if (edit.description !== undefined) set("description", "description", edit.description);
+    if (edit.title !== undefined) await change("title", "title", edit.title.trim());
+    if (edit.description !== undefined) await change("description", "description", edit.description);
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
-      if (set("statusId", "status", edit.statusId)) {
-        changes[changes.length - 1] = {
-          field: "status",
-          from: await named(tx, "select id, name from statuses where id = $1", ticket.statusId),
-          to: await named(tx, "select id, name from statuses where id = $1", edit.statusId),
-        };
-      }
+      await change("statusId", "status", edit.statusId, statusNamed);
     }
-    if (edit.priority !== undefined) set("priority", "priority", edit.priority);
-    if (edit.labels !== undefined) set("labels", "labels", distinctLabels(edit.labels));
+    if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
+    if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
     if (edit.assigneeId !== undefined) {
       if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
-      if (set("assigneeId", "assignee", edit.assigneeId)) {
-        changes[changes.length - 1] = {
-          field: "assignee",
-          from: await named(tx, "select id, email as name from users where id = $1", ticket.assigneeId),
-          to: await named(tx, "select id, email as name from users where id = $1", edit.assigneeId),
-        };
-      }
+      await change("assigneeId", "assignee", edit.assigneeId, userNamed);
     }
-    if (edit.dueDate !== undefined) set("dueDate", "dueDate", edit.dueDate);
-    if (edit.estimate !== undefined) set("estimate", "estimate", edit.estimate);
+    if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
+    if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
 
     await tx.query(
@@ -255,7 +271,7 @@ export async function editTicket(
   });
 }
 
-/** A Status or User as `{ id, name }`, as it is named now; or null for no id. */
+/** A Status or User, looked up by the query, as `{ id, name }` as it is named now; or null for no id. */
 async function named(tx: Tx, query: string, id: string | null): Promise<{ id: string; name: string } | null> {
   if (id === null) return null;
   const { rows } = await tx.query<{ id: string; name: string }>(query, [id]);

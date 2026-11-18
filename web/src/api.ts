@@ -115,7 +115,7 @@ export interface Comment {
   ticketId: string;
   replyToId: string | null;
   body: string;
-  author: Actor;
+  actor: Actor;
   createdAt: string;
   mentions: Mention[];
 }
