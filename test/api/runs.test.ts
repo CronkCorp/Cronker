@@ -375,7 +375,7 @@ describe("Runners and Agents", () => {
     expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
-      { id: agent.runnerId, name: "Fake", kind: "fake", createdAt: expect.any(String) },
+      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, createdAt: expect.any(String) },
     ]);
     const notOwn = await call("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: "00000000-0000-0000-0000-000000000000" });
     expect(notOwn.json.error.code).toBe("unknown_runner");
