@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream, type OpenStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -304,5 +305,41 @@ describe("limits per Runner", () => {
       "CRONK-2": { run: null, waiting: "runnerSlot" },
       "CRONK-3": { run: "running", waiting: null },
     });
+  });
+});
+
+describe("waiting live", () => {
+  /** The Tickets the stream says changed, until it goes quiet. */
+  async function changedTickets(stream: OpenStream) {
+    const changed = new Set<unknown>();
+    for (;;) {
+      try {
+        const event = await stream.next(300);
+        if (event.type === "ticket.changed") changed.add(event.data.ticketId);
+      } catch {
+        return changed;
+      }
+    }
+  }
+
+  test("a Ticket starting to wait, and its wait ending, each tell the Workspace's streams its card changed", async () => {
+    const { workspace, ada, runner, status, ticket, delegateToTriage, finish } = await adaWithAgent();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    const [running, waiting, blocker, blocked] = [await ticket("A"), await ticket("B"), await ticket("C"), await ticket("D")];
+    await ok("POST", `/api/tickets/${blocked.id}/relations`, ada, { kind: "blockedBy", ticketId: blocker.id });
+    await delegateToTriage(running.id);
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+
+    await delegateToTriage(waiting.id);
+    await delegateToTriage(blocked.id);
+    expect(await changedTickets(stream)).toEqual(new Set([waiting.id, blocked.id]));
+
+    // The blocker finishing changes the blocked card, from blocked to waiting for a slot behind B.
+    await ok("PATCH", `/api/tickets/${blocker.id}`, ada, { statusId: status("Done") });
+    expect(await changedTickets(stream)).toEqual(new Set([blocker.id, blocked.id]));
+
+    await finish(running.id);
+    expect(await changedTickets(stream)).toEqual(new Set([running.id, waiting.id]));
+    stream.close();
   });
 });
