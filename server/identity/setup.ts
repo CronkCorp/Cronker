@@ -4,7 +4,7 @@ import { transaction, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { hashPassword } from "./passwords.js";
 import { hashSecret, issueSecret, secretMatches } from "./secrets.js";
-import type { User } from "./user.js";
+import { userColumns, type User } from "./user.js";
 import type { Workspace } from "../workspaces/workspaces.js";
 
 /**
@@ -62,7 +62,7 @@ export async function runSetup(db: Db, clock: Clock, input: SetupInput): Promise
 
     const now = clock.now();
     const user = await tx.query<User>(
-      "insert into users (email, password_hash, created_at) values ($1, $2, $3) returning id, email",
+      `insert into users (email, password_hash, created_at) values ($1, $2, $3) returning ${userColumns}`,
       [input.email, passwordHash, now],
     );
     const workspace = await tx.query<Workspace>(
