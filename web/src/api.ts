@@ -60,6 +60,86 @@ export interface Project extends ProjectSummary {
   statuses: Status[];
 }
 
+export type Priority = "urgent" | "high" | "medium" | "low" | "none";
+
+export const priorities: { priority: Priority; label: string }[] = [
+  { priority: "urgent", label: "Urgent" },
+  { priority: "high", label: "High" },
+  { priority: "medium", label: "Medium" },
+  { priority: "low", label: "Low" },
+  { priority: "none", label: "None" },
+];
+
+/** A Ticket key written in Markdown that names a Ticket of the Workspace. */
+export interface Mention {
+  text: string;
+  key: string;
+  ticketId: string;
+}
+
+export interface TicketSummary {
+  id: string;
+  projectId: string;
+  key: string;
+  title: string;
+  description: string;
+  statusId: string;
+  priority: Priority;
+  labels: string[];
+  assigneeId: string | null;
+  dueDate: string | null;
+  estimate: number | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface Ticket extends TicketSummary {
+  mentions: Mention[];
+}
+
+export interface TicketEdit {
+  title?: string;
+  description?: string;
+  statusId?: string;
+  priority?: Priority;
+  labels?: string[];
+  assigneeId?: string | null;
+  dueDate?: string | null;
+  estimate?: number | null;
+}
+
+export interface TicketFilter {
+  statusId?: string;
+  assigneeId?: string;
+  priority?: Priority;
+  label?: string;
+}
+
+export interface Actor {
+  kind: "user";
+  id: string;
+  name: string;
+}
+
+export interface Comment {
+  id: string;
+  ticketId: string;
+  replyToId: string | null;
+  body: string;
+  actor: Actor;
+  createdAt: string;
+  mentions: Mention[];
+}
+
+export interface Change {
+  id: string;
+  actor: Actor;
+  at: string;
+  field: "created" | "title" | "description" | "status" | "priority" | "labels" | "assignee" | "dueDate" | "estimate";
+  from: unknown;
+  to: unknown;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -122,6 +202,19 @@ export const api = {
     ),
   removeStatus: (projectId: string, statusId: string) =>
     call<Project>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`),
+  tickets: (projectId: string, filter: TicketFilter = {}) => {
+    const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value));
+    const search = query.size ? `?${query}` : "";
+    return call<TicketSummary[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
+  },
+  createTicket: (projectId: string, input: { title: string; description?: string }) =>
+    call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
+  ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
+  editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
+  comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
+  comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
+    call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function ws(id: string) {
