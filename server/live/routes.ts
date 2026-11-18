@@ -1,7 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ErrorBody } from "../http/errors.js";
+import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { inboxOf } from "../inbox/inbox.js";
 import { requireMember } from "../workspaces/members.js";
@@ -25,7 +25,7 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Server-sent events for the signed-in User in this Workspace, sent after the changes behind them commit. " +
             "`inbox` carries `{ count }`, the User's Inbox count: once when the stream opens, then whenever their Inbox " +
             "changes, even if its count stays the same. " +
-            "The stream ends if the User leaves the Workspace.",
+            "The stream ends at the next change once the User has signed out or left the Workspace.",
           params: Type.Object({ workspaceId: Type.String() }),
           response: {
             200: Type.String({ description: "A `text/event-stream`." }),
@@ -49,32 +49,42 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
 
         let ended = false;
         let last: string | undefined;
-        let refreshing: Promise<void> | undefined;
+        /** The stream lasts only while its sign-in lasts and its User belongs to the Workspace. */
+        const stillAllowed = async () => {
+          const signedIn = await requireUser(context, request).then(
+            (current) => current.id === user.id,
+            (error: unknown) => (error instanceof ApiError ? false : Promise.reject(error)),
+          );
+          return signedIn && (await findWorkspace(db, user.id, workspace.id)) !== undefined;
+        };
+
+        let refreshing = false;
         let again = false;
-        // Changes may arrive faster than the Inbox is worked out; they are folded into one more refresh.
+        // Changes may arrive faster than the Inbox is worked out; they are folded into one more
+        // pass. `refreshing` is cleared in the same step as the last check of `again`, so no
+        // change can arrive in between and be missed.
         const refresh = async () => {
           if (refreshing) {
             again = true;
             return;
           }
-          refreshing = (async () => {
+          refreshing = true;
+          try {
             do {
               again = false;
-              if (!(await findWorkspace(db, user.id, workspace.id))) return end();
+              if (!(await stillAllowed())) return end();
               const inbox = await inboxOf(db, user.id, workspace.id);
               const seen = JSON.stringify(inbox);
               if (ended || seen === last) continue;
               last = seen;
               send("inbox", { count: inbox.count });
             } while (again && !ended);
-          })()
-            .catch((error: unknown) => {
-              request.log.error(error);
-              end();
-            })
-            .finally(() => {
-              refreshing = undefined;
-            });
+          } catch (error) {
+            request.log.error(error);
+            end();
+          } finally {
+            refreshing = false;
+          }
         };
 
         const keepAlive = setInterval(() => raw.write(":\n\n"), keepAliveMs);

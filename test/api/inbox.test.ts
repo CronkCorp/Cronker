@@ -238,6 +238,19 @@ describe("the Inbox count, live", () => {
     expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
   });
 
+  test("signing out ends the client's stream at the next change", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "After sign-out");
+    const stream = await events(workspace.id, ada.cookie);
+    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
+
+    expect((await cronk.request("DELETE", "/api/sign-in", { cookie: ada.cookie })).status).toBe(204);
+    const other = await signIn(cronk);
+    await editTicket(other, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+
+    await stream.ended();
+  });
+
   test("only members may open a Workspace's stream, and removing a member ends theirs", async () => {
     const { ada, bea, workspace } = await workspaceWithProject();
     const created = await cronk.request("POST", "/api/workspaces", { cookie: bea.cookie, body: { name: "Bea's" } });
