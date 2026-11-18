@@ -21,3 +21,9 @@ create table reports (
   foreign key (agent_id, workspace_id) references agents (id, workspace_id)
 );
 create index reports_ticket_id_idx on reports (ticket_id, seq);
+
+-- A Report a Run finished with is one of its Ticket's Reports, titled after the Run's Step.
+insert into reports (workspace_id, ticket_id, run_id, agent_id, title, body, created_at)
+select workspace_id, ticket_id, id, agent_id, status_name || ' report', report, ended_at
+from runs where report is not null order by seq;
+alter table runs drop column report;

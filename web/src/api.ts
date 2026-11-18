@@ -256,7 +256,6 @@ export interface Run {
   state: RunState;
   outcome: string | null;
   question: string | null;
-  report: string | null;
   endReason: string | null;
   sessionUrl: string | null;
   startedAt: string;

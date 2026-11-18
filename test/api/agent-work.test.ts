@@ -205,6 +205,33 @@ describe("Reports", () => {
     expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([]);
   });
 
+  test("finishing a Run with a Report adds it to the Ticket's Reports, titled after the Run's Step", async () => {
+    const { ada, ticket, agent, run, asAgent } = await runningRun();
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready", report: "Clear enough to start." });
+
+    expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([
+      {
+        id: expect.any(String),
+        ticketId: ticket.id,
+        runId: run.id,
+        agent: { id: agent.id, name: "claude-max" },
+        title: "Triage report",
+        body: "Clear enough to start.",
+        createdAt: "2026-01-01T09:00:00.000Z",
+      },
+    ]);
+  });
+
+  test("a refused finish adds no Report", async () => {
+    const { ada, ticket, run, asAgent } = await runningRun();
+
+    const refused = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "approve", report: "Done." });
+
+    expect(refused.status).toBe(400);
+    expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([]);
+  });
+
   test("a Report written tells the Workspace's streams", async () => {
     const { workspace, ada, project, ticket, asAgent } = await runningRun();
     const stream = await openStream(cronk, ada.cookie!, workspace.id);

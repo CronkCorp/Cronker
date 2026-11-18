@@ -9,6 +9,7 @@ import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Step } from "../work/steps.js";
+import { recordReport } from "../work/reports.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
@@ -36,7 +37,6 @@ export const Run = Type.Object({
   state: RunState,
   outcome: Type.Union([Type.String(), Type.Null()], { description: "The Outcome its Agent finished it with." }),
   question: Type.Union([Type.String(), Type.Null()], { description: "The Question its Agent finished it with, if any." }),
-  report: Type.Union([Type.String(), Type.Null()], { description: "The Report its Agent finished it with, if any, in Markdown." }),
   endReason: Type.Union([Type.String(), Type.Null()], {
     description: "Why it failed, or why its Runner refused to start it.",
   }),
@@ -58,7 +58,7 @@ type Row = Omit<Run, "startedAt" | "endedAt"> & {
 const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
-  runs.question, runs.report, runs.end_reason as "endReason", runs.session_url as "sessionUrl",
+  runs.question, runs.end_reason as "endReason", runs.session_url as "sessionUrl",
   runs.started_at as "startedAt", runs.ended_at as "endedAt",
   runs.workspace_id as "workspaceId", runs.agent_id as "agentId", runs.status_id as "statusId", runs.brief`;
 
@@ -268,9 +268,12 @@ export async function finishRun(
 
     const now = clock.now();
     await tx.query(
-      `update runs set state = 'finished', outcome = $2, question = $3, report = $4, ended_at = $5 where id = $1`,
-      [run.id, outcome.name, input.question ?? null, input.report ?? null, now],
+      `update runs set state = 'finished', outcome = $2, question = $3, ended_at = $4 where id = $1`,
+      [run.id, outcome.name, input.question ?? null, now],
     );
+    if (input.report !== undefined) {
+      await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
+    }
     if (outcome.statusId !== ticket.statusId) {
       await tx.query("update tickets set status_id = $2 where id = $1", [ticket.id, outcome.statusId]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
