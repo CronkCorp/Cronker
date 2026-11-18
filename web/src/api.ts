@@ -34,6 +34,10 @@ export interface Member {
   isAdmin: boolean;
 }
 
+export type PendingAdd =
+  | { user: User; addedVia: "email"; addedAt: string; /** When the last of their links to join expires. */ expiresAt: string }
+  | { user: User; addedVia: "github"; addedAt: string };
+
 export interface Link {
   url: string;
   expiresAt: string;
@@ -283,6 +287,13 @@ export class ApiError extends Error {
   }
 }
 
+/** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
+export interface ConnectRequest {
+  client: { id: string; name: string | null };
+  redirectUri: string;
+  agents: { id: string; name: string; workspace: Workspace }[];
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
@@ -317,6 +328,9 @@ export const api = {
   setAdmin: (id: string, userId: string, isAdmin: boolean) =>
     call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
   removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
+  pendingAdds: (id: string) => call<PendingAdd[]>("GET", `${ws(id)}/pending-adds`),
+  cancelPendingAdd: (id: string, userId: string) =>
+    call<void>("DELETE", `${ws(id)}/pending-adds/${encodeURIComponent(userId)}`),
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
   addMemberByGitHub: (id: string, login: string) =>
     call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
@@ -385,11 +399,19 @@ export const api = {
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
+  connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
+  approveConnect: (requestId: string, agentId: string) =>
+    call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
+  denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;
+}
+
+function connect(requestId: string) {
+  return `/api/oauth/requests/${encodeURIComponent(requestId)}`;
 }
 
 function agent(id: string) {

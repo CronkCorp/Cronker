@@ -30,6 +30,9 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/links/use",
     "/api/me",
     "/api/me/password",
+    "/api/oauth/requests/{requestId}",
+    "/api/oauth/requests/{requestId}/approve",
+    "/api/oauth/requests/{requestId}/deny",
     "/api/projects/{projectId}",
     "/api/projects/{projectId}/statuses",
     "/api/projects/{projectId}/statuses/{statusId}",
@@ -57,6 +60,8 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/workspaces/{workspaceId}/members/github",
     "/api/workspaces/{workspaceId}/members/{userId}",
     "/api/workspaces/{workspaceId}/members/{userId}/reset-link",
+    "/api/workspaces/{workspaceId}/pending-adds",
+    "/api/workspaces/{workspaceId}/pending-adds/{userId}",
     "/api/workspaces/{workspaceId}/projects",
     "/api/workspaces/{workspaceId}/tickets/{key}",
   ]);

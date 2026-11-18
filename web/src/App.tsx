@@ -6,15 +6,18 @@ import {
   type LinkDetails,
   type Member,
   nameOf,
+  type PendingAdd,
   type User,
   type WorkspaceSummary,
 } from "./api.js";
 import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
+import { ConnectError, ConnectScreen } from "./connect.js";
 import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { InboxLink, InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
+import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
 
 type Screen =
@@ -35,11 +38,16 @@ export function App() {
   const path = usePath();
   // Links Cronk hands out open `/link`, with their secret in the fragment.
   const onLinkPage = path === "/link";
+  // A connector asking to connect opens `/connect`, the consent screen of Cronk's OAuth server.
+  const connect = path === "/connect" ? new URLSearchParams(window.location.search) : null;
 
   const load = useCallback(async (notice?: string) => {
     try {
       if (await api.setupNeeded()) return setScreen({ kind: "setup" });
       const me = await api.me();
+      // Signing in with GitHub on the way somewhere, such as the consent screen, ends at `/`; carry on there.
+      const returnTo = takeReturnAfterSignIn();
+      if (returnTo && /^\/(?!\/)/.test(returnTo) && window.location.pathname === "/") replace(returnTo);
       setScreen({ kind: "signedIn", user: me.user, workspaces: me.workspaces });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -81,6 +89,8 @@ export function App() {
       />
     );
   }
+  const connectError = connect?.get("error");
+  if (connectError) return <ConnectError code={connectError} />;
   switch (screen.kind) {
     case "loading":
       return <Centered title="Cronk">Loading…</Centered>;
@@ -89,8 +99,15 @@ export function App() {
     case "connectGitHub":
       return <GitHubSetupStep onSkip={() => load()} />;
     case "signIn":
-      return <SignInScreen notice={screen.notice} onSignedIn={() => load()} />;
+      return (
+        <SignInScreen
+          notice={connect ? "Sign in to Cronk to choose which of your Agents the connector acts as." : screen.notice}
+          returnTo={connect ? `${window.location.pathname}${window.location.search}` : undefined}
+          onSignedIn={() => load()}
+        />
+      );
     case "signedIn":
+      if (connect) return <ConnectScreen requestId={connect.get("request") ?? ""} />;
       return (
         <SignedIn
           user={screen.user}
@@ -155,7 +172,7 @@ function SetupScreen({ onDone }: { onDone: () => void }) {
   );
 }
 
-function SignInScreen({ notice, onSignedIn }: { notice?: string; onSignedIn: () => void }) {
+function SignInScreen({ notice, returnTo, onSignedIn }: { notice?: string; returnTo?: string; onSignedIn: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     await api.signIn(field(form, "email"), field(form, "password"));
     onSignedIn();
@@ -178,7 +195,7 @@ function SignInScreen({ notice, onSignedIn }: { notice?: string; onSignedIn: () 
         </button>
       </form>
       <p className="or">
-        <GitHubSignIn />
+        <GitHubSignIn returnTo={returnTo} />
       </p>
     </Centered>
   );
@@ -472,11 +489,14 @@ function Members({
   onLeft: () => void;
 }) {
   const [members, setMembers] = useState<Member[] | null>(null);
+  const [pending, setPending] = useState<PendingAdd[]>([]);
   const [notice, setNotice] = useState<ReactNode>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
     api.members(workspace.id).then(setMembers, (e: Error) => setError(e.message));
-  }, [workspace.id]);
+    if (workspace.isAdmin) api.pendingAdds(workspace.id).then(setPending, (e: Error) => setError(e.message));
+    else setPending([]);
+  }, [workspace.id, workspace.isAdmin]);
   useEffect(refresh, [refresh]);
 
   const act = async (action: () => Promise<void>) => {
@@ -506,6 +526,7 @@ function Members({
     const { user: added } = await api.addMemberByGitHub(workspace.id, field(form, "login").trim().replace(/^@/, ""));
     element.reset();
     setNotice(<p role="status">{nameOf(added)} joins at their next sign-in with GitHub.</p>);
+    refresh();
   });
 
   return (
@@ -547,10 +568,43 @@ function Members({
       )}
       {notice}
       {error && <p role="alert">{error}</p>}
+      {pending.length > 0 && (
+        <>
+          <h2 id="pending-adds">Added, not joined yet</h2>
+          <table aria-labelledby="pending-adds">
+            <tbody>
+              {pending.map((add) => (
+                <tr key={`${add.user.id} ${add.addedVia}`}>
+                  <td>{nameOf(add.user)}</td>
+                  <td className="muted">
+                    {add.addedVia === "email"
+                      ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
+                      : "by GitHub login, joins at their next sign-in"}
+                  </td>
+                  <td className="actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        act(async () => {
+                          await api.cancelPendingAdd(workspace.id, add.user.id);
+                          refresh();
+                        })
+                      }
+                    >
+                      Cancel add
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <h2>Members</h2>
+        </>
+      )}
       {members === null ? (
         <p>Loading…</p>
       ) : (
-        <table>
+        <table aria-label="Members">
           <tbody>
             {members.map((member) => (
               <tr key={member.user.id}>

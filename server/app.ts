@@ -12,6 +12,7 @@ import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
 import { runRoutes } from "./runs/routes.js";
 import { mcpRoutes } from "./mcp/routes.js";
+import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
 import { inboxRoutes } from "./inbox/routes.js";
@@ -87,6 +88,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));
   await app.register(mcpRoutes(context, app));
+  await app.register(oauthRoutes(context));
   await app.register(liveRoutes(context));
 
   const { webRoot } = context.config;
