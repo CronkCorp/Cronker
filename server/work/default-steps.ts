@@ -16,7 +16,7 @@ const triage = `Triage this Ticket so the next Steps can work on it without aski
 - Set its Priority and Labels. Add \`no-review\` when the change is obvious and needs no code review, such as a docs-only fix.
 - Split work that is clearly several pieces into Sub-Tickets.
 
-Finish with **ready** when the Ticket is clear enough to investigate. Finish with **needs you** and a Question when only a person can say what is wanted.`;
+Finish with **ready** when the Ticket is clear enough to investigate. Finish with **needs you** and a Question when only a User can say what is wanted.`;
 
 const investigate = `Investigate how to do this Ticket's work, without changing any code yet.
 
@@ -24,7 +24,7 @@ const investigate = `Investigate how to do this Ticket's work, without changing 
 - Find the code, documents and decisions the work touches, and anything that makes it risky.
 - Write a Report on the Ticket: what you found, the approach you recommend and why, and the open questions, if any.
 
-Finish with **done** once the Report gives the implementation what it needs. Finish with **needs you** and a Question when a choice only a person can make blocks the approach.`;
+Finish with **done** once the Report gives the implementation what it needs. Finish with **needs you** and a Question when a choice only a User can make blocks the approach.`;
 
 const implement = `Implement this Ticket's work.
 
@@ -32,7 +32,7 @@ const implement = `Implement this Ticket's work.
 - Make the change on a branch named after the Ticket's key, with tests, and open a pull request whose title starts with the key.
 - Leave a Comment on the Ticket linking the pull request and saying anything a reviewer should know.
 
-Finish with **done** once the pull request is open and its checks pass. Finish with **needs you** and a Question when you can't go on without a person.`;
+Finish with **done** once the pull request is open and its checks pass. Finish with **needs you** and a Question when you can't go on without a User.`;
 
 const codeReview = `Review the pull request this Ticket's implementation opened.
 
@@ -40,7 +40,7 @@ const codeReview = `Review the pull request this Ticket's implementation opened.
 - Check that the change does what the Ticket asks, is tested, and follows the Repository's conventions.
 - Write a Report with your findings, most serious first.
 
-Finish with **approve** when it is ready for a person to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a person. Finish with **needs you** and a Question when you can't judge it.`;
+Finish with **approve** when it is ready for a User to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a User. Finish with **needs you** and a Question when you can't judge it.`;
 
 export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {

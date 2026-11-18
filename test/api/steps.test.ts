@@ -166,7 +166,7 @@ describe("attaching, editing and removing a Step", () => {
     expect(changed.statuses.find((s) => s.name === "Triage")!.step).toEqual(edited);
   });
 
-  test("removing a Step leaves its Status as one where Tickets wait for a person", async () => {
+  test("removing a Step leaves its Status as one where Tickets wait for a User", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
 
     const response = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${id("Investigate")}/step`, {
@@ -343,7 +343,7 @@ describe("Outcome refusals", () => {
       status: 409,
       error: {
         code: "outcome_target_not_allowed",
-        message: "The needs you Outcome needs you can't move Tickets to Done, a Done Status: asking a person must never complete work.",
+        message: "The needs you Outcome needs you can't move Tickets to Done, a Done Status: asking a User must never complete work.",
       },
     });
   });
@@ -496,7 +496,7 @@ describe("the Brief preview", () => {
         "End the Run by calling `finish` with your Run id and one of these Outcomes:",
         "",
         "- **ready**: moves CRONK-1 to Ready.",
-        "- **needs you**: moves CRONK-1 to Backlog and hands it to a person. Give a Question saying what you need.",
+        "- **needs you**: moves CRONK-1 to Backlog and hands it back to its Assignee. Give a Question saying what you need.",
         "",
         "Rules:",
         "",
@@ -516,8 +516,8 @@ describe("the Brief preview", () => {
     const { preamble } = await (await cronk.request("GET", `/api/tickets/${ticket.id}/brief`, { cookie })).json();
 
     expect(preamble).toContain("- **approve**: moves CRONK-1 to In Review.\n");
-    expect(preamble).toContain("- **changes**: moves CRONK-1 to Implement. It counts as a round: after 2, it hands the Ticket to a person instead.\n");
-    expect(preamble).toContain("- **needs you**: moves CRONK-1 to In Review and hands it to a person.");
+    expect(preamble).toContain("- **changes**: moves CRONK-1 to Implement. It counts as a round: after 2, the Step's *needs you* Outcome applies instead.\n");
+    expect(preamble).toContain("- **needs you**: moves CRONK-1 to In Review and hands it back to its Assignee.");
     expect(preamble).not.toContain("**complete**");
   });
 
@@ -529,7 +529,7 @@ describe("the Brief preview", () => {
     expect(response.status).toBe(409);
     expect((await response.json()).error).toEqual({
       code: "status_has_no_step",
-      message: "CRONK-1 is in Ready, which has no Step: Tickets there wait for a person, and get no Run.",
+      message: "CRONK-1 is in Ready, which has no Step: Tickets there wait for a User, and get no Run.",
     });
   });
 

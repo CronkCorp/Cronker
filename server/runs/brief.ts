@@ -31,7 +31,7 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
     throw new ApiError(
       409,
       "status_has_no_step",
-      `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a person, and get no Run.`,
+      `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a User, and get no Run.`,
     );
   }
   const step = status.step;
@@ -41,9 +41,9 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
   const offered = step.outcomes.filter((o) => kindOf(o.statusId) !== "done");
   const outcomeLine = (o: Outcome) => {
     const moves = `- **${o.name}**: moves ${ticket.key} to ${nameOf(o.statusId)}`;
-    if (o.needsYou) return `${moves} and hands it to a person. Give a Question saying what you need.`;
+    if (o.needsYou) return `${moves} and hands it back to its Assignee. Give a Question saying what you need.`;
     if (o.countsAsRound) {
-      return `${moves}. It counts as a round: after ${step.roundLimit}, it hands the Ticket to a person instead.`;
+      return `${moves}. It counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
     }
     return `${moves}.`;
   };
