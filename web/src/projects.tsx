@@ -319,7 +319,11 @@ const runMarkers = {
 } as const;
 
 /** How a card marks a Ticket that needs a Run but waits for one; this replaces its latest Run's marker. */
-const waitingMarkers = { runnerSlot: "Waiting for a Runner slot", blocked: "Blocked" } as const;
+const waitingMarkers = {
+  runnerSlot: "Waiting for a Runner slot",
+  runnerPaused: "Waiting: Runner rate limited",
+  blocked: "Blocked",
+} as const;
 
 const ticketDrag = "application/x-cronk-ticket";
 

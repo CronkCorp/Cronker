@@ -286,12 +286,16 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
           result.reference.url ?? null,
         ]);
       } else if (result.refusal.kind === "rate_limited") {
-        // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits for a slot of its Runner,
-        // rather than showing as couldn't-start. Its slot is freed without handing it on at once, which would
-        // only meet the same limit; the next Run its Runner ends hands it on, as for any waiting Ticket.
-        await lockSlotOf(tx, runId);
+        // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits, rather than showing as
+        // couldn't-start. The Runner's queue pauses until the limit passes, so none of its waiting Tickets meet
+        // the same limit meanwhile; the periodic check resumes it then (`resumePausedRunners`).
+        const runnerId = await lockSlotOf(tx, runId);
         const { rowCount } = await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
         if (rowCount) await tx.query("update tickets set waits_for_run = true where id = $1", [ticketId]);
+        await tx.query("update runners set paused_until = greatest(paused_until, $2) where id = $1", [
+          runnerId,
+          result.refusal.retryAt,
+        ]);
       } else {
         await freeSlot(context, tx, runId);
         await tx.query(
@@ -309,10 +313,11 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
  * Holds the Runner's slots still until the transaction ends: everything that starts or ends a Run through
  * it takes this lock, so counting its running Runs and waiting Tickets gives the answer that stands.
  */
-async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number }> {
-  const { rows } = await tx.query<{ limit: number }>("select run_limit as limit from runners where id = $1 for update", [
-    runnerId,
-  ]);
+async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number; paused: boolean }> {
+  const { rows } = await tx.query<{ limit: number; paused: boolean }>(
+    "select run_limit as limit, paused_until is not null as paused from runners where id = $1 for update",
+    [runnerId],
+  );
   return rows[0]!;
 }
 
@@ -335,9 +340,13 @@ async function lockSlotOf(tx: Tx, runId: string): Promise<string | null> {
   return runnerId;
 }
 
-/** Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue. */
+/**
+ * Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue:
+ * none while its queue is paused by a rate limit.
+ */
 async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<boolean> {
-  const { limit } = await lockRunner(tx, runnerId);
+  const { limit, paused } = await lockRunner(tx, runnerId);
+  if (paused) return false;
   const { rows } = await tx.query<{ taken: number }>(
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
@@ -424,6 +433,15 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
     if (!next) return;
     if ((await recheck(context, next.id)) === "waiting") return;
   }
+}
+
+/** Resumes the queues of rate-limited Runners whose pause has passed, giving out their free slots. */
+export async function resumePausedRunners(context: Context): Promise<void> {
+  const { rows } = await context.db.query<{ id: string }>(
+    "update runners set paused_until = null where paused_until <= $1 returning id",
+    [context.clock.now()],
+  );
+  for (const { id } of rows) await startWaitingRuns(context, id);
 }
 
 /**
