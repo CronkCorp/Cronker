@@ -12,6 +12,7 @@ import type { Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
+import { askQuestion } from "./questions.js";
 import { RunState } from "./states.js";
 
 /**
@@ -279,8 +280,17 @@ export async function finishRun(
       `update runs set state = 'finished', outcome = $2, question = $3, report = $4, ended_at = $5 where id = $1`,
       [run.id, outcome.name, input.question ?? null, input.report ?? null, now],
     );
+    if (outcome.needsYou) {
+      const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
+      await askQuestion(context, tx, ticket, asking, question!, now);
+    }
     if (outcome.statusId !== ticket.statusId) {
-      await tx.query("update tickets set status_id = $2 where id = $1", [ticket.id, outcome.statusId]);
+      // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
+      await tx.query("update tickets set status_id = $2, handed_back_by_run_id = $3 where id = $1", [
+        ticket.id,
+        outcome.statusId,
+        outcome.needsYou ? run.id : null,
+      ]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id }, now, [
         { field: "status", from: named(ticket.statusId), to: named(outcome.statusId) },

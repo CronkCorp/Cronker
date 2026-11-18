@@ -63,3 +63,47 @@ describe("asking a Question", () => {
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
   });
 });
+
+/** Finishes the Ticket's running Run with needs you and the Question, and returns the Question's Inbox item. */
+async function ask(setup: Awaited<ReturnType<typeof investigating>>, question: string) {
+  const { workspace, ada, ticket, asAgent } = setup;
+  const running = (await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).find((r: { state: string }) => r.state === "running");
+  await ok("POST", `/api/runs/${running.id}/finish`, asAgent, { outcome: "needs you", question });
+  const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+  return items.find((item: { kind: string }) => item.kind === "question");
+}
+
+describe("where a Question shows", () => {
+  test("on the Ticket as a Comment from the Agent, and in the Assignee's Inbox", async () => {
+    const setup = await investigating();
+    const { workspace, ada, ticket, agent, run, asAgent, status } = setup;
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, {
+      outcome: "needs you",
+      question: "Should the button be blue or green?",
+    });
+
+    const comments = await ok("GET", `/api/tickets/${ticket.id}/comments`, ada);
+    expect(comments).toEqual([
+      expect.objectContaining({
+        replyToId: null,
+        body: "Should the button be blue or green?",
+        actor: { kind: "agent", id: agent.id, name: "claude-max" },
+        questionId: expect.any(String),
+      }),
+    ]);
+    const inbox = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(inbox.items).toContainEqual({
+      kind: "question",
+      ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", statusId: status("Backlog") }),
+      question: {
+        id: comments[0].questionId,
+        commentId: comments[0].id,
+        body: "Should the button be blue or green?",
+        agent: { id: agent.id, name: "claude-max" },
+        step: { statusId: status("Investigate"), name: "Investigate" },
+        askedAt: "2026-01-01T09:00:00.000Z",
+      },
+    });
+  });
+});
