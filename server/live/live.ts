@@ -29,7 +29,10 @@ export interface Subscriber {
   end(): void;
 }
 
-/** The open event streams of this server, and delivery to them once changes commit. */
+/**
+ * The open event streams of this server, and delivery to them once changes commit. Delivery
+ * is in-process: changes made by another process, such as a server command, reach no stream.
+ */
 export class Live {
   private readonly subscribers = new Set<Subscriber>();
 

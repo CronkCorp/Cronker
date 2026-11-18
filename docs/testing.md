@@ -6,7 +6,7 @@ Tests exercise Cronk from the outside, the way a User or Agent does: they call t
 
 These are the seams from the milestone 1 spec (#1). Tests live only at them.
 
-1. **HTTP API against a real, disposable Postgres** (primary). Cronk runs in-process with the clock under the test's control. Nearly every rule is tested here. Lives in `test/api/`.
+1. **HTTP API against a real, disposable Postgres** (primary). Cronk runs in-process with the clock under the test's control. Nearly every rule is tested here, live updates included, by reading a Workspace's event stream over HTTP. Lives in `test/api/`.
 2. **The Runner interface with a fake Runner.** API tests start Cronk with a fake Runner that records each start and can be told to refuse, rate-limit or report a Run ended without finishing. *(Not built yet.)*
 3. **The subscription Runner against a stand-in HTTP server** for the scheduled-task fire endpoint. The real service is never called. *(Not built yet.)*
 4. **MCP** (thin): a real MCP client against the running server, for bearer tokens, OAuth and the mapping of tools onto the API. *(Not built yet.)*
@@ -28,6 +28,7 @@ What a seam can't see, such as that only hashes of secrets are stored, is kept b
   - `stop()`: closes Cronk and drops its database. Call it in `afterEach`.
 - **Disposable Postgres per test** (`database.ts`). Each `startCronk()` copies a fresh database from a migrated template (`create database … template …`), so tests share nothing and none pays for migrations. The template's name carries a hash of `migrations/`, so changing a migration builds a new template on the next run.
 - **The injectable clock** (`clock.ts`). Cronk reads the time only through its `Clock`. `TestClock` starts at a fixed instant and moves only on `clock.advance(ms)`; `days(n)` helps. Use it for anything that expires.
+- **`openStream(cronk, cookie, workspaceId)`** (`stream.ts`) opens a Workspace's event stream as any client would and resolves once the server has subscribed it. `next()` waits for the next event, `expectQuiet()` fails if one arrives, `ended()` waits for the server to end the stream, and `close()` drops it; `stop()` ends any still open.
 - **Flows** (`flows.ts`): `setUp(cronk)`, `signIn(cronk)` and `addMember(cronk, adminCookie, workspaceId, email)` (added by email, joined through the link, signed in) for tests whose subject comes after them. Keep them few; a test about setup or sign-in itself spells the requests out.
 
 Faults and external services are staged through the harness, never by mocking Cronk's own modules: later tickets add the fake Runner and stand-in HTTP servers as `startCronk` options.
