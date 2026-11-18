@@ -450,12 +450,16 @@ export async function editTicket(
   edit: TicketEdit,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
-  if (editor.kind === "agent") checkAgentFields(editor, edit);
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const actor: ChangeActor =
-      editor.kind === "user" ? editor.id : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+    let actor: ChangeActor = editor.id;
+    if (editor.kind === "agent") {
+      // The Agent that filed a Discovered Ticket edits it, outside any Run, until a User takes it up.
+      const filed = filedByAgent(editor, ticket);
+      checkAgentFields(editor, edit, filed);
+      actor = { kind: "agent", id: editor.id, runId: filed ? null : await runOfAgent(tx, editor, ticket) };
+    }
     // Only Users get this far with fields that name a User.
     const userId = editor.id;
     const next = { ...ticket };
@@ -576,10 +580,15 @@ export async function editTicket(
   });
 }
 
-/** Refuses an Agent's edit of a field only Users edit. */
-function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
+/** Whether the Ticket is a Discovered Ticket the Agent filed that still waits for a User. */
+export function filedByAgent(agent: AgentCaller, ticket: TicketRow): boolean {
+  return ticket.discovered?.waiting === true && ticket.discovered.agentId === agent.id;
+}
+
+/** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */
+function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean): void {
   const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
-    (field) => edit[field] !== undefined && !agentEditable.has(field),
+    (field) => edit[field] !== undefined && !agentEditable.has(field) && !(filed && field === "title"),
   );
   if (refused.length === 0) return;
   throw new ApiError(
@@ -588,8 +597,9 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
     `${agent.name} is an Agent, and Agents don't edit a Ticket's ${refused.join(", ")}.`,
     {
       rule:
-        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate; " +
-        "its title, Assignee, Delegation, parent and Status are for Users to change.",
+        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate, " +
+        "and the title too of a Discovered Ticket it filed, until a User takes that up; " +
+        "a Ticket's Assignee, Delegation, parent and Status are for Users to change.",
       advice:
         `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
         "to change the rest; a Run moves its Ticket with `finish`.",

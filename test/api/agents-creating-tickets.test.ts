@@ -183,3 +183,58 @@ describe("Discovered Tickets", () => {
     expect(refused.json.error.code).toBe("read_only_token");
   });
 });
+
+describe("the filing Agent and its Discovered Ticket", () => {
+  /** A running Run whose Agent filed CRONK-3 from it, then finished the Run. */
+  async function discovered() {
+    const setup = await runningRun();
+    const { project, run, asAgent } = setup;
+    const found = await ok("POST", `/api/projects/${project.id}/tickets`, setup.asAgent, { title: "Found it", runId: run.id });
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    return { ...setup, found };
+  }
+
+  test("edits it after its Run, title included, each Change naming the Agent", async () => {
+    const { ada, agent, found, asAgent } = await discovered();
+
+    const edited = await ok("PATCH", `/api/tickets/${found.id}`, asAgent, {
+      title: "Found it: the parser drops comments",
+      description: "Reproduce with `-- x`.",
+      priority: "high",
+      labels: ["bug"],
+    });
+
+    expect(edited).toEqual(
+      expect.objectContaining({ title: "Found it: the parser drops comments", priority: "high", labels: ["bug"] }),
+    );
+    const timeline = await ok("GET", `/api/tickets/${found.id}/timeline`, ada);
+    expect(timeline.slice(1).map((c: { field: string; actor: { id: string }; runId: string | null }) => [c.field, c.actor.id, c.runId])).toEqual([
+      ["title", agent.id, null],
+      ["description", agent.id, null],
+      ["priority", agent.id, null],
+      ["labels", agent.id, null],
+    ]);
+  });
+
+  test("still doesn't set its Assignee, Delegation, parent or Status", async () => {
+    const { user, found, asAgent, status } = await discovered();
+
+    for (const edit of [{ assigneeId: user.id }, { delegateId: null }, { parentId: null }]) {
+      const refused = await call("PATCH", `/api/tickets/${found.id}`, asAgent, edit);
+      expect(refused.json.error.code).toBe("agent_field_not_allowed");
+    }
+    const moved = await call("PATCH", `/api/tickets/${found.id}`, asAgent, { statusId: status("Ready") });
+    expect(moved.json.error.code).toBe("agent_sets_no_status");
+  });
+
+  test("another Agent doesn't edit it", async () => {
+    const { workspace, ada, found } = await discovered();
+    const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
+    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "full" });
+
+    const refused = await call("PATCH", `/api/tickets/${found.id}`, { headers: { authorization: `Bearer ${secret}` } }, { priority: "low" });
+
+    expect(refused.status).toBe(403);
+    expect(refused.json.error.code).toBe("no_running_run");
+  });
+});
