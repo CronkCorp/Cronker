@@ -6,6 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { User } from "../identity/user.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
+import { undelegateTickets } from "../work/tickets.js";
 
 /** A non-human account acting in one Workspace on behalf of exactly one User, its Owner. */
 export const Agent = Type.Object({
@@ -118,7 +119,21 @@ export async function setAgentRunner(context: Context, agent: Agent, runnerId: s
   return { ...agent, runnerId };
 }
 
-/** Removes an Agent: it no longer lists and its tokens are refused at once; what it did still names it. */
-export async function removeAgent(db: Db, clock: Clock, agent: Agent): Promise<void> {
-  await db.query("update agents set removed_at = $2 where id = $1 and removed_at is null", [agent.id, clock.now()]);
+/**
+ * Removes an Agent: it no longer lists and its tokens are refused at once; what it did still names it.
+ * Its Owner, who removes it, undelegates each Ticket delegated to it, which stops its running Runs.
+ */
+export async function removeAgent(context: Context, agent: Agent): Promise<void> {
+  await transaction(context.db, async (tx) => {
+    const now = context.clock.now();
+    // Its Tickets first, then the Agent: the order editing a Ticket takes them in, delegating it.
+    await tx.query("select 1 from tickets where delegate_id = $1 order by id for update", [agent.id]);
+    const { rowCount } = await tx.query("update agents set removed_at = $2 where id = $1 and removed_at is null", [
+      agent.id,
+      now,
+    ]);
+    if (rowCount === 0) return;
+    const who = agent.owner.email ?? `@${agent.owner.githubLogin}`;
+    await undelegateTickets(context, tx, agent.owner.id, [agent.id], `${who} removed ${agent.name}.`, now);
+  });
 }

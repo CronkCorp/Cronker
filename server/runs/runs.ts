@@ -158,6 +158,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     statusId: string;
     labels: string[];
     delegateId: string | null;
+    delegateRemoved: boolean;
     autonomousDelegation: boolean | null;
     agentName: string | null;
     runnerId: string | null;
@@ -169,7 +170,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   }>(
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
-       tickets.labels, tickets.delegate_id as "delegateId",
+       tickets.labels, tickets.delegate_id as "delegateId", agents.removed_at is not null as "delegateRemoved",
        tickets.autonomous_delegation as "autonomousDelegation", agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
        tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
@@ -191,7 +192,9 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     await waitForRun(false);
     return "none" as const;
   };
-  if (!ticket.delegateId) return needsNone();
+  // A removed Agent's Runs could never call back: its tokens are refused. Removing it undelegates its Tickets,
+  // so this guards only Tickets left delegated to it some other way.
+  if (!ticket.delegateId || ticket.delegateRemoved) return needsNone();
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.

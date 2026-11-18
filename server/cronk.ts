@@ -53,13 +53,30 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
       resumePausedRunners: () => resumePausedRunners(context),
       async close() {
         await app.close();
-        await db.end();
+        await endPool(db);
       },
     };
   } catch (error) {
     await db.end();
     throw error;
   }
+}
+
+/**
+ * Ends the pool and waits until each of its connections has closed. `end()` alone resolves once the pool has let
+ * go of them, while they may still be closing, so whatever comes next (such as dropping the database) could cut
+ * them off mid-close.
+ */
+async function endPool(db: pg.Pool): Promise<void> {
+  let open = db.totalCount;
+  const closed = new Promise<void>((resolve) => {
+    if (open === 0) return resolve();
+    db.on("remove", () => {
+      if (--open === 0) resolve();
+    });
+  });
+  await db.end();
+  await closed;
 }
 
 /**

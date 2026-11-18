@@ -306,7 +306,9 @@ export async function createTicket(
       // A Sub-Ticket inherits its parent's Delegation and Autonomous Delegation, and so its Assignee, whose Agent the
       // Delegate is.
       assigneeId = parent.assigneeId;
-      delegateId = parent.delegateId;
+      // Held like any Delegation, so removing the Agent waits and then undelegates the Sub-Ticket too, or, removed
+      // first, the Agent is no Delegate to inherit.
+      delegateId = parent.delegateId !== null && (await holdAgentInUse(tx, parent.delegateId)) ? parent.delegateId : null;
       autonomousDelegation = parent.autonomousDelegation;
     } else if (creator.kind === "agent") {
       const run = input.runId === undefined ? null : await runningRunOf(tx, creator, input.runId);
@@ -364,6 +366,12 @@ export async function createTicket(
   });
 }
 
+/** Whether the Agent is still in use, holding it until the transaction ends so it isn't removed meanwhile. */
+async function holdAgentInUse(tx: Tx, agentId: string): Promise<boolean> {
+  const { rowCount } = await tx.query("select 1 from agents where id = $1 and removed_at is null for share", [agentId]);
+  return rowCount !== 0;
+}
+
 /** The Agent's running Run of that id, with its Ticket and the Ticket's Assignee; refused if it has none. */
 async function runningRunOf(
   tx: Tx,
@@ -385,11 +393,14 @@ async function runningRunOf(
   });
 }
 
-/** The User's first Agent still in use in the Workspace, by when it was created, if they have one. */
+/**
+ * The User's first Agent still in use in the Workspace, by when it was created, if they have one. Like
+ * `checkDelegate`, it holds the Agent until the transaction ends, so the Agent isn't removed meanwhile.
+ */
 async function firstAgentOf(tx: Tx, userId: string, workspaceId: string): Promise<string | null> {
   const { rows } = await tx.query<{ id: string }>(
     `select id from agents where owner_id = $1 and workspace_id = $2 and removed_at is null
-     order by created_at, id limit 1`,
+     order by created_at, id limit 1 for share`,
     [userId, workspaceId],
   );
   return rows[0]?.id ?? null;
@@ -655,6 +666,38 @@ export async function editTicket(
   });
 }
 
+/**
+ * Undelegates every Ticket delegated to one of the Agents, because the User took the Agents away: each Ticket
+ * keeps its Assignee, records the undelegation as the User's Change, and its running Run stops with the reason.
+ * Call it in a transaction, after the Agents can no longer be delegated to.
+ */
+export async function undelegateTickets(
+  context: Context,
+  tx: Tx,
+  userId: string,
+  agentIds: string[],
+  reason: string,
+  now: Date,
+): Promise<void> {
+  const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string; delegateId: string; agentName: string }>(
+    `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
+       tickets.delegate_id as "delegateId", agents.name as "agentName"
+     from tickets join agents on agents.id = tickets.delegate_id
+     where tickets.delegate_id = any($1::uuid[]) order by tickets.id for update of tickets`,
+    [agentIds],
+  );
+  for (const ticket of rows) {
+    await tx.query("update tickets set delegate_id = null where id = $1", [ticket.id]);
+    await recordChanges(tx, ticket, userId, now, [
+      { field: "delegate", from: { id: ticket.delegateId, name: ticket.agentName }, to: null },
+    ]);
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    await stopRunningRun(context, tx, ticket.id, reason, now);
+    // Losing its Delegate ends the Ticket's wait for a Run.
+    await startRunIfNeeded(context, tx, ticket.id, now);
+  }
+}
+
 async function autonomousDelegationOf(tx: Tx, ticketId: string): Promise<boolean | null> {
   const { rows } = await tx.query<{ value: boolean | null }>(
     "select autonomous_delegation as value from tickets where id = $1",
@@ -786,6 +829,7 @@ function distinctLabels(labels: string[]): string[] {
 /**
  * Checks a User may delegate the Ticket to the Agent: only to one of their own Agents still in use in the
  * Ticket's Workspace, and only a Ticket that is theirs or unassigned, so a Delegate is always the Assignee's.
+ * It holds the Agent until the transaction ends: removing it waits, then finds the new Delegation and undoes it.
  */
 async function checkDelegate(
   tx: Tx,
@@ -797,7 +841,8 @@ async function checkDelegate(
   const { rows } = await tx.query<{ id: string; name: string; ownerId: string; owner: string }>(
     `select agents.id, agents.name, agents.owner_id as "ownerId", coalesce(owners.email, '@' || owners.github_login) as owner
      from agents join users owners on owners.id = agents.owner_id
-     where agents.id = $1 and agents.workspace_id = $2 and agents.removed_at is null`,
+     where agents.id = $1 and agents.workspace_id = $2 and agents.removed_at is null
+     for share of agents`,
     [agentId, ticket.workspaceId],
   );
   const agent = rows[0];
