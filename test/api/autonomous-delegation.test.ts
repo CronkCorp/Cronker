@@ -315,3 +315,34 @@ describe("blocking", () => {
     expect((await runsOf(first.id)).map((r: { state: string }) => r.state)).toEqual(["running"]);
   });
 });
+
+describe("the Inbox", () => {
+  const inboxOf = (workspaceId: string, as: Request) => ok("GET", `/api/workspaces/${workspaceId}/inbox`, as);
+
+  test("an Unverified completion waits in its Assignee's Inbox until Accepted", async () => {
+    const { workspace, ada, ticket, status } = await completedUnverified();
+
+    expect(await inboxOf(workspace.id, ada)).toEqual({
+      count: 1,
+      items: [
+        {
+          kind: "unverified",
+          ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", verification: "unverified" }),
+          status: { id: status("Done"), name: "Done" },
+          completedBy: { id: status("Code review"), name: "Code review" },
+        },
+      ],
+    });
+
+    await ok("POST", `/api/tickets/${ticket.id}/accept`, ada);
+    expect(await inboxOf(workspace.id, ada)).toEqual({ count: 0, items: [] });
+  });
+
+  test("Reopening it removes it from the Inbox", async () => {
+    const { workspace, ada, ticket } = await completedUnverified();
+
+    await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Not yet." });
+
+    expect(await inboxOf(workspace.id, ada)).toEqual({ count: 0, items: [] });
+  });
+});
