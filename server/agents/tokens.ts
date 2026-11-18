@@ -86,9 +86,21 @@ const safeMethods = new Set(["GET", "HEAD"]);
  * carries none. Refuses a token that was revoked, whose Agent was removed or whose Owner has
  * left the Workspace, and a read-only token on a request that would change something.
  */
-export async function authenticateAgent({ db }: Context, request: FastifyRequest): Promise<AgentCaller | undefined> {
+export async function authenticateAgent(context: Context, request: FastifyRequest): Promise<AgentCaller | undefined> {
   const header = request.headers.authorization;
   if (header === undefined) return undefined;
+  const agent = await agentOfToken(context, header);
+  if (agent.access === "read" && !safeMethods.has(request.method)) {
+    throw new ApiError(403, "read_only_token", `This token of ${agent.name} is read-only.`, {
+      rule: "A read-only token may only read.",
+      advice: `Read instead, or ask ${agent.owner.email}, ${agent.name}'s Owner, for a full token.`,
+    });
+  }
+  return agent;
+}
+
+/** The Agent an `Authorization` header's bearer token belongs to, or a 401 `invalid_token` refusal. */
+export async function agentOfToken({ db }: Context, header: string): Promise<AgentCaller> {
   const secret = /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1];
   const { rows } = secret
     ? await db.query<AgentCaller>(
@@ -109,12 +121,6 @@ export async function authenticateAgent({ db }: Context, request: FastifyRequest
     throw new ApiError(401, "invalid_token", "That token was revoked, its Agent removed, or it never existed.", {
       rule: "Only a current token of an Agent still in use, whose Owner still belongs to its Workspace, is accepted.",
       advice: "Ask the Agent's Owner to issue a new token.",
-    });
-  }
-  if (agent.access === "read" && !safeMethods.has(request.method)) {
-    throw new ApiError(403, "read_only_token", `This token of ${agent.name} is read-only.`, {
-      rule: "A read-only token may only read.",
-      advice: `Read instead, or ask ${agent.owner.email}, ${agent.name}'s Owner, for a full token.`,
     });
   }
   return agent;
