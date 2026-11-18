@@ -6,6 +6,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
 import { ApiError } from "./http/errors.js";
+import { refuseOtherOrigins } from "./http/origin.js";
 import { identityRoutes } from "./identity/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
 
@@ -34,6 +35,8 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     request.log.error(error);
     return reply.code(500).send({ error: { code: "internal", message: "Something went wrong inside Cronk." } });
   });
+
+  refuseOtherOrigins(app, context.config.publicUrl);
 
   await app.register(swagger, {
     openapi: {
