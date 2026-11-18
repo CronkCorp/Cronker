@@ -362,7 +362,8 @@ export async function createTicket(
       live.publish(tx, parent.workspaceId, { type: "ticket.changed", projectId: parent.projectId, ticketId: parent.id });
     }
     await startRunIfNeeded(context, tx, ticket.id, now);
-    return withMentions(tx, ticket);
+    // Read it again: a Run it started, or its wait for one, shows on it.
+    return withMentions(tx, (await findTicketRow(tx, creator, ticket.id))!);
   });
 }
 
@@ -555,17 +556,30 @@ export async function editTicket(
       const owner = await ownerOf(tx, next.delegateId);
       if (owner !== next.assigneeId) await change("delegateId", "delegate", null, agentNamed);
     }
+    /** The parent the Ticket was just put under, if any. */
+    let newParent: TicketRef | null = null;
+    /** Whether the Ticket took its new parent's Delegation. */
+    let delegationInherited = false;
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
+      if (parent && parent.id !== ticket.parentId) newParent = parent;
+      // A new Sub-Ticket takes a delegated parent's Delegation, and so its Assignee, whose Agent the Delegate is,
+      // even over a Delegation of its own; under an undelegated parent it keeps its own. An Assignee or Delegate
+      // given along with the parent wins.
+      const delegationGiven = edit.assigneeId !== undefined || edit.delegateId !== undefined;
+      const delegation = newParent && !delegationGiven ? await heldDelegationOf(tx, newParent.id) : null;
+      if (delegation) {
+        await change("assigneeId", "assignee", delegation.assigneeId, userNamed);
+        await change("delegateId", "delegate", delegation.delegateId, agentNamed);
+        delegationInherited = true;
+      }
     }
     if (edit.autonomousDelegation !== undefined) {
       await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
     } else {
       // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
-      const inherited = next.parentId !== ticket.parentId && next.parentId !== null
-        ? await autonomousDelegationOf(tx, next.parentId)
-        : null;
+      const inherited = newParent ? await autonomousDelegationOf(tx, newParent.id) : null;
       if (inherited !== null) {
         await change("autonomousDelegation", "autonomousDelegation", inherited);
       } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
@@ -649,9 +663,11 @@ export async function editTicket(
       const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
       const reason = moved
         ? `${who} moved ${ticket.key} to ${moved.name}.`
-        : delegate
-          ? `${who} delegated ${ticket.key} to ${delegate.name}.`
-          : `${who} undelegated ${ticket.key}.`;
+        : delegate && delegationInherited
+          ? `${who} put ${ticket.key} under ${newParent!.key}, delegating it to ${delegate.name}.`
+          : delegate
+            ? `${who} delegated ${ticket.key} to ${delegate.name}.`
+            : `${who} undelegated ${ticket.key}.`;
       await stopRunningRun(context, tx, ticket.id, reason, now);
     }
     // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
@@ -662,7 +678,8 @@ export async function editTicket(
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
     if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
-    return withMentions(tx, next);
+    // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
+    return withMentions(tx, (await findTicketRow(tx, editor, ticket.id))!);
   });
 }
 
@@ -864,6 +881,22 @@ async function checkDelegate(
     );
   }
   return agent;
+}
+
+/**
+ * The Ticket's Assignee and Delegate, if it is delegated to an Agent still in use. Like `checkDelegate`, it holds
+ * the Agent until the transaction ends, so removing it waits and then undelegates whoever inherits it too.
+ */
+async function heldDelegationOf(
+  tx: Tx,
+  ticketId: string,
+): Promise<{ assigneeId: string; delegateId: string } | null> {
+  const { rows } = await tx.query<{ assigneeId: string; delegateId: string | null }>(
+    `select assignee_id as "assigneeId", delegate_id as "delegateId" from tickets where id = $1`,
+    [ticketId],
+  );
+  const { assigneeId, delegateId } = rows[0]!;
+  return delegateId !== null && (await holdAgentInUse(tx, delegateId)) ? { assigneeId, delegateId } : null;
 }
 
 async function ownerOf(tx: Tx, agentId: string): Promise<string | undefined> {
