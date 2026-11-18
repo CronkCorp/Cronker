@@ -282,6 +282,29 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
 }
 
 /**
+ * Call after something may have unblocked waiting Tickets: the Ticket moved, so what it blocks and its parent
+ * may now have only finished blockers and Sub-Tickets, or the Tickets named in `also` lost a blocker or a
+ * Sub-Ticket. Their cards change, and once the transaction commits their Runners' free slots go to them.
+ */
+export async function startUnblocked(context: Context, tx: Tx, ticketId: string | null, also: string[] = []): Promise<void> {
+  const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string; runnerId: string | null }>(
+    `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
+       agents.runner_id as "runnerId"
+     from tickets left join agents on agents.id = tickets.delegate_id
+     where tickets.waits_for_run and (tickets.id = any($2::uuid[])
+       or tickets.id in (select other_ticket_id from relations where kind = 'blocks' and ticket_id = $1)
+       or tickets.id = (select parent_id from tickets where id = $1))`,
+    [ticketId, also],
+  );
+  for (const { id, workspaceId, projectId } of rows) {
+    context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId: id });
+  }
+  for (const runnerId of new Set(rows.flatMap((row) => row.runnerId ?? []))) {
+    afterCommit(tx, () => startWaitingRuns(context, runnerId));
+  }
+}
+
+/**
  * Gives the Runner's free slots to its waiting Tickets, highest Priority first, then the one that entered its
  * Status first, until it is full. Call it once a transaction that freed a slot or unblocked a Ticket commits.
  * Each Ticket is started in a transaction of its own, so no two Tickets are held at once.
@@ -373,6 +396,7 @@ export async function finishRun(
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id }, now, [
         { field: "status", from: named(ticket.statusId), to: named(outcome.statusId) },
       ]);
+      await startUnblocked(context, tx, ticket.id);
     }
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     // Moving into a Status by an Outcome counts as entering it.

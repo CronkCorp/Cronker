@@ -177,3 +177,105 @@ describe("the queue", () => {
     });
   });
 });
+
+describe("blocked Tickets", () => {
+  test("a blocked Ticket gets no Run, and gets one by itself once its blocker is finished", async () => {
+    const { ada, project, status, ticket, delegateToTriage } = await adaWithAgent();
+    const blocker = await ticket("Blocker");
+    const blocked = await ticket("Blocked");
+    await ok("POST", `/api/tickets/${blocked.id}/relations`, ada, { kind: "blockedBy", ticketId: blocker.id });
+
+    await delegateToTriage(blocked.id);
+    expect(await board(project.id, ada)).toEqual({
+      "CRONK-1": { run: null, waiting: null },
+      "CRONK-2": { run: null, waiting: "blocked" },
+    });
+
+    await ok("PATCH", `/api/tickets/${blocker.id}`, ada, { statusId: status("Done") });
+
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-2"]);
+    expect(await board(project.id, ada)).toEqual({
+      "CRONK-1": { run: null, waiting: null },
+      "CRONK-2": { run: "running", waiting: null },
+    });
+  });
+
+  test("a blocker finished by its Run's Outcome, or Canceled, or no longer blocking, starts what it blocked", async () => {
+    const { ada, agent, project, status, ticket, delegateToTriage, finish } = await adaWithAgent();
+    const [finishedByRun, canceled, unlinked] = [await ticket("A"), await ticket("B"), await ticket("C")];
+    const blocked = [await ticket("D"), await ticket("E"), await ticket("F")];
+    const relations = [];
+    for (const [i, blocker] of [finishedByRun, canceled, unlinked].entries()) {
+      relations.push(await ok("POST", `/api/tickets/${blocker.id}/relations`, ada, { kind: "blocks", ticketId: blocked[i].id }));
+    }
+    for (const t of blocked) await delegateToTriage(t.id);
+    expect(cronk.runner.starts).toEqual([]);
+
+    // A Run whose Outcome moves its Ticket to a Done Status needs Autonomous Delegation, which no Ticket has yet;
+    // a Ticket an Outcome moves to Review is still unfinished.
+    await ok("PATCH", `/api/tickets/${finishedByRun.id}`, ada, { delegateId: agent.id, statusId: status("Code review") });
+    await finish(finishedByRun.id, undefined, "approve");
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1"]);
+    await ok("PATCH", `/api/tickets/${finishedByRun.id}`, ada, { statusId: status("Done") });
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1", "CRONK-4"]);
+
+    await ok("PATCH", `/api/tickets/${canceled.id}`, ada, { statusId: status("Canceled") });
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1", "CRONK-4", "CRONK-5"]);
+
+    // Unblocked while its Runner is full, it waits for a slot instead.
+    await ok("DELETE", `/api/tickets/${unlinked.id}/relations/${relations[2].id}`, ada);
+    expect((await board(project.id, ada))["CRONK-6"]).toEqual({ run: null, waiting: "runnerSlot" });
+    await finish(blocked[0].id);
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1", "CRONK-4", "CRONK-5", "CRONK-6"]);
+  });
+
+  test("a blocked Ticket holds no Runner slot: Tickets behind it in the queue start", async () => {
+    const { ada, project, runner, ticket, delegateToTriage } = await adaWithAgent();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    const blocker = await ticket("Blocker");
+    const urgent = await ticket("Urgent, blocked");
+    const low = await ticket("Low");
+    await ok("PATCH", `/api/tickets/${urgent.id}`, ada, { priority: "urgent" });
+    await ok("POST", `/api/tickets/${urgent.id}/relations`, ada, { kind: "blockedBy", ticketId: blocker.id });
+
+    await delegateToTriage(urgent.id);
+    await delegateToTriage(low.id);
+
+    expect(await board(project.id, ada)).toEqual({
+      "CRONK-1": { run: null, waiting: null },
+      "CRONK-2": { run: null, waiting: "blocked" },
+      "CRONK-3": { run: "running", waiting: null },
+    });
+  });
+});
+
+describe("parents", () => {
+  test("a parent gets no Run while a Sub-Ticket is unfinished, and gets one when the last is finished", async () => {
+    const { ada, project, status, ticket, delegateToTriage } = await adaWithAgent();
+    const parent = await ticket("Parent");
+    const [first, second] = [await ticket("First part"), await ticket("Second part")];
+    for (const sub of [first, second]) await ok("PATCH", `/api/tickets/${sub.id}`, ada, { parentId: parent.id });
+
+    await delegateToTriage(parent.id);
+    expect((await board(project.id, ada))["CRONK-1"]).toEqual({ run: null, waiting: "blocked" });
+
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { statusId: status("Done") });
+    expect(cronk.runner.starts).toEqual([]);
+    await ok("PATCH", `/api/tickets/${second.id}`, ada, { statusId: status("Done") });
+
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1"]);
+    expect((await board(project.id, ada))["CRONK-1"]).toEqual({ run: "running", waiting: null });
+  });
+
+  test("taking its last unfinished Sub-Ticket away starts the parent", async () => {
+    const { ada, ticket, delegateToTriage } = await adaWithAgent();
+    const parent = await ticket("Parent");
+    const sub = await ticket("Part");
+    await ok("PATCH", `/api/tickets/${sub.id}`, ada, { parentId: parent.id });
+    await delegateToTriage(parent.id);
+
+    await ok("PATCH", `/api/tickets/${sub.id}`, ada, { parentId: null });
+
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1"]);
+  });
+});

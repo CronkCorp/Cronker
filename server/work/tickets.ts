@@ -6,7 +6,7 @@ import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded } from "../runs/runs.js";
+import { startRunIfNeeded, startUnblocked } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
 import { Waiting, waitingColumn } from "../runs/waiting.js";
 
@@ -428,6 +428,9 @@ export async function editTicket(
     const entered = next.statusId !== ticket.statusId;
     const delegateChanged = next.delegateId !== ticket.delegateId;
     if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
+    // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
+    const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
+    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? ticket.id : null, leftParent);
     return withMentions(tx, next);
   });
 }
