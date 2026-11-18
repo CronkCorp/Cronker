@@ -460,3 +460,95 @@ describe("Status changes keep Outcomes valid", () => {
     expect((await kindOf("Investigate", "done")).status).toBe(200);
   });
 });
+
+describe("the Brief preview", () => {
+  async function ticketIn(statusName: string) {
+    const board = await projectOnDefaultBoard();
+    const created = await cronk.request("POST", `/api/projects/${board.project.id}/tickets`, {
+      cookie: board.cookie,
+      body: { title: "Make it so" },
+    });
+    expect(created.status).toBe(201);
+    const ticket = (await created.json()) as { id: string; key: string };
+    const moved = await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: board.cookie,
+      body: { statusId: board.id(statusName) },
+    });
+    expect(moved.status).toBe(200);
+    return { ...board, ticket };
+  }
+
+  test("a Ticket in a Status with a Step previews Cronk's preamble, the Step's Brief and the Ticket key", async () => {
+    const { cookie, ticket, status } = await ticketIn("Triage");
+
+    const response = await cronk.request("GET", `/api/tickets/${ticket.id}/brief`, { cookie });
+
+    expect(response.status).toBe(200);
+    const brief = await response.json();
+    expect(brief.preamble).toBe(
+      [
+        "You are an agent working on the Ticket CRONK-1 in Cronk, as one Run of its Triage Step.",
+        "",
+        `Reach Cronk through its MCP server at ${cronk.url}/mcp. Read the Ticket there, with its Comments, Relations and the Reports of earlier Runs: this Brief doesn't repeat them.`,
+        "",
+        "Your Run id is given when the Run starts.",
+        "",
+        "End the Run by calling `finish` with your Run id and one of these Outcomes:",
+        "",
+        "- **ready**: moves CRONK-1 to Ready.",
+        "- **needs you**: moves CRONK-1 to Backlog and hands it to a person. Give a Question saying what you need.",
+        "",
+        "Rules:",
+        "",
+        "- Call `finish` exactly once, as the last thing you do.",
+        "- *needs you* takes a Question.",
+        "- Don't merge pull requests on GitHub directly.",
+      ].join("\n"),
+    );
+    expect(brief.brief).toBe(status("Triage").step!.brief);
+    expect(brief.ticketKey).toBe("CRONK-1");
+    expect(brief.text).toBe(`${brief.preamble}\n\n${status("Triage").step!.brief}\n\nCRONK-1`);
+  });
+
+  test("the preview offers the Outcomes counting as a round, and those completing work only under Autonomous Delegation", async () => {
+    const { cookie, ticket } = await ticketIn("Code review");
+
+    const { preamble } = await (await cronk.request("GET", `/api/tickets/${ticket.id}/brief`, { cookie })).json();
+
+    expect(preamble).toContain("- **approve**: moves CRONK-1 to In Review.\n");
+    expect(preamble).toContain("- **changes**: moves CRONK-1 to Implement. It counts as a round: after 2, it hands the Ticket to a person instead.\n");
+    expect(preamble).toContain("- **needs you**: moves CRONK-1 to In Review and hands it to a person.");
+    expect(preamble).not.toContain("**complete**");
+  });
+
+  test("a Ticket in a Status without a Step has no Brief", async () => {
+    const { cookie, ticket } = await ticketIn("Ready");
+
+    const response = await cronk.request("GET", `/api/tickets/${ticket.id}/brief`, { cookie });
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toEqual({
+      code: "status_has_no_step",
+      message: "CRONK-1 is in Ready, which has no Step: Tickets there wait for a person, and get no Run.",
+    });
+  });
+
+  test("an Agent reads the preview too; a Ticket out of view has none", async () => {
+    const { workspace, cookie, ticket } = await ticketIn("Implement");
+    const agent = await (
+      await cronk.request("POST", `/api/workspaces/${workspace.id}/agents`, { cookie, body: { name: "claude-max" } })
+    ).json();
+    const token = await (
+      await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access: "read" } })
+    ).json();
+
+    const asAgent = await cronk.request("GET", `/api/tickets/${ticket.id}/brief`, {
+      headers: { authorization: `Bearer ${token.secret}` },
+    });
+    expect(asAgent.status).toBe(200);
+    expect((await asAgent.json()).ticketKey).toBe("CRONK-1");
+
+    const missing = await cronk.request("GET", "/api/tickets/00000000-0000-0000-0000-000000000000/brief", { cookie });
+    expect(missing.status).toBe(404);
+  });
+});

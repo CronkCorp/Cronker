@@ -10,6 +10,7 @@ import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
 import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
+import { runRoutes } from "./runs/routes.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
@@ -82,6 +83,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));
   await app.register(mcpRoutes(context, app));
