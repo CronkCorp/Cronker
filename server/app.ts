@@ -45,6 +45,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     },
   });
   await app.register(swaggerUi, { routePrefix: "/api/docs" });
+  app.get("/api/openapi.json", { schema: { hide: true } }, async () => app.swagger());
 
   await app.register(cookie);
   await app.register(identityRoutes(context));
