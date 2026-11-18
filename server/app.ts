@@ -1,5 +1,5 @@
 import type { Writable } from "node:stream";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import fastifyStatic from "@fastify/static";
@@ -26,15 +26,20 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     logger: logStream ? { stream: logStream } : true,
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  app.setErrorHandler(async (error, request, reply) => {
-    // Every refusal an Agent meets names the rule and what it may do instead, including
-    // refusals of a malformed request, made before its route looked at the token.
+  // Every refusal an Agent meets names the rule and what it may do instead, including
+  // refusals made before a route looked at the token, such as of a malformed request.
+  const byAgent = async (request: FastifyRequest) => {
     const header = request.headers.authorization;
-    const byAgent =
+    return (
       agentOfRequest(request) !== undefined ||
-      (header !== undefined && (await agentOfToken(context, header).then(() => true, () => false)));
+      (header !== undefined && (await agentOfToken(context, header).then(() => true, () => false)))
+    );
+  };
+
+  app.setErrorHandler(async (error, request, reply) => {
+    const isAgent = await byAgent(request);
     const guide = (statusCode: number, guidance?: Guidance) =>
-      guidance ?? (byAgent ? guidanceForAgent(statusCode) : undefined);
+      guidance ?? (isAgent ? guidanceForAgent(statusCode) : undefined);
     if (error instanceof ApiError) {
       return sendError(reply, error.statusCode, error.code, error.message, guide(error.statusCode, error.guidance));
     }
@@ -78,12 +83,12 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
 
   const { webRoot } = context.config;
   if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
-  app.setNotFoundHandler((request, reply) => {
+  app.setNotFoundHandler(async (request, reply) => {
     // The web client routes its own paths, so any other page gets its index.
     if (webRoot && request.method === "GET" && !request.url.startsWith("/api/")) {
       return reply.sendFile("index.html");
     }
-    return sendError(reply, 404, "not_found", "Nothing is here.");
+    return sendError(reply, 404, "not_found", "Nothing is here.", (await byAgent(request)) ? guidanceForAgent(404) : undefined);
   });
 
   return app;

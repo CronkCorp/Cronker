@@ -174,6 +174,7 @@ describe("what an Agent may change", () => {
 
     const refusals = [
       await cronk.request("GET", "/api/tickets/00000000-0000-0000-0000-000000000000", { headers }),
+      await cronk.request("GET", "/api/nothing-here", { headers }),
       await cronk.request("POST", `/api/tickets/${ticket.id}/comments`, { headers, body: { body: " " } }),
       await cronk.request("POST", `/api/tickets/${ticket.id}/comments`, {
         headers,
@@ -190,7 +191,7 @@ describe("what an Agent may change", () => {
         advice: expect.any(String),
       });
     }
-    expect(refusals.map((r) => r.status)).toEqual([404, 400, 400]);
+    expect(refusals.map((r) => r.status)).toEqual([404, 404, 400, 400]);
   });
 
   test("an Agent of another member is refused the same way", async () => {
