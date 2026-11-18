@@ -27,7 +27,7 @@ export async function changeStep(
     if (!status) throw new ApiError(404, "not_found", "No such Status in this Project.");
     if (change.type === "put") {
       if (!mayHaveStep(status.kind)) throw stepOnDoneOrCanceled(status);
-      checkOutcomes(change.step.outcomes, project.statuses);
+      checkOutcomes(change.step.outcomes, status, project.statuses);
       await writeStep(tx, project, statusId, change.step, clock.now());
     } else {
       await removeStep(tx, statusId);
