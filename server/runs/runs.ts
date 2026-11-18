@@ -218,6 +218,32 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
 }
 
 /**
+ * Stops the Ticket's running Run, if it has one, because a User took the Ticket away from it: moved,
+ * undelegated or re-delegated it. Call it in the transaction that locked the Ticket. Once that commits,
+ * Cronk asks the Run's Runner to stop it too, where the Runner can; either way the Run's later calls are refused.
+ */
+export async function stopRunningRun(context: Context, tx: Tx, ticketId: string, reason: string, now: Date): Promise<void> {
+  const { rows } = await tx.query<{ runId: string; sessionId: string | null; sessionUrl: string | null; runnerKind: string | null }>(
+    `update runs set state = 'stopped', end_reason = $2, ended_at = $3
+     where ticket_id = $1 and state = 'running'
+     returning id as "runId", session_id as "sessionId", session_url as "sessionUrl",
+       (select kind from runners where runners.id = runs.runner_id) as "runnerKind"`,
+    [ticketId, reason, now],
+  );
+  const stopped = rows[0];
+  const runner = stopped?.runnerKind ? context.runners[stopped.runnerKind] : undefined;
+  if (!stopped || !runner?.stop) return;
+  const reference = {
+    ...(stopped.sessionId === null ? {} : { sessionId: stopped.sessionId }),
+    ...(stopped.sessionUrl === null ? {} : { url: stopped.sessionUrl }),
+  };
+  afterCommit(tx, async () => {
+    // Best effort: the Run is stopped in Cronk whatever its Runner says.
+    await runner.stop!({ runId: stopped.runId, reference }).catch(() => {});
+  });
+}
+
+/**
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
  * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
  */

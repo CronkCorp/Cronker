@@ -261,3 +261,93 @@ describe("lost Runs", () => {
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
   });
 });
+
+describe("stopped Runs", () => {
+  test("a User moving the Ticket by hand stops its running Run, and Cronk tells the Runner", async () => {
+    const { ada, ticket, run, status, inbox } = await runningRun();
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready") });
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({
+        state: "stopped",
+        endReason: "ada@example.com moved CRONK-1 to Ready.",
+        endedAt: "2026-01-01T09:00:00.000Z",
+      }),
+    );
+    expect(cronk.runner.stops).toEqual([
+      { runId: run.id, reference: { sessionId: "session_1", url: "https://claude.ai/code/session_1" } },
+    ]);
+    // A stopped Run was the User's own doing: nothing waits in the Inbox.
+    expect(await inbox()).toEqual({ count: 0, items: [] });
+  });
+
+  test("moving it into another Step's Status stops the Run and starts one of that Step", async () => {
+    const { ada, ticket, status } = await runningRun();
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate") });
+
+    expect(await states(ticket.id, ada)).toEqual([
+      ["Triage", "stopped"],
+      ["Investigate", "running"],
+    ]);
+  });
+
+  test("undelegating the Ticket stops its Run", async () => {
+    const { ada, ticket, run } = await runningRun();
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({ state: "stopped", endReason: "ada@example.com undelegated CRONK-1." }),
+    );
+  });
+
+  test("changing its Delegate stops the Run, and the new Delegate gets one of the same Step", async () => {
+    const { workspace, ada, ticket, run, runner } = await runningRun();
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-api" });
+    const other = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: other.id });
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({ state: "stopped", endReason: "ada@example.com delegated CRONK-1 to claude-api." }),
+    );
+    const runs = await runsOf(ticket.id, ada);
+    expect(runs.map((r: { agent: { name: string }; state: string }) => [r.agent.name, r.state])).toEqual([
+      ["claude-max", "stopped"],
+      ["claude-api", "running"],
+    ]);
+  });
+
+  test("editing anything else leaves the Run running", async () => {
+    const { ada, ticket, run } = await runningRun();
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { title: "Make it so, now", priority: "high" });
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    expect(cronk.runner.stops).toEqual([]);
+  });
+
+  test("the stopped Run's later calls are refused, telling its Agent to stop; Users still read it", async () => {
+    const { ada, ticket, run, asAgent, status } = await runningRun();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready") });
+
+    for (const [method, path, body] of [
+      ["POST", `/api/runs/${run.id}/finish`, { outcome: "ready" }],
+      ["GET", `/api/runs/${run.id}`, undefined],
+      ["GET", `/api/runs/${run.id}/brief`, undefined],
+    ] as const) {
+      const response = await call(method, path, asAgent, body);
+      expect(response.status, path).toBe(409);
+      expect(response.json.error).toEqual({
+        code: "run_stopped",
+        message: "ada@example.com moved CRONK-1 to Ready, which stopped this Run.",
+        rule: "A User moving, undelegating or re-delegating a Ticket stops its running Run, and Cronk refuses the stopped Run's calls.",
+        advice: "Stop working on CRONK-1 and end your session. A User decides what happens to it next.",
+      });
+    }
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Ready"));
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("stopped");
+  });
+});

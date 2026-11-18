@@ -6,7 +6,7 @@ import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded } from "../runs/runs.js";
+import { startRunIfNeeded, stopRunningRun } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
 
 /** How urgent a Ticket is. */
@@ -418,9 +418,25 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
-    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
+    // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
     const entered = next.statusId !== ticket.statusId;
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
+    if (entered || next.delegateId !== ticket.delegateId) {
+      const { rows } = await tx.query<{ name: string }>(
+        "select coalesce(email, '@' || github_login) as name from users where id = $1",
+        [userId],
+      );
+      const who = rows[0]!.name;
+      const moved = changes.find((c) => c.field === "status")?.to as { name: string } | undefined;
+      const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
+      const reason = moved
+        ? `${who} moved ${ticket.key} to ${moved.name}.`
+        : delegate
+          ? `${who} delegated ${ticket.key} to ${delegate.name}.`
+          : `${who} undelegated ${ticket.key}.`;
+      await stopRunningRun(context, tx, ticket.id, reason, now);
+    }
+    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
     if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, next);
   });
