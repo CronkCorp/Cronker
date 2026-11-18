@@ -31,7 +31,9 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
       } catch (error) {
         if (!(error instanceof ApiError) || error.statusCode !== 401) throw error;
         const metadata = `${context.config.publicUrl.origin}${protectedResourcePath}`;
-        reply.header("www-authenticate", `Bearer realm="Cronk", error="invalid_token", resource_metadata="${metadata}"`);
+        // A request with no token at all is told only where to get one (RFC 6750 §3.1, RFC 9728 §5.1).
+        const invalid = offersBearer(authorization) ? `, error="invalid_token"` : "";
+        reply.header("www-authenticate", `Bearer realm="Cronk"${invalid}, resource_metadata="${metadata}"`);
         return sendError(reply, 401, error.code, error.message, error.guidance);
       }
 

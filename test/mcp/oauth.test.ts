@@ -2,6 +2,8 @@ import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotoc
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { navigate, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
@@ -14,11 +16,13 @@ import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
 const clients: Client[] = [];
+const servers: Server[] = [];
 beforeEach(async () => {
   cronk = await startCronk();
 });
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.close()));
+  await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
   await cronk?.stop();
 });
 
@@ -31,7 +35,10 @@ class ConnectorProvider implements OAuthClientProvider {
   private saved?: OAuthTokens;
   private verifier = "";
 
-  constructor(readonly clientMetadataUrl?: string) {}
+  /** A client named by its Client ID Metadata Document uses the document's URL as its id, unregistered. */
+  constructor(metadataDocumentUrl?: string) {
+    if (metadataDocumentUrl) this.information = { client_id: metadataDocumentUrl };
+  }
 
   get redirectUrl() {
     return callback;
@@ -71,6 +78,17 @@ async function connect(provider: ConnectorProvider) {
   await client.connect(transportFor(provider));
   clients.push(client);
   return client;
+}
+
+/** A stand-in for where a client publishes its Client ID Metadata Document; returns the document's URL. */
+async function publishMetadataDocument(document: (url: string) => object): Promise<string> {
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(document(`http://127.0.0.1:${(server.address() as AddressInfo).port}${request.url}`)));
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}/oauth/client.json`;
 }
 
 /** Ada's Workspace with a Ticket CRONK-1, and an Agent of hers. */
@@ -121,5 +139,26 @@ describe("MCP with OAuth", () => {
     expect(comments).toEqual([
       expect.objectContaining({ body: "Connected.", actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
     ]);
+  });
+
+  test("a connector named by its Client ID Metadata Document connects without registering", async () => {
+    const { cookie, agent } = await workspaceWithTicket();
+    const documentUrl = await publishMetadataDocument((url) => ({
+      client_id: url,
+      client_name: "Claude",
+      redirect_uris: [callback],
+      token_endpoint_auth_method: "none",
+    }));
+    const provider = new ConnectorProvider(documentUrl);
+
+    await expect(connect(provider)).rejects.toThrow(UnauthorizedError);
+    const code = await consent(provider, cookie, agent.id);
+    await transportFor(provider).finishAuth(code);
+    const client = await connect(provider);
+
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toContain("read_ticket");
+    const tokens = await (await cronk.request("GET", `/api/agents/${agent.id}/tokens`, { cookie })).json();
+    expect(tokens).toEqual([expect.objectContaining({ name: "Claude", access: "full" })]);
   });
 });
