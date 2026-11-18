@@ -20,7 +20,17 @@ import {
 } from "./members.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
-import { createWorkspace, findWorkspace, Membership, renameWorkspace, Workspace, WorkspaceName } from "./workspaces.js";
+import {
+  changeSettings,
+  createWorkspace,
+  findWorkspace,
+  Membership,
+  renameWorkspace,
+  settingsOf,
+  Workspace,
+  WorkspaceName,
+  WorkspaceSettings,
+} from "./workspaces.js";
 import { Link } from "../identity/links.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -76,6 +86,43 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
         return renameWorkspace(db, workspace.id, request.body.name);
+      },
+    );
+
+    app.get(
+      "/api/workspaces/:workspaceId/settings",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "A Workspace's settings",
+          params: Type.Object({ workspaceId: Type.String() }),
+          response: { 200: WorkspaceSettings, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const workspace = await findWorkspace(db, caller, request.params.workspaceId);
+        if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
+        return settingsOf(db, workspace.id);
+      },
+    );
+
+    app.patch(
+      "/api/workspaces/:workspaceId/settings",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Change a Workspace's settings (Admins only)",
+          description: "Changes whichever settings are given, such as the lost-Run threshold.",
+          params: Type.Object({ workspaceId: Type.String() }),
+          body: Type.Partial(WorkspaceSettings),
+          response: { 200: WorkspaceSettings, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        return changeSettings(db, workspace.id, request.body);
       },
     );
 

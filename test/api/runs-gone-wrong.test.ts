@@ -232,4 +232,32 @@ describe("lost Runs", () => {
     await ok("GET", `/api/tickets/${other.id}`, asAgent);
     expect(await alive(1)).toBe("lost");
   });
+
+  test("Admins set the lost-Run threshold per Workspace; other members only read it", async () => {
+    const { workspace, ada, run } = await runningRun();
+    const settings = `/api/workspaces/${workspace.id}/settings`;
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    expect(await ok("GET", settings, { cookie: bea.cookie })).toEqual({ lostRunMinutes: 30 });
+
+    expect((await call("PATCH", settings, { cookie: bea.cookie }, { lostRunMinutes: 10 })).status).toBe(403);
+    expect((await call("PATCH", settings, ada, { lostRunMinutes: 0 })).status).toBe(400);
+    expect(await ok("PATCH", settings, ada, { lostRunMinutes: 10 })).toEqual({ lostRunMinutes: 10 });
+
+    cronk.clock.advance(minutes(10));
+    await cronk.checkForLostRuns();
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({ state: "lost", endReason: "No call named the Run or CRONK-1 for 10 minutes." }),
+    );
+  });
+
+  test("another Workspace's threshold leaves this one's Runs alone", async () => {
+    const { ada, run } = await runningRun();
+    const elsewhere = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
+    await ok("PATCH", `/api/workspaces/${elsewhere.id}/settings`, ada, { lostRunMinutes: 5 });
+
+    cronk.clock.advance(minutes(10));
+    await cronk.checkForLostRuns();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
 });
