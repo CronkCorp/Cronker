@@ -25,7 +25,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   }).withTypeProvider<TypeBoxTypeProvider>();
 
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof ApiError) return sendError(reply, error.statusCode, error.code, error.message);
+    if (error instanceof ApiError) return sendError(reply, error.statusCode, error.code, error.message, error.guidance);
     const { validation, statusCode, message } = error as { validation?: unknown; statusCode?: number; message: string };
     if (validation) return sendError(reply, 400, "invalid_request", message);
     if (statusCode && statusCode < 500) return sendError(reply, statusCode, "invalid_request", message);

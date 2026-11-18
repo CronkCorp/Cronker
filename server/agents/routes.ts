@@ -3,8 +3,12 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { ApiError } from "../http/errors.js";
+import { requireCaller } from "../identity/callers.js";
+import { Workspace } from "../workspaces/workspaces.js";
+import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, tokensOf } from "./tokens.js";
 import { requireMember } from "../workspaces/members.js";
-import { Agent, AgentName, agentsOf, createAgent, removeAgent, renameAgent, requireOwnAgent } from "./agents.js";
+import { Agent, AgentName, agentsOf, createAgent, findAgent, removeAgent, renameAgent, requireOwnAgent } from "./agents.js";
 
 export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -84,6 +88,88 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
         const agent = await requireOwnAgent(db, user.id, request.params.agentId);
         await removeAgent(db, clock, agent);
         return reply.code(204).send(null);
+      },
+    );
+
+    app.get(
+      "/api/agents/:agentId/tokens",
+      {
+        schema: {
+          tags: ["Agents"],
+          summary: "One's own Agent's tokens",
+          description: "Never their secrets, which are shown only when issued. Only the Agent's Owner sees them.",
+          params: AgentParams,
+          response: { 200: Type.Array(AgentToken), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return tokensOf(db, await requireOwnAgent(db, user.id, request.params.agentId));
+      },
+    );
+
+    app.post(
+      "/api/agents/:agentId/tokens",
+      {
+        schema: {
+          tags: ["Agents"],
+          summary: "Issue a token for one's own Agent",
+          description:
+            "A full token acts as the Agent; a read-only one may only read. The secret is in this response only: Cronk keeps just its hash.",
+          params: AgentParams,
+          body: Type.Object({
+            name: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S", description: "Where it's used, such as `laptop`." }),
+            access: TokenAccess,
+          }),
+          response: { 201: IssuedToken, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        return reply.code(201).send(await issueToken(db, clock, agent, request.body));
+      },
+    );
+
+    app.delete(
+      "/api/agents/:agentId/tokens/:tokenId",
+      {
+        schema: {
+          tags: ["Agents"],
+          summary: "Revoke a token of one's own Agent",
+          description: "The token is refused from the next request.",
+          params: Type.Object({ agentId: Type.String(), tokenId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        await revokeToken(db, agent, request.params.tokenId);
+        return reply.code(204).send(null);
+      },
+    );
+
+    app.get(
+      "/api/agent",
+      {
+        schema: {
+          tags: ["Agents"],
+          summary: "The Agent a token belongs to",
+          description: "For an Agent: who it is, its Workspace, and whether its token is full or read-only.",
+          response: {
+            200: Type.Object({ agent: Agent, workspace: Workspace, access: TokenAccess }),
+            401: ErrorBody,
+            403: ErrorBody,
+          },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        if (caller.kind !== "agent") {
+          throw new ApiError(403, "not_an_agent", "Only an Agent's token can ask which Agent it is. Users see themselves at /api/me.");
+        }
+        return { agent: (await findAgent(db, caller.id))!, workspace: caller.workspace, access: caller.access };
       },
     );
   };

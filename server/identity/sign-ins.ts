@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { authenticateAgent } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { transaction } from "../db.js";
@@ -57,8 +58,19 @@ export async function signOut({ db }: Context, request: FastifyRequest, reply: F
   reply.clearCookie(signInCookie, { path: "/" });
 }
 
-/** The User the request's sign-in cookie belongs to, or a 401 refusal. */
-export async function requireUser({ db, clock }: Context, request: FastifyRequest): Promise<User> {
+/**
+ * The User the request's sign-in cookie belongs to, or a 401 refusal. An Agent's token is
+ * refused here: what only Users may do names the rule and what the Agent may do instead.
+ */
+export async function requireUser(context: Context, request: FastifyRequest): Promise<User> {
+  const { db, clock } = context;
+  const agent = await authenticateAgent(context, request);
+  if (agent) {
+    throw new ApiError(403, "agent_not_allowed", `${agent.name} is an Agent, and only a User can do that.`, {
+      rule: "Agents may read their Workspace and comment on its Tickets; everything else needs a User.",
+      advice: `Read the Ticket and its Comments, or leave a Comment asking ${agent.owner.email}, ${agent.name}'s Owner, to do it.`,
+    });
+  }
   const token = request.cookies[signInCookie];
   if (token) {
     const { rows } = await db.query<User>(

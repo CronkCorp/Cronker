@@ -16,6 +16,14 @@ async function createAgent(cookie: string, workspaceId: string, name: string) {
   return (await response.json()) as { id: string; name: string };
 }
 
+async function issueToken(cookie: string, agentId: string, access: "full" | "read" = "full", name = "laptop") {
+  const response = await cronk.request("POST", `/api/agents/${agentId}/tokens`, { cookie, body: { name, access } });
+  expect(response.status).toBe(201);
+  return (await response.json()) as { token: { id: string }; secret: string };
+}
+
+const bearer = (secret: string) => ({ authorization: `Bearer ${secret}` });
+
 describe("Agents", () => {
   test("a User creates an Agent of their own in a Workspace", async () => {
     const { user, workspace } = await setUp(cronk);
@@ -99,5 +107,101 @@ describe("Agents", () => {
     expect(renamed.status).toBe(404);
     const listed = await cronk.request("GET", `/api/workspaces/${friends.id}/agents`, { cookie: bea.cookie });
     expect(listed.status).toBe(404);
+  });
+});
+
+describe("Agent tokens", () => {
+  test("an Owner issues a token, shown once, that acts as the Agent", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const agent = await createAgent(cookie, workspace.id, "claude-max");
+
+    const response = await cronk.request("POST", `/api/agents/${agent.id}/tokens`, {
+      cookie,
+      body: { name: "laptop", access: "read" },
+    });
+
+    expect(response.status).toBe(201);
+    const issued = await response.json();
+    expect(issued).toEqual({
+      token: { id: expect.any(String), name: "laptop", access: "read", createdAt: expect.any(String) },
+      secret: expect.stringMatching(/^cronk_agent_/),
+    });
+    const listed = await cronk.request("GET", `/api/agents/${agent.id}/tokens`, { cookie });
+    expect(await listed.json()).toEqual([issued.token]);
+
+    const me = await cronk.request("GET", "/api/agent", { headers: bearer(issued.secret) });
+    expect(me.status).toBe(200);
+    expect(await me.json()).toEqual({
+      agent: expect.objectContaining({ id: agent.id, name: "claude-max" }),
+      workspace: { id: workspace.id, name: "Ada's Workspace" },
+      access: "read",
+    });
+  });
+
+  test("a revoked token is refused at once", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const agent = await createAgent(cookie, workspace.id, "claude-max");
+    const { token, secret } = await issueToken(cookie, agent.id);
+    const other = await issueToken(cookie, agent.id, "full", "cloud");
+
+    const revoked = await cronk.request("DELETE", `/api/agents/${agent.id}/tokens/${token.id}`, { cookie });
+    expect(revoked.status).toBe(204);
+
+    const response = await cronk.request("GET", "/api/agent", { headers: bearer(secret) });
+    expect(response.status).toBe(401);
+    const { error } = await response.json();
+    expect(error.code).toBe("invalid_token");
+    expect(error.advice).toEqual(expect.any(String));
+    expect((await cronk.request("GET", "/api/agent", { headers: bearer(other.secret) })).status).toBe(200);
+  });
+
+  test("a removed Agent's tokens are refused at once", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const agent = await createAgent(cookie, workspace.id, "claude-max");
+    const { secret } = await issueToken(cookie, agent.id);
+
+    await cronk.request("DELETE", `/api/agents/${agent.id}`, { cookie });
+
+    expect((await cronk.request("GET", "/api/agent", { headers: bearer(secret) })).status).toBe(401);
+  });
+
+  test("an Agent's tokens are refused once its Owner leaves the Workspace", async () => {
+    const { workspace } = await setUp(cronk);
+    const ada = await signIn(cronk);
+    const bea = await addMember(cronk, ada, workspace.id, "bea@example.com");
+    const agent = await createAgent(bea.cookie, workspace.id, "bea-bot");
+    const { secret } = await issueToken(bea.cookie, agent.id);
+
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie: ada });
+
+    expect((await cronk.request("GET", "/api/agent", { headers: bearer(secret) })).status).toBe(401);
+  });
+
+  test("an unknown token is refused", async () => {
+    await setUp(cronk);
+    const response = await cronk.request("GET", "/api/agent", { headers: bearer("cronk_agent_nonsense") });
+    expect(response.status).toBe(401);
+    expect((await response.json()).error.code).toBe("invalid_token");
+  });
+
+  test("only an Agent's Owner sees, issues and revokes its tokens", async () => {
+    const { workspace } = await setUp(cronk);
+    const ada = await signIn(cronk);
+    const agent = await createAgent(ada, workspace.id, "claude-max");
+    const { token } = await issueToken(ada, agent.id);
+    const bea = await addMember(cronk, ada, workspace.id, "bea@example.com");
+
+    const paths = [
+      ["GET", `/api/agents/${agent.id}/tokens`, undefined],
+      ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "full" }],
+      ["DELETE", `/api/agents/${agent.id}/tokens/${token.id}`, undefined],
+    ] as const;
+    for (const [method, path, body] of paths) {
+      const response = await cronk.request(method, path, { cookie: bea.cookie, body });
+      expect(response.status).toBe(403);
+    }
   });
 });

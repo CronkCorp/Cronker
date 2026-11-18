@@ -11,3 +11,14 @@ create table agents (
 );
 create unique index agents_workspace_name_key on agents (workspace_id, lower(name)) where removed_at is null;
 create index agents_owner_id_idx on agents (owner_id);
+
+-- Agent tokens, full or read-only. Only the hash of each is stored; revoking one deletes it.
+create table agent_tokens (
+  id uuid primary key default gen_random_uuid(),
+  agent_id uuid not null references agents (id),
+  name text not null,
+  access text not null check (access in ('full', 'read')),
+  token_hash text not null unique,
+  created_at timestamptz not null
+);
+create index agent_tokens_agent_id_idx on agent_tokens (agent_id);
