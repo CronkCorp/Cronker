@@ -18,7 +18,7 @@ import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow 
 export async function acceptTicket(context: Context, user: User, ticketId: string): Promise<Ticket> {
   const { db, clock, live } = context;
   await transaction(db, async (tx) => {
-    const ticket = await unverifiedTicket(tx, user, ticketId, "Accept");
+    const ticket = await unverifiedTicket(tx, user, ticketId, "Accepted");
     await tx.query("update tickets set verification = 'verified' where id = $1", [ticket.id]);
     await recordChanges(tx, ticket, user.id, clock.now(), [{ field: "verification", from: "unverified", to: "verified" }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
@@ -33,7 +33,9 @@ export async function acceptTicket(context: Context, user: User, ticketId: strin
 export async function reopenTicket(context: Context, user: User, ticketId: string, comment: string): Promise<Ticket> {
   const { db, clock, live } = context;
   await transaction(db, async (tx) => {
-    const ticket = await unverifiedTicket(tx, user, ticketId, "Reopen");
+    const ticket = await unverifiedTicket(tx, user, ticketId, "Reopened");
+    // Holds the board still until the move commits, so the Status it goes back to can't be removed meanwhile.
+    await tx.query("select 1 from projects where id = $1 for share", [ticket.projectId]);
     const { rows } = await tx.query<{ from: { id: string; name: string }; to: { id: string; name: string } | null }>(
       `select json_build_object('id', current.id, 'name', current.name) as from,
          case when back.id is null then null else json_build_object('id', back.id, 'name', back.name) end as to
@@ -51,7 +53,6 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
           "Accept it, then move it where it should go.",
       );
     }
-    await tx.query("select 1 from projects where id = $1 for share", [ticket.projectId]);
     await tx.query(
       "update tickets set status_id = $2, verification = null, completed_from_status_id = null where id = $1",
       [ticket.id, to.id],
@@ -68,17 +69,20 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
   return (await findTicket(db, userViewer(user.id), ticketId))!;
 }
 
-/** The Ticket, locked, if it is Unverified; otherwise a refusal naming the action. */
-async function unverifiedTicket(tx: Tx, user: User, ticketId: string, action: string): Promise<TicketRow> {
+/** The Ticket, locked, if it is Unverified; otherwise a refusal saying it can't be Accepted or Reopened. */
+async function unverifiedTicket(
+  tx: Tx,
+  user: User,
+  ticketId: string,
+  action: "Accepted" | "Reopened",
+): Promise<TicketRow> {
   const ticket = await findTicketRow(tx, userViewer(user.id), ticketId, { lock: true });
   if (!ticket) throw ticketNotFound();
   if (ticket.verification !== "unverified") {
     throw new ApiError(
       409,
       "not_unverified",
-      `${ticket.key} isn't Unverified: only a Ticket a Run completed, before anyone Accepts or Reopens it, can be ${
-        action === "Accept" ? "Accepted" : "Reopened"
-      }.`,
+      `${ticket.key} isn't Unverified: only a Ticket a Run completed, before anyone Accepts or Reopens it, can be ${action}.`,
     );
   }
   return ticket;

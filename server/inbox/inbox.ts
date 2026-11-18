@@ -8,14 +8,14 @@ import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../
  * state that put it there changes.
  */
 
+const StatusRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
+
 /** A Ticket in a Review Status, waiting for its Assignee's review. */
 export const ReviewItem = Type.Object({
   kind: Type.Literal("review"),
   ticket: TicketSummary,
-  status: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
+  status: StatusRef,
 });
-
-const StatusRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
 
 /** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
 export const UnverifiedItem = Type.Object({

@@ -12,6 +12,10 @@ export const statusKinds = ["backlog", "active", "review", "done", "canceled"] a
 export type StatusKind = (typeof statusKinds)[number];
 export const StatusKind = Type.Union(statusKinds.map((kind) => Type.Literal(kind)));
 
+/** The kinds of Status in which a Ticket is finished, as the Tickets it blocks see it: an Unverified completion too. */
+export const finishedKinds: StatusKind[] = ["done", "canceled"];
+export const finishedKind = (kind: StatusKind) => finishedKinds.includes(kind);
+
 export const Status = Type.Object({
   id: Type.String({ format: "uuid" }),
   name: Type.String(),

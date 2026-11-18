@@ -5,8 +5,8 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type NewChange } from "./changes.js";
-import { findProject, projectNotFound } from "./projects.js";
-import { finishedKind, startRunIfNeeded, startRunsBlockedBy } from "../runs/runs.js";
+import { findProject, finishedKind, projectNotFound, type StatusKind } from "./projects.js";
+import { startRunIfNeeded, startRunsBlockedBy } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
 
 /** How urgent a Ticket is. */
@@ -418,7 +418,7 @@ export async function editTicket(
         : null;
       if (inherited !== null) {
         await change("autonomousDelegation", "autonomousDelegation", inherited);
-      } else if (next.delegateId !== null && next.autonomousDelegation === null) {
+      } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
         const { rows } = await tx.query<{ value: boolean }>(
           "select autonomous_delegation_default as value from projects where id = $1",
           [ticket.projectId],
@@ -478,7 +478,7 @@ export async function editTicket(
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
     if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
     if (entered) {
-      const { rows } = await tx.query<{ kind: string }>("select kind from statuses where id = $1", [next.statusId]);
+      const { rows } = await tx.query<{ kind: StatusKind }>("select kind from statuses where id = $1", [next.statusId]);
       if (finishedKind(rows[0]!.kind)) await startRunsBlockedBy(context, tx, ticket.id, now);
     }
     return withMentions(tx, next);

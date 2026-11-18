@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -344,5 +345,36 @@ describe("the Inbox", () => {
     await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Not yet." });
 
     expect(await inboxOf(workspace.id, ada)).toEqual({ count: 0, items: [] });
+  });
+});
+
+describe("live updates", () => {
+  test("completing, Accepting, Reopening and passing the setting down each tell the Workspace's streams", async () => {
+    const { workspace, ada, project, ticket, run, asAgent } = await inCodeReview();
+    const child = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Child" });
+    await ok("PATCH", `/api/tickets/${child.id}`, ada, { parentId: ticket.id });
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+    const changed = (ticketId: string) => ({ type: "ticket.changed", data: { projectId: project.id, ticketId } });
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "complete" });
+    expect(await stream.next()).toEqual(changed(ticket.id));
+    await ok("POST", `/api/tickets/${ticket.id}/accept`, ada);
+    expect(await stream.next()).toEqual(changed(ticket.id));
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: false });
+    expect([await stream.next(), await stream.next()]).toEqual([changed(ticket.id), changed(child.id)]);
+    stream.close();
+  });
+
+  test("Reopening tells the streams of its Comment and its move", async () => {
+    const { workspace, ada, project, ticket } = await completedUnverified();
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+
+    await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Again." });
+
+    const events = [await stream.next(), await stream.next()];
+    expect(events.map((e) => e.type)).toEqual(["comment.added", "ticket.changed"]);
+    expect(events[1]).toEqual({ type: "ticket.changed", data: { projectId: project.id, ticketId: ticket.id } });
+    stream.close();
   });
 });

@@ -7,7 +7,7 @@ import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
-import { statusesOf, type Status } from "../work/projects.js";
+import { finishedKind, finishedKinds, statusesOf, type Status } from "../work/projects.js";
 import type { Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, completes, offeredOutcomes } from "./brief.js";
@@ -149,8 +149,8 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
   const { rowCount: blocked } = await tx.query(
     `select 1 from relations join tickets blockers on blockers.id = relations.ticket_id
      join statuses on statuses.id = blockers.status_id
-     where relations.kind = 'blocks' and relations.other_ticket_id = $1 and statuses.kind not in ('done', 'canceled')`,
-    [ticketId],
+     where relations.kind = 'blocks' and relations.other_ticket_id = $1 and statuses.kind <> all ($2::status_kind[])`,
+    [ticketId, finishedKinds],
   );
   if (blocked) return;
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
@@ -243,9 +243,6 @@ export async function startRunsBlockedBy(context: Context, tx: Tx, ticketId: str
   );
   for (const { id } of rows) await startRunIfNeeded(context, tx, id, now);
 }
-
-/** Whether a Ticket in a Status of this kind is finished, as what it blocks and its parent see it. */
-export const finishedKind = (kind: string) => kind === "done" || kind === "canceled";
 
 /**
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
