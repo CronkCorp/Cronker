@@ -9,7 +9,7 @@ import { field, useSubmit } from "./forms.js";
 function newStep(project: Project, status: Status): Step {
   const at = project.statuses.findIndex((s) => s.id === status.id);
   const next = project.statuses[at + 1] ?? project.statuses[0]!;
-  const back = project.statuses.find((s) => s.id !== status.id)!;
+  const firstOther = project.statuses.find((s) => s.id !== status.id)!;
   return {
     brief: "",
     model: "sonnet",
@@ -17,7 +17,7 @@ function newStep(project: Project, status: Status): Step {
     labelRule: null,
     outcomes: [
       { name: "done", statusId: next.id, default: true, needsYou: false, countsAsRound: false },
-      { name: "needs you", statusId: back.id, default: false, needsYou: true, countsAsRound: false },
+      { name: "needs you", statusId: firstOther.id, default: false, needsYou: true, countsAsRound: false },
     ],
   };
 }

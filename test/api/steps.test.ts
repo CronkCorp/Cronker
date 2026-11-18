@@ -411,7 +411,7 @@ describe("Outcome refusals", () => {
     });
   });
 
-  test("a default Outcome or a round may still target the Status its Step is on", async () => {
+  test("a default Outcome or one counting as a round may still target the Status its Step is on", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const step = {
       brief: "Plan the work.",

@@ -61,7 +61,7 @@ export async function stepsOf(db: Db | Tx, projectId: string): Promise<Map<strin
 /** The rules a Step's Outcomes keep, checked against the Status the Step is on and the Statuses of its Project. */
 export function checkOutcomes(
   outcomes: Outcome[],
-  stepOn: { id: string; name: string },
+  stepStatus: { id: string; name: string },
   statuses: { id: string; name: string; kind: StatusKind }[],
 ): void {
   const names = new Set<string>();
@@ -98,12 +98,12 @@ export function checkOutcomes(
     }
   }
   // Asking a User hands the Ticket back; left on this Step's Status it would get the next Run at once, with no answer.
-  const staying = outcomes.find((o) => o.needsYou && o.statusId === stepOn.id);
-  if (staying) {
+  const selfTargeting = outcomes.find((o) => o.needsYou && o.statusId === stepStatus.id);
+  if (selfTargeting) {
     throw new ApiError(
       409,
       "outcome_target_not_allowed",
-      `The needs you Outcome ${staying.name} can't move Tickets to ${stepOn.name}, the Status its Step is on: ` +
+      `The needs you Outcome ${selfTargeting.name} can't move Tickets to ${stepStatus.name}, the Status its Step is on: ` +
         "asking a User must hand the Ticket back, not start the next Run at once.",
     );
   }
