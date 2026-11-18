@@ -1,6 +1,6 @@
 import { connect, type Socket } from "node:net";
 import { addMember, setUp, signIn } from "../test/harness/flows.js";
-import { startCronk } from "../test/harness/start-cronk.js";
+import { startCronk, type StartedCronk } from "../test/harness/start-cronk.js";
 import { expect, test, webRoot } from "./fixtures.js";
 
 test("the board and the Ticket view show what another member changes, without a reload", async ({ page, cronk }) => {
@@ -50,10 +50,27 @@ test("the board and the Ticket view show what another member changes, without a 
   await expect(page.getByRole("region", { name: "Comments" }).getByRole("article")).toContainText(["Picking this up."]);
 });
 
+/** Opens a connection to Cronk without sending anything on it yet. */
+function connectTo(cronk: StartedCronk): Promise<Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(new URL(cronk.url).port), "127.0.0.1", () => resolve(socket));
+    socket.once("error", reject);
+  });
+}
+
+/** Whether stopping finishes within 5s; without the fix it waits on a timeout of a minute or more. */
+function stopsAtOnce(stopping: Promise<void>): Promise<string> {
+  return Promise.race([
+    stopping.then(() => "stopped"),
+    new Promise<string>((resolve) => setTimeout(resolve, 5_000, "still stopping after 5s")),
+  ]);
+}
+
+// These two start Cronk themselves rather than through the fixture, so they can time stopping it.
+
 test("Cronk stops at once while the browser holds a connection it has not used yet", async ({ page }) => {
-  // Started here rather than by the fixture, so the test can time stopping it.
   const cronk = await startCronk({ webRoot });
-  let spare: Socket | undefined;
+  let spare: Socket;
   try {
     await setUp(cronk);
     const stream = page.waitForResponse((response) => response.url().endsWith("/events"));
@@ -63,52 +80,44 @@ test("Cronk stops at once while the browser holds a connection it has not used y
     await page.getByRole("button", { name: "Sign in" }).click();
     await stream;
     // Browsers open connections ahead of need, such as one to reconnect the event stream on.
-    const { port } = new URL(cronk.url);
-    spare = await new Promise<Socket>((resolve, reject) => {
-      const socket = connect(Number(port), "127.0.0.1", () => resolve(socket)).once("error", reject);
-    });
+    spare = await connectTo(cronk);
   } catch (error) {
     await cronk.stop();
     throw error;
   }
 
-  const stopped = await Promise.race([
-    cronk.stop().then(() => "stopped"),
-    new Promise((resolve) => setTimeout(resolve, 5_000, "still stopping after 5s")),
-  ]);
+  const stopped = await stopsAtOnce(cronk.stop());
   spare.destroy();
   expect(stopped).toBe("stopped");
 });
 
 test("Cronk stops at once after answering a request that was in flight when it began to stop", async () => {
   const cronk = await startCronk({ webRoot });
-  const { port } = new URL(cronk.url);
+  // No one has set Cronk up, so the sign-in is refused: what matters is that it is answered.
   const body = JSON.stringify({ email: "ada@example.com", password: "correct horse battery" });
   let socket: Socket;
   try {
     // A request whose body has yet to arrive, as a slow upload's, keeps its connection busy.
-    socket = await new Promise<Socket>((resolve, reject) => {
-      const s = connect(Number(port), "127.0.0.1", () => resolve(s)).once("error", reject);
-    });
+    socket = await connectTo(cronk);
     socket.write(
-      `POST /api/sign-in HTTP/1.1\r\nhost: 127.0.0.1:${port}\r\ncontent-type: application/json\r\n` +
+      `POST /api/sign-in HTTP/1.1\r\nhost: ${new URL(cronk.url).host}\r\ncontent-type: application/json\r\n` +
         `content-length: ${body.length}\r\n\r\n${body.slice(0, 5)}`,
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await expect.poll(() => cronk.logs.some((line) => line.msg === "incoming request")).toBe(true);
   } catch (error) {
     await cronk.stop();
     throw error;
   }
 
-  const stopping = cronk.stop().then(() => "stopped");
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  const stopping = cronk.stop();
+  // Once Cronk is stopping, it takes no new connections.
+  await expect
+    .poll(() => connectTo(cronk).then((s) => new Promise((resolve) => s.once("close", () => resolve("refused"))), () => "refused"))
+    .toBe("refused");
   const answered = new Promise<string>((resolve) => socket.once("data", (data) => resolve(String(data))));
   socket.write(body.slice(5));
   expect(await answered).toMatch(/^HTTP\/1\.1 401 /);
-  const stopped = await Promise.race([
-    stopping,
-    new Promise((resolve) => setTimeout(resolve, 5_000, "still stopping after 5s")),
-  ]);
+  const stopped = await stopsAtOnce(stopping);
   socket.destroy();
   expect(stopped).toBe("stopped");
 });

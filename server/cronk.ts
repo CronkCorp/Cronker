@@ -56,14 +56,17 @@ function endConnectionsOnClose(app: FastifyInstance): void {
   const unused = new Set<Socket>();
   let closing = false;
   app.server.on("connection", (socket: Socket) => {
-    if (closing) return socket.destroy();
+    if (closing) {
+      socket.destroy();
+      return;
+    }
     unused.add(socket);
     socket.once("close", () => unused.delete(socket));
   });
   app.server.on("request", (request: IncomingMessage, response: ServerResponse) => {
     unused.delete(request.socket);
     response.once("finish", () => {
-      if (closing) request.socket.end();
+      if (closing) request.socket.destroySoon();
     });
   });
   app.addHook("preClose", async () => {
