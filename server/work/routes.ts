@@ -134,7 +134,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Remove a Status",
-          description: `${kindRule} Returns the Project.`,
+          description:
+            `${kindRule} Refused too while the Status holds Tickets, naming how many: ` +
+            "move them to another Status first. Returns the Project.",
           params: StatusParams,
           response: { 200: Project, ...statusRefusals },
         },

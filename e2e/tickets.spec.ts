@@ -90,4 +90,11 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await page.getByRole("link", { name: "List" }).click();
   const list = page.getByRole("region", { name: "List" });
   await expect(list.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
+
+  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Remove Ready" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Ready holds 1 Ticket. Move it to another Status before removing it.",
+  );
+  await expect(page.getByLabel("Name of Ready")).toBeVisible();
 });
