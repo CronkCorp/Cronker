@@ -86,11 +86,31 @@ describe("starting Runs", () => {
 
     // The Brief: Cronk's preamble naming the Run, then the Step's Brief, then the Ticket key.
     const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
-    expect(brief.preamble).toContain(`Your Run id is ${run.id}.`);
-    expect(brief.preamble).toContain("- **ready**: moves CRONK-1 to Ready.");
-    expect(brief.brief).toBe(project.statuses.find((s: { name: string }) => s.name === "Triage").step.brief);
+    expect(brief.preamble).toBe(
+      [
+        "You are an agent working on the Ticket CRONK-1 in Cronk, as one Run of its Triage Step.",
+        "",
+        `Reach Cronk through its MCP server at ${cronk.url}/mcp. Read the Ticket there, with its Comments, ` +
+          "Relations and the Reports of earlier Runs: this Brief doesn't repeat them.",
+        "",
+        `Your Run id is ${run.id}.`,
+        "",
+        "End the Run by calling `finish` with your Run id and one of these Outcomes:",
+        "",
+        "- **ready**: moves CRONK-1 to Ready.",
+        "- **needs you**: moves CRONK-1 to Backlog and hands it back to its Assignee. Give a Question saying what you need.",
+        "",
+        "Rules:",
+        "",
+        "- Call `finish` exactly once, as the last thing you do.",
+        "- *needs you* takes a Question.",
+        "- Don't merge pull requests on GitHub directly.",
+      ].join("\n"),
+    );
+    expect(brief.brief).toMatch(/^Triage this Ticket so the next Steps can work on it without asking\./);
     expect(brief.ticketKey).toBe("CRONK-1");
-    expect(brief.text).toBe([brief.preamble, brief.brief, "CRONK-1"].join("\n\n"));
+    expect(brief.text.startsWith(`${brief.preamble}\n\nTriage this Ticket`)).toBe(true);
+    expect(brief.text.endsWith("\n\nCRONK-1")).toBe(true);
     expect(start!.brief).toBe(brief.text);
   });
 
@@ -240,6 +260,32 @@ describe("what finish refuses", () => {
 
     expect((await call("POST", `/api/runs/${run.id}/finish`, far, { outcome: "ready" })).status).toBe(404);
     expect((await call("GET", `/api/runs/${run.id}/brief`, far)).status).toBe(404);
+  });
+});
+
+describe("a Run whose Ticket a User moved meanwhile", () => {
+  test("finishing it is refused, leaving the Ticket where the User put it", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready") });
+
+    const response = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question: "?" });
+
+    expect(response.status).toBe(409);
+    expect(response.json.error).toEqual(expect.objectContaining({ code: "ticket_moved", advice: expect.any(String) }));
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Ready"));
+  });
+
+  test("moving it into another Step's Status records no Run beside the running one, even a refused one", async () => {
+    const { ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate") });
+
+    const runs = await runsOf(ticket.id, ada);
+    expect(runs.map((r: { step: { name: string }; state: string }) => [r.step.name, r.state])).toEqual([["Triage", "running"]]);
   });
 });
 

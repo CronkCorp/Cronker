@@ -77,7 +77,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Ends the caller's own running Run with one of the Outcomes its Brief offers, and moves its Ticket to the " +
             "Outcome's Status in the same transaction; a Status with a Step starts the next Run. Only the Run's Agent " +
-            "may finish it, once.",
+            "may finish it, once, and only while its Ticket is still in the Status the Run started in.",
           params: RunParams,
           body: Type.Object({
             outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),

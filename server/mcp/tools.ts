@@ -201,7 +201,8 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Ends your running Run with one of the Outcomes its Brief offers, which moves its Ticket to the Outcome's " +
         "Status; a Status with a Step starts the next Run. Call it exactly once, as the last thing you do. " +
-        "Refused for another Agent's Run, a Run that isn't running, and an Outcome the Run isn't offered. " +
+        "Refused for another Agent's Run, a Run that isn't running, a Run whose Ticket a User moved meanwhile, " +
+        "and an Outcome the Run isn't offered. " +
         "This is the only way an Agent moves a Ticket: Agents never set a Status.",
       inputSchema: {
         run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),

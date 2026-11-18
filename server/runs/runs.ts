@@ -143,6 +143,9 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   if (!status.step) return;
+  // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
+  const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
+  if (running) return;
 
   const runId = randomUUID();
   const brief = buildBrief(context.config, ticket.key, statuses, status as Status & { step: Step }, runId);
@@ -241,6 +244,12 @@ export async function finishRun(
       throw new ApiError(409, "run_not_running", `This Run is ${run.state}, not running, so it can't be finished.`, {
         rule: finishRule,
         advice: "Nothing more is needed for this Run; leave a Comment on its Ticket if you have more to say.",
+      });
+    }
+    if (ticket.statusId !== run.statusId) {
+      throw new ApiError(409, "ticket_moved", `${ticket.key} was moved out of ${run.step.name} while this Run was running.`, {
+        rule: "A Run's Outcome moves its Ticket only from the Status the Run was started in.",
+        advice: `Stop working on ${ticket.key}: a User moved it on. Leave a Comment if there is something they should know.`,
       });
     }
     const statuses = await statusesOf(tx, ticket.projectId);
