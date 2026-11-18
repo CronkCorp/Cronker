@@ -87,7 +87,11 @@ function StepItem({
             busy={busy}
             onDraft={setDraft}
             onSave={() => run(() => api.putStep(project.id, status.id, draft))}
-            onCancel={() => setDraft(status.step)}
+            onCancel={() => {
+              // A refusal of the draft goes with it.
+              setDraft(status.step);
+              setError(null);
+            }}
             onRemove={() => run(() => api.removeStep(project.id, status.id))}
           />
         )}
