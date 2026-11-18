@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
 import { WentWrongState, wentWrongStates } from "../runs/states.js";
-import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
+import { ticketColumns, TicketRef, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
 
 /**
  * A User's Inbox in one Workspace: everything waiting on them. It is worked out from
@@ -28,7 +28,16 @@ export const RunItem = Type.Object({
   }),
 });
 
-export const InboxItem = Type.Union([ReviewItem, RunItem]);
+/** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
+export const DiscoveredItem = Type.Object({
+  kind: Type.Literal("discovered"),
+  ticket: TicketSummary,
+  agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Agent that filed it." }),
+  sourceTicket: Type.Union([TicketRef, Type.Null()], { description: "The Ticket of the Run it was filed in, if any." }),
+  runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
+});
+
+export const InboxItem = Type.Union([ReviewItem, RunItem, DiscoveredItem]);
 export type InboxItem = Static<typeof InboxItem>;
 
 export const Inbox = Type.Object({
@@ -67,6 +76,24 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
     [workspaceId, userId, wentWrongStates],
   );
   for (const { run, ...row } of wentWrong) items.push({ kind: "run", ticket: ticketSummary(row), run });
+  const { rows: discovered } = await db.query<TicketRow & { agent: { id: string; name: string } }>(
+    `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
+       json_build_object('id', agents.id, 'name', agents.name) as agent
+     from tickets join projects on projects.id = tickets.project_id
+     join agents on agents.id = tickets.discovered_by_agent_id
+     where tickets.workspace_id = $1 and tickets.assignee_id = $2 and tickets.discovery_waits
+     order by projects.key, tickets.number`,
+    [workspaceId, userId],
+  );
+  for (const { agent, ...row } of discovered) {
+    items.push({
+      kind: "discovered",
+      ticket: ticketSummary(row),
+      agent,
+      sourceTicket: row.discovered!.sourceTicket,
+      runId: row.discovered!.runId,
+    });
+  }
   return { count: items.length, items };
 }
 

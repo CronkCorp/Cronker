@@ -513,10 +513,16 @@ export async function editTicket(
     if (changes.length === 0) return withMentions(tx, ticket);
 
     const now = clock.now();
+    // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
+    const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
+    if (next.discovered?.waiting && (next.statusId !== ticket.statusId || delegated)) {
+      next.discovered = { ...next.discovered, waiting: false };
+    }
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
-       status_entered_at = case when status_id = $9 then status_entered_at else $12 end where id = $1`,
+       status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
+       discovery_waits = $13 where id = $1`,
       [
         ticket.id,
         next.title,
@@ -530,6 +536,7 @@ export async function editTicket(
         next.parentId,
         next.delegateId,
         now,
+        next.discovered?.waiting ?? false,
       ],
     );
     await recordChanges(tx, ticket, actor, now, changes);
@@ -577,6 +584,29 @@ export async function editTicket(
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
     if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
     return withMentions(tx, next);
+  });
+}
+
+/**
+ * A User dismisses a waiting Discovered Ticket: it leaves their Inbox and its Agent's hands, staying where it is.
+ * Refused for any other Ticket.
+ */
+export async function dismissTicket(context: Context, userId: string, ticketId: string): Promise<Ticket> {
+  const { db, clock, live } = context;
+  return transaction(db, async (tx) => {
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    if (!ticket) throw ticketNotFound();
+    if (!ticket.discovered?.waiting) {
+      throw new ApiError(
+        409,
+        "not_waiting",
+        `${ticket.key} isn't a Discovered Ticket waiting for a User: only those are dismissed.`,
+      );
+    }
+    await tx.query("update tickets set discovery_waits = false where id = $1", [ticket.id]);
+    await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    return withMentions(tx, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
 }
 

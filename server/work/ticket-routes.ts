@@ -11,6 +11,7 @@ import { Report, reportsOn, writeReport } from "./reports.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
+  dismissTicket,
   editTicket,
   findTicket,
   findTicketByKey,
@@ -189,6 +190,26 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           });
         }
         return editTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId, request.body);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/dismiss",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Dismiss a Discovered Ticket",
+          description:
+            "Takes a Discovered Ticket waiting for a User out of its Assignee's Inbox, and out of the hands of the " +
+            "Agent that filed it, leaving it where it is. Delegating or moving it does the same. Refused for any " +
+            "other Ticket (`not_waiting`).",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return dismissTicket(context, user.id, request.params.ticketId);
       },
     );
 

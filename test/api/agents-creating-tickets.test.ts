@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -270,5 +271,111 @@ describe("the filing Agent and its Discovered Ticket", () => {
 
     expect(refused.status).toBe(403);
     expect(refused.json.error.code).toBe("no_running_run");
+  });
+});
+
+describe("waiting Discovered Tickets in the Inbox", () => {
+  async function discoveredInInbox() {
+    const setup = await runningRun();
+    const found = await ok("POST", `/api/projects/${setup.project.id}/tickets`, setup.asAgent, { title: "Found it", runId: setup.run.id });
+    const inbox = async (as = setup.ada) => ok("GET", `/api/workspaces/${setup.workspace.id}/inbox`, as);
+    /** Whether the Agent may still edit the Discovered Ticket. */
+    const agentEdits = async () =>
+      (await call("PATCH", `/api/tickets/${found.id}`, setup.asAgent, { priority: "low" })).status === 200;
+    return { ...setup, found, inbox, agentEdits };
+  }
+
+  test("one waits in its Assignee's Inbox, with the Agent, source Ticket and Run it came from", async () => {
+    const { workspace, ada, ticket, agent, run, found, inbox } = await discoveredInInbox();
+
+    expect(await inbox()).toEqual({
+      count: 1,
+      items: [
+        {
+          kind: "discovered",
+          ticket: expect.objectContaining({ id: found.id, key: "CRONK-3" }),
+          agent: { id: agent.id, name: "claude-max" },
+          sourceTicket: { id: ticket.id, projectId: ticket.projectId, key: "CRONK-1", title: "Make it so" },
+          runId: run.id,
+        },
+      ],
+    });
+
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    expect((await inbox({ cookie: bea.cookie })).count).toBe(0);
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { assigneeId: bea.user.id });
+    expect((await inbox()).count).toBe(0);
+    expect((await inbox({ cookie: bea.cookie })).items.map((i: { kind: string }) => i.kind)).toEqual(["discovered"]);
+  });
+
+  test("delegating it takes it out of the Inbox, and out of the Agent's hands", async () => {
+    const { ada, agent, found, inbox, agentEdits } = await discoveredInInbox();
+
+    const delegated = await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
+
+    expect(delegated.discovered).toEqual(expect.objectContaining({ waiting: false }));
+    expect((await inbox()).count).toBe(0);
+    expect(await agentEdits()).toBe(false);
+  });
+
+  test("moving it takes it out of the Inbox, and out of the Agent's hands, even moved back", async () => {
+    const { ada, found, inbox, agentEdits, status } = await discoveredInInbox();
+
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { statusId: status("Ready") });
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { statusId: status("Backlog") });
+
+    expect((await inbox()).count).toBe(0);
+    expect(await agentEdits()).toBe(false);
+  });
+
+  test("other edits by a User leave it waiting", async () => {
+    const { ada, found, inbox, agentEdits } = await discoveredInInbox();
+
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { title: "Found it, retitled", priority: "high" });
+
+    expect((await inbox()).count).toBe(1);
+    expect(await agentEdits()).toBe(true);
+  });
+
+  test("dismissing it takes it out of the Inbox and the Agent's hands, leaving it where it is", async () => {
+    const { ada, found, asAgent, inbox, agentEdits, status } = await discoveredInInbox();
+
+    const dismissed = await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
+
+    expect(dismissed).toEqual(
+      expect.objectContaining({ statusId: status("Backlog"), delegateId: null, discovered: expect.objectContaining({ waiting: false }) }),
+    );
+    expect((await inbox()).count).toBe(0);
+    expect(await agentEdits()).toBe(false);
+    const block = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketKey: "CRONK-1" });
+    expect(block.json.error.code).toBe("not_your_discovered_ticket");
+    const again = await call("POST", `/api/tickets/${found.id}/dismiss`, ada);
+    expect(again.status).toBe(409);
+    expect(again.json.error.code).toBe("not_waiting");
+  });
+
+  test("only a User dismisses one, and only a waiting Discovered Ticket", async () => {
+    const { ada, other, found, asAgent, inbox } = await discoveredInInbox();
+
+    const byAgent = await call("POST", `/api/tickets/${found.id}/dismiss`, asAgent);
+    expect(byAgent.json.error.code).toBe("agent_not_allowed");
+    const notDiscovered = await call("POST", `/api/tickets/${other.id}/dismiss`, ada);
+    expect(notDiscovered.status).toBe(409);
+    expect(notDiscovered.json.error.code).toBe("not_waiting");
+    expect((await inbox()).count).toBe(1);
+  });
+
+  test("dismissing one is recorded on its timeline and tells the Workspace's streams", async () => {
+    const { workspace, ada, found } = await discoveredInInbox();
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+
+    await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
+
+    expect(await stream.next()).toEqual({
+      type: "ticket.changed",
+      data: { projectId: found.projectId, ticketId: found.id },
+    });
+    const [dismissed] = (await ok("GET", `/api/tickets/${found.id}/timeline`, ada)).slice(-1);
+    expect(dismissed).toEqual(expect.objectContaining({ field: "dismissed", from: null, to: null, actor: expect.objectContaining({ kind: "user" }) }));
   });
 });
