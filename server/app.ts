@@ -8,6 +8,7 @@ import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
 import { ApiError, sendError } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
+import { agentRoutes } from "./agents/routes.js";
 import { identityRoutes } from "./identity/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
@@ -48,6 +49,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(agentRoutes(context));
 
   const { webRoot } = context.config;
   if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
