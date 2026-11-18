@@ -1,8 +1,9 @@
-import { lookup } from "node:dns/promises";
 import { randomBytes } from "node:crypto";
-import { isIP } from "node:net";
+import { lookup } from "node:dns";
+import { get as httpGet, type IncomingMessage } from "node:http";
+import { get as httpsGet } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 import type { Context } from "../context.js";
-import type { Db } from "../db.js";
 
 /**
  * OAuth clients of Cronk's MCP server. A client either registers itself (RFC 7591) and gets
@@ -44,7 +45,7 @@ function validRedirectUri(value: unknown): value is string {
 }
 
 /** What a client says of itself, at registration or in its metadata document. */
-function parseMetadata(body: unknown): { name: string | null; redirectUris: string[] } {
+function parseMetadata(body: unknown, registering: boolean): { name: string | null; redirectUris: string[] } {
   const metadata = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
   const { redirect_uris: redirectUris, client_name: name } = metadata;
   if (!Array.isArray(redirectUris) || redirectUris.length === 0) {
@@ -57,6 +58,11 @@ function parseMetadata(body: unknown): { name: string | null; redirectUris: stri
       `${JSON.stringify(invalid)} isn't a redirect URI Cronk accepts: it must be an https URL without a fragment, or http to localhost.`,
     );
   }
+  const method = metadata.token_endpoint_auth_method;
+  if (method !== undefined && method !== "none" && !registering) {
+    // A metadata document can't hold a secret, so a client named by one must be public.
+    throw new OAuthError("invalid_client_metadata", "A client named by its metadata document must use `token_endpoint_auth_method` none.");
+  }
   if (name !== undefined && (typeof name !== "string" || name.length > 200)) {
     throw new OAuthError("invalid_client_metadata", "`client_name` must be a string of at most 200 characters.");
   }
@@ -65,15 +71,22 @@ function parseMetadata(body: unknown): { name: string | null; redirectUris: stri
 
 const clientFields = `id, name, redirect_uris as "redirectUris"`;
 
-/** Registers a client (RFC 7591). Whatever it asks for, it becomes a public client using authorization codes with PKCE. */
-export async function registerClient({ db, clock }: Context, body: unknown) {
-  const { name, redirectUris } = parseMetadata(body);
+/** Keeps a client, or the latest copy of its metadata document. */
+async function saveClient({ db, clock }: Context, client: OAuthClient): Promise<Date> {
   const now = clock.now();
-  const id = `cronk_client_${randomBytes(16).toString("base64url")}`;
   await db.query(
-    "insert into oauth_clients (id, name, redirect_uris, created_at, updated_at) values ($1, $2, $3, $4, $4)",
-    [id, name, redirectUris, now],
+    `insert into oauth_clients (id, name, redirect_uris, created_at, updated_at) values ($1, $2, $3, $4, $4)
+     on conflict (id) do update set name = excluded.name, redirect_uris = excluded.redirect_uris, updated_at = excluded.updated_at`,
+    [client.id, client.name, client.redirectUris, now],
   );
+  return now;
+}
+
+/** Registers a client (RFC 7591). Whatever it asks for, it becomes a public client using authorization codes with PKCE. */
+export async function registerClient(context: Context, body: unknown) {
+  const { name, redirectUris } = parseMetadata(body, true);
+  const id = `cronk_client_${randomBytes(16).toString("base64url")}`;
+  const now = await saveClient(context, { id, name, redirectUris });
   return {
     client_id: id,
     client_id_issued_at: Math.floor(now.getTime() / 1000),
@@ -85,12 +98,6 @@ export async function registerClient({ db, clock }: Context, body: unknown) {
   };
 }
 
-/** A client Cronk already knows, by id. */
-export async function findClient(db: Db, clientId: string): Promise<OAuthClient | undefined> {
-  const { rows } = await db.query<OAuthClient>(`select ${clientFields} from oauth_clients where id = $1`, [clientId]);
-  return rows[0];
-}
-
 /** Whether a client id is the URL of a Client ID Metadata Document rather than one Cronk issued. */
 const isMetadataUrl = (clientId: string) => /^https?:\/\//i.test(clientId);
 
@@ -100,84 +107,111 @@ const isMetadataUrl = (clientId: string) => /^https?:\/\//i.test(clientId);
  */
 export async function resolveClient(context: Context, clientId: string): Promise<OAuthClient> {
   if (!isMetadataUrl(clientId)) {
-    const client = await findClient(context.db, clientId);
-    if (!client) throw new OAuthError("invalid_client", "Cronk doesn't know that client. Register it first.");
-    return client;
+    const { rows } = await context.db.query<OAuthClient>(`select ${clientFields} from oauth_clients where id = $1`, [clientId]);
+    if (!rows[0]) throw new OAuthError("invalid_client", "Cronk doesn't know that client. Register it first.");
+    return rows[0];
   }
-  const url = await metadataDocumentUrl(context, clientId);
-  const document = await fetchDocument(url);
+  const local = context.config.publicUrl.protocol === "http:";
+  const document = await fetchDocument(metadataDocumentUrl(clientId, local), local);
   if (document.client_id !== clientId) {
     throw new OAuthError("invalid_client", "The client's metadata document names a different `client_id` from its own URL.");
   }
-  const { name, redirectUris } = parseMetadata(document);
-  const now = context.clock.now();
-  await context.db.query(
-    `insert into oauth_clients (id, name, redirect_uris, created_at, updated_at) values ($1, $2, $3, $4, $4)
-     on conflict (id) do update set name = excluded.name, redirect_uris = excluded.redirect_uris, updated_at = excluded.updated_at`,
-    [clientId, name, redirectUris, now],
-  );
-  return { id: clientId, name, redirectUris };
+  const client = { id: clientId, ...parseMetadata(document, false) };
+  await saveClient(context, client);
+  return client;
 }
+
+const refuseUrl = (why: string) => new OAuthError("invalid_client", `That client id isn't a usable metadata document URL: ${why}.`);
 
 /**
  * A Client ID Metadata Document's URL must be https with a path. A Cronk reached over plain
- * http, which only a local one may be, also takes plain http. Otherwise it never fetches from
- * its own network: the host must not be, or resolve to, a loopback or private address.
+ * http, which only a local one may be, also takes plain http.
  */
-async function metadataDocumentUrl({ config }: Context, clientId: string): Promise<URL> {
-  const refuse = (why: string) => new OAuthError("invalid_client", `That client id isn't a usable metadata document URL: ${why}.`);
+function metadataDocumentUrl(clientId: string, local: boolean): URL {
   let url: URL;
   try {
     url = new URL(clientId);
   } catch {
-    throw refuse("it isn't a URL");
+    throw refuseUrl("it isn't a URL");
   }
-  const local = config.publicUrl.protocol === "http:";
-  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) throw refuse("it must use https");
-  if (url.pathname === "/" || url.hash || url.username || url.password) throw refuse("it needs a path, and no fragment or credentials");
-  if (!local) {
-    const host = url.hostname.replace(/^\[|\]$/g, "");
-    const addresses = isIP(host) ? [host] : (await lookup(host, { all: true }).catch(() => [])).map((a) => a.address);
-    if (addresses.length === 0) throw refuse("its host can't be found");
-    if (addresses.some(isPrivateAddress)) throw refuse("its host is on a private network");
-  }
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) throw refuseUrl("it must use https");
+  if (url.pathname === "/" || url.hash || url.username || url.password) throw refuseUrl("it needs a path, and no fragment or credentials");
   return url;
 }
 
+/** Whether an address is on a loopback, private, shared or otherwise non-public network. */
 function isPrivateAddress(address: string): boolean {
   if (isIP(address) === 6) {
     const lower = address.toLowerCase();
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-    if (mapped) return isPrivateAddress(mapped[1]!);
-    return lower === "::" || lower === "::1" || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower);
+    const embedded = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+    if (embedded) return isPrivateAddress(embedded[1]!);
+    return lower === "::" || lower === "::1" || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower) || /^ff/.test(lower) ||
+      lower.startsWith("64:ff9b:");
   }
   const [a, b] = address.split(".").map(Number) as [number, number];
   return (
-    a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+    a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19))
   );
 }
 
+/**
+ * Resolves a host as usual, but refuses one on a private network. Checking the very addresses
+ * the connection then uses leaves no gap for the host to answer differently in between.
+ */
+const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
+  lookup(hostname, { ...options, all: true }, (error, addresses) => {
+    if (error) return callback(error, "", 0);
+    if (addresses.length === 0 || addresses.some((a) => isPrivateAddress(a.address))) {
+      return callback(Object.assign(new Error(`${hostname} is on a private network`), { code: "EPRIVATE" }), "", 0);
+    }
+    if (options.all) return (callback as unknown as (e: null, a: typeof addresses) => void)(null, addresses);
+    return callback(null, addresses[0]!.address, addresses[0]!.family);
+  });
+};
+
 const documentLimitBytes = 64 * 1024;
 
-async function fetchDocument(url: URL): Promise<Record<string, unknown>> {
+/**
+ * Fetches a metadata document: JSON of at most 64 KB, answered within 5 seconds without a
+ * redirect. Unless Cronk is a local one, never from its own network.
+ */
+async function fetchDocument(url: URL, local: boolean): Promise<Record<string, unknown>> {
   const unusable = (why: string) => new OAuthError("invalid_client", `Cronk couldn't use the client's metadata document: ${why}.`);
-  let response: Response;
+  const literal = url.hostname.replace(/^\[|\]$/g, "");
+  if (!local && isIP(literal) && isPrivateAddress(literal)) throw refuseUrl("its host is on a private network");
+
+  const body = await new Promise<Buffer>((resolve, reject) => {
+    const get = url.protocol === "https:" ? httpsGet : httpGet;
+    const request = get(
+      url,
+      { headers: { accept: "application/json" }, timeout: 5000, ...(local ? {} : { lookup: publicOnlyLookup }) },
+      (response: IncomingMessage) => {
+        if (response.statusCode !== 200) {
+          response.resume();
+          return reject(unusable(`fetching it answered ${response.statusCode}`));
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on("data", (chunk: Buffer) => {
+          size += chunk.byteLength;
+          if (size > documentLimitBytes) {
+            request.destroy();
+            return reject(unusable("it is larger than 64 KB"));
+          }
+          chunks.push(chunk);
+        });
+        response.on("end", () => resolve(Buffer.concat(chunks)));
+        response.on("error", () => reject(unusable("it couldn't be fetched")));
+      },
+    );
+    request.on("timeout", () => request.destroy(new Error("timed out")));
+    request.on("error", (error: Error & { code?: string }) =>
+      reject(error.code === "EPRIVATE" ? refuseUrl("its host is on a private network") : unusable("it couldn't be fetched")),
+    );
+  });
   try {
-    response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(5000), headers: { accept: "application/json" } });
-  } catch {
-    throw unusable("it couldn't be fetched");
-  }
-  if (!response.ok || !response.body) throw unusable(`fetching it answered ${response.status}`);
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of response.body) {
-    size += chunk.byteLength;
-    if (size > documentLimitBytes) throw unusable("it is larger than 64 KB");
-    chunks.push(chunk);
-  }
-  try {
-    const document = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+    const document = JSON.parse(body.toString("utf8")) as unknown;
     if (typeof document === "object" && document !== null && !Array.isArray(document)) return document as Record<string, unknown>;
   } catch {
     // Reported below.

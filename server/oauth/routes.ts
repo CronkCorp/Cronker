@@ -1,10 +1,10 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { mcpPath, protectedResourcePath } from "../mcp/routes.js";
+import { protectedResourcePath } from "../mcp/routes.js";
 import {
   approveRequest,
   AuthorizationRequest,
@@ -12,6 +12,7 @@ import {
   denyRequest,
   issueTokens,
   lookUpRequest,
+  mcpResource,
   requestAuthorization,
   type AuthorizeQuery,
   type TokenParams,
@@ -33,11 +34,17 @@ export const registerPath = "/oauth/register";
 /** The web client's consent screen. */
 export const consentPath = "/connect";
 
-function sendOAuthError(reply: FastifyReply, error: OAuthError) {
-  return reply
-    .code(error.statusCode)
-    .header("cache-control", "no-store")
-    .send({ error: error.error, error_description: error.description });
+/** A handler for an endpoint a client calls, answering its refusals in OAuth's format, never cached. */
+function oauthEndpoint(handle: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.header("cache-control", "no-store");
+    try {
+      return await handle(request, reply);
+    } catch (error) {
+      if (!(error instanceof OAuthError)) throw error;
+      return reply.code(error.statusCode).send({ error: error.error, error_description: error.description });
+    }
+  };
 }
 
 export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -49,7 +56,7 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
     });
 
     const protectedResource = async () => ({
-      resource: `${origin}${mcpPath}`,
+      resource: mcpResource(context),
       authorization_servers: [origin],
       bearer_methods_supported: ["header"],
       resource_name: "Cronk",
@@ -71,14 +78,11 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
       authorization_response_iss_parameter_supported: true,
     }));
 
-    app.post(registerPath, { schema: { hide: true } }, async (request, reply) => {
-      try {
-        return reply.code(201).header("cache-control", "no-store").send(await registerClient(context, request.body));
-      } catch (error) {
-        if (error instanceof OAuthError) return sendOAuthError(reply, error);
-        throw error;
-      }
-    });
+    app.post(
+      registerPath,
+      { schema: { hide: true } },
+      oauthEndpoint(async (request, reply) => reply.code(201).send(await registerClient(context, request.body))),
+    );
 
     // For a browser to open. A request Cronk can't send back to the client goes to the consent screen with the error to show.
     app.get(authorizePath, { schema: { hide: true } }, async (request, reply) => {
@@ -87,7 +91,7 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
         const outcome = await requestAuthorization(context, query);
         if (outcome.kind === "consent") return reply.redirect(`${consentPath}?request=${outcome.requestId}`);
         return reply.redirect(
-          backToClient(context, outcome.redirectUri!, {
+          backToClient(context, outcome.redirectUri, {
             error: outcome.error.error,
             error_description: outcome.error.description,
             state: query.state,
@@ -99,15 +103,11 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
       }
     });
 
-    app.post(tokenPath, { schema: { hide: true } }, async (request, reply) => {
-      try {
-        const body = (request.body ?? {}) as TokenParams;
-        return reply.header("cache-control", "no-store").send(await issueTokens(context, body));
-      } catch (error) {
-        if (error instanceof OAuthError) return sendOAuthError(reply, error);
-        throw error;
-      }
-    });
+    app.post(
+      tokenPath,
+      { schema: { hide: true } },
+      oauthEndpoint(async (request) => issueTokens(context, (request.body ?? {}) as TokenParams)),
+    );
 
     const RequestParams = Type.Object({ requestId: Type.String() });
     const Redirect = Type.Object({ redirectTo: Type.String({ description: "Where to send the browser now." }) });
@@ -117,9 +117,9 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Connecting"],
-          summary: "A request to connect an app, for the consent screen",
+          summary: "A request to connect an OAuth client, for the consent screen",
           description:
-            "An app such as a claude.ai connector asked to act as one of the signed-in User's Agents. Says which app asks, where the browser goes back to, and the User's own Agents to pick from.",
+            "An OAuth client, such as a claude.ai connector, asked to act as one of the signed-in User's Agents. Says which client asks, where the browser goes back to, and the User's own Agents to pick from.",
           params: RequestParams,
           response: { 200: AuthorizationRequest, 401: ErrorBody, 404: ErrorBody },
         },
@@ -132,9 +132,9 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Connecting"],
-          summary: "Connect the app as one of one's own Agents",
+          summary: "Connect the OAuth client as one of one's own Agents",
           description:
-            "The app gets a one-time code to trade for tokens acting as the Agent, until the Agent is removed or the token is revoked from the Agent's tokens. Refused with `not_owner` for someone else's Agent.",
+            "The client gets a one-time code to trade for tokens acting as the Agent, until the Agent is removed or the token is revoked from the Agent's tokens. Refused with `not_owner` for someone else's Agent.",
           params: RequestParams,
           body: Type.Object({ agentId: Type.String() }),
           response: { 200: Redirect, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
@@ -151,7 +151,7 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Connecting"],
-          summary: "Refuse to connect the app",
+          summary: "Refuse to connect the OAuth client",
           params: RequestParams,
           response: { 200: Redirect, 401: ErrorBody, 404: ErrorBody },
         },

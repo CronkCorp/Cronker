@@ -270,28 +270,45 @@ async function approve(cookie: string, requestId: string, agentId: string) {
 }
 
 describe("trading the code in", () => {
-  test("needs the PKCE verifier and the client the code was issued to, and works once", async () => {
+  test("needs the PKCE verifier and the client the code was issued to", async () => {
     const { cookie, agent } = await adaWithAgent();
     const { client_id } = await register();
     const other = await register();
+    const attempt = async (params: Record<string, string>) => {
+      const { verifier, challenge } = pkce();
+      const code = await approve(cookie, await requestConnection(client_id, challenge), agent.id);
+      const response = await token({ grant_type: "authorization_code", client_id, code, code_verifier: verifier, redirect_uri: callback, ...params });
+      return { status: response.status, body: await response.json() };
+    };
+
+    expect(await attempt({ code_verifier: pkce().verifier })).toEqual({ status: 400, body: expect.objectContaining({ error: "invalid_grant" }) });
+    expect(await attempt({ code_verifier: "too-short" })).toEqual({ status: 400, body: expect.objectContaining({ error: "invalid_request" }) });
+    expect((await attempt({ client_id: other.client_id })).status).toBe(400);
+    expect((await attempt({ redirect_uri: "https://claude.ai/elsewhere" })).status).toBe(400);
+    expect((await attempt({ resource: "https://example.com/mcp" })).status).toBe(400);
+    expect((await attempt({ resource: `${cronk.url}/mcp/` })).status).toBe(200);
+    const traded = await attempt({});
+    expect(traded).toEqual({
+      status: 200,
+      body: expect.objectContaining({ token_type: "Bearer", access_token: expect.stringMatching(/^cronk_agent_/) }),
+    });
+  });
+
+  test("a code works once, and a wrong attempt uses it up", async () => {
+    const { cookie, agent } = await adaWithAgent();
+    const { client_id } = await register();
     const { verifier, challenge } = pkce();
     const code = await approve(cookie, await requestConnection(client_id, challenge), agent.id);
-    const trade = (params: Record<string, string>) =>
-      token({ grant_type: "authorization_code", client_id, code, code_verifier: verifier, redirect_uri: callback, ...params });
+    const trade = (code_verifier: string) => token({ grant_type: "authorization_code", client_id, code, code_verifier });
 
-    const wrongVerifier = await trade({ code_verifier: pkce().verifier });
-    expect(wrongVerifier.status).toBe(400);
-    expect(await wrongVerifier.json()).toEqual(expect.objectContaining({ error: "invalid_grant" }));
-    expect((await trade({ client_id: other.client_id })).status).toBe(400);
-    expect((await trade({ redirect_uri: "https://claude.ai/elsewhere" })).status).toBe(400);
-    expect((await trade({ resource: "https://example.com/mcp" })).status).toBe(400);
+    expect((await trade(pkce().verifier)).status).toBe(400);
+    expect((await trade(verifier)).status).toBe(400);
 
-    const traded = await trade({});
-    expect(traded.status).toBe(200);
-    expect(await traded.json()).toEqual(
-      expect.objectContaining({ token_type: "Bearer", access_token: expect.stringMatching(/^cronk_agent_/) }),
-    );
-    expect((await trade({})).status).toBe(400);
+    const second = pkce();
+    const another = await approve(cookie, await requestConnection(client_id, second.challenge), agent.id);
+    const once = () => token({ grant_type: "authorization_code", client_id, code: another, code_verifier: second.verifier });
+    expect((await once()).status).toBe(200);
+    expect((await once()).status).toBe(400);
   });
 
   test("a code not traded in within 10 minutes expires", async () => {
@@ -400,12 +417,18 @@ describe("a Client ID Metadata Document", () => {
     expect(client).toEqual({ id: url, name: "Claude" });
   });
 
-  test("is refused when it names a different client id or isn't there", async () => {
+  test("is refused when it names a different client id, isn't there, or asks to authenticate with a secret", async () => {
     const lying = await publish(() => ({ client_id: "https://claude.ai/client.json", redirect_uris: [callback] }));
     const ask = (client_id: string) =>
       authorize({ client_id, redirect_uri: callback, response_type: "code", code_challenge: "c", code_challenge_method: "S256" });
 
     expect((await ask(lying)).search).toBe("?error=invalid_client");
     expect((await ask(`${cronk.url}/nothing-here.json`)).search).toBe("?error=invalid_client");
+    const withSecret = await publish((self) => ({
+      client_id: self,
+      redirect_uris: [callback],
+      token_endpoint_auth_method: "client_secret_basic",
+    }));
+    expect((await ask(withSecret)).search).toBe("?error=invalid_client_metadata");
   });
 });

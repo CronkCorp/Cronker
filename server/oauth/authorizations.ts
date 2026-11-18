@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { requireOwnAgent } from "../agents/agents.js";
 import type { Context } from "../context.js";
-import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
@@ -35,10 +34,18 @@ export interface AuthorizeQuery {
 }
 
 /** Where to send the browser next: the consent screen, or back to the client with an error. */
-export type AuthorizeOutcome = { kind: "consent"; requestId: string } | { kind: "error"; error: OAuthError };
+export type AuthorizeOutcome =
+  | { kind: "consent"; requestId: string }
+  | { kind: "error"; error: OAuthError; redirectUri: string };
 
 /** The address of Cronk's MCP server: the one resource its tokens are for (RFC 8707). */
-const mcpResource = ({ config }: Context) => `${config.publicUrl.origin}${mcpPath}`;
+export const mcpResource = ({ config }: Context) => `${config.publicUrl.origin}${mcpPath}`;
+
+/** Whether a `resource` parameter, if sent, names Cronk's MCP server, with or without a trailing slash. */
+const forMcp = (context: Context, resource: string | undefined) =>
+  resource === undefined || resource.replace(/\/$/, "") === mcpResource(context);
+
+const later = (now: Date, ms: number) => new Date(now.getTime() + ms);
 
 /** The redirect URI a request names, which must be one the client registered; with only one registered it may be left out. */
 function redirectUriOf(client: OAuthClient, requested: string | undefined): string {
@@ -60,13 +67,13 @@ export function backToClient(context: Context, redirectUri: string, params: Reco
  * client or redirect URI is wrong is refused outright, since the browser can't safely be sent
  * back; any other mistake goes back to the client as an error.
  */
-export async function requestAuthorization(context: Context, query: AuthorizeQuery): Promise<AuthorizeOutcome & { redirectUri?: string }> {
+export async function requestAuthorization(context: Context, query: AuthorizeQuery): Promise<AuthorizeOutcome> {
   if (!query.client_id) throw new OAuthError("invalid_request", "The request names no client, in `client_id`.");
   const client = await resolveClient(context, query.client_id);
   const redirectUri = redirectUriOf(client, query.redirect_uri);
 
-  const fail = (error: string, description: string) => ({
-    kind: "error" as const,
+  const fail = (error: string, description: string): AuthorizeOutcome => ({
+    kind: "error",
     error: new OAuthError(error, description),
     redirectUri,
   });
@@ -74,7 +81,7 @@ export async function requestAuthorization(context: Context, query: AuthorizeQue
   if (!query.code_challenge || query.code_challenge_method !== "S256") {
     return fail("invalid_request", "Cronk needs PKCE: a `code_challenge` with `code_challenge_method` S256.");
   }
-  if (query.resource !== undefined && query.resource !== mcpResource(context)) {
+  if (!forMcp(context, query.resource)) {
     return fail("invalid_target", `Cronk only issues tokens for its MCP server, ${mcpResource(context)}.`);
   }
 
@@ -84,7 +91,7 @@ export async function requestAuthorization(context: Context, query: AuthorizeQue
   const { rows } = await context.db.query<{ id: string }>(
     `insert into oauth_requests (client_id, redirect_uri, code_challenge, state, created_at, expires_at)
      values ($1, $2, $3, $4, $5, $6) returning id`,
-    [client.id, redirectUri, query.code_challenge, query.state ?? null, now, new Date(now.getTime() + requestLifetimeMs)],
+    [client.id, redirectUri, query.code_challenge, query.state ?? null, now, later(now, requestLifetimeMs)],
   );
   return { kind: "consent", requestId: rows[0]!.id };
 }
@@ -128,7 +135,7 @@ async function pendingRequest({ db, clock }: Context, requestId: string): Promis
       )
     : { rows: [] };
   if (!rows[0]) {
-    throw new ApiError(404, "not_found", "That request to connect has expired or was already answered. Start connecting again from the app.");
+    throw new ApiError(404, "not_found", "That request to connect has expired or was already answered. Start connecting again from where you began.");
   }
   return rows[0];
 }
@@ -161,7 +168,7 @@ export async function approveRequest(context: Context, user: User, requestId: st
   const { rowCount } = await context.db.query(
     `update oauth_requests set agent_id = $2, code_hash = $3, expires_at = $4
      where id = $1 and code_hash is null and used_at is null`,
-    [request.id, agent.id, hashSecret(code), new Date(now.getTime() + requestLifetimeMs)],
+    [request.id, agent.id, hashSecret(code), later(context.clock.now(), requestLifetimeMs)],
   );
   if (rowCount === 0) throw new ApiError(404, "not_found", "That request to connect was already answered.");
   return backToClient(context, request.redirectUri, { code, state: request.state ?? undefined });
@@ -193,7 +200,7 @@ const s256 = (verifier: string) => createHash("sha256").update(verifier).digest(
 /** Trades a code or a refresh token in for a new access token and refresh token (RFC 6749 §4.1.3, §6). */
 export async function issueTokens(context: Context, params: TokenParams): Promise<TokenResponse> {
   if (!params.client_id) throw new OAuthError("invalid_client", "The request names no client, in `client_id`.", 401);
-  if (params.resource !== undefined && params.resource !== mcpResource(context)) {
+  if (!forMcp(context, params.resource)) {
     throw new OAuthError("invalid_target", `Cronk only issues tokens for its MCP server, ${mcpResource(context)}.`);
   }
   switch (params.grant_type) {
@@ -213,44 +220,49 @@ const agentInUse = (agentId: string) => `exists (
   select 1 from agents join memberships on memberships.workspace_id = agents.workspace_id and memberships.user_id = agents.owner_id
   where agents.id = ${agentId} and agents.removed_at is null)`;
 
+/** A PKCE code verifier: 43 to 128 unreserved characters (RFC 7636 §4.1). */
+const verifierPattern = /^[A-Za-z0-9\-._~]{43,128}$/;
+
 async function tradeCode(context: Context, clientId: string, params: TokenParams): Promise<TokenResponse> {
   if (!params.code || !params.code_verifier) throw new OAuthError("invalid_request", "Send the `code` and its `code_verifier`.");
   const { code, code_verifier: verifier } = params;
-  return transaction(context.db, async (tx) => {
-    const now = context.clock.now();
-    const { rows } = await tx.query<{
-      redirectUri: string;
-      challenge: string;
-      agentId: string;
-      clientId: string;
-      clientName: string | null;
-    }>(
-      `update oauth_requests set used_at = $2
-       from oauth_clients
-       where oauth_clients.id = oauth_requests.client_id and oauth_requests.code_hash = $1
-         and oauth_requests.used_at is null and oauth_requests.expires_at > $2
-       returning oauth_requests.redirect_uri as "redirectUri", oauth_requests.code_challenge as challenge,
-         oauth_requests.agent_id as "agentId", oauth_requests.client_id as "clientId", oauth_clients.name as "clientName"`,
-      [hashSecret(code), now],
-    );
-    const grant = rows[0];
-    if (!grant || grant.clientId !== clientId) throw invalidGrant("That code was used already, has expired, or is another client's.");
-    if (params.redirect_uri !== undefined && params.redirect_uri !== grant.redirectUri) {
-      throw invalidGrant("The redirect URI isn't the one the code was issued for.");
-    }
-    if (s256(verifier) !== grant.challenge) throw invalidGrant("The code verifier doesn't match the code challenge.");
-    const { rows: inUse } = await tx.query<{ ok: boolean }>(`select ${agentInUse("$1")} as ok`, [grant.agentId]);
-    if (!inUse[0]!.ok) throw invalidGrant("The Agent picked was removed, or its Owner left its Workspace.");
+  if (!verifierPattern.test(verifier)) {
+    throw new OAuthError("invalid_request", "A `code_verifier` is 43 to 128 letters, digits, `-`, `.`, `_` or `~`.");
+  }
+  const { db } = context;
+  const now = context.clock.now();
+  // The code is used up by any attempt to trade it in, so a wrong client or verifier can't try again.
+  const { rows } = await db.query<{
+    redirectUri: string;
+    challenge: string;
+    agentId: string;
+    clientId: string;
+    clientName: string | null;
+  }>(
+    `update oauth_requests set used_at = $2
+     from oauth_clients
+     where oauth_clients.id = oauth_requests.client_id and oauth_requests.code_hash = $1
+       and oauth_requests.used_at is null and oauth_requests.expires_at > $2
+     returning oauth_requests.redirect_uri as "redirectUri", oauth_requests.code_challenge as challenge,
+       oauth_requests.agent_id as "agentId", oauth_requests.client_id as "clientId", oauth_clients.name as "clientName"`,
+    [hashSecret(code), now],
+  );
+  const grant = rows[0];
+  if (!grant || grant.clientId !== clientId) throw invalidGrant("That code was used already, has expired, or is another client's.");
+  if (params.redirect_uri !== undefined && params.redirect_uri !== grant.redirectUri) {
+    throw invalidGrant("The redirect URI isn't the one the code was issued for.");
+  }
+  if (s256(verifier) !== grant.challenge) throw invalidGrant("The code verifier doesn't match the code challenge.");
 
-    const access = issueSecret("agent");
-    const refreshToken = issueSecret("oauth_refresh");
-    await tx.query(
-      `insert into agent_tokens (agent_id, name, access, token_hash, created_at, oauth_client_id, expires_at, refresh_hash)
-       values ($1, $2, 'full', $3, $4, $5, $6, $7)`,
-      [grant.agentId, grant.clientName ?? "OAuth client", hashSecret(access), now, clientId, expiry(now), hashSecret(refreshToken)],
-    );
-    return tokenResponse(access, refreshToken);
-  });
+  const access = issueSecret("agent");
+  const refreshToken = issueSecret("oauth_refresh");
+  const { rowCount } = await db.query(
+    `insert into agent_tokens (agent_id, name, access, token_hash, created_at, oauth_client_id, expires_at, refresh_hash)
+     select $1, $2, 'full', $3, $4, $5, $6, $7 where ${agentInUse("$1")}`,
+    [grant.agentId, grant.clientName ?? "OAuth client", hashSecret(access), now, clientId, expiry(now), hashSecret(refreshToken)],
+  );
+  if (rowCount === 0) throw invalidGrant("The Agent picked was removed, or its Owner left its Workspace.");
+  return tokenResponse(access, refreshToken);
 }
 
 async function refresh(context: Context, clientId: string, refreshToken: string | undefined): Promise<TokenResponse> {
@@ -270,7 +282,7 @@ async function refresh(context: Context, clientId: string, refreshToken: string 
   return tokenResponse(access, next);
 }
 
-const expiry = (now: Date) => new Date(now.getTime() + accessTokenLifetimeSeconds * 1000);
+const expiry = (now: Date) => later(now, accessTokenLifetimeSeconds * 1000);
 
 const tokenResponse = (access: string, refreshToken: string): TokenResponse => ({
   access_token: access,
