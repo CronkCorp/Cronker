@@ -100,6 +100,24 @@ export function targetRefusal(
   return undefined;
 }
 
+/**
+ * Whether a Status of this kind may have a Step: a Ticket in a Done or Canceled Status is
+ * finished or canceled, and a Step there would start Runs on it.
+ */
+export function mayHaveStep(kind: StatusKind): boolean {
+  return kind !== "done" && kind !== "canceled";
+}
+
+export function stepOnFinishedStatus(status: { name: string; kind: StatusKind }): ApiError {
+  const kind = status.kind === "done" ? "Done" : "Canceled";
+  return new ApiError(
+    409,
+    "step_on_finished_status",
+    `${status.name} is a ${kind} Status, so it can't have a Step: ` +
+      "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs.",
+  );
+}
+
 /** Puts a Step on a Status, replacing any Step it had; the Step is checked by the caller. */
 export async function writeStep(
   tx: Tx,
