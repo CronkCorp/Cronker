@@ -37,15 +37,34 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "Create a Ticket",
-          description: "Creates a Ticket with the Project's next key, in the Project's first Backlog Status.",
+          description:
+            "Creates a Ticket with the Project's next key, in the Project's first Backlog Status. A Sub-Ticket, given " +
+            "its `parentId`, starts with its parent's Assignee and Delegation. Agents create Tickets too: during its " +
+            "running Run an Agent may split its Run's Ticket into Sub-Tickets (`no_running_run` for any other " +
+            "parent). Any other Ticket an Agent files is a Discovered Ticket: undelegated, assigned to the Assignee of " +
+            "the Ticket of the Run it names in `runId` (or, naming none, to the Agent's Owner), and waiting in their " +
+            "Inbox until a User delegates, moves or dismisses it.",
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({ title: Title, description: Type.Optional(Description) }),
-          response: { 201: Ticket, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          body: Type.Object({
+            title: Title,
+            description: Type.Optional(Description),
+            parentId: Type.Optional(
+              Type.String({ format: "uuid", description: "Makes it a Sub-Ticket of this Ticket of the same Project." }),
+            ),
+            runId: Type.Optional(
+              Type.String({
+                format: "uuid",
+                description:
+                  "For an Agent filing a Discovered Ticket: its running Run, whose Ticket it records as the source.",
+              }),
+            ),
+          }),
+          response: { 201: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        return reply.code(201).send(await createTicket(context, user.id, request.params.projectId, request.body));
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await createTicket(context, caller, request.params.projectId, request.body));
       },
     );
 

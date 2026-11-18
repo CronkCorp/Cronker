@@ -58,8 +58,8 @@ export interface NewChange {
   to: unknown;
 }
 
-/** Who makes a Change: a User, by id, an Agent during one of its Runs, or Cronk itself. */
-export type ChangeActor = string | { kind: "agent"; id: string; runId: string } | { kind: "cronk" };
+/** Who makes a Change: a User, by id, an Agent (during one of its Runs, or outside any), or Cronk itself. */
+export type ChangeActor = string | { kind: "agent"; id: string; runId: string | null } | { kind: "cronk" };
 
 export async function recordChanges(
   tx: Tx,
