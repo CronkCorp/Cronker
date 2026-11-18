@@ -23,7 +23,22 @@ export const QuestionItem = Type.Object({
   question: Question,
 });
 
-export const InboxItem = Type.Union([QuestionItem, ReviewItem]);
+/** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
+export const NeedsYouItem = Type.Object({
+  kind: Type.Literal("needsYou"),
+  ticket: TicketSummary,
+  status: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "Where the Outcome moved it." }),
+  outcome: Type.String({ description: "The name of the needs you Outcome the Run finished with." }),
+  step: Type.Object(
+    {
+      statusId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], { description: "Null once the Status is removed." }),
+      name: Type.String({ description: "The Status's name when the Run started." }),
+    },
+    { description: "The Step whose Run handed the Ticket back, by the Status it sits on." },
+  ),
+});
+
+export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem]);
 export type InboxItem = Static<typeof InboxItem>;
 
 export const Inbox = Type.Object({
@@ -35,30 +50,37 @@ export type Inbox = Static<typeof Inbox>;
 /** The User's Inbox in the Workspace; the caller checks they belong to it. */
 export async function inboxOf(db: Db, userId: string, workspaceId: string): Promise<Inbox> {
   const questions = await openQuestionsFor(db, userId, workspaceId);
-  const { rows } = await db.query<TicketRow & { statusName: string; inReview: boolean }>(
+  type Row = TicketRow & {
+    statusName: string;
+    inReview: boolean;
+    handedBack: { outcome: string; step: { statusId: string | null; name: string } } | null;
+  };
+  const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
-       statuses.kind = 'review' as "inReview"
+       statuses.kind = 'review' as "inReview",
+       case when runs.id is not null then json_build_object(
+         'outcome', runs.outcome, 'step', json_build_object('statusId', runs.status_id, 'name', runs.status_name)
+       ) end as "handedBack"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
+     left join runs on runs.id = tickets.handed_back_by_run_id
      where tickets.workspace_id = $1 and tickets.assignee_id = $2
-       and (statuses.kind = 'review' or tickets.id = any($3))
+       and (statuses.kind = 'review' or runs.id is not null or tickets.id = any($3))
      order by projects.key, tickets.number`,
     [workspaceId, userId, questions.map((q) => q.ticketId)],
   );
-  const tickets = new Map(rows.map(({ statusName: _s, inReview: _r, ...row }) => [row.id, row]));
+  const summary = ({ statusName: _s, inReview: _r, handedBack: _h, ...row }: Row) => ticketSummary(row);
+  const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
   const items: InboxItem[] = [
-    ...questions.map(({ ticketId, ...question }): InboxItem => ({
-      kind: "question",
-      ticket: ticketSummary(tickets.get(ticketId)!),
-      question,
-    })),
-    ...rows
-      .filter((row) => row.inReview)
-      .map(({ statusName, inReview: _r, ...row }): InboxItem => ({
-        kind: "review",
-        ticket: ticketSummary(row),
-        status: { id: row.statusId, name: statusName },
-      })),
+    ...questions.map(({ ticketId, ...question }): InboxItem => ({ kind: "question", ticket: tickets.get(ticketId)!, question })),
+    ...rows.flatMap((row): InboxItem[] =>
+      row.handedBack
+        ? [{ kind: "needsYou", ticket: summary(row), status: { id: row.statusId, name: row.statusName }, ...row.handedBack }]
+        : [],
+    ),
+    ...rows.flatMap((row): InboxItem[] =>
+      row.inReview ? [{ kind: "review", ticket: summary(row), status: { id: row.statusId, name: row.statusName } }] : [],
+    ),
   ];
   return { count: items.length, items };
 }
