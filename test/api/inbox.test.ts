@@ -123,3 +123,29 @@ describe("Tickets waiting for review", () => {
     expect(await inbox(ada.cookie, workspace.id)).toEqual({ count: 0, items: [] });
   });
 });
+
+describe("one Inbox per Workspace", () => {
+  test("a User's Inbox in one Workspace holds nothing from their other Workspaces", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "In the first Workspace");
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+    const second = await cronk.request("POST", "/api/workspaces", { cookie: ada.cookie, body: { name: "Second" } });
+    expect(second.status).toBe(201);
+    const { id: secondId } = (await second.json()) as { id: string };
+
+    expect(await inbox(ada.cookie, secondId)).toEqual({ count: 0, items: [] });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(1);
+  });
+
+  test("the Inbox of a Workspace the User doesn't belong to answers as if it didn't exist", async () => {
+    const { ada, bea } = await workspaceWithProject();
+    const created = await cronk.request("POST", "/api/workspaces", { cookie: bea.cookie, body: { name: "Bea's" } });
+    const { id: beasId } = (await created.json()) as { id: string };
+
+    for (const workspaceId of [beasId, "not-an-id"]) {
+      const response = await cronk.request("GET", `/api/workspaces/${workspaceId}/inbox`, { cookie: ada.cookie });
+      expect(response.status).toBe(404);
+    }
+    expect((await cronk.request("GET", `/api/workspaces/${beasId}/inbox`)).status).toBe(401);
+  });
+});
