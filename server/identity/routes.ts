@@ -2,7 +2,7 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
-import { requireUser, signIn, signOut } from "./sign-ins.js";
+import { changePassword, requireUser, signIn, signOut } from "./sign-ins.js";
 import { isSetUp, runSetup } from "./setup.js";
 import { Email, Password, User } from "./user.js";
 import { LinkDetails, lookUpLink, useLink } from "./links.js";
@@ -96,6 +96,23 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return { user, workspaces: await workspacesOf(db, user.id) };
+      },
+    );
+
+    app.put(
+      "/api/me/password",
+      {
+        schema: {
+          tags: ["Sign-in"],
+          summary: "Change one's own password",
+          description: "Needs the current password. Ends every other sign-in of the User; this one stays.",
+          body: Type.Object({ currentPassword: Type.String(), newPassword: Password }),
+          response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await changePassword(context, request, request.body.currentPassword, request.body.newPassword);
+        return reply.code(204).send(null);
       },
     );
 
