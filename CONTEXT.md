@@ -41,7 +41,7 @@ A link between two Tickets: one **blocks** the other, or they **relate to** each
 _Avoid_: Dependency, link
 
 **Discovered Ticket**:
-A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee, and waits in their Inbox until they delegate, move or dismiss it.
+A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee (or, filed outside a Run, the Agent's Owner), recording its source Ticket and Run, and waits in their Inbox until a User delegates, moves or dismisses it. Until then the Agent that filed it may edit it and add blocks from it.
 _Avoid_: Follow-up, spin-off, finding
 
 **Step**:
@@ -85,7 +85,7 @@ One recorded edit to a Ticket: which field, its value before and after, the Acto
 _Avoid_: Event, activity, history entry, audit log
 
 **Inbox**:
-A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions and Tickets waiting for their review.
+A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions, Tickets waiting for their review and Discovered Tickets.
 _Avoid_: Notifications, review queue, to-do
 
 **Brief**:

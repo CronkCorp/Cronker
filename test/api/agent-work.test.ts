@@ -143,8 +143,9 @@ describe("what an Agent may not edit", () => {
         code: "agent_field_not_allowed",
         message: expect.any(String),
         rule:
-          "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate; " +
-          "its title, Assignee, Delegation, parent and Status are for Users to change.",
+          "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate, " +
+          "and the title too of a Discovered Ticket it filed, until a User takes that up; " +
+          "a Ticket's Assignee, Delegation, parent and Status are for Users to change.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }

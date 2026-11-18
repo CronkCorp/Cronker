@@ -703,7 +703,7 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | RelationKind>, string> = {
+const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | RelationKind>, string> = {
   delegate: "Delegate",
   title: "Title",
   description: "Description",
@@ -737,6 +737,7 @@ interface StepSkipped {
 
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
+  if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "stepSkipped") {
     const { status, labelRule, outcome } = change.to as StepSkipped;
     return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;

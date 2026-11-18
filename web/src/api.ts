@@ -151,6 +151,8 @@ export interface TicketSummary {
   /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
   verification: "unverified" | "verified" | null;
   parentId: string | null;
+  /** For a Discovered Ticket: the Agent that filed it, from which Ticket and Run, and whether it waits for a User. */
+  discovered: { agentId: string; sourceTicket: TicketRef | null; runId: string | null; waiting: boolean } | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
@@ -300,10 +302,11 @@ export interface Change {
     | "stepSkipped"
     | "autonomousDelegation"
     | "verification"
+    | "dismissed"
     | RelationKind;
   from: unknown;
   to: unknown;
-  /** The Run an Agent made the Change in; null for a User's. */
+  /** The Run an Agent made the Change in; null for a User's, or an Agent's outside a Run. */
   runId: string | null;
 }
 
@@ -372,7 +375,14 @@ export interface RunItem {
   run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
 }
 
-export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem;
+/** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
+export interface DiscoveredItem {
+  kind: "discovered";
+  ticket: TicketSummary;
+  agent: { id: string; name: string };
+}
+
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
@@ -523,6 +533,7 @@ export const api = {
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
+  dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),

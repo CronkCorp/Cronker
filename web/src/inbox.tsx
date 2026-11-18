@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
+import { api, type DiscoveredItem, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { Link } from "./router.js";
@@ -140,5 +140,44 @@ function ItemDetail({ item }: { item: InboxItem }) {
       );
     case "run":
       return <WentWrong item={item} />;
+    case "discovered":
+      return <Discovered item={item} />;
   }
+}
+
+/** A Discovered Ticket an Agent filed, and Dismiss; delegating or moving it from its page also takes it away. */
+function Discovered({ item }: { item: DiscoveredItem }) {
+  const source = item.ticket.discovered?.sourceTicket;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dismiss = () => {
+    setBusy(true);
+    setError(null);
+    // The Inbox reloads on the live event dismissing causes, which takes this item away.
+    api.dismiss(item.ticket.id).then(
+      () => setBusy(false),
+      (e: Error) => {
+        setBusy(false);
+        setError(e.message);
+      },
+    );
+  };
+  return (
+    <>
+      <small>
+        Discovered by {item.agent.name}
+        {source && (
+          <>
+            {" "}
+            while on <Link to={`/tickets/${source.id}`}>{source.key}</Link>
+          </>
+        )}
+        : delegate, move or dismiss it
+      </small>
+      {error && <p role="alert">{error}</p>}
+      <button type="button" onClick={dismiss} disabled={busy} aria-label={`Dismiss ${item.ticket.key}`}>
+        Dismiss
+      </button>
+    </>
+  );
 }
