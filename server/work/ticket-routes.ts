@@ -7,6 +7,7 @@ import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
+import { acceptTicket, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
@@ -177,6 +178,53 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         }
         const user = await requireUser(context, request);
         return editTicket(context, user.id, request.params.ticketId, request.body);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/accept",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Accept an Unverified Ticket",
+          description:
+            "Marks a Ticket a Run completed as Verified, leaving it in its Done Status. Only Users Accept; " +
+            "a Ticket that isn't Unverified is refused with `not_unverified`.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return acceptTicket(context, user, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/reopen",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Reopen an Unverified Ticket",
+          description:
+            "Sends a Ticket a Run completed back to the Status of the Step that completed it, with a Comment saying why, " +
+            "so a new Run picks it up there; it blocks again the Tickets it blocks. Only Users Reopen; a Ticket that " +
+            "isn't Unverified is refused with `not_unverified`.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            comment: Type.String({
+              minLength: 1,
+              maxLength: 100_000,
+              pattern: "\\S",
+              description: "Why it is reopened, in Markdown; added to the Ticket's Comments.",
+            }),
+          }),
+          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return reopenTicket(context, user, request.params.ticketId, request.body.comment);
       },
     );
 

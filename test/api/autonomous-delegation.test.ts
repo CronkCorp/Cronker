@@ -177,3 +177,92 @@ describe("completing a Ticket by an Outcome", () => {
     expect((await ticketOf(ticket.id, ada)).statusId).toBe(status("Code review"));
   });
 });
+
+/** Ada's Ticket completed by its Code review Run, Unverified. */
+async function completedUnverified() {
+  const setup = await inCodeReview();
+  await ok("POST", `/api/runs/${setup.run.id}/finish`, setup.asAgent, { outcome: "complete" });
+  return setup;
+}
+
+describe("Verification", () => {
+  test("a User Accepts an Unverified Ticket, making it Verified where it is", async () => {
+    const { ada, ticket, status } = await completedUnverified();
+
+    const accepted = await ok("POST", `/api/tickets/${ticket.id}/accept`, ada);
+
+    expect(accepted).toEqual(expect.objectContaining({ statusId: status("Done"), verification: "verified" }));
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.at(-1)).toEqual(
+      expect.objectContaining({ field: "verification", from: "unverified", to: "verified", actor: expect.objectContaining({ name: "ada@example.com" }) }),
+    );
+    const again = await call("POST", `/api/tickets/${ticket.id}/accept`, ada);
+    expect(again.status).toBe(409);
+    expect(again.json.error.code).toBe("not_unverified");
+
+    // Once Verified, it moves like any other Ticket, and is no longer Verified once out of Done.
+    const moved = await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Implement") });
+    expect(moved.verification).toBeNull();
+  });
+
+  test("a User Reopens it with a Comment saying why, sending it back to the Step that completed it for a new Run", async () => {
+    const { ada, ticket, status } = await completedUnverified();
+
+    const reopened = await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "The tests don't pass." });
+
+    expect(reopened).toEqual(expect.objectContaining({ statusId: status("Code review"), verification: null }));
+    const comments = await ok("GET", `/api/tickets/${ticket.id}/comments`, ada);
+    expect(comments.at(-1)).toEqual(
+      expect.objectContaining({ body: "The tests don't pass.", actor: expect.objectContaining({ name: "ada@example.com" }) }),
+    );
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.slice(-2).map((c: { field: string; from: unknown; to: unknown }) => [c.field, c.from, c.to])).toEqual([
+      ["status", { id: status("Done"), name: "Done" }, { id: status("Code review"), name: "Code review" }],
+      ["verification", "unverified", null],
+    ]);
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    expect(runs.map((r: { step: { name: string }; state: string }) => [r.step.name, r.state])).toEqual([
+      ["Code review", "finished"],
+      ["Code review", "running"],
+    ]);
+  });
+
+  test("Reopen requires a Comment, and both need an Unverified Ticket and a User", async () => {
+    const { ada, ticket, asAgent, status } = await completedUnverified();
+
+    for (const body of [{}, { comment: "" }, { comment: "  " }]) {
+      const response = await call("POST", `/api/tickets/${ticket.id}/reopen`, ada, body);
+      expect(response.status, JSON.stringify(body)).toBe(400);
+    }
+    for (const action of ["accept", "reopen"]) {
+      const byAgent = await call("POST", `/api/tickets/${ticket.id}/${action}`, asAgent, { comment: "Not me." });
+      expect(byAgent.status).toBe(403);
+      expect(byAgent.json.error.code).toBe("agent_not_allowed");
+    }
+    expect(await ticketOf(ticket.id, ada)).toEqual(
+      expect.objectContaining({ statusId: status("Done"), verification: "unverified" }),
+    );
+
+    const other = await ok("POST", `/api/projects/${ticket.projectId}/tickets`, ada, { title: "Never completed" });
+    const notUnverified = await call("POST", `/api/tickets/${other.id}/reopen`, ada, { comment: "Why?" });
+    expect(notUnverified.status).toBe(409);
+    expect(notUnverified.json.error.code).toBe("not_unverified");
+  });
+
+  test("a plain Status change out of Done is refused for an Unverified Ticket", async () => {
+    const { ada, ticket, status } = await completedUnverified();
+
+    const moved = await call("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Implement") });
+
+    expect(moved.status).toBe(409);
+    expect(moved.json.error).toEqual({
+      code: "ticket_unverified",
+      message: "CRONK-1 was completed by a Run and is Unverified: it leaves Done only by Accept or Reopen.",
+      rule: expect.any(String),
+      advice: expect.any(String),
+    });
+    expect((await ticketOf(ticket.id, ada)).statusId).toBe(status("Done"));
+    // Other fields still change.
+    expect((await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { title: "Made it so" })).title).toBe("Made it so");
+  });
+});

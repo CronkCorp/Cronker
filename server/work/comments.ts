@@ -6,7 +6,7 @@ import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "./actors.js";
-import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
+import { findTicketRow, Mention, mentionsInEach, ticketNotFound, type TicketRow } from "./tickets.js";
 
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -57,32 +57,43 @@ export async function addComment(
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, actor, ticketId);
     if (!ticket) throw ticketNotFound();
-    if (input.replyToId !== undefined) {
-      const { rowCount } = isUuid(input.replyToId)
-        ? await tx.query("select 1 from comments where id = $1 and ticket_id = $2", [input.replyToId, ticket.id])
-        : { rowCount: 0 };
-      if (rowCount === 0) throw new ApiError(400, "unknown_comment", "Replies go to a Comment on the same Ticket.");
-    }
-    const { rows } = await tx.query<{ id: string }>(
-      `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-      [
-        ticket.workspaceId,
-        ticket.id,
-        input.replyToId ?? null,
-        actor.kind === "user" ? actor.id : null,
-        actor.kind === "agent" ? actor.id : null,
-        input.body,
-        clock.now(),
-      ],
-    );
-    const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, rows[0]!.id));
-    live.publish(tx, ticket.workspaceId, {
-      type: "comment.added",
-      projectId: ticket.projectId,
-      ticketId: ticket.id,
-      commentId: comment!.id,
-    });
-    return comment!;
+    return writeComment({ clock, live }, tx, actor, ticket, input);
   });
+}
+
+/** Writes a Comment on the Ticket in the transaction, as `addComment` does once it found the Ticket. */
+export async function writeComment(
+  { clock, live }: Pick<Context, "clock" | "live">,
+  tx: Tx,
+  actor: Caller,
+  ticket: TicketRow,
+  input: { body: string; replyToId?: string },
+): Promise<Comment> {
+  if (input.replyToId !== undefined) {
+    const { rowCount } = isUuid(input.replyToId)
+      ? await tx.query("select 1 from comments where id = $1 and ticket_id = $2", [input.replyToId, ticket.id])
+      : { rowCount: 0 };
+    if (rowCount === 0) throw new ApiError(400, "unknown_comment", "Replies go to a Comment on the same Ticket.");
+  }
+  const { rows } = await tx.query<{ id: string }>(
+    `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    [
+      ticket.workspaceId,
+      ticket.id,
+      input.replyToId ?? null,
+      actor.kind === "user" ? actor.id : null,
+      actor.kind === "agent" ? actor.id : null,
+      input.body,
+      clock.now(),
+    ],
+  );
+  const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, rows[0]!.id));
+  live.publish(tx, ticket.workspaceId, {
+    type: "comment.added",
+    projectId: ticket.projectId,
+    ticketId: ticket.id,
+    commentId: comment!.id,
+  });
+  return comment!;
 }

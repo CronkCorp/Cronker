@@ -369,7 +369,23 @@ export async function editTicket(
     if (edit.description !== undefined) await change("description", "description", edit.description);
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
+      if (edit.statusId !== ticket.statusId && ticket.verification === "unverified") {
+        throw new ApiError(
+          409,
+          "ticket_unverified",
+          `${ticket.key} was completed by a Run and is Unverified: it leaves Done only by Accept or Reopen.`,
+          {
+            rule: "A Ticket a Run completed stays in its Done Status until a User Accepts or Reopens it.",
+            advice: "Accept it to keep it done, or Reopen it with a Comment saying why to send it back to the Step that completed it.",
+          },
+        );
+      }
       await change("statusId", "status", edit.statusId, statusNamed);
+      // Leaving its Done Status, an Accepted Ticket is no longer Verified: Verification is of that completion.
+      if (next.statusId !== ticket.statusId && ticket.verification !== null) {
+        next.verification = null;
+        changes.push({ field: "verification", from: ticket.verification, to: null });
+      }
     }
     if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
     if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
@@ -416,7 +432,9 @@ export async function editTicket(
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11, autonomous_delegation = $12
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11, autonomous_delegation = $12,
+       verification = $13, completed_from_status_id = case when $13::verification is null then null
+         else completed_from_status_id end
        where id = $1`,
       [
         ticket.id,
@@ -431,6 +449,7 @@ export async function editTicket(
         next.parentId,
         next.delegateId,
         next.autonomousDelegation,
+        next.verification,
       ],
     );
     const now = clock.now();
