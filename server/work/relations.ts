@@ -3,6 +3,7 @@ import type { Clock } from "../clock.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { recordChanges } from "./changes.js";
 import { findTicketRef, findTicketRow, ticketNotFound, TicketRef, ticketRefColumn, unknownTicket } from "./tickets.js";
 
 /** A Relation as seen from one of its Tickets: this Ticket blocks, is blocked by, or relates to the other. */
@@ -48,6 +49,8 @@ export async function addRelation(
       [ticket.workspaceId, input.kind === "relatesTo" ? "relates" : "blocks", from, to, userId, clock.now()],
     );
     if (!rows[0]) throw new ApiError(409, "relation_exists", "These Tickets already have that Relation.");
+    const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
+    await recordRelationChanges(tx, ticket.workspaceId, userId, clock.now(), input.kind, self, other, "added");
     return { id: rows[0]!.id, kind: input.kind, ticket: other };
   });
 }
@@ -56,16 +59,47 @@ function relationNotFound(): ApiError {
   return new ApiError(404, "not_found", "This Ticket has no such Relation.");
 }
 
-export async function removeRelation(db: Db, userId: string, ticketId: string, relationId: string): Promise<void> {
+export async function removeRelation(
+  db: Db,
+  clock: Clock,
+  userId: string,
+  ticketId: string,
+  relationId: string,
+): Promise<void> {
   await transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId);
     if (!ticket || !isUuid(relationId)) throw relationNotFound();
-    const { rowCount } = await tx.query(
-      "delete from relations where id = $1 and $2 in (ticket_id, other_ticket_id)",
+    const { rows } = await tx.query<{ kind: "blocks" | "relates"; ticketId: string; otherTicketId: string }>(
+      `delete from relations where id = $1 and $2 in (ticket_id, other_ticket_id)
+       returning kind, ticket_id as "ticketId", other_ticket_id as "otherTicketId"`,
       [relationId, ticket.id],
     );
-    if (rowCount === 0) throw relationNotFound();
+    const removed = rows[0];
+    if (!removed) throw relationNotFound();
+    const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
+    const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
+    const kind = removed.kind === "relates" ? "relatesTo" : "blocks";
+    await recordRelationChanges(tx, ticket.workspaceId, userId, clock.now(), kind, from, to, "removed");
   });
+}
+
+const opposite: Record<RelationKind, RelationKind> = { blocks: "blockedBy", blockedBy: "blocks", relatesTo: "relatesTo" };
+
+/** Records a Relation added or removed on both its Tickets' timelines, each naming the other Ticket. */
+async function recordRelationChanges(
+  tx: Tx,
+  workspaceId: string,
+  userId: string,
+  at: Date,
+  kind: RelationKind,
+  ticket: TicketRef,
+  other: TicketRef,
+  how: "added" | "removed",
+): Promise<void> {
+  const change = (field: RelationKind, ref: TicketRef) =>
+    how === "added" ? { field, from: null, to: ref } : { field, from: ref, to: null };
+  await recordChanges(tx, { id: ticket.id, workspaceId }, userId, at, [change(kind, other)]);
+  await recordChanges(tx, { id: other.id, workspaceId }, userId, at, [change(opposite[kind], ticket)]);
 }
 
 /**

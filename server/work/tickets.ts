@@ -306,7 +306,16 @@ export async function editTicket(
         next.parentId,
       ],
     );
-    await recordChanges(tx, ticket, userId, clock.now(), changes);
+    const now = clock.now();
+    await recordChanges(tx, ticket, userId, now, changes);
+    if (next.parentId !== ticket.parentId) {
+      // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
+      const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
+      const subTicketChange = (parentId: string | null, change: NewChange) =>
+        parentId === null ? undefined : recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
+      await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
+      await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
+    }
     return withMentions(tx, next);
   });
 }

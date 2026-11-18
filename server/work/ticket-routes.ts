@@ -217,7 +217,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        await removeRelation(db, user.id, request.params.ticketId, request.params.relationId);
+        await removeRelation(db, clock, user.id, request.params.ticketId, request.params.relationId);
         return reply.code(204).send(null);
       },
     );

@@ -307,3 +307,62 @@ describe("Sub-Tickets", () => {
     expect((await relationsOf(cookie, relations.id)).parent).toBeNull();
   });
 });
+
+async function timelineOf(cookie: string, ticketId: string) {
+  const response = await cronk.request("GET", `/api/tickets/${ticketId}/timeline`, { cookie });
+  expect(response.status).toBe(200);
+  const changes: { field: string; from: unknown; to: unknown; actor: { id: string }; at: string }[] =
+    await response.json();
+  return changes.filter((change) => change.field !== "created");
+}
+
+describe("the timeline", () => {
+  test("adding and removing Relations shows on both Tickets' timelines", async () => {
+    const { user, cookie, tickets } = await withTickets("Sign in", "Board", "List");
+    const [signInTicket, board, list] = tickets as [TicketRef, TicketRef, TicketRef];
+    const blocks = await (await relate(cookie, board.id, "blockedBy", signInTicket.id)).json();
+    cronk.clock.advance(60_000);
+    await relate(cookie, board.id, "relatesTo", list.id);
+    cronk.clock.advance(60_000);
+    await cronk.request("DELETE", `/api/tickets/${signInTicket.id}/relations/${blocks.id}`, { cookie });
+
+    const by = { actor: expect.objectContaining({ id: user.id }) };
+    expect(await timelineOf(cookie, signInTicket.id)).toEqual([
+      { ...by, id: expect.any(String), at: "2026-01-01T09:00:00.000Z", field: "blocks", from: null, to: board },
+      { ...by, id: expect.any(String), at: "2026-01-01T09:02:00.000Z", field: "blocks", from: board, to: null },
+    ]);
+    expect(await timelineOf(cookie, board.id)).toEqual([
+      { ...by, id: expect.any(String), at: "2026-01-01T09:00:00.000Z", field: "blockedBy", from: null, to: signInTicket },
+      { ...by, id: expect.any(String), at: "2026-01-01T09:01:00.000Z", field: "relatesTo", from: null, to: list },
+      { ...by, id: expect.any(String), at: "2026-01-01T09:02:00.000Z", field: "blockedBy", from: signInTicket, to: null },
+    ]);
+    expect(await timelineOf(cookie, list.id)).toEqual([
+      { ...by, id: expect.any(String), at: "2026-01-01T09:01:00.000Z", field: "relatesTo", from: null, to: board },
+    ]);
+  });
+
+  test("setting, moving and clearing a parent shows on the Sub-Ticket's and each parent's timeline", async () => {
+    const { cookie, tickets } = await withTickets("Relations", "Views", "Ticket view");
+    const [relations, views, view] = tickets as [TicketRef, TicketRef, TicketRef];
+
+    await setParent(cookie, view.id, relations.id);
+    await setParent(cookie, view.id, views.id);
+    await setParent(cookie, view.id, null);
+
+    const shown = async (ticket: TicketRef) =>
+      (await timelineOf(cookie, ticket.id)).map(({ field, from, to }) => ({ field, from, to }));
+    expect(await shown(view)).toEqual([
+      { field: "parent", from: null, to: relations },
+      { field: "parent", from: relations, to: views },
+      { field: "parent", from: views, to: null },
+    ]);
+    expect(await shown(relations)).toEqual([
+      { field: "subTicket", from: null, to: view },
+      { field: "subTicket", from: view, to: null },
+    ]);
+    expect(await shown(views)).toEqual([
+      { field: "subTicket", from: null, to: view },
+      { field: "subTicket", from: view, to: null },
+    ]);
+  });
+});
