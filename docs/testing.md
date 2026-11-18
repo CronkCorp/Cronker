@@ -29,6 +29,7 @@ What a seam can't see, such as that only hashes of secrets are stored, is kept b
   - `request(method, path, { body, cookie, origin, headers })`: a `fetch` against it. It sends no `Origin` unless asked, like a non-browser client.
   - `clock`: the test's clock (below).
   - `logs` and `setupCode()`: everything Cronk logged, and the setup code a fresh installation logs.
+  - `terminateIdleDatabaseConnections()`: terminates Cronk's idle database connections from an admin connection, as a Postgres restart or failover would, and returns how many it terminated.
   - `command(...args)`: runs a server command (`server/command.ts`) in a child process against this Cronk's database, as an operator would, and returns its exit code, stdout and stderr.
   - `stop()`: closes Cronk and drops its database. Call it in `afterEach`.
 - **Disposable Postgres per test** (`database.ts`). Each `startCronk()` copies a fresh database from a migrated template (`create database … template …`), so tests share nothing and none pays for migrations. The template's name carries a hash of `migrations/`, so changing a migration builds a new template on the next run.

@@ -65,6 +65,8 @@ function ensureTemplate(): Promise<string> {
 
 export interface TestDatabase {
   url: string;
+  /** Terminates every idle connection to this database from an admin connection, as a Postgres restart would. */
+  terminateIdleConnections(): Promise<number>;
   drop(): Promise<void>;
 }
 
@@ -74,6 +76,14 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   await withAdmin((client) => client.query(`create database "${name}" template "${template}"`));
   return {
     url: urlFor(name),
+    terminateIdleConnections: () =>
+      withAdmin(async (client) => {
+        const { rowCount } = await client.query(
+          "select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and state = 'idle' and pid <> pg_backend_pid()",
+          [name],
+        );
+        return rowCount ?? 0;
+      }),
     drop: () => withAdmin((client) => client.query(`drop database if exists "${name}" with (force)`)).then(() => {}),
   };
 }

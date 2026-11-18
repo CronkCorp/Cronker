@@ -1,7 +1,6 @@
-import pg from "pg";
 import { systemClock } from "./clock.js";
 import { ConfigError, loadConfig } from "./config.js";
-import { migrate } from "./db.js";
+import { createPool, migrate } from "./db.js";
 import { Live } from "./live/live.js";
 import { ApiError } from "./http/errors.js";
 import { issueResetLinkByEmail } from "./identity/links.js";
@@ -32,7 +31,7 @@ async function main(args: string[]): Promise<number> {
     return 1;
   }
 
-  const db = new pg.Pool({ connectionString: config.databaseUrl });
+  const db = createPool(config.databaseUrl);
   try {
     await migrate(db);
     const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live(), runners: {} }, email);
