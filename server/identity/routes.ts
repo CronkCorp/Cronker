@@ -2,13 +2,11 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
-import { requireUser, signIn, signOut } from "./sign-ins.js";
+import { changePassword, requireUser, signIn, signOut } from "./sign-ins.js";
 import { isSetUp, runSetup } from "./setup.js";
-import { User } from "./user.js";
-import { Membership, Workspace, workspacesOf } from "../workspaces/workspaces.js";
-
-const Email = Type.String({ format: "email", maxLength: 320 });
-const Password = Type.String({ minLength: 8, maxLength: 1024 });
+import { Email, Password, User } from "./user.js";
+import { LinkDetails, lookUpLink, useLink } from "./links.js";
+import { Membership, Workspace, WorkspaceName, workspacesOf } from "../workspaces/workspaces.js";
 
 export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -37,7 +35,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
             setupCode: Type.String(),
             email: Email,
             password: Password,
-            workspaceName: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }),
+            workspaceName: WorkspaceName,
           }),
           response: { 201: Type.Object({ user: User, workspace: Workspace }), 403: ErrorBody, 409: ErrorBody },
         },
@@ -99,6 +97,53 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         return { user, workspaces: await workspacesOf(db, user.id) };
       },
+    );
+
+    app.put(
+      "/api/me/password",
+      {
+        schema: {
+          tags: ["Sign-in"],
+          summary: "Change one's own password",
+          description: "Needs the current password. Ends every other sign-in of the User; this one stays.",
+          body: Type.Object({ currentPassword: Type.String(), newPassword: Password }),
+          response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await changePassword(context, request, request.body.currentPassword, request.body.newPassword);
+        return reply.code(204).send(null);
+      },
+    );
+
+    app.post(
+      "/api/links/lookup",
+      {
+        schema: {
+          tags: ["Links"],
+          summary: "What a one-time link does",
+          description:
+            "Takes the secret from a join or reset link's fragment and says what using it will do, without using it.",
+          body: Type.Object({ token: Type.String() }),
+          response: { 200: LinkDetails, 404: ErrorBody },
+        },
+      },
+      async (request) => lookUpLink(context, request.body.token),
+    );
+
+    app.post(
+      "/api/links/use",
+      {
+        schema: {
+          tags: ["Links"],
+          summary: "Use a one-time link",
+          description:
+            "A join link makes the User a member of its Workspace: it sets their password if they have none yet, and otherwise needs their current one (`wrong_password` if not). A reset link sets a new password and ends all the User's sign-ins. Either works once.",
+          body: Type.Object({ token: Type.String(), password: Password }),
+          response: { 200: Type.Object({ user: User }), 400: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => ({ user: await useLink(context, request.body.token, request.body.password) }),
     );
   };
 }

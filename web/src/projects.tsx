@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type FormEvent } from "react";
 import { api, statusKinds, type Project, type ProjectSummary, type Status, type StatusKind, type Workspace } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Link, navigate } from "./router.js";
@@ -63,14 +63,30 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 type View = "board" | "list" | "settings";
 
 /** A Project of the Workspace on screen, as a board, as a list, or its settings. */
-export function ProjectScreen({ workspace, projectId, view }: { workspace: Workspace; projectId: string; view: View }) {
+export function ProjectScreen({
+  workspace,
+  projectId,
+  view,
+  onOtherWorkspace,
+}: {
+  workspace: Workspace;
+  projectId: string;
+  view: View;
+  /** Offered a Project of another Workspace; returns whether the screen switches to that Workspace. */
+  onOtherWorkspace?: (workspaceId: string) => boolean;
+}) {
   const [project, setProject] = useState<Project | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const otherWorkspace = useRef(onOtherWorkspace);
+  otherWorkspace.current = onOtherWorkspace;
 
   useEffect(() => {
     api.project(projectId).then(
       // A Project of another of the User's Workspaces isn't shown under this one's name.
-      (found) => (found.workspaceId === workspace.id ? setProject(found) : setFailure("No such Project.")),
+      (found) => {
+        if (found.workspaceId === workspace.id) setProject(found);
+        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Project.");
+      },
       (e: Error) => setFailure(e.message),
     );
   }, [projectId, workspace.id]);

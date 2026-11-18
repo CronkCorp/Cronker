@@ -10,6 +10,12 @@ export function navigate(path: string): void {
   for (const listener of listeners) listener();
 }
 
+/** Moves to a path without adding a history entry, such as away from a one-time link that has been used. */
+export function replace(path: string): void {
+  window.history.replaceState(null, "", path);
+  for (const listener of listeners) listener();
+}
+
 export function usePath(): string {
   const [path, setPath] = useState(window.location.pathname);
   useEffect(() => {

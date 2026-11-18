@@ -162,3 +162,48 @@ form.inline {
 .statuses li button[aria-label^="Move"] {
   padding: 0.5rem 0.7rem;
 }
+.shell header nav {
+  display: flex;
+  gap: 1rem;
+}
+.narrow {
+  max-width: 24rem;
+}
+.admin-forms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+}
+.admin-forms form {
+  min-width: 14rem;
+}
+.issued-link {
+  display: grid;
+  gap: 0.25rem;
+  max-width: 40rem;
+  margin: 1rem 0;
+}
+.issued-link small {
+  color: var(--muted);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 48rem;
+}
+td {
+  padding: 0.5rem 0.5rem 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+td.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+@media (max-width: 600px) {
+  .shell header {
+    flex-wrap: wrap;
+  }
+}
