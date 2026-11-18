@@ -544,6 +544,36 @@ describe("a Sub-Ticket's Delegation", () => {
     expect(subTicket).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
   });
 
+  test("delegating a parent gives its Sub-Tickets its Autonomous Delegation along with its Delegate", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Relations", "Ticket view");
+    const [parent, view] = tickets as [TicketRef, TicketRef];
+    await edit(cookie, view.id, { parentId: parent.id });
+    await edit(cookie, parent.id, { autonomousDelegation: true });
+    await edit(cookie, view.id, { autonomousDelegation: false });
+    const agent = await createAgent(cookie, workspace.id, "claude-max");
+
+    await edit(cookie, parent.id, { delegateId: agent.id });
+
+    const subTicket = await (await cronk.request("GET", `/api/tickets/${view.id}`, { cookie })).json();
+    expect(subTicket).toEqual(expect.objectContaining({ delegateId: agent.id, autonomousDelegation: true }));
+    expect(await changesOf(cookie, view.id)).toEqual(
+      expect.arrayContaining([{ field: "autonomousDelegation", from: false, to: true }]),
+    );
+  });
+
+  test("an Assignee change that takes a parent's Delegate away undelegates its Sub-Tickets too", async () => {
+    const { user, cookie, workspace, tickets } = await withTickets("Relations", "Ticket view");
+    const [parent, view] = tickets as [TicketRef, TicketRef];
+    await edit(cookie, view.id, { parentId: parent.id });
+    await edit(cookie, parent.id, { delegateId: (await createAgent(cookie, workspace.id, "claude-max")).id });
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+
+    await edit(cookie, parent.id, { assigneeId: bea.user.id });
+
+    const subTicket = await (await cronk.request("GET", `/api/tickets/${view.id}`, { cookie })).json();
+    expect(subTicket).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: null }));
+  });
+
   test("undelegating a parent leaves a Sub-Ticket delegated to another Agent as it is", async () => {
     const { user, cookie, workspace, tickets } = await withTickets("Relations", "Ticket view");
     const [parent, view] = tickets as [TicketRef, TicketRef];

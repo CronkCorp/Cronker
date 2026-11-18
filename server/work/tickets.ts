@@ -646,7 +646,11 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
-    if (next.autonomousDelegation !== ticket.autonomousDelegation && next.autonomousDelegation !== null) {
+    // A Sub-Ticket inherits its parent's Autonomous Delegation, so it follows any change, and goes along with a
+    // Delegation passed down.
+    const delegationPassedDown = next.delegateId !== null && next.delegateId !== ticket.delegateId;
+    const autonomousChanged = next.autonomousDelegation !== ticket.autonomousDelegation;
+    if ((autonomousChanged || delegationPassedDown) && next.autonomousDelegation !== null) {
       await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
     }
     // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
@@ -789,10 +793,8 @@ async function passDelegationDown(
     undelegated ? [ticket.id, ticket.delegateId] : [ticket.id, next.delegateId, next.assigneeId],
   );
   if (rows.length === 0) return;
-  const named = async (sql: string, id: string | null) =>
-    id === null ? null : (await tx.query<{ id: string; name: string }>(sql, [id])).rows[0]!;
-  const assignee = await named("select id, email as name from users where id = $1", next.assigneeId);
-  const delegate = await named("select id, name from agents where id = $1", next.delegateId);
+  const assignee = undelegated ? null : await named(tx, "select id, email as name from users where id = $1", next.assigneeId);
+  const delegate = await named(tx, "select id, name from agents where id = $1", next.delegateId);
   const who = await nameOfUser(tx, userId);
   for (const subTicket of rows) {
     const assigneeId = undelegated ? subTicket.assigneeId : next.assigneeId;
