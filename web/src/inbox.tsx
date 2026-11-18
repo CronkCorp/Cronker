@@ -108,6 +108,7 @@ function WentWrong({ item }: { item: RunItem }) {
 
 /** A Discovered Ticket an Agent filed, and Dismiss; delegating or moving it from its page also takes it away. */
 function Discovered({ item }: { item: DiscoveredItem }) {
+  const source = item.ticket.discovered?.sourceTicket;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dismiss = () => {
@@ -126,10 +127,10 @@ function Discovered({ item }: { item: DiscoveredItem }) {
     <>
       <small>
         Discovered by {item.agent.name}
-        {item.sourceTicket && (
+        {source && (
           <>
             {" "}
-            while on <Link to={`/tickets/${item.sourceTicket.id}`}>{item.sourceTicket.key}</Link>
+            while on <Link to={`/tickets/${source.id}`}>{source.key}</Link>
           </>
         )}
         : delegate, move or dismiss it

@@ -308,10 +308,17 @@ describe("waiting Discovered Tickets in the Inbox", () => {
       items: [
         {
           kind: "discovered",
-          ticket: expect.objectContaining({ id: found.id, key: "CRONK-3" }),
+          ticket: expect.objectContaining({
+            id: found.id,
+            key: "CRONK-3",
+            discovered: {
+              agentId: agent.id,
+              sourceTicket: { id: ticket.id, projectId: ticket.projectId, key: "CRONK-1", title: "Make it so" },
+              runId: run.id,
+              waiting: true,
+            },
+          }),
           agent: { id: agent.id, name: "claude-max" },
-          sourceTicket: { id: ticket.id, projectId: ticket.projectId, key: "CRONK-1", title: "Make it so" },
-          runId: run.id,
         },
       ],
     });

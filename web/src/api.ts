@@ -315,8 +315,6 @@ export interface DiscoveredItem {
   kind: "discovered";
   ticket: TicketSummary;
   agent: { id: string; name: string };
-  sourceTicket: TicketRef | null;
-  runId: string | null;
 }
 
 export type InboxItem = ReviewItem | RunItem | DiscoveredItem;
