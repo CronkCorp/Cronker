@@ -1,0 +1,65 @@
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { setUp, signIn } from "../harness/flows.js";
+import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+
+let cronk: StartedCronk;
+beforeEach(async () => {
+  cronk = await startCronk();
+});
+afterEach(async () => {
+  await cronk?.stop();
+});
+
+interface Request {
+  cookie?: string;
+  headers?: Record<string, string>;
+}
+
+async function call(method: string, path: string, as: Request, body?: unknown) {
+  const response = await cronk.request(method, path, { ...as, body });
+  return { status: response.status, json: response.status === 204 ? null : await response.json() };
+}
+
+async function ok(method: string, path: string, as: Request, body?: unknown) {
+  const response = await call(method, path, as, body);
+  expect(response.status, `${method} ${path}: ${JSON.stringify(response.json)}`).toBeLessThan(300);
+  return response.json;
+}
+
+/**
+ * Ada with a Project on the default board, and a Ticket assigned to her and delegated to her Agent
+ * `claude-max`, which uses her fake Runner, with a running Run of the Investigate Step.
+ */
+async function investigating() {
+  const { workspace, user } = await setUp(cronk);
+  const ada = { cookie: await signIn(cronk) };
+  const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
+  const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Pick a colour" });
+  const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+  const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+  const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
+  await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Investigate") });
+  const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+  const asAgent = { headers: { authorization: `Bearer ${secret}` } };
+  return { workspace, user, ada, project, ticket, agent, asAgent, status, run };
+}
+
+describe("asking a Question", () => {
+  test("finishing with needs you without a Question is refused, leaving the Run running", async () => {
+    const { ada, ticket, run, asAgent, status } = await investigating();
+
+    const response = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you" });
+
+    expect(response.status).toBe(400);
+    expect(response.json.error).toEqual({
+      code: "question_needed",
+      message: "needs you hands CRONK-1 back to its Assignee, so it takes a Question.",
+      rule: "A Run that finishes with its Step's needs you Outcome says what it needs in a Question.",
+      advice: "Finish with needs you again, giving a Question that says what you need from the Assignee.",
+    });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
+  });
+});

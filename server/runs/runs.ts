@@ -266,6 +266,14 @@ export async function finishRun(
       });
     }
 
+    const question = input.question?.trim() ? input.question : undefined;
+    if (outcome.needsYou && !question) {
+      throw new ApiError(400, "question_needed", `${outcome.name} hands ${ticket.key} back to its Assignee, so it takes a Question.`, {
+        rule: "A Run that finishes with its Step's needs you Outcome says what it needs in a Question.",
+        advice: `Finish with ${outcome.name} again, giving a Question that says what you need from the Assignee.`,
+      });
+    }
+
     const now = clock.now();
     await tx.query(
       `update runs set state = 'finished', outcome = $2, question = $3, report = $4, ended_at = $5 where id = $1`,
