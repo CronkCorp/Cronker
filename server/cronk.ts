@@ -4,14 +4,19 @@ import pg from "pg";
 import { buildApp } from "./app.js";
 import { systemClock, type Clock } from "./clock.js";
 import type { Config } from "./config.js";
+import type { Context } from "./context.js";
 import { migrate } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { Live } from "./live/live.js";
+import type { RunnerKind } from "./runs/runner.js";
+import { runReports } from "./runs/runs.js";
 
 export interface CronkOptions {
   config: Config;
   clock?: Clock;
   logStream?: Writable;
+  /** The kinds of Runner Users may set up, by name. */
+  runnerKinds?: Record<string, RunnerKind>;
 }
 
 export interface Cronk {
@@ -21,11 +26,14 @@ export interface Cronk {
 }
 
 /** Migrates the database, issues a setup code if the installation is fresh, and builds the app. */
-export async function createCronk({ config, clock = systemClock, logStream }: CronkOptions): Promise<Cronk> {
+export async function createCronk({ config, clock = systemClock, logStream, runnerKinds = {} }: CronkOptions): Promise<Cronk> {
   const db = new pg.Pool({ connectionString: config.databaseUrl });
   try {
     await migrate(db);
-    const app = await buildApp({ config, db, clock, live: new Live() }, { logStream });
+    const context: Context = { config, db, clock, live: new Live(), runners: {} };
+    const reports = runReports(context);
+    for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
+    const app = await buildApp(context, { logStream });
     await issueSetupCode(db, app.log);
     return {
       app,

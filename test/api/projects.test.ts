@@ -42,6 +42,7 @@ describe("creating a Project", () => {
       workspaceId: workspace.id,
       name: "Cronker",
       key: "CRONK",
+      newTicketsDelegated: false,
       statuses: defaultBoard.map((status) => ({
         id: expect.any(String),
         ...status,

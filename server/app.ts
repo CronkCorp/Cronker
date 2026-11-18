@@ -67,7 +67,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             type: "http",
             scheme: "bearer",
             description:
-              "An Agent's token. Agents may read their Workspace and comment on its Tickets; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+              "An Agent's token. Agents may read their Workspace, comment on its Tickets and finish their own Runs; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
           },
         },
       },
