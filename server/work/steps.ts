@@ -108,13 +108,15 @@ export function mayHaveStep(kind: StatusKind): boolean {
   return kind !== "done" && kind !== "canceled";
 }
 
-export function stepOnFinishedStatus(status: { name: string; kind: StatusKind }): ApiError {
+/** Why a Done or Canceled Status may not have a Step, for refusals. */
+export const noStepWhy = "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs";
+
+export function stepOnDoneOrCanceled(status: { name: string; kind: StatusKind }): ApiError {
   const kind = status.kind === "done" ? "Done" : "Canceled";
   return new ApiError(
     409,
-    "step_on_finished_status",
-    `${status.name} is a ${kind} Status, so it can't have a Step: ` +
-      "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs.",
+    "step_on_done_or_canceled_status",
+    `${status.name} is a ${kind} Status, so it can't have a Step: ${noStepWhy}.`,
   );
 }
 

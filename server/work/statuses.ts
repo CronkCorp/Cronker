@@ -12,7 +12,7 @@ import {
   type Project,
   type StatusKind,
 } from "./projects.js";
-import { mayHaveStep, outcomesOf, targetRefusal } from "./steps.js";
+import { mayHaveStep, noStepWhy, outcomesOf, targetRefusal } from "./steps.js";
 
 /**
  * Changes to a Project's Statuses. Each change is worked out on the whole board in
@@ -129,9 +129,8 @@ function checkSteps(board: Draft[], before: Project["statuses"]): void {
     if (mayHaveStep(status.kind) || !before.find((s) => s.id === status.id)?.step) continue;
     throw new ApiError(
       409,
-      "step_on_finished_status",
-      `${status.name} has a Step, so it can't be a ${kindNames[status.kind]} Status: ` +
-        "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs. " +
+      "step_on_done_or_canceled_status",
+      `${status.name} has a Step, so it can't be a ${kindNames[status.kind]} Status: ${noStepWhy}. ` +
         `Remove ${status.name}'s Step first.`,
     );
   }

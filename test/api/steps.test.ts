@@ -404,7 +404,7 @@ describe("no Step on finished or canceled work", () => {
       });
       expect(response.status).toBe(409);
       expect((await response.json()).error).toEqual({
-        code: "step_on_finished_status",
+        code: "step_on_done_or_canceled_status",
         message:
           `${name} is a ${name} Status, so it can't have a Step: ` +
           "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs.",
@@ -422,7 +422,7 @@ describe("no Step on finished or canceled work", () => {
       const response = await kindOf("Investigate", kind.toLowerCase());
       expect(response.status).toBe(409);
       expect((await response.json()).error).toEqual({
-        code: "step_on_finished_status",
+        code: "step_on_done_or_canceled_status",
         message:
           `Investigate has a Step, so it can't be a ${kind} Status: ` +
           "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs. " +
