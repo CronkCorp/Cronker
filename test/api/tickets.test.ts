@@ -64,6 +64,7 @@ describe("creating a Ticket", () => {
       autonomousDelegation: null,
       verification: null,
       parentId: null,
+      discovered: null,
       dueDate: null,
       estimate: null,
       createdBy: user.id,

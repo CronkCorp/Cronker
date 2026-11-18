@@ -448,6 +448,7 @@ td.actions {
   color: var(--accent);
 }
 .run-marker.runnerSlot,
+.run-marker.runnerPaused,
 .run-marker.blocked {
   color: var(--muted);
 }
@@ -473,4 +474,7 @@ td.actions {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+.runner .admin-forms {
+  align-items: flex-start;
 }

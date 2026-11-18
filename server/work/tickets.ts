@@ -31,6 +31,30 @@ export const Mention = Type.Object({
 });
 export type Mention = Static<typeof Mention>;
 
+/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
+export const TicketRef = Type.Object({
+  id: Type.String({ format: "uuid" }),
+  projectId: Type.String({ format: "uuid" }),
+  key: Type.String(),
+  title: Type.String(),
+});
+export type TicketRef = Static<typeof TicketRef>;
+
+/** Where a Discovered Ticket came from, and whether it still waits for a User. */
+export const Discovery = Type.Object({
+  agentId: Type.String({ format: "uuid", description: "The Agent that filed it." }),
+  sourceTicket: Type.Union([TicketRef, Type.Null()], {
+    description: "The Ticket of the Run it was filed in; null for one filed outside a Run.",
+  }),
+  runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], { description: "The Run it was filed in." }),
+  waiting: Type.Boolean({
+    description:
+      "True until a User delegates, moves or dismisses it: meanwhile it waits in its Assignee's Inbox, and the " +
+      "Agent that filed it may edit it and add blocks from it.",
+  }),
+});
+export type Discovery = Static<typeof Discovery>;
+
 export const TicketSummary = Type.Object({
   id: Type.String({ format: "uuid" }),
   projectId: Type.String({ format: "uuid" }),
@@ -57,9 +81,15 @@ export const TicketSummary = Type.Object({
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Ticket this is a Sub-Ticket of, in the same Project.",
   }),
+  discovered: Type.Union([Discovery, Type.Null()], {
+    description: "For a Discovered Ticket, one an Agent filed outside its own Ticket's Sub-Tickets: who filed it and from where.",
+  }),
   dueDate: Type.Union([Type.String({ format: "date" }), Type.Null()]),
   estimate: Type.Union([Type.Number(), Type.Null()]),
-  createdBy: Type.String({ format: "uuid" }),
+  createdBy: Type.String({
+    format: "uuid",
+    description: "The User who created the Ticket, or whose Agent filed it; its timeline names the Agent and Run.",
+  }),
   createdAt: Type.String({ format: "date-time" }),
   lastRun: Type.Union(
     [
@@ -82,6 +112,11 @@ export const Ticket = Type.Object({
 });
 export type Ticket = Static<typeof Ticket>;
 
+/** Selects a Ticket as a TicketRef, from `tickets` and its `projects` joined as the given aliases. */
+export const ticketRefColumn = (tickets: string, projects: string) =>
+  `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
+     'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
+
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
@@ -91,7 +126,14 @@ export const ticketColumns = `tickets.id, tickets.project_id as "projectId", pro
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
-  ${waitingColumn("tickets")} as waiting`;
+  ${waitingColumn("tickets")} as waiting,
+  case when tickets.discovered_by_agent_id is null then null else json_build_object(
+    'agentId', tickets.discovered_by_agent_id,
+    'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources
+      join projects source_projects on source_projects.id = sources.project_id
+      where sources.id = tickets.discovered_from_ticket_id),
+    'runId', tickets.discovered_in_run_id,
+    'waiting', tickets.discovery_waits) end as discovered`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -101,20 +143,6 @@ export const ticketSummary = ({ workspaceId: _, createdAt, ...row }: Row): Ticke
   ...row,
   createdAt: createdAt.toISOString(),
 });
-
-/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
-export const TicketRef = Type.Object({
-  id: Type.String({ format: "uuid" }),
-  projectId: Type.String({ format: "uuid" }),
-  key: Type.String(),
-  title: Type.String(),
-});
-export type TicketRef = Static<typeof TicketRef>;
-
-/** Selects a Ticket as a TicketRef, from `tickets` and its `projects` joined as the given aliases. */
-export const ticketRefColumn = (tickets: string, projects: string) =>
-  `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
-     'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
 /** A Ticket of the Workspace as a TicketRef, if there is one with that id. */
 export async function findTicketRef(
@@ -225,28 +253,84 @@ export async function mentionsInEach(db: Db | Tx, workspaceId: string, texts: st
   return written.map((keys) => keys.flatMap((text) => found.get(text) ?? []));
 }
 
+/** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. */
+export interface NewTicket {
+  title: string;
+  description?: string;
+  /** Makes it a Sub-Ticket of this Ticket of the same Project, with the parent's Assignee and Delegation. */
+  parentId?: string;
+  /** For an Agent filing a Discovered Ticket: its running Run, whose Ticket is the source. */
+  runId?: string;
+}
+
+/**
+ * Creates a Ticket in the Project's first Backlog Status. A Sub-Ticket takes its parent's Assignee, Delegation and
+ * Autonomous Delegation;
+ * an Agent creates one only under the Ticket of its own running Run. Any other Ticket an Agent files is a
+ * Discovered Ticket: undelegated, assigned to the Assignee of the Ticket of the Run it names (or, naming none, to
+ * the Agent's Owner) and waiting in their Inbox. Otherwise a User's new Ticket starts delegated to their first
+ * Agent where the Project says so.
+ */
 export async function createTicket(
   context: Context,
-  userId: string,
+  creator: Caller,
   projectId: string,
-  input: { title: string; description?: string },
+  input: NewTicket,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
-    const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
+    const project = await findProject(tx, creator, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (input.parentId !== undefined && input.runId !== undefined) {
+      throw new ApiError(400, "parent_or_run", "Give a parent for a Sub-Ticket or a Run for a Discovered Ticket, not both.");
+    }
+    if (input.runId !== undefined && creator.kind === "user") {
+      throw new ApiError(400, "run_for_agents", "Only an Agent names the Run it files a Ticket from.");
+    }
     const backlog = project.statuses.find((s) => s.kind === "backlog")!;
     const now = clock.now();
-    // In a Project whose new Tickets start delegated, the creator's first Agent takes it, assigning them.
-    const delegate = project.newTicketsDelegated ? await firstAgentOf(tx, userId, project.workspaceId) : null;
+    const createdBy = creator.kind === "user" ? creator.id : creator.owner.id;
+    let actor: ChangeActor = creator.id;
+    let assigneeId: string | null = null;
+    let delegateId: string | null = null;
+    let autonomousDelegation: boolean | null = null;
+    let discovery: { runId: string | null; sourceTicketId: string | null } | null = null;
+    let parent: TicketRow | undefined;
+    if (input.parentId !== undefined) {
+      parent = await findTicketRow(tx, creator, input.parentId);
+      if (!parent) throw unknownTicket();
+      if (parent.projectId !== project.id) {
+        throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
+      }
+      if (creator.kind === "agent") actor = { kind: "agent", id: creator.id, runId: await runOfAgent(tx, creator, parent) };
+      // A Sub-Ticket inherits its parent's Delegation and Autonomous Delegation, and so its Assignee, whose Agent the
+      // Delegate is.
+      assigneeId = parent.assigneeId;
+      delegateId = parent.delegateId;
+      autonomousDelegation = parent.autonomousDelegation;
+    } else if (creator.kind === "agent") {
+      const run = input.runId === undefined ? null : await runningRunOf(tx, creator, input.runId);
+      actor = { kind: "agent", id: creator.id, runId: run?.id ?? null };
+      assigneeId = run?.assigneeId ?? creator.owner.id;
+      discovery = { runId: run?.id ?? null, sourceTicketId: run?.ticketId ?? null };
+    } else if (project.newTicketsDelegated) {
+      // In a Project whose new Tickets start delegated, the creator's first Agent takes it, assigning them.
+      delegateId = await firstAgentOf(tx, creator.id, project.workspaceId);
+      if (delegateId) {
+        assigneeId = creator.id;
+        // Delegated from the start, it takes its Project's Autonomous Delegation at once.
+        autonomousDelegation = project.autonomousDelegationDefault;
+      }
+    }
     const { rows } = await tx.query<{ id: string }>(
       `with numbered as (
          update projects set next_ticket_number = next_ticket_number + 1 where id = $2
          returning next_ticket_number - 1 as number
        )
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
-         assignee_id, delegate_id, status_entered_at, autonomous_delegation)
-       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7, $10 from numbered
+         assignee_id, delegate_id, status_entered_at, autonomous_delegation, parent_id, discovered_by_agent_id,
+         discovered_from_ticket_id, discovered_in_run_id, discovery_waits)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7, $10, $11, $12, $13, $14, $15 from numbered
        returning id`,
       [
         project.workspaceId,
@@ -254,19 +338,50 @@ export async function createTicket(
         input.title.trim(),
         input.description ?? "",
         backlog.id,
-        userId,
+        createdBy,
         now,
-        delegate ? userId : null,
-        delegate,
-        // Delegated from the start, it takes its Project's Autonomous Delegation at once.
-        delegate ? project.autonomousDelegationDefault : null,
+        assigneeId,
+        delegateId,
+        autonomousDelegation,
+        parent?.id ?? null,
+        discovery ? creator.id : null,
+        discovery?.sourceTicketId ?? null,
+        discovery?.runId ?? null,
+        discovery !== null,
       ],
     );
-    const ticket = (await findTicketRow(tx, userViewer(userId), rows[0]!.id))!;
-    await recordChanges(tx, ticket, userId, now, [{ field: "created", from: null, to: null }]);
+    const ticket = (await findTicketRow(tx, creator, rows[0]!.id))!;
+    await recordChanges(tx, ticket, actor, now, [{ field: "created", from: null, to: null }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.created", projectId: ticket.projectId, ticketId: ticket.id });
+    if (parent) {
+      // The parent's timeline shows the Sub-Ticket it gained.
+      const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
+      await recordChanges(tx, parent, actor, now, [{ field: "subTicket", from: null, to: self }]);
+      live.publish(tx, parent.workspaceId, { type: "ticket.changed", projectId: parent.projectId, ticketId: parent.id });
+    }
     await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, ticket);
+  });
+}
+
+/** The Agent's running Run of that id, with its Ticket and the Ticket's Assignee; refused if it has none. */
+async function runningRunOf(
+  tx: Tx,
+  agent: AgentCaller,
+  runId: string,
+): Promise<{ id: string; ticketId: string; assigneeId: string | null }> {
+  const { rows } = isUuid(runId)
+    ? await tx.query<{ id: string; ticketId: string; assigneeId: string | null }>(
+        `select runs.id, runs.ticket_id as "ticketId", tickets.assignee_id as "assigneeId"
+         from runs join tickets on tickets.id = runs.ticket_id
+         where runs.id = $1 and runs.agent_id = $2 and runs.state = 'running'`,
+        [runId, agent.id],
+      )
+    : { rows: [] };
+  if (rows[0]) return rows[0];
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run with that id.`, {
+    rule: "An Agent files a Ticket from a Run only while that Run of its own is running.",
+    advice: "Name your running Run, as your Brief gives it, or leave the Run out to file the Ticket for your Owner.",
   });
 }
 
@@ -347,7 +462,8 @@ const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "lab
 /**
  * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
  * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
- * each of its Changes names.
+ * each of its Changes names. Assigning a Ticket whose Assignee was removed from the Workspace takes it out
+ * of the Admins' Inbox.
  */
 export async function editTicket(
   context: Context,
@@ -356,12 +472,18 @@ export async function editTicket(
   edit: TicketEdit,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
-  if (editor.kind === "agent") checkAgentFields(editor, edit);
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const actor: ChangeActor =
-      editor.kind === "user" ? editor.id : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+    let actor: ChangeActor = editor.id;
+    if (editor.kind === "agent") {
+      // The Agent that filed a Discovered Ticket edits it, outside any Run, until a User takes it up.
+      const filed = holdsDiscoveredTicket(editor, ticket);
+      checkAgentFields(editor, edit, filed);
+      actor = filed
+        ? await discoveringAgent(tx, editor, ticket)
+        : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+    }
     // Only Users get this far with fields that name a User.
     const userId = editor.id;
     const next = { ...ticket };
@@ -448,14 +570,21 @@ export async function editTicket(
     if (changes.length === 0) return withMentions(tx, ticket);
 
     const now = clock.now();
+    // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
+    const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
+    if (next.discovered?.waiting && (next.statusId !== ticket.statusId || delegated)) {
+      next.discovered = { ...next.discovered, waiting: false };
+    }
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
+       former_assignee_id = case when $6::uuid is null then former_assignee_id end,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
        status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
        -- Moving the Ticket ends its waiting from a needs you Outcome.
        needs_you_run_id = case when status_id = $9 then needs_you_run_id end,
        autonomous_delegation = $13, verification = $14,
-       completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end
+       completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end,
+       discovery_waits = $15
        where id = $1`,
       [
         ticket.id,
@@ -472,6 +601,7 @@ export async function editTicket(
         now,
         next.autonomousDelegation,
         next.verification,
+        next.discovered?.waiting ?? false,
       ],
     );
     await recordChanges(tx, ticket, actor, now, changes);
@@ -564,10 +694,47 @@ async function passAutonomousDelegationDown(
   }
 }
 
-/** Refuses an Agent's edit of a field only Users edit. */
-function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
+/**
+ * A User dismisses a waiting Discovered Ticket: it leaves their Inbox and its Agent's hands, staying where it is.
+ * Refused for any other Ticket.
+ */
+export async function dismissTicket(context: Context, userId: string, ticketId: string): Promise<Ticket> {
+  const { db, clock, live } = context;
+  return transaction(db, async (tx) => {
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    if (!ticket) throw ticketNotFound();
+    if (!ticket.discovered?.waiting) {
+      throw new ApiError(
+        409,
+        "not_waiting",
+        `${ticket.key} isn't a Discovered Ticket waiting for a User: only those are dismissed.`,
+      );
+    }
+    await tx.query("update tickets set discovery_waits = false where id = $1", [ticket.id]);
+    await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    return withMentions(tx, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
+  });
+}
+
+/** Whether the Ticket is a Discovered Ticket the Agent filed that still waits for a User, so the Agent may change it. */
+export function holdsDiscoveredTicket(agent: AgentCaller, ticket: TicketRow): boolean {
+  return ticket.discovered?.waiting === true && ticket.discovered.agentId === agent.id;
+}
+
+/** The Agent changing a Discovered Ticket it filed, in the Run it filed it in while that Run is still running. */
+export async function discoveringAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<ChangeActor> {
+  const runId = ticket.discovered?.runId ?? null;
+  const { rowCount } = runId
+    ? await tx.query("select 1 from runs where id = $1 and state = 'running'", [runId])
+    : { rowCount: 0 };
+  return { kind: "agent", id: agent.id, runId: rowCount ? runId : null };
+}
+
+/** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */
+function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean): void {
   const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
-    (field) => edit[field] !== undefined && !agentEditable.has(field),
+    (field) => edit[field] !== undefined && !agentEditable.has(field) && !(filed && field === "title"),
   );
   if (refused.length === 0) return;
   throw new ApiError(
@@ -576,8 +743,9 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
     `${agent.name} is an Agent, and Agents don't edit a Ticket's ${refused.join(", ")}.`,
     {
       rule:
-        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate; " +
-        "its title, Assignee, Delegation, parent and Status are for Users to change.",
+        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate, " +
+        "and the title too of a Discovered Ticket it filed, until a User takes that up; " +
+        "a Ticket's Assignee, Delegation, parent and Status are for Users to change.",
       advice:
         `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
         "to change the rest; a Run moves its Ticket with `finish`.",

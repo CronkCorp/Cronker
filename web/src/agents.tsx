@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Agent, type AgentToken, type User, type WorkspaceSummary } from "./api.js";
+import { api, type Agent, type AgentToken, type Runner, type User, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Link, navigate } from "./router.js";
 
@@ -67,6 +67,7 @@ export function Agents({ user, workspace }: { user: User; workspace: WorkspaceSu
 export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummary; agentId: string }) {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [tokens, setTokens] = useState<AgentToken[] | null>(null);
+  const [runners, setRunners] = useState<Runner[]>([]);
   const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
@@ -75,6 +76,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
       (e: Error) => setError(e.message),
     );
     api.tokens(agentId).then(setTokens, (e: Error) => setError(e.message));
+    api.runners().then(setRunners, (e: Error) => setError(e.message));
   }, [workspace.id, agentId]);
   useEffect(refresh, [refresh]);
 
@@ -116,6 +118,26 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
               Rename
             </button>
           </form>
+          <label>
+            Runner
+            <select
+              value={agent.runnerId ?? ""}
+              onChange={(event) => {
+                const runnerId = event.target.value || null;
+                void act(async () => setAgent(await api.setAgentRunner(agentId, runnerId)));
+              }}
+            >
+              <option value="">None: its Runs can't start</option>
+              {runners.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <small>
+              <Link to="/runners">Set up your Runners</Link>
+            </small>
+          </label>
           <form onSubmit={issue.onSubmit}>
             <label>
               Token name
