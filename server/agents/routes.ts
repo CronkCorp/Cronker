@@ -84,7 +84,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
         let agent = await requireOwnAgent(db, user.id, request.params.agentId);
         const { name, runnerId } = request.body;
         if (name !== undefined) agent = await renameAgent(db, agent, name);
-        if (runnerId !== undefined) agent = await setAgentRunner(db, agent, runnerId);
+        if (runnerId !== undefined) agent = await setAgentRunner(context, agent, runnerId);
         return agent;
       },
     );

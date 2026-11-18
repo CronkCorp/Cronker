@@ -14,7 +14,11 @@ interface Status {
   id: string;
   name: string;
   kind: string;
-  step: { brief: string; model: string; roundLimit: number; outcomes: Outcome[] } | null;
+  step: { brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; outcomes: Outcome[] } | null;
+}
+interface LabelRule {
+  kind: "requires" | "skippedBy";
+  label: string;
 }
 interface Outcome {
   name: string;
@@ -58,29 +62,36 @@ describe("the default board's Steps", () => {
     const { project, id } = await projectOnDefaultBoard();
 
     const steps = Object.fromEntries(
-      project.statuses.map((s) => [s.name, s.step && { model: s.step.model, roundLimit: s.step.roundLimit, outcomes: s.step.outcomes }]),
+      project.statuses.map((s) => [
+        s.name,
+        s.step && { model: s.step.model, roundLimit: s.step.roundLimit, labelRule: s.step.labelRule, outcomes: s.step.outcomes },
+      ]),
     );
     expect(steps).toEqual({
       Backlog: null,
       Triage: {
         model: "haiku",
         roundLimit: 2,
+        labelRule: null,
         outcomes: [outcome("ready", id("Ready"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Ready: null,
       Investigate: {
         model: "sonnet",
         roundLimit: 2,
+        labelRule: null,
         outcomes: [outcome("done", id("Implement"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Implement: {
         model: "opus",
         roundLimit: 2,
+        labelRule: null,
         outcomes: [outcome("done", id("Code review"), { default: true }), outcome("needs you", id("Ready"), { needsYou: true })],
       },
       "Code review": {
         model: "sonnet",
         roundLimit: 2,
+        labelRule: { kind: "skippedBy", label: "no-review" },
         outcomes: [
           outcome("approve", id("In Review"), { default: true }),
           outcome("changes", id("Implement"), { countsAsRound: true }),
@@ -110,6 +121,7 @@ function readyStep(id: (name: string) => string) {
     brief: "Plan the work.",
     model: "sonnet",
     roundLimit: 3,
+    labelRule: null,
     outcomes: [
       outcome("planned", id("Investigate"), { default: true }),
       outcome("unclear", id("Triage"), { countsAsRound: true }),
@@ -147,12 +159,13 @@ describe("attaching, editing and removing a Step", () => {
     expect(((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step!.roundLimit).toBe(2);
   });
 
-  test("editing a Step replaces its Brief, model, round limit and Outcomes", async () => {
+  test("editing a Step replaces its Brief, model, round limit, Label rule and Outcomes", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const edited = {
       brief: "Triage, briefly.",
       model: "opus",
       roundLimit: 1,
+      labelRule: { kind: "requires", label: "ready-to-go" },
       outcomes: [outcome("go", id("Investigate"), { default: true }), outcome("ask", id("Backlog"), { needsYou: true })],
     };
 
@@ -164,6 +177,25 @@ describe("attaching, editing and removing a Step", () => {
     expect(response.status).toBe(200);
     const changed = (await response.json()) as Project;
     expect(changed.statuses.find((s) => s.name === "Triage")!.step).toEqual(edited);
+  });
+
+  test("a Step has no Label rule unless given, and its Label is kept trimmed", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const { labelRule: _, ...step } = readyStep(id);
+    const put = async (body: unknown) => {
+      const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, { cookie, body });
+      return { status: response.status, json: await response.json() };
+    };
+    const ready = (p: Project) => p.statuses.find((s) => s.name === "Ready")!.step!.labelRule;
+
+    expect(ready((await put(step)).json)).toBeNull();
+    expect(ready((await put({ ...step, labelRule: { kind: "skippedBy", label: "  wip " } })).json)).toEqual({
+      kind: "skippedBy",
+      label: "wip",
+    });
+    for (const labelRule of [{ kind: "skippedBy", label: " " }, { kind: "ignores", label: "wip" }, { kind: "requires" }]) {
+      expect((await put({ ...step, labelRule })).status, JSON.stringify(labelRule)).toBe(400);
+    }
   });
 
   test("removing a Step leaves its Status as one where Tickets wait for a User", async () => {
@@ -241,7 +273,8 @@ describe("Agents and Steps", () => {
       expect((await response.json()).error, `${method} ${path}`).toEqual({
         code: "agent_not_allowed",
         message: expect.any(String),
-        rule: "Agents may read their Workspace, comment on its Tickets and finish their own Runs; everything else needs a User.",
+        rule:
+          "Agents may read their Workspace and comment on its Tickets; during their running Run on a Ticket they may also edit it, write Reports on it and finish the Run. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
@@ -390,6 +423,52 @@ describe("Outcome refusals", () => {
   });
 });
 
+describe("no Step on finished or canceled work", () => {
+  test("a Step on a Done or Canceled Status is refused, naming the Status, and nothing changes", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    for (const name of ["Done", "Canceled"]) {
+      const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id(name)}/step`, {
+        cookie,
+        body: {
+          brief: "Wrap up.",
+          model: "haiku",
+          outcomes: [outcome("again", id("In Review"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
+        },
+      });
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toEqual({
+        code: "step_on_done_or_canceled_status",
+        message:
+          `${name} is a ${name} Status, so it can't have a Step: ` +
+          "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs.",
+      });
+    }
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
+  });
+
+  test("making a Status with a Step Done or Canceled is refused, naming the Status and its Step, until the Step is removed", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const kindOf = (name: string, kind: string) =>
+      cronk.request("PATCH", `/api/projects/${project.id}/statuses/${id(name)}`, { cookie, body: { kind } });
+
+    for (const kind of ["Done", "Canceled"]) {
+      const response = await kindOf("Investigate", kind.toLowerCase());
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toEqual({
+        code: "step_on_done_or_canceled_status",
+        message:
+          `Investigate has a Step, so it can't be a ${kind} Status: ` +
+          "a Ticket in a Done or Canceled Status is finished or canceled and gets no Runs. " +
+          "Remove Investigate's Step first.",
+      });
+    }
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
+
+    await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${id("Investigate")}/step`, { cookie });
+    expect((await kindOf("Investigate", "done")).status).toBe(200);
+  });
+});
+
 describe("Status changes keep Outcomes valid", () => {
   test("removing a Status an Outcome moves Tickets to is refused, naming the Outcome", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
@@ -457,7 +536,6 @@ describe("Status changes keep Outcomes valid", () => {
     });
 
     expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
-    expect((await kindOf("Investigate", "done")).status).toBe(200);
   });
 });
 
@@ -502,6 +580,8 @@ describe("the Brief preview", () => {
         "",
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
+        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
+          "and write Reports on it; leave everything else to its Users.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );

@@ -5,7 +5,7 @@ import { userViewer } from "../identity/viewers.js";
 import type { User } from "../identity/user.js";
 import { startRunIfNeeded } from "../runs/runs.js";
 import { recordChanges } from "./changes.js";
-import { writeComment } from "./comments.js";
+import { insertComment } from "./comment-writes.js";
 import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "./tickets.js";
 
 /**
@@ -53,12 +53,16 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
           "Accept it, then move it where it should go.",
       );
     }
-    await tx.query(
-      "update tickets set status_id = $2, verification = null, completed_from_status_id = null where id = $1",
-      [ticket.id, to.id],
-    );
     const now = clock.now();
-    await writeComment(context, tx, { kind: "user", ...user }, ticket, { body: comment });
+    await tx.query(
+      `update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null,
+         verification = null, completed_from_status_id = null
+       where id = $1`,
+      [ticket.id, to.id, now],
+    );
+    // Sent back by a User, like a move by hand, it starts its rounds afresh.
+    await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
+    await insertComment(context, tx, ticket, { kind: "user", id: user.id }, comment, null);
     await recordChanges(tx, ticket, user.id, now, [
       { field: "status", from, to },
       { field: "verification", from: "unverified", to: null },

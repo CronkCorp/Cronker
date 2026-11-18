@@ -33,6 +33,12 @@ export type RunnerRefusal =
   | { kind: "rate_limited"; message: string; retryAt: Date }
   | { kind: "unavailable"; message: string };
 
+/** What a Runner needs to stop a Run it started. */
+export interface RunToStop {
+  runId: string;
+  reference: RunReference;
+}
+
 export type StartResult = { started: true; reference: RunReference } | { started: false; refusal: RunnerRefusal };
 
 /** What a Runner tells Cronk about its Runs after starting them. */
@@ -44,7 +50,7 @@ export interface RunReports {
 export interface Runner {
   start(run: RunToStart): Promise<StartResult>;
   /** Best effort; a Runner that can't stop its sessions leaves this out. */
-  stop?(run: { runId: string; reference: RunReference }): Promise<void>;
+  stop?(run: RunToStop): Promise<void>;
 }
 
 /** Builds a kind of Runner, given where to report its Runs' ends. */

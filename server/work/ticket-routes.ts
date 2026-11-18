@@ -7,6 +7,7 @@ import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
+import { Report, reportsOn, writeReport } from "./reports.js";
 import { acceptTicket, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
@@ -176,8 +177,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               "the Outcome moves the Ticket.",
           });
         }
-        const user = await requireUser(context, request);
-        return editTicket(context, user.id, request.params.ticketId, request.body);
+        return editTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId, request.body);
       },
     );
 
@@ -263,6 +263,43 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const caller = await requireCaller(context, request);
         return reply.code(201).send(await addComment(context, caller, request.params.ticketId, request.body));
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/reports",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Reports",
+          description: "Oldest first: what its Runs wrote, each naming its Run and Agent. Later Runs on the Ticket read them.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(Report), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => reportsOn(db, await requireCaller(context, request), request.params.ticketId),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/reports",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Write a Report on a Ticket",
+          description:
+            "For an Agent, during its own running Run on the Ticket (`no_running_run` otherwise): Markdown such as an " +
+            "investigation's findings, listed with the Ticket. Users comment instead (`only_runs_report`).",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            title: Title,
+            body: Type.String({ minLength: 1, maxLength: 500_000, pattern: "\\S", description: "Markdown." }),
+          }),
+          response: { 201: Report, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await writeReport(context, caller, request.params.ticketId, request.body));
       },
     );
 

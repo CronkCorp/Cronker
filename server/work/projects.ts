@@ -12,10 +12,6 @@ export const statusKinds = ["backlog", "active", "review", "done", "canceled"] a
 export type StatusKind = (typeof statusKinds)[number];
 export const StatusKind = Type.Union(statusKinds.map((kind) => Type.Literal(kind)));
 
-/** The kinds of Status in which a Ticket is finished, as the Tickets it blocks see it: an Unverified completion too. */
-export const finishedKinds: StatusKind[] = ["done", "canceled"];
-export const finishedKind = (kind: StatusKind) => finishedKinds.includes(kind);
-
 export const Status = Type.Object({
   id: Type.String({ format: "uuid" }),
   name: Type.String(),
@@ -134,11 +130,12 @@ export async function createProject(
     }
     const statuses = await statusesOf(tx, project.id);
     const idOf = (name: string) => statuses.find((s) => s.name === name)!.id;
-    for (const [name, { brief, model, outcomes }] of Object.entries(defaultSteps)) {
+    for (const [name, { brief, model, labelRule, outcomes }] of Object.entries(defaultSteps)) {
       const step: Step = {
         brief,
         model,
         roundLimit: defaultRoundLimit,
+        labelRule: labelRule ?? null,
         outcomes: outcomes.map(({ name, status, ...flags }) => ({
           name,
           statusId: idOf(status),

@@ -35,6 +35,8 @@ export interface StartedCronk {
   /** The fake Runner, installed as the Runner kind `fake`: what it was asked to start, and what to do next. */
   runner: FakeRunner;
   clock: TestClock;
+  /** Runs the periodic check that makes Runs lost, as the server does every minute; move the clock first. */
+  checkForLostRuns(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -118,6 +120,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     github,
     runner,
     clock,
+    checkForLostRuns: () => cronk.checkForLostRuns(),
     logs,
     setupCode() {
       const line = logs.find((l) => typeof l.setupCode === "string");

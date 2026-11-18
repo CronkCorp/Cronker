@@ -6,10 +6,13 @@ import {
   type Agent,
   type Change,
   type Comment,
+  labelRuleShown,
+  type LabelRule,
   type Member,
   type Priority,
   type Project,
   type RelationKind,
+  type Report,
   type Run,
   type Ticket,
   type TicketEdit,
@@ -25,7 +28,7 @@ import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 
-/** A Ticket: its fields, its description, its Relations, its Comments and its timeline of Changes. */
+/** A Ticket: its fields, its description, its Reports, its Relations, its Comments and its timeline of Changes. */
 export function TicketScreen({
   workspace,
   user,
@@ -43,6 +46,7 @@ export function TicketScreen({
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -56,6 +60,7 @@ export function TicketScreen({
   const latestTicket = useLatest();
   const latestProject = useLatest();
   const latestComments = useLatest();
+  const latestReports = useLatest();
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
   const latestRelations = useLatest();
@@ -87,10 +92,11 @@ export function TicketScreen({
     api.members(workspace.id).then(setMembers, fail);
     api.agents(workspace.id).then(setAgents, fail);
     latestComments(api.comments(ticketId), setComments, fail);
+    latestReports(api.reports(ticketId), setReports, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
     latestRuns(api.runs(ticketId), setRuns, fail);
     loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -102,6 +108,7 @@ export function TicketScreen({
       loadRelations();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
+    if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
     if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
       latestProject(api.project(project.id), setProject, fail);
     }
@@ -164,6 +171,7 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
+          <Reports reports={reports} />
           <Relations
             ticket={ticket}
             relations={relations}
@@ -596,6 +604,25 @@ function Relations({
   );
 }
 
+/** What the Ticket's Runs wrote, oldest first; shown only once there is one. */
+function Reports({ reports }: { reports: Report[] }) {
+  if (reports.length === 0) return null;
+  return (
+    <section aria-label="Reports" className="reports">
+      <h2>Reports</h2>
+      {reports.map((report) => (
+        <article key={report.id} aria-label={report.title} className="comment">
+          <h3>{report.title}</h3>
+          <div className="comment-meta">
+            <strong>{report.agent.name}</strong> <span className="muted">(Agent)</span> <When at={report.createdAt} />
+          </div>
+          <Markdown text={report.body} mentions={[]} />
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function When({ at }: { at: string }) {
   return <time dateTime={at}>{new Date(at).toLocaleString()}</time>;
 }
@@ -634,6 +661,7 @@ function Comments({
               <strong>{comment.actor.name}</strong>
               {comment.actor.kind === "agent" && <span className="muted"> (Agent)</span>} <When at={comment.createdAt} />
               {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
+              {comment.questionId && <span className="badge">Question</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
             {replyingTo === comment.id ? (
@@ -675,7 +703,7 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | RelationKind>, string> = {
+const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | RelationKind>, string> = {
   delegate: "Delegate",
   title: "Title",
   description: "Description",
@@ -700,8 +728,19 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
   relatesTo: { added: "related this to", removed: "removed the relation to" },
 };
 
+/** What a `stepSkipped` Change records: the Status whose Step was skipped, its Label rule and the default Outcome. */
+interface StepSkipped {
+  status: { id: string; name: string };
+  labelRule: LabelRule;
+  outcome: string;
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
+  if (change.field === "stepSkipped") {
+    const { status, labelRule, outcome } = change.to as StepSkipped;
+    return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;
+  }
   if (change.field === "description") return "changed the Description";
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
@@ -730,6 +769,8 @@ const runStateShown: Record<Run["state"], string> = {
   running: "running",
   finished: "finished",
   failed: "failed",
+  lost: "lost",
+  stopped: "stopped",
   refused: "couldn't start",
 };
 
@@ -740,7 +781,12 @@ function RunEntry({ run }: { run: Run }) {
       {run.agent.name} ran the {run.step.name} Step on {run.model}:{" "}
       <span className={`run-state ${run.state}`}>{runStateShown[run.state]}</span>
       {run.outcome && <> with {run.outcome}</>}
-      {run.endReason && <>: {run.endReason}</>}{" "}
+      {run.endReason && <>: {run.endReason}</>}
+      {run.question && (
+        <>
+          , {run.questionBy === "cronk" ? "Cronk" : run.agent.name} asking: <q>{run.question}</q>
+        </>
+      )}{" "}
       <span className="muted">
         <When at={run.startedAt} />
         {run.endedAt && (
@@ -768,6 +814,7 @@ function Timeline({ changes, runs }: { changes: Change[]; runs: Run[] }) {
     ...changes.map((change) => ({ at: change.at, key: `change:${change.id}`, change })),
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, run })),
   ].sort((a, b) => a.at.localeCompare(b.at));
+  const runOf = new Map(runs.map((run) => [run.id, run]));
   return (
     <section aria-label="Timeline" className="timeline">
       <h2>Timeline</h2>
@@ -777,7 +824,10 @@ function Timeline({ changes, runs }: { changes: Change[]; runs: Run[] }) {
             <RunEntry key={entry.key} run={entry.run} />
           ) : (
             <li key={entry.key}>
-              {entry.change.actor.name} {described(entry.change)}{" "}
+              {entry.change.actor.name} {described(entry.change)}
+              {entry.change.runId && runOf.has(entry.change.runId) && (
+                <> in its {runOf.get(entry.change.runId)!.step.name} Run</>
+              )}{" "}
               <span className="muted">
                 <When at={entry.change.at} />
               </span>

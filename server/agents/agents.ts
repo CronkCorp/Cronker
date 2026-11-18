@@ -1,9 +1,11 @@
 import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
-import { violates, type Db } from "../db.js";
+import type { Context } from "../context.js";
+import { transaction, violates, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { User } from "../identity/user.js";
+import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 
 /** A non-human account acting in one Workspace on behalf of exactly one User, its Owner. */
 export const Agent = Type.Object({
@@ -103,13 +105,16 @@ export async function renameAgent(db: Db, agent: Agent, name: string): Promise<A
   return { ...agent, name: name.trim() };
 }
 
-/** Points the Agent at one of its Owner's Runners, or at none. */
-export async function setAgentRunner(db: Db, agent: Agent, runnerId: string | null): Promise<Agent> {
-  if (runnerId !== null) {
-    const { rowCount } = await db.query("select 1 from runners where id = $1 and owner_id = $2", [runnerId, agent.owner.id]);
-    if (rowCount === 0) throw new ApiError(400, "unknown_runner", "An Agent uses only one of its Owner's own Runners.");
-  }
-  await db.query("update agents set runner_id = $2 where id = $1", [agent.id, runnerId]);
+/** Points the Agent at one of its Owner's Runners, or none; its waiting Tickets are rechecked against it. */
+export async function setAgentRunner(context: Context, agent: Agent, runnerId: string | null): Promise<Agent> {
+  await transaction(context.db, async (tx) => {
+    if (runnerId !== null) {
+      const { rowCount } = await tx.query("select 1 from runners where id = $1 and owner_id = $2", [runnerId, agent.owner.id]);
+      if (rowCount === 0) throw new ApiError(400, "unknown_runner", "An Agent uses only one of its Owner's own Runners.");
+    }
+    await tx.query("update agents set runner_id = $2 where id = $1", [agent.id, runnerId]);
+    recheckWaiting(context, tx, await waitingTickets(tx, "tickets.delegate_id = $1", [agent.id]));
+  });
   return { ...agent, runnerId };
 }
 

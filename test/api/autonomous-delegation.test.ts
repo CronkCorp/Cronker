@@ -84,7 +84,7 @@ describe("the Autonomous Delegation setting", () => {
 
     const byAgent = await call("PATCH", `/api/tickets/${ticket.id}`, asAgent, { autonomousDelegation: false });
     expect(byAgent.status).toBe(403);
-    expect(byAgent.json.error.code).toBe("agent_not_allowed");
+    expect(byAgent.json.error.code).toBe("agent_field_not_allowed");
     expect((await ticketOf(ticket.id, ada)).autonomousDelegation).toBe(true);
   });
 
