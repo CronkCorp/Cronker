@@ -6,7 +6,7 @@ import fastifyStatic from "@fastify/static";
 import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
-import { agentOfRequest, agentOfToken } from "./agents/tokens.js";
+import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
 import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
@@ -32,7 +32,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     const header = request.headers.authorization;
     return (
       agentOfRequest(request) !== undefined ||
-      (header !== undefined && (await agentOfToken(context, header).then(() => true, () => false)))
+      (offersBearer(header) && (await agentOfToken(context, header).then(() => true, () => false)))
     );
   };
 

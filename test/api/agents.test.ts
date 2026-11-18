@@ -180,6 +180,15 @@ describe("Agent tokens", () => {
     expect((await cronk.request("GET", "/api/agent", { headers: bearer(secret) })).status).toBe(401);
   });
 
+  test("a User's sign-in still works behind a proxy that sends its own Basic credentials", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+
+    const response = await cronk.request("GET", "/api/me", { cookie, headers: { authorization: "Basic YWRhOnNlY3JldA==" } });
+
+    expect(response.status).toBe(200);
+  });
+
   test("an unknown token is refused", async () => {
     await setUp(cronk);
     const response = await cronk.request("GET", "/api/agent", { headers: bearer("cronk_agent_nonsense") });

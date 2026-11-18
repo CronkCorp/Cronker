@@ -87,13 +87,19 @@ const agentsOfRequests = new WeakMap<FastifyRequest, AgentCaller>();
 export const agentOfRequest = (request: FastifyRequest): AgentCaller | undefined => agentsOfRequests.get(request);
 
 /**
+ * Whether an `Authorization` header offers a bearer token, the only kind an Agent sends.
+ * Other schemes, such as the Basic credentials of a proxy in front of Cronk, are no concern of Cronk's.
+ */
+export const offersBearer = (header: string | undefined): header is string => /^Bearer\s/i.test(header ?? "");
+
+/**
  * The Agent whose token the request carries as `Authorization: Bearer …`, or nothing if it
  * carries none. Refuses a token that was revoked, whose Agent was removed or whose Owner has
  * left the Workspace, and a read-only token on a request that would change something.
  */
 export async function authenticateAgent(context: Context, request: FastifyRequest): Promise<AgentCaller | undefined> {
   const header = request.headers.authorization;
-  if (header === undefined) return undefined;
+  if (!offersBearer(header)) return undefined;
   const agent = await agentOfToken(context, header);
   agentsOfRequests.set(request, agent);
   if (agent.access === "read" && !safeMethods.has(request.method)) {

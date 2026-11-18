@@ -1,6 +1,6 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import { agentOfToken } from "../agents/tokens.js";
+import { agentOfToken, offersBearer } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError, sendError } from "../http/errors.js";
 import { buildMcpServer, type Api } from "./tools.js";
@@ -18,7 +18,7 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
     app.post(mcpPath, { schema: { hide: true } }, async (request, reply) => {
       const authorization = request.headers.authorization;
       try {
-        if (!authorization) {
+        if (!offersBearer(authorization)) {
           throw new ApiError(401, "invalid_token", "Cronk's MCP server needs an Agent token.", {
             rule: "MCP requests carry an Agent's token as `Authorization: Bearer …`.",
             advice: "Ask a User to issue a token for one of their Agents, and send it as a bearer token.",
