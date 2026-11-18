@@ -1,11 +1,13 @@
 import type { Writable } from "node:stream";
 import Fastify, { type FastifyInstance } from "fastify";
+import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
 import { ApiError } from "./http/errors.js";
 import { identityRoutes } from "./identity/routes.js";
+import { workspaceRoutes } from "./workspaces/routes.js";
 
 export interface AppOptions {
   logStream?: Writable;
@@ -41,7 +43,9 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   });
   await app.register(swaggerUi, { routePrefix: "/api/docs" });
 
+  await app.register(cookie);
   await app.register(identityRoutes(context));
+  await app.register(workspaceRoutes(context));
 
   return app;
 }
