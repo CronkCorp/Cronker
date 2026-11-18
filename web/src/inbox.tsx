@@ -63,7 +63,16 @@ function Item({ item }: { item: InboxItem }) {
       <Link to={`/tickets/${item.ticket.id}`}>
         <span className="muted">{item.ticket.key}</span> {item.ticket.title}
       </Link>
-      {item.kind === "review" ? <small>Waiting for your review in {item.status.name}</small> : <WentWrong item={item} />}
+      {item.kind === "review" ? (
+        <small>Waiting for your review in {item.status.name}</small>
+      ) : item.kind === "reassign" ? (
+        <small>
+          {item.formerAssignee.email ?? `@${item.formerAssignee.githubLogin}`} was removed from the Workspace: assign it to
+          someone
+        </small>
+      ) : (
+        <WentWrong item={item} />
+      )}
     </li>
   );
 }

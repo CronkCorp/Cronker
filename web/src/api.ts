@@ -307,7 +307,14 @@ export interface RunItem {
   run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
 }
 
-export type InboxItem = ReviewItem | RunItem;
+/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
+export interface ReassignItem {
+  kind: "reassign";
+  ticket: TicketSummary;
+  formerAssignee: User;
+}
+
+export type InboxItem = ReviewItem | RunItem | ReassignItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {

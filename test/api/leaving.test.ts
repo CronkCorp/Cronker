@@ -137,4 +137,24 @@ describe("removing a User from a Workspace", () => {
     expect(await inbox()).toEqual({ count: 0, items: [] });
     expect(await ok("GET", `/api/tickets/${idle.id}`, ada)).toMatchObject({ assigneeId: ada.id, delegateId: adasAgent.id });
   });
+
+  test("leaves the other Workspaces they belong to as they were", async () => {
+    const { ada, bea, remove } = await beaAtWork();
+    const other = await ok("POST", "/api/workspaces", ada, { name: "Ada's other Workspace" });
+    const added = await ok("POST", `/api/workspaces/${other.id}/members`, ada, { email: "bea@example.com" });
+    await ok("POST", "/api/links/use", {}, { token: new URL(added.link.url).hash.slice(1), password: "bea@example.com's password" });
+    const project = await ok("POST", `/api/workspaces/${other.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    const agent = await agentOf(bea, other.id, "bea-claude");
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, bea, { title: "Bea's other work" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, bea, { delegateId: agent.id, statusId: triage });
+
+    await remove();
+
+    expect(await ok("GET", `/api/tickets/${ticket.id}`, agent.as)).toMatchObject({ assigneeId: bea.id, delegateId: agent.id });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, bea);
+    expect(run.state).toBe("running");
+    expect(cronk.runner.stops.map((s) => s.runId)).not.toContain(run.id);
+    expect(await ok("GET", `/api/workspaces/${other.id}/inbox`, ada)).toEqual({ count: 0, items: [] });
+  });
 });

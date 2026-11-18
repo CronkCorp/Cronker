@@ -85,7 +85,7 @@ One recorded edit to a Ticket: which field, its value before and after, the Acto
 _Avoid_: Event, activity, history entry, audit log
 
 **Inbox**:
-A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions and Tickets waiting for their review.
+A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions and Tickets waiting for their review. An Admin's also holds the Tickets of Users removed from the Workspace, until someone assigns them.
 _Avoid_: Notifications, review queue, to-do
 
 **Brief**:
