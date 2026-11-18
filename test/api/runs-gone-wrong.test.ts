@@ -351,3 +351,35 @@ describe("stopped Runs", () => {
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("stopped");
   });
 });
+
+describe("nothing retries by itself", () => {
+  test("after a Run fails, is lost or couldn't start, no new Run starts until a User acts", async () => {
+    const { ada, project, agent, status, inbox } = await adaWithAgent();
+    const ticket = (title: string) => ok("POST", `/api/projects/${project.id}/tickets`, ada, { title });
+    const [failed, lost, refused] = [await ticket("Fails"), await ticket("Goes silent"), await ticket("Can't start")];
+    for (const t of [failed, lost, refused]) {
+      if (t === refused) cronk.runner.refuseNext({ kind: "credentials_rejected", message: "Rejected." });
+      await ok("PATCH", `/api/tickets/${t.id}`, ada, { delegateId: agent.id, statusId: status("Implement") });
+    }
+    const [failedRun] = await runsOf(failed.id, ada);
+    await cronk.runner.endWithoutFinishing(failedRun.id);
+    cronk.clock.advance(minutes(30));
+    await cronk.checkForLostRuns();
+    const startsSoFar = cronk.runner.starts.length;
+
+    // Time passes, checks run, and Users edit everything but Status and Delegate.
+    for (let hour = 0; hour < 3; hour++) {
+      cronk.clock.advance(minutes(60));
+      await cronk.checkForLostRuns();
+    }
+    for (const t of [failed, lost, refused]) {
+      await ok("PATCH", `/api/tickets/${t.id}`, ada, { priority: "urgent", labels: ["again"], title: `${t.title}!` });
+    }
+
+    expect(cronk.runner.starts).toHaveLength(startsSoFar);
+    expect(await states(failed.id, ada)).toEqual([["Implement", "failed"]]);
+    expect(await states(lost.id, ada)).toEqual([["Implement", "lost"]]);
+    expect(await states(refused.id, ada)).toEqual([["Implement", "refused"]]);
+    expect((await inbox()).count).toBe(3);
+  });
+});
