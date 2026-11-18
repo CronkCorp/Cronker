@@ -94,6 +94,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             assigneeId: Type.Optional(nullable(Type.String({ format: "uuid" }))),
             dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
             estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
+            statusId: Type.Optional(
+              Type.String({ format: "uuid", description: "Moves the Ticket to this Status of its Project." }),
+            ),
           }),
           response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },

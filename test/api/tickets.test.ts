@@ -198,3 +198,50 @@ describe("editing a Ticket", () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe("moving a Ticket", () => {
+  test("a Ticket moves to any Status of its Project", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "On the move" });
+
+    for (const status of ["Done", "Triage", "Canceled", "Backlog"]) {
+      const response = await edit(cookie, ticket.id, { statusId: statusId(status) });
+      expect(response.status, status).toBe(200);
+      expect((await response.json()).statusId).toBe(statusId(status));
+    }
+  });
+
+  test("a Status of another Project is refused", async () => {
+    const { workspace, cookie, project } = await newProject();
+    const other = await createProject(cookie, workspace.id, "Operations", "OPS");
+    const ticket = await createTicket(cookie, project.id, { title: "Stay here" });
+
+    for (const statusId of [other.statuses[0]!.id, "00000000-0000-4000-8000-000000000000"]) {
+      const response = await edit(cookie, ticket.id, { statusId });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: { code: "unknown_status", message: "That Status isn't on this Ticket's board." },
+      });
+    }
+  });
+
+  test("a Status that holds Tickets can't be removed until they move out", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Ready to go" });
+    await edit(cookie, ticket.id, { statusId: statusId("Ready") });
+
+    const refused = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: { code: "status_has_tickets", message: "Ready still holds Tickets. Move them to another Status first." },
+    });
+
+    await edit(cookie, ticket.id, { statusId: statusId("Backlog") });
+    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+    });
+    expect(removed.status).toBe(200);
+  });
+});

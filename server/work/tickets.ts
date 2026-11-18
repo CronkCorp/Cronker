@@ -150,6 +150,7 @@ export interface TicketEdit {
   assigneeId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
+  statusId?: string;
 }
 
 /** Changes whichever of a Ticket's fields are given. */
@@ -173,11 +174,25 @@ export async function editTicket(
     }
     if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
     if (edit.estimate !== undefined) next.estimate = edit.estimate;
+    if (edit.statusId !== undefined) {
+      await checkStatus(tx, ticket.projectId, edit.statusId);
+      next.statusId = edit.statusId;
+    }
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8 where id = $1`,
-      [ticket.id, next.title, next.description, next.priority, next.labels, next.assigneeId, next.dueDate, next.estimate],
+       due_date = $7, estimate = $8, status_id = $9 where id = $1`,
+      [
+        ticket.id,
+        next.title,
+        next.description,
+        next.priority,
+        next.labels,
+        next.assigneeId,
+        next.dueDate,
+        next.estimate,
+        next.statusId,
+      ],
     );
     return withMentions(tx, next);
   });
@@ -198,4 +213,13 @@ async function checkMember(tx: Tx, workspaceId: string, userId: string): Promise
     ? await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [workspaceId, userId])
     : { rowCount: 0 };
   if (rowCount === 0) throw new ApiError(400, "assignee_not_member", "An Assignee must be a member of this Workspace.");
+}
+
+/** Checks the Status is on the Project's board, and keeps the board from changing until the move commits. */
+async function checkStatus(tx: Tx, projectId: string, statusId: string): Promise<void> {
+  await tx.query("select 1 from projects where id = $1 for share", [projectId]);
+  const { rowCount } = isUuid(statusId)
+    ? await tx.query("select 1 from statuses where project_id = $1 and id = $2", [projectId, statusId])
+    : { rowCount: 0 };
+  if (rowCount === 0) throw new ApiError(400, "unknown_status", "That Status isn't on this Ticket's board.");
 }
