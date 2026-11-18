@@ -461,6 +461,42 @@ describe("a Sub-Ticket's Delegation", () => {
       );
     }
   });
+
+  test("delegating a parent re-delegates a Sub-Ticket with its own Delegation, stopping its running Run", async () => {
+    const { user, cookie, workspace, project, tickets } = await withTickets("Relations", "Ticket view");
+    const [parent, view] = tickets as [TicketRef, TicketRef];
+    await edit(cookie, view.id, { parentId: parent.id });
+    const adasAgent = await agentWithRunner(cookie, workspace.id, "claude-max");
+    const board = await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json();
+    const triage = board.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    await edit(cookie, view.id, { delegateId: adasAgent.id, statusId: triage });
+    const runsOf = async () => (await cronk.request("GET", `/api/tickets/${view.id}/runs`, { cookie })).json();
+    const [run] = await runsOf();
+    expect(run.state).toBe("running");
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const beasAgent = await agentWithRunner(bea.cookie, workspace.id, "bea-bot");
+
+    await edit(bea.cookie, parent.id, { delegateId: beasAgent.id });
+
+    const subTicket = await (await cronk.request("GET", `/api/tickets/${view.id}`, { cookie })).json();
+    expect(subTicket).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
+    expect(await changesOf(cookie, view.id)).toEqual(
+      expect.arrayContaining([
+        { field: "assignee", from: { id: user.id, name: "ada@example.com" }, to: { id: bea.user.id, name: "bea@example.com" } },
+        { field: "delegate", from: { id: adasAgent.id, name: "claude-max" }, to: { id: beasAgent.id, name: "bea-bot" } },
+      ]),
+    );
+    const runs = await runsOf();
+    expect(runs.find((r: { id: string }) => r.id === run.id)).toEqual(
+      expect.objectContaining({
+        state: "stopped",
+        endReason: `bea@example.com delegated ${parent.key}, and so its Sub-Ticket ${view.key}, to bea-bot.`,
+      }),
+    );
+    expect(runs.find((r: { id: string }) => r.id !== run.id)).toEqual(
+      expect.objectContaining({ state: "running", agent: { id: beasAgent.id, name: "bea-bot" } }),
+    );
+  });
 });
 
 async function timelineOf(cookie: string, ticketId: string) {
