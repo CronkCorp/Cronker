@@ -404,11 +404,11 @@ function List({
 function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const toggle = async (newTicketsDelegated: boolean) => {
+  const toggle = async (edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) => {
     setBusy(true);
     setError(null);
     try {
-      onChange(await api.editProject(project.id, { newTicketsDelegated }));
+      onChange(await api.editProject(project.id, edit));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -423,10 +423,23 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
           type="checkbox"
           checked={project.newTicketsDelegated}
           disabled={busy}
-          onChange={(e) => void toggle(e.target.checked)}
+          onChange={(e) => void toggle({ newTicketsDelegated: e.target.checked })}
         />
         New Tickets start delegated to their creator's Agent
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.autonomousDelegationDefault}
+          disabled={busy}
+          onChange={(e) => void toggle({ autonomousDelegationDefault: e.target.checked })}
+        />
+        Tickets first delegated get Autonomous Delegation
+      </label>
+      <p className="muted">
+        Under Autonomous Delegation a Step may complete a Ticket itself, as Unverified, until its Assignee Accepts or
+        Reopens it. Sub-Tickets take their parent's setting.
+      </p>
       {error && <p role="alert">{error}</p>}
     </section>
   );

@@ -53,7 +53,11 @@ export function InboxScreen({ workspace }: { workspace: Workspace }) {
                 <Link to={`/tickets/${item.ticket.id}`}>
                   <span className="muted">{item.ticket.key}</span> {item.ticket.title}
                 </Link>
-                <small>Waiting for your review in {item.status.name}</small>
+                <small>
+                  {item.kind === "unverified"
+                    ? `Completed by the ${item.completedBy?.name ?? "removed"} Step, Unverified: Accept or Reopen it`
+                    : `Waiting for your review in ${item.status.name}`}
+                </small>
               </li>
             ))}
           </ul>

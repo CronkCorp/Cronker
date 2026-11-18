@@ -102,6 +102,8 @@ export interface ProjectSummary {
 
 export interface Project extends ProjectSummary {
   newTicketsDelegated: boolean;
+  /** Whether a Ticket takes Autonomous Delegation when first delegated. */
+  autonomousDelegationDefault: boolean;
   statuses: Status[];
 }
 
@@ -133,6 +135,10 @@ export interface TicketSummary {
   labels: string[];
   assigneeId: string | null;
   delegateId: string | null;
+  /** Null until a User sets it or the Ticket is first delegated. */
+  autonomousDelegation: boolean | null;
+  /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
+  verification: "unverified" | "verified" | null;
   parentId: string | null;
   dueDate: string | null;
   estimate: number | null;
@@ -153,6 +159,7 @@ export interface TicketEdit {
   labels?: string[];
   assigneeId?: string | null;
   delegateId?: string | null;
+  autonomousDelegation?: boolean;
   dueDate?: string | null;
   estimate?: number | null;
   parentId?: string | null;
@@ -239,6 +246,8 @@ export interface Change {
     | "parent"
     | "subTicket"
     | "delegate"
+    | "autonomousDelegation"
+    | "verification"
     | RelationKind;
   from: unknown;
   to: unknown;
@@ -270,7 +279,16 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
-export type InboxItem = ReviewItem;
+/** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
+export interface UnverifiedItem {
+  kind: "unverified";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  /** The Step that completed it, by its Status; null once that Status is removed. */
+  completedBy: { id: string; name: string } | null;
+}
+
+export type InboxItem = ReviewItem | UnverifiedItem;
 
 export interface Inbox {
   count: number;
@@ -344,7 +362,7 @@ export const api = {
   createProject: (workspaceId: string, input: { name: string; key: string }) =>
     call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
-  editProject: (id: string, edit: { newTicketsDelegated?: boolean }) =>
+  editProject: (id: string, edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
@@ -379,6 +397,9 @@ export const api = {
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
+  acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
+  reopenTicket: (id: string, comment: string) =>
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment }),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
