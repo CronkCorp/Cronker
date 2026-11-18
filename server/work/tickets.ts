@@ -46,6 +46,11 @@ export const TicketSummary = Type.Object({
       "Whether a Step may complete the Ticket itself, as Unverified, instead of stopping for a User. Null until a User " +
       "sets it or the Ticket is first delegated, when it takes its Project's default; Sub-Tickets take their parent's.",
   }),
+  verification: Type.Union([Type.Literal("unverified"), Type.Literal("verified"), Type.Null()], {
+    description:
+      "For a Ticket a Run completed: `unverified` until a User Accepts it (`verified`) or Reopens it. " +
+      "Null for a Ticket no Run completed.",
+  }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Ticket this is a Sub-Ticket of, in the same Project.",
   }),
@@ -77,7 +82,7 @@ export type Ticket = Static<typeof Ticket>;
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
   tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId",
-  tickets.autonomous_delegation as "autonomousDelegation", tickets.parent_id as "parentId",
+  tickets.autonomous_delegation as "autonomousDelegation", tickets.verification, tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs

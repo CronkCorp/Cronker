@@ -115,3 +115,65 @@ describe("the Autonomous Delegation setting", () => {
     expect((await ticketOf(later.id, ada)).autonomousDelegation).toBe(true);
   });
 });
+
+/** Ada's Ticket under Autonomous Delegation, delegated, with a Run of the Code review Step running. */
+async function inCodeReview() {
+  const setup = await adaWithAgent();
+  const { ada, ticket, agent, status } = setup;
+  await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: true, delegateId: agent.id });
+  await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+  const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+  return { ...setup, run };
+}
+
+describe("completing a Ticket by an Outcome", () => {
+  test("Outcomes to a Done Status are offered, and listed in the Brief, only under Autonomous Delegation", async () => {
+    const { ada, ticket, run, status } = await inCodeReview();
+
+    const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
+    expect(brief.preamble).toContain(
+      [
+        "- **approve**: moves CRONK-1 to In Review.",
+        "- **changes**: moves CRONK-1 to Implement. It counts as a round: after 2, the Step's *needs you* Outcome applies instead.",
+        "- **complete**: moves CRONK-1 to Done, completing it as Unverified until its Assignee Accepts or Reopens it.",
+        "- **needs you**: moves CRONK-1 to In Review and hands it back to its Assignee. Give a Question saying what you need.",
+      ].join("\n"),
+    );
+
+    // Turned off, the same Step offers no Outcome to Done, to the Run already running or in the Brief.
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: false });
+    const preview = await ok("GET", `/api/tickets/${ticket.id}/brief`, ada);
+    expect(preview.preamble).not.toContain("**complete**");
+    expect(preview.preamble).not.toContain("Unverified");
+    expect((await ticketOf(ticket.id, ada)).statusId).toBe(status("Code review"));
+  });
+
+  test("choosing one completes the Ticket as Unverified", async () => {
+    const { ada, ticket, run, asAgent, status } = await inCodeReview();
+    expect((await ticketOf(ticket.id, ada)).verification).toBeNull();
+
+    const finished = await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "complete" });
+
+    expect(finished).toEqual(expect.objectContaining({ state: "finished", outcome: "complete" }));
+    const completed = await ticketOf(ticket.id, ada);
+    expect(completed).toEqual(expect.objectContaining({ statusId: status("Done"), verification: "unverified" }));
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.slice(-2).map((c: { field: string; actor: { name: string }; to: unknown }) => [c.actor.name, c.field, c.to])).toEqual([
+      ["claude-max", "status", { id: status("Done"), name: "Done" }],
+      ["claude-max", "verification", "unverified"],
+    ]);
+  });
+
+  test("without Autonomous Delegation, a Run already running may not choose one", async () => {
+    const { ada, ticket, run, asAgent, status } = await inCodeReview();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: false });
+
+    const refused = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "complete" });
+
+    expect(refused.status).toBe(400);
+    expect(refused.json.error).toEqual(
+      expect.objectContaining({ code: "outcome_not_offered", advice: "Finish with one of these Outcomes: approve, changes, needs you." }),
+    );
+    expect((await ticketOf(ticket.id, ada)).statusId).toBe(status("Code review"));
+  });
+});
