@@ -18,6 +18,7 @@ import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQuer
 import { InboxLink, InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
+import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
 
@@ -316,6 +317,8 @@ function SignedIn({
     page = <ChangePassword />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
+  } else if (path === "/runners") {
+    page = <RunnersScreen workspaces={workspaces} />;
   } else if (current && projectPath) {
     page = (
       <ProjectScreen
@@ -395,6 +398,7 @@ function SignedIn({
           )}
           {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}
           {current && <Link to={`/workspaces/${current.id}/agents`}>Agents</Link>}
+          <Link to="/runners">Runners</Link>
           <Link to="/workspaces/new">New Workspace</Link>
           <Link to="/github">GitHub</Link>
         </nav>

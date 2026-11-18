@@ -157,7 +157,7 @@ export interface TicketSummary {
   createdAt: string;
   lastRun: { id: string; state: RunState } | null;
   /** What it waits for before it gets the Run it needs, if it needs one. */
-  waiting: "runnerSlot" | "blocked" | null;
+  waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
 }
 
 export interface Ticket extends TicketSummary {
@@ -214,6 +214,28 @@ export interface Agent {
   name: string;
   owner: User;
   runnerId: string | null;
+  createdAt: string;
+}
+
+/** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
+export interface Trigger {
+  id: string;
+  model: string;
+  /** The Project it overrides the Runner's own trigger on; null for all Projects. */
+  projectId: string | null;
+  triggerId: string;
+  createdAt: string;
+}
+
+/** A way for Cronk to start Runs of the User's Agents with their own credentials. */
+export interface Runner {
+  id: string;
+  name: string;
+  kind: string;
+  limit: number;
+  /** Until when a rate limit pauses its queue. */
+  pausedUntil: string | null;
+  triggers: Trigger[];
   createdAt: string;
 }
 
@@ -479,6 +501,14 @@ export const api = {
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
+  setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId }),
+  runners: () => call<Runner[]>("GET", "/api/runners"),
+  createRunner: (input: { name: string; kind: string }) => call<Runner>("POST", "/api/runners", input),
+  setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
+  saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
+    call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
+  removeTrigger: (runnerId: string, triggerId: string) =>
+    call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),
   tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
   issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
@@ -499,6 +529,10 @@ export const api = {
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
+
+function runner(id: string) {
+  return `/api/runners/${encodeURIComponent(id)}`;
+}
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;
