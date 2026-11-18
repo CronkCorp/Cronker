@@ -114,3 +114,287 @@ describe("Project refusals", () => {
     expect(response.status).toBe(401);
   });
 });
+
+async function newProject() {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const response = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, {
+    cookie,
+    body: { name: "Cronker", key: "CRONK" },
+  });
+  const project = (await response.json()) as { id: string; statuses: { id: string; name: string; kind: string }[] };
+  const statusId = (name: string) => project.statuses.find((s) => s.name === name)!.id;
+  return { cookie, project, statusId };
+}
+
+const board = (project: { statuses: { name: string; kind: string }[] }) =>
+  project.statuses.map((s) => `${s.name}:${s.kind}`);
+
+describe("editing a Project's Statuses", () => {
+  test("a Status added without a position goes last on the board", async () => {
+    const { cookie, project } = await newProject();
+
+    const response = await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
+      cookie,
+      body: { name: "Blocked", kind: "active" },
+    });
+
+    expect(response.status).toBe(201);
+    const changed = await response.json();
+    expect(board(changed)).toEqual([
+      "Backlog:backlog",
+      "Triage:active",
+      "Ready:backlog",
+      "Investigate:active",
+      "Implement:active",
+      "Code review:active",
+      "In Review:review",
+      "Done:done",
+      "Canceled:canceled",
+      "Blocked:active",
+    ]);
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(changed);
+  });
+
+  test("a Status added at a position goes there, counting from 0", async () => {
+    const { cookie, project } = await newProject();
+
+    const response = await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
+      cookie,
+      body: { name: "Icebox", kind: "backlog", position: 0 },
+    });
+
+    expect(response.status).toBe(201);
+    expect(board(await response.json()).slice(0, 3)).toEqual(["Icebox:backlog", "Backlog:backlog", "Triage:active"]);
+  });
+
+  test("a Status is renamed", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const response = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+      body: { name: "Todo" },
+    });
+
+    expect(response.status).toBe(200);
+    const changed = await response.json();
+    expect(changed.statuses[2]).toEqual({ id: statusId("Ready"), name: "Todo", kind: "backlog" });
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(changed);
+  });
+
+  test("a Status moved to a position goes there, and the others close up around it", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const move = (name: string, position: number) =>
+      cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId(name)}`, { cookie, body: { position } });
+
+    const later = await move("Triage", 3);
+    expect(later.status).toBe(200);
+    expect(board(await later.json()).slice(0, 5)).toEqual([
+      "Backlog:backlog",
+      "Ready:backlog",
+      "Investigate:active",
+      "Triage:active",
+      "Implement:active",
+    ]);
+
+    const earlier = await move("Canceled", 0);
+    expect(board(await earlier.json())).toEqual([
+      "Canceled:canceled",
+      "Backlog:backlog",
+      "Ready:backlog",
+      "Investigate:active",
+      "Triage:active",
+      "Implement:active",
+      "Code review:active",
+      "In Review:review",
+      "Done:done",
+    ]);
+  });
+
+  test("a Status's kind is changed while another Status keeps the old kind", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const response = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Code review")}`, {
+      cookie,
+      body: { kind: "review" },
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).statuses[5]).toEqual({ id: statusId("Code review"), name: "Code review", kind: "review" });
+  });
+
+  test("a Status is removed while another Status keeps its kind", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const response = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+    });
+
+    expect(response.status).toBe(200);
+    const changed = await response.json();
+    expect(changed.statuses.map((s: { name: string }) => s.name)).toEqual([
+      "Backlog",
+      "Triage",
+      "Investigate",
+      "Implement",
+      "Code review",
+      "In Review",
+      "Done",
+      "Canceled",
+    ]);
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(changed);
+  });
+});
+
+describe("every Status kind keeps a Status", () => {
+  test("removing the only Status of a kind is refused with a clear message, and nothing changes", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const response = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Canceled")}`, {
+      cookie,
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "status_kind_needed",
+        message:
+          "Every Project needs at least one Canceled Status, and Canceled is this Project's only one. Add another Canceled Status first.",
+      },
+    });
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
+  });
+
+  test("changing the kind of the only Status of a kind is refused", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const response = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("In Review")}`, {
+      cookie,
+      body: { kind: "active" },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: {
+        code: "status_kind_needed",
+        message:
+          "Every Project needs at least one Review Status, and In Review is this Project's only one. Add another Review Status first.",
+      },
+    });
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
+  });
+
+  test("once another Status has the kind, the last one's kind can change or it can go", async () => {
+    const { cookie, project, statusId } = await newProject();
+    await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
+      cookie,
+      body: { name: "Won't do", kind: "canceled" },
+    });
+
+    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Canceled")}`, {
+      cookie,
+    });
+    expect(removed.status).toBe(200);
+    expect(board(await removed.json()).at(-1)).toBe("Won't do:canceled");
+  });
+
+  test("removing every Status of a kind one by one is refused at the last", async () => {
+    const { cookie, project, statusId } = await newProject();
+    const remove = (name: string) =>
+      cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId(name)}`, { cookie });
+
+    expect((await remove("Ready")).status).toBe(200);
+    const last = await remove("Backlog");
+    expect(last.status).toBe(409);
+    expect((await last.json()).error.message).toBe(
+      "Every Project needs at least one Backlog Status, and Backlog is this Project's only one. Add another Backlog Status first.",
+    );
+  });
+});
+
+describe("Status refusals", () => {
+  test("a Status name already on the board is refused, ignoring case", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const added = await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
+      cookie,
+      body: { name: "done", kind: "done" },
+    });
+    expect(added.status).toBe(409);
+    expect(await added.json()).toEqual({
+      error: { code: "status_name_taken", message: "This Project already has a Status called done." },
+    });
+
+    const renamed = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+      body: { name: "Backlog" },
+    });
+    expect(renamed.status).toBe(409);
+    expect((await renamed.json()).error.code).toBe("status_name_taken");
+
+    const recased = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+      body: { name: "READY" },
+    });
+    expect(recased.status).toBe(200);
+  });
+
+  test("a position off the board is refused", async () => {
+    const { cookie, project, statusId } = await newProject();
+
+    const added = await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
+      cookie,
+      body: { name: "Later", kind: "backlog", position: 10 },
+    });
+    expect(added.status).toBe(400);
+    expect(await added.json()).toEqual({
+      error: { code: "invalid_position", message: "A position on this board is from 0 to 9." },
+    });
+
+    const moved = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+      cookie,
+      body: { position: 9 },
+    });
+    expect(moved.status).toBe(400);
+    expect((await moved.json()).error.message).toBe("A position on this board is from 0 to 8.");
+  });
+
+  test("an unknown Status kind is refused", async () => {
+    const { cookie, project } = await newProject();
+
+    const response = await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
+      cookie,
+      body: { name: "Parked", kind: "paused" },
+    });
+    expect(response.status).toBe(400);
+  });
+
+  test("a Status that isn't on the Project's board answers 404", async () => {
+    const { cookie, project } = await newProject();
+
+    for (const id of ["00000000-0000-4000-8000-000000000000", "not-a-uuid"]) {
+      const edited = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${id}`, {
+        cookie,
+        body: { name: "Gone" },
+      });
+      expect(edited.status).toBe(404);
+      const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${id}`, { cookie });
+      expect(removed.status).toBe(404);
+    }
+  });
+
+  test("Statuses of a Project the User can't see answer 404", async () => {
+    const { cookie, project } = await newProject();
+    const elsewhere = "00000000-0000-4000-8000-000000000000";
+
+    const added = await cronk.request("POST", `/api/projects/${elsewhere}/statuses`, {
+      cookie,
+      body: { name: "Later", kind: "backlog" },
+    });
+    expect(added.status).toBe(404);
+    const removed = await cronk.request("DELETE", `/api/projects/${elsewhere}/statuses/${project.statuses[0]!.id}`, {
+      cookie,
+    });
+    expect(removed.status).toBe(404);
+  });
+});
