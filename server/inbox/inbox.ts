@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
+import { WentWrongState, wentWrongStates } from "../runs/states.js";
 import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
 
 /**
@@ -21,7 +22,7 @@ export const RunItem = Type.Object({
   ticket: TicketSummary,
   run: Type.Object({
     id: Type.String({ format: "uuid" }),
-    state: Type.Union([Type.Literal("failed"), Type.Literal("lost"), Type.Literal("refused")]),
+    state: WentWrongState,
     step: Type.Object({ statusId: Type.String({ format: "uuid" }), name: Type.String() }),
     endReason: Type.Union([Type.String(), Type.Null()]),
   }),
@@ -60,9 +61,9 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
      join agents on agents.id = tickets.delegate_id
      join lateral (select * from runs where runs.ticket_id = tickets.id order by runs.seq desc limit 1) runs on true
      where tickets.workspace_id = $1 and agents.owner_id = $2
-       and runs.state in ('failed', 'lost', 'refused') and runs.status_id = tickets.status_id
+       and runs.state = any($3::run_state[]) and runs.status_id = tickets.status_id
      order by projects.key, tickets.number`,
-    [workspaceId, userId],
+    [workspaceId, userId, wentWrongStates],
   );
   for (const { run, ...row } of wentWrong) items.push({ kind: "run", ticket: ticketSummary(row), run });
   return { count: items.length, items };

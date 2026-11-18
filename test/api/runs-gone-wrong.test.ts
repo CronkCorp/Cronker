@@ -179,6 +179,21 @@ describe("Retry", () => {
     expect(cronk.runner.starts).toHaveLength(2);
   });
 
+  test("only the Delegate's Owner retries, since the Run spends their credentials", async () => {
+    const { workspace, ada, ticket, run } = await runningRun();
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    await cronk.runner.endWithoutFinishing(run.id);
+
+    const byBea = await call("POST", `/api/tickets/${ticket.id}/retry`, { cookie: bea.cookie });
+
+    expect(byBea.status).toBe(403);
+    expect(byBea.json.error).toEqual({
+      code: "not_delegates_owner",
+      message: "Only ada@example.com, the Owner of claude-max, retries CRONK-1: its Runs spend their credentials.",
+    });
+    expect(cronk.runner.starts).toHaveLength(1);
+  });
+
   test("is refused once the Ticket left the Status of the Run that went wrong", async () => {
     const { ada, ticket, run, status } = await runningRun();
     await cronk.runner.endWithoutFinishing(run.id);
@@ -206,6 +221,10 @@ describe("lost Runs", () => {
     expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
       expect.objectContaining({ state: "lost", endReason: "No call named the Run or CRONK-1 for 30 minutes.", endedAt: "2026-01-01T09:30:00.000Z" }),
     );
+    // Its session may yet be alive, so Cronk asks the Runner to stop it, keeping a Retry from running beside it.
+    expect(cronk.runner.stops).toEqual([
+      { runId: run.id, reference: { sessionId: "session_1", url: "https://claude.ai/code/session_1" } },
+    ]);
     expect((await inbox()).items).toEqual([
       expect.objectContaining({ kind: "run", ticket: expect.objectContaining({ id: ticket.id }), run: expect.objectContaining({ state: "lost" }) }),
     ]);

@@ -4,7 +4,6 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { userViewer } from "../identity/viewers.js";
 import { Brief, previewBrief } from "./brief.js";
 import { createRunner, RunnerRecord, runnersOf } from "./runners.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
@@ -99,15 +98,17 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Retry a Ticket whose latest Run went wrong",
           description:
             "Starts a fresh Run of the same Step on a delegated Ticket whose latest Run failed, was lost or couldn't " +
-            "start, while the Ticket is still in that Run's Status; refused with `nothing_to_retry` otherwise. " +
-            "Nothing retries by itself: only a User does, here. Returns the new Run.",
+            "start, while the Ticket is still in that Run's Status; refused with `nothing_to_retry` otherwise. Only the " +
+            "Delegate's Owner retries, since the Run spends their credentials. Nothing retries by itself. Returns the " +
+            "new Run as recorded; if its Runner then refuses to start it, a later read shows that, and a rate-limited " +
+            "Runner leaves the Ticket waiting with no Run.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 201: Run, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await retryRun(context, userViewer(user.id), request.params.ticketId));
+        return reply.code(201).send(await retryRun(context, user.id, request.params.ticketId));
       },
     );
 

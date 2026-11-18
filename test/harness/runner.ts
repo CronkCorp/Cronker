@@ -1,4 +1,4 @@
-import type { RunnerRefusal, RunReference, RunReports, Runner, RunToStart, StartResult } from "../../server/runs/runner.js";
+import type { RunnerRefusal, RunReports, Runner, RunToStart, RunToStop, StartResult } from "../../server/runs/runner.js";
 
 /**
  * The fake Runner every `startCronk()` installs as the Runner kind `fake`. It records each
@@ -8,7 +8,7 @@ export class FakeRunner implements Runner {
   /** Every start asked of it, refused or not, in order. */
   readonly starts: RunToStart[] = [];
   /** Every stop Cronk asked of it, in order. */
-  readonly stops: { runId: string; reference: RunReference }[] = [];
+  readonly stops: RunToStop[] = [];
   private readonly refusals: RunnerRefusal[] = [];
   private reports?: RunReports;
 
@@ -28,7 +28,7 @@ export class FakeRunner implements Runner {
     };
   }
 
-  async stop(run: { runId: string; reference: RunReference }): Promise<void> {
+  async stop(run: RunToStop): Promise<void> {
     this.stops.push(run);
   }
 

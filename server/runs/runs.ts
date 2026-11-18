@@ -5,14 +5,14 @@ import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
-import { RunState } from "./states.js";
+import { RunState, wentWrong } from "./states.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -225,23 +225,40 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
  * Cronk asks the Run's Runner to stop it too, where the Runner can; either way the Run's later calls are refused.
  */
 export async function stopRunningRun(context: Context, tx: Tx, ticketId: string, reason: string, now: Date): Promise<void> {
-  const { rows } = await tx.query<{ runId: string; sessionId: string | null; sessionUrl: string | null; runnerKind: string | null }>(
+  const { rows } = await tx.query<EndedRun>(
     `update runs set state = 'stopped', end_reason = $2, ended_at = $3
      where ticket_id = $1 and state = 'running'
-     returning id as "runId", session_id as "sessionId", session_url as "sessionUrl",
-       (select kind from runners where runners.id = runs.runner_id) as "runnerKind"`,
+     returning ${endedRunColumns}`,
     [ticketId, reason, now],
   );
-  const stopped = rows[0];
-  const runner = stopped?.runnerKind ? context.runners[stopped.runnerKind] : undefined;
-  if (!stopped || !runner?.stop) return;
+  for (const run of rows) askRunnerToStop(context, tx, run);
+}
+
+/** A Run that just ended in Cronk, with what its Runner needs to stop it too. */
+interface EndedRun {
+  runId: string;
+  workspaceId: string;
+  ticketId: string;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  runnerKind: string | null;
+}
+
+const endedRunColumns = `runs.id as "runId", runs.workspace_id as "workspaceId", runs.ticket_id as "ticketId",
+  runs.session_id as "sessionId", runs.session_url as "sessionUrl",
+  (select kind from runners where runners.id = runs.runner_id) as "runnerKind"`;
+
+/** Once the transaction commits, asks the Runner of a Run Cronk ended to stop its session too, where it can. */
+function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
+  const runner = run.runnerKind ? context.runners[run.runnerKind] : undefined;
+  if (!runner?.stop) return;
   const reference = {
-    ...(stopped.sessionId === null ? {} : { sessionId: stopped.sessionId }),
-    ...(stopped.sessionUrl === null ? {} : { url: stopped.sessionUrl }),
+    ...(run.sessionId === null ? {} : { sessionId: run.sessionId }),
+    ...(run.sessionUrl === null ? {} : { url: run.sessionUrl }),
   };
   afterCommit(tx, async () => {
-    // Best effort: the Run is stopped in Cronk whatever its Runner says.
-    await runner.stop!({ runId: stopped.runId, reference }).catch(() => {});
+    // Best effort: the Run has ended in Cronk whatever its Runner says.
+    await runner.stop!({ runId: run.runId, reference }).catch(() => {});
   });
 }
 
@@ -278,12 +295,6 @@ export async function finishRun(
         advice: "Nothing more is needed for this Run; leave a Comment on its Ticket if you have more to say.",
       });
     }
-    if (ticket.statusId !== run.statusId) {
-      throw new ApiError(409, "ticket_moved", `${ticket.key} was moved out of ${run.step.name} while this Run was running.`, {
-        rule: "A Run's Outcome moves its Ticket only from the Status the Run was started in.",
-        advice: `Stop working on ${ticket.key}: a User moved it on. Leave a Comment if there is something they should know.`,
-      });
-    }
     const statuses = await statusesOf(tx, ticket.projectId);
     const step = statuses.find((s) => s.id === run.statusId)?.step;
     const offered = step ? offeredOutcomes(step, statuses) : [];
@@ -317,35 +328,48 @@ export async function finishRun(
   });
 }
 
-/** The Run states a User may Retry from: the Run went wrong, and nothing retries it by itself. */
-const retriable = ["failed", "lost", "refused"];
-
 /**
  * Starts a fresh Run of the same Step on a Ticket whose latest Run failed, was lost or couldn't
- * start, while the Ticket is still delegated and in that Run's Status. Only a User retries.
+ * start, while the Ticket is still delegated and in that Run's Status. Only the Delegate's Owner
+ * retries, since the Run spends their credentials. Returns the new Run as recorded; its Runner is
+ * asked to start it once this commits, as for any Run.
  */
-export async function retryRun(context: Context, viewer: Viewer, ticketId: string): Promise<Run> {
+export async function retryRun(context: Context, userId: string, ticketId: string): Promise<Run> {
   return transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, viewer, ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const { rows } = await tx.query<{ state: string; statusId: string | null }>(
+    const { rows } = await tx.query<{ state: RunState; statusId: string | null }>(
       `select state, status_id as "statusId" from runs where ticket_id = $1 order by seq desc limit 1`,
       [ticket.id],
     );
     const latest = rows[0];
-    const rule = `Retry starts a fresh Run on a delegated Ticket whose latest Run failed, was lost or couldn't start, while it is still in that Run's Status.`;
-    if (!latest || !retriable.includes(latest.state) || latest.statusId !== ticket.statusId || !ticket.delegateId) {
-      const why = !latest
-        ? `${ticket.key} has had no Run`
-        : !retriable.includes(latest.state)
-          ? `${ticket.key}'s latest Run is ${latest.state}`
-          : latest.statusId !== ticket.statusId
-            ? `${ticket.key} has moved on from the Status its latest Run was in`
-            : `${ticket.key} isn't delegated`;
+    const why = !latest
+      ? `${ticket.key} has had no Run`
+      : !wentWrong(latest.state)
+        ? `${ticket.key}'s latest Run is ${latest.state}`
+        : latest.statusId !== ticket.statusId
+          ? `${ticket.key} has moved on from the Status its latest Run was in`
+          : !ticket.delegateId
+            ? `${ticket.key} isn't delegated`
+            : null;
+    if (why) {
       throw new ApiError(409, "nothing_to_retry", `${why}, so there is nothing to retry.`, {
-        rule,
+        rule: "Retry starts a fresh Run on a delegated Ticket whose latest Run failed, was lost or couldn't start, while it is still in that Run's Status.",
         advice: "Move the Ticket into a Status with a Step, or delegate it, to start a Run there.",
       });
+    }
+    const { rows: owners } = await tx.query<{ ownerId: string; agentName: string; ownerName: string }>(
+      `select agents.owner_id as "ownerId", agents.name as "agentName", coalesce(users.email, '@' || users.github_login) as "ownerName"
+       from agents join users on users.id = agents.owner_id where agents.id = $1`,
+      [ticket.delegateId],
+    );
+    const owner = owners[0]!;
+    if (owner.ownerId !== userId) {
+      throw new ApiError(
+        403,
+        "not_delegates_owner",
+        `Only ${owner.ownerName}, the Owner of ${owner.agentName}, retries ${ticket.key}: its Runs spend their credentials.`,
+      );
     }
     await startRunIfNeeded(context, tx, ticket.id, context.clock.now());
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
@@ -360,11 +384,11 @@ export async function retryRun(context: Context, viewer: Viewer, ticketId: strin
 /**
  * Makes lost every running Run whose Agent made no call naming it or its Ticket for its Workspace's
  * lost-Run threshold. The server runs this periodically; tests run it directly after moving the clock.
- * A lost Run's Ticket stays where it is, waiting for Retry.
+ * A lost Run's Ticket stays where it is, waiting for Retry; its Runner is asked to stop it, where it can.
  */
 export async function checkForLostRuns(context: Context): Promise<void> {
   await transaction(context.db, async (tx) => {
-    const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
+    const { rows } = await tx.query<EndedRun & { projectId: string }>(
       `update runs set state = 'lost', ended_at = $1,
          end_reason = format('No call named the Run or %s for %s minutes.', projects.key || '-' || tickets.number,
            workspaces.lost_run_minutes)
@@ -372,11 +396,13 @@ export async function checkForLostRuns(context: Context): Promise<void> {
        where runs.state = 'running' and tickets.id = runs.ticket_id and projects.id = tickets.project_id
          and workspaces.id = runs.workspace_id
          and coalesce(runs.last_call_at, runs.started_at) <= $1::timestamptz - make_interval(mins => workspaces.lost_run_minutes)
-       returning runs.workspace_id as "workspaceId", tickets.project_id as "projectId", runs.ticket_id as "ticketId"`,
+       returning ${endedRunColumns}, tickets.project_id as "projectId"`,
       [context.clock.now()],
     );
-    for (const { workspaceId, projectId, ticketId } of rows) {
-      context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
+    for (const run of rows) {
+      context.live.publish(tx, run.workspaceId, { type: "ticket.changed", projectId: run.projectId, ticketId: run.ticketId });
+      // A lost Run's session may yet be alive: stopping it keeps a Retry from running beside it.
+      askRunnerToStop(context, tx, run);
     }
   });
 }

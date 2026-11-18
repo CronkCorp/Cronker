@@ -31,7 +31,10 @@ export function watchRunCalls(app: FastifyInstance, context: Context): void {
 /** The Agent making the request, if it is one with a token Cronk accepts; the route itself refuses any other. */
 async function agentOf(context: Context, request: FastifyRequest): Promise<AgentCaller | undefined> {
   if (!offersBearer(request.headers.authorization)) return undefined;
-  return authenticateAgent(context, request).catch(() => undefined);
+  return authenticateAgent(context, request).catch((error: unknown) => {
+    if (error instanceof ApiError) return undefined;
+    throw error;
+  });
 }
 
 /** Refuses the Agent's call naming one of its own Runs that a User stopped, saying why. */

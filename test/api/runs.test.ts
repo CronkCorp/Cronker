@@ -314,7 +314,8 @@ describe("at most one running Run per Ticket", () => {
     expect(runs.filter((r: { state: string }) => r.state === "running")).toHaveLength(1);
     expect(runs.at(-1).state).toBe("running");
     expect(runs.slice(0, -1).every((r: { state: string }) => r.state === "stopped")).toBe(true);
-    expect(cronk.runner.starts).toHaveLength(runs.length);
+    // Every Run recorded was asked of the Runner, and only those.
+    expect(cronk.runner.starts.map((s) => s.runId).sort()).toEqual(runs.map((r: { id: string }) => r.id).sort());
   });
 });
 
