@@ -27,3 +27,27 @@ describe("setup", () => {
     expect(await (await cronk.request("GET", "/api/setup")).json()).toEqual({ needed: false });
   });
 });
+
+describe("setup refusals", () => {
+  test("setup without the right setup code is refused", async () => {
+    const response = await cronk.request("POST", "/api/setup", {
+      body: { ...firstUser, setupCode: "cronk_setup_guessed" },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: { code: "invalid_setup_code", message: expect.any(String) } });
+    expect(await (await cronk.request("GET", "/api/setup")).json()).toEqual({ needed: true });
+  });
+
+  test("setup can't run twice, even with the same setup code", async () => {
+    const setupCode = cronk.setupCode();
+    await cronk.request("POST", "/api/setup", { body: { ...firstUser, setupCode } });
+
+    const again = await cronk.request("POST", "/api/setup", {
+      body: { ...firstUser, email: "mallory@example.com", setupCode },
+    });
+
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({ error: { code: "already_set_up", message: expect.any(String) } });
+  });
+});
