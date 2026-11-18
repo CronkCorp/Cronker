@@ -647,7 +647,7 @@ describe("Runs live", () => {
   });
 });
 
-describe("the answer to editing a Ticket", () => {
+describe("answering with the Ticket as its edit or creation left it", () => {
   test("delegating a Ticket into a Status with a Step answers with the Run it started, as a GET shows it", async () => {
     const { ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
@@ -669,5 +669,24 @@ describe("the answer to editing a Ticket", () => {
     expect(moved.waiting).toBe("blocked");
     expect(moved.lastRun).toBeNull();
     expect(moved).toEqual(await ok("GET", `/api/tickets/${ticket.id}`, ada));
+  });
+
+  test("creating a Ticket that starts delegated in a Status with a Step answers with the Run it started", async () => {
+    const { ada, project, status } = await adaWithAgent();
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { newTicketsDelegated: true });
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Backlog")}/step`, ada, {
+      brief: "Look before you leap.",
+      model: "haiku",
+      outcomes: [
+        { name: "ready", statusId: status("Ready"), default: true, needsYou: false, countsAsRound: false },
+        { name: "needs you", statusId: status("Triage"), default: false, needsYou: true, countsAsRound: false },
+      ],
+    });
+
+    const created = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Born delegated" });
+
+    const [run] = await runsOf(created.id, ada);
+    expect(created.lastRun).toEqual({ id: run.id, state: "running" });
+    expect(created).toEqual(await ok("GET", `/api/tickets/${created.id}`, ada));
   });
 });

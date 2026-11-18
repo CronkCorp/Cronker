@@ -362,7 +362,8 @@ export async function createTicket(
       live.publish(tx, parent.workspaceId, { type: "ticket.changed", projectId: parent.projectId, ticketId: parent.id });
     }
     await startRunIfNeeded(context, tx, ticket.id, now);
-    return withMentions(tx, ticket);
+    // Read it again: a Run it started, or its wait for one, shows on it.
+    return withMentions(tx, (await findTicketRow(tx, creator, ticket.id))!);
   });
 }
 
