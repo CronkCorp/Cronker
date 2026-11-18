@@ -12,7 +12,7 @@ import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
 import { refuseStoppedRunCalls } from "./runs/calls.js";
 import { runRoutes } from "./runs/routes.js";
-import { noteRunCall } from "./runs/runs.js";
+import { noteRunCall, type NamedInCall } from "./runs/runs.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
@@ -64,14 +64,19 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   app.addHook("onSend", async (request, _reply, payload) => {
     const header = request.headers.authorization;
     const params = (request.params ?? {}) as Record<string, string | undefined>;
-    if (!params.runId && !params.ticketId && !params.key) return payload;
+    const named: NamedInCall = { runId: params.runId, ticketId: params.ticketId, ticketKey: params.key };
+    // Filing a Ticket names a Run in its body: the Run it is filed from, or a Sub-Ticket's parent, its Run's Ticket.
+    if (request.method === "POST" && request.routeOptions.url === "/api/projects/:projectId/tickets") {
+      const body = (request.body ?? {}) as Record<string, unknown>;
+      if (typeof body.runId === "string") named.runId = body.runId;
+      if (typeof body.parentId === "string") named.ticketId = body.parentId;
+    }
+    if (!named.runId && !named.ticketId && !named.ticketKey) return payload;
     try {
       const agent =
         agentOfRequest(request) ??
         (offersBearer(header) ? await agentOfToken(context, header).catch(() => undefined) : undefined);
-      if (agent) {
-        await noteRunCall(context, agent, { runId: params.runId, ticketId: params.ticketId, ticketKey: params.key });
-      }
+      if (agent) await noteRunCall(context, agent, named);
     } catch (error) {
       // The call itself is answered as it was; only the Run's last call goes unrecorded.
       request.log.error(error);

@@ -379,3 +379,20 @@ describe("waiting Discovered Tickets in the Inbox", () => {
     expect(dismissed).toEqual(expect.objectContaining({ field: "dismissed", from: null, to: null, actor: expect.objectContaining({ kind: "user" }) }));
   });
 });
+
+describe("a Run's last call", () => {
+  test("filing a Sub-Ticket of its Ticket, or a Discovered Ticket naming it, records the Run's last call", async () => {
+    const { ada, project, ticket, run, asAgent } = await runningRun();
+    const lastCall = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).lastCallAt;
+    expect(await lastCall()).toBeNull();
+
+    cronk.clock.advance(60_000);
+    await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Half", parentId: ticket.id });
+    const afterSub = await lastCall();
+    expect(afterSub).toBe(cronk.clock.now().toISOString());
+
+    cronk.clock.advance(60_000);
+    await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found", runId: run.id });
+    expect(await lastCall()).toBe(cronk.clock.now().toISOString());
+  });
+});
