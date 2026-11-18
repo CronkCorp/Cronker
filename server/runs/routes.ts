@@ -5,6 +5,7 @@ import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
+import { dismissQuestion } from "./questions.js";
 import { createRunner, RunnerRecord, runnersOf } from "./runners.js";
 import { briefOfRun, findRun, finishRun, Run, runsOf } from "./runs.js";
 
@@ -88,6 +89,26 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => finishRun(context, await requireCaller(context, request), request.params.runId, request.body),
+    );
+
+    app.post(
+      "/api/questions/:questionId/dismiss",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Dismiss a Question",
+          description:
+            "Removes the Question from its Ticket's Assignee's Inbox without moving the Ticket. The Question stays on " +
+            "the Ticket as its Comment, and the first User's reply to that Comment still answers it. Users only.",
+          params: Type.Object({ questionId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        await dismissQuestion(context, { kind: "user", id: user.id }, request.params.questionId);
+        return reply.code(204).send(null);
+      },
     );
 
     app.get(

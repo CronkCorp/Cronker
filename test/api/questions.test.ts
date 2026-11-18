@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -186,5 +186,42 @@ describe("answering a Question after the Ticket moved", () => {
 
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
     expect(cronk.runner.starts).toHaveLength(1);
+  });
+});
+
+describe("dismissing a Question", () => {
+  test("removes it from the Inbox without moving anything", async () => {
+    const setup = await investigating();
+    const { workspace, ada, ticket, status } = setup;
+    const item = await ask(setup, "Blue or green?");
+
+    const dismissed = await call("POST", `/api/questions/${item.question.id}/dismiss`, ada);
+
+    expect(dismissed.status).toBe(204);
+    const inbox = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(inbox.items.filter((i: { kind: string }) => i.kind === "question")).toEqual([]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+    expect(cronk.runner.starts).toHaveLength(1);
+    // The Question stays on the Ticket, and a reply still answers it.
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Green after all.", replyToId: item.question.commentId });
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
+  });
+
+  test("only Users of its Workspace dismiss a Question", async () => {
+    const setup = await investigating();
+    const { workspace, ada, asAgent } = setup;
+    const item = await ask(setup, "Blue or green?");
+    const elsewhere = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
+    const bea = await addMember(cronk, ada.cookie, elsewhere.id, "bea@example.com");
+
+    const byAgent = await call("POST", `/api/questions/${item.question.id}/dismiss`, asAgent);
+    expect(byAgent.status).toBe(403);
+    expect(byAgent.json.error.code).toBe("agent_not_allowed");
+    const byOutsider = await call("POST", `/api/questions/${item.question.id}/dismiss`, { cookie: bea.cookie });
+    expect(byOutsider.status).toBe(404);
+    expect((await call("POST", "/api/questions/not-an-id/dismiss", ada)).status).toBe(404);
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items).toContainEqual(
+      expect.objectContaining({ kind: "question" }),
+    );
   });
 });

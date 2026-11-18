@@ -1,6 +1,9 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import type { Db, Tx } from "../db.js";
+import { transaction, type Db, type Tx } from "../db.js";
+import { ApiError } from "../http/errors.js";
+import { isUuid } from "../http/ids.js";
+import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comments.js";
 import { statusesOf } from "../work/projects.js";
@@ -104,4 +107,27 @@ export async function answerQuestion(
     { field: "status", from: named(ticket.statusId), to: named(question.stepStatusId) },
   ]);
   await startRunIfNeeded(context, tx, ticket.id, now);
+}
+
+/**
+ * Dismisses a Question from the Inbox of its Ticket's Assignee, moving nothing. It stays on the Ticket,
+ * where a User's reply still answers it.
+ */
+export async function dismissQuestion({ db, clock, live }: Context, viewer: Viewer & { kind: "user" }, questionId: string): Promise<void> {
+  await transaction(db, async (tx) => {
+    const view = inView(viewer, "questions.workspace_id", "$2");
+    const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
+      `select questions.workspace_id as "workspaceId", tickets.project_id as "projectId", tickets.id as "ticketId"
+       from questions join tickets on tickets.id = questions.ticket_id
+       where questions.id = $1 and ${view.sql}`,
+      [isUuid(questionId) ? questionId : null, view.value],
+    );
+    const question = rows[0];
+    if (!question) throw new ApiError(404, "not_found", "No such Question.");
+    await tx.query(
+      "update questions set dismissed_at = $2, dismissed_by = $3 where id = $1 and dismissed_at is null",
+      [questionId, clock.now(), viewer.id],
+    );
+    live.publish(tx, question.workspaceId, { type: "ticket.changed", projectId: question.projectId, ticketId: question.ticketId });
+  });
 }
