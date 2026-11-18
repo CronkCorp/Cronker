@@ -54,6 +54,4 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
   const delegation = page.getByRole("region", { name: "Delegation" });
   await delegation.getByLabel("New Tickets start delegated to their creator's Agent").click();
   await expect(delegation.getByLabel("New Tickets start delegated to their creator's Agent")).toBeChecked();
-  // Closes the page's event stream before Cronk stops, which otherwise can hang teardown (#34).
-  await page.goto("about:blank");
 });
