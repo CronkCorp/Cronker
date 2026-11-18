@@ -4,6 +4,8 @@ A self-hosted platform where humans and AI agents share Tickets, Documents, Term
 
 ## Running Cronk
 
+To set up an installation from scratch, through to Runs in Claude Code on the web and Claude Code on a laptop, follow `docs/setup.md`. In short:
+
 ```sh
 CRONK_PUBLIC_URL=https://cronk.example.com docker compose up -d
 docker compose logs cronk | grep "setup code"
