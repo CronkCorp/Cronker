@@ -208,6 +208,20 @@ export interface Change {
   to: unknown;
 }
 
+/** A Ticket in a Review Status, waiting for its Assignee's review. */
+export interface ReviewItem {
+  kind: "review";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+}
+
+export type InboxItem = ReviewItem;
+
+export interface Inbox {
+  count: number;
+  items: InboxItem[];
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -287,6 +301,7 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),

@@ -13,6 +13,7 @@ import { agentRoutes } from "./agents/routes.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
+import { inboxRoutes } from "./inbox/routes.js";
 import { liveRoutes } from "./live/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
@@ -81,6 +82,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));
   await app.register(mcpRoutes(context, app));
   await app.register(liveRoutes(context));

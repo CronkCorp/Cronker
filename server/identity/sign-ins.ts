@@ -38,7 +38,11 @@ export async function signIn(
 }
 
 /** Signs the User in: a new sign-in, lasting 30 days, in a `SameSite=Strict` cookie. */
-export async function startSignIn({ db, clock, config }: Context, reply: FastifyReply, userId: string): Promise<void> {
+export async function startSignIn(
+  { db, clock, config }: Pick<Context, "db" | "clock" | "config">,
+  reply: FastifyReply,
+  userId: string,
+): Promise<void> {
   const token = issueSecret("sign_in");
   const now = clock.now();
   // Expired sign-ins are no use to anyone; drop the User's while adding a new one.
