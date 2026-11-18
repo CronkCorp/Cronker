@@ -158,3 +158,33 @@ describe("answering a Question", () => {
     expect(cronk.runner.starts).toHaveLength(2);
   });
 });
+
+describe("answering a Question after the Ticket moved", () => {
+  test("only adds the Comment, leaving the Ticket where a User put it", async () => {
+    const setup = await investigating();
+    const { workspace, ada, ticket, status } = setup;
+    const item = await ask(setup, "Blue or green?");
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready") });
+
+    const answer = await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Green.", replyToId: item.question.commentId });
+
+    expect(answer.body).toBe("Green.");
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Ready"));
+    expect(cronk.runner.starts).toHaveLength(1);
+    // It is answered all the same.
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items).toEqual([]);
+  });
+
+  test("even when it moved back since: answering moves only a Ticket that hasn't moved", async () => {
+    const setup = await investigating();
+    const { ada, ticket, status } = setup;
+    const item = await ask(setup, "Blue or green?");
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready") });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Backlog") });
+
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Green.", replyToId: item.question.commentId });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+    expect(cronk.runner.starts).toHaveLength(1);
+  });
+});
