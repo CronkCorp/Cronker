@@ -31,7 +31,8 @@ async function workspaceWithTicket(access: "full" | "read" = "full") {
   const cookie = await signIn(cronk);
   const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
   const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Read me", description: "Do it." });
-  await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Later" });
+  const later = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Later" });
+  await post(cookie, `/api/tickets/${ticket.id}/relations`, { kind: "blocks", ticketId: later.id });
   await post(cookie, `/api/tickets/${ticket.id}/comments`, { body: "First thoughts." });
   const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access });
@@ -76,7 +77,7 @@ describe("MCP with an Agent token", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual(["comment", "list_tickets", "read_ticket"]);
   });
 
-  test("an Agent reads a Ticket by key with its Comments", async () => {
+  test("an Agent reads a Ticket by key with its Comments and Relations", async () => {
     const { secret } = await workspaceWithTicket();
     const client = await connect(secret);
 
@@ -86,6 +87,9 @@ describe("MCP with an Agent token", () => {
     expect(json.ticket).toEqual(expect.objectContaining({ key: "CRONK-1", title: "Read me", description: "Do it." }));
     expect(json.comments).toEqual([
       expect.objectContaining({ body: "First thoughts.", actor: expect.objectContaining({ name: "ada@example.com" }) }),
+    ]);
+    expect(json.relations.relations).toEqual([
+      expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-2" }) }),
     ]);
   });
 

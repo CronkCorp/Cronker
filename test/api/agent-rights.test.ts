@@ -42,6 +42,7 @@ describe("what an Agent reads", () => {
       `/api/tickets/${ticket.id}`,
       `/api/tickets/${ticket.id}/comments`,
       `/api/tickets/${ticket.id}/timeline`,
+      `/api/tickets/${ticket.id}/relations`,
       `/api/workspaces/${workspace.id}/agents`,
     ]) {
       const response = await cronk.request("GET", path, { headers });
@@ -84,6 +85,7 @@ describe("what an Agent reads", () => {
       `/api/tickets/${ticket.id}`,
       `/api/tickets/${ticket.id}/comments`,
       `/api/tickets/${ticket.id}/timeline`,
+      `/api/tickets/${ticket.id}/relations`,
     ]) {
       expect((await cronk.request("GET", path, { headers })).status, path).toBe(404);
     }

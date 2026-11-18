@@ -194,7 +194,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "A Ticket's Relations, parent and Sub-Tickets",
-          description: "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other.",
+          description:
+            "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other. Agents may read them too.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: TicketRelations, 401: ErrorBody, 404: ErrorBody },
         },

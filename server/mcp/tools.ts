@@ -84,7 +84,8 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields and its Comments, oldest first. " +
+        "A Ticket of your Workspace with its fields, its Comments (oldest first), and its Relations: " +
+        "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets. " +
         "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
       annotations: { readOnlyHint: true },
@@ -92,7 +93,11 @@ export function buildMcpServer(api: Api): McpServer {
     ({ ticket }) =>
       answer(async () => {
         const found = await ticketByKeyOrId(ticket);
-        return { ticket: found, comments: await get(`/api/tickets/${found.id}/comments`) };
+        return {
+          ticket: found,
+          comments: await get(`/api/tickets/${found.id}/comments`),
+          relations: await get(`/api/tickets/${found.id}/relations`),
+        };
       }),
   );
 
