@@ -120,4 +120,21 @@ describe("removing a User from a Workspace", () => {
     expect(await inbox({ cookie: cy.cookie })).toEqual(expected);
     expect(await inbox({ cookie: dee.cookie })).toEqual({ count: 0, items: [] });
   });
+
+  test("assigning such a Ticket, or delegating it, takes it out of the Admins' Inbox", async () => {
+    const { workspace, ada, bea, project, ticket, remove } = await beaAtWork();
+    const idle = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Bea's later work" });
+    await ok("PATCH", `/api/tickets/${idle.id}`, ada, { assigneeId: bea.id });
+    const dee = await addMember(cronk, ada.cookie, workspace.id, "dee@example.com");
+    const adasAgent = await agentOf(ada, workspace.id, "ada-claude");
+    const inbox = () => ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    await remove();
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { assigneeId: dee.user.id });
+    expect((await inbox()).items.map((i: { ticket: { key: string } }) => i.ticket.key)).toEqual(["CRONK-2"]);
+
+    await ok("PATCH", `/api/tickets/${idle.id}`, ada, { delegateId: adasAgent.id });
+    expect(await inbox()).toEqual({ count: 0, items: [] });
+    expect(await ok("GET", `/api/tickets/${idle.id}`, ada)).toMatchObject({ assigneeId: ada.id, delegateId: adasAgent.id });
+  });
 });
