@@ -134,6 +134,10 @@ function ItemDetail({ item }: { item: InboxItem }) {
       );
     case "review":
       return <small>Waiting for your review in {item.status.name}</small>;
+    case "unverified":
+      return (
+        <small>Completed by the {item.completedBy?.name ?? "removed"} Step, Unverified: Accept or Reopen it</small>
+      );
     case "run":
       return <WentWrong item={item} />;
   }

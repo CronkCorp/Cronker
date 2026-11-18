@@ -30,6 +30,8 @@ export const changeFields = [
   "relatesTo",
   "delegate",
   "stepSkipped",
+  "autonomousDelegation",
+  "verification",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 
@@ -40,7 +42,7 @@ export const Change = Type.Object({
   field: Type.Union(changeFields.map((f) => Type.Literal(f))),
   from: Type.Unknown({
     description:
-      "The value before: a string, number, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
+      "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
       "and the default Outcome the Ticket moved on by.",

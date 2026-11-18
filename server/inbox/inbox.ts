@@ -51,7 +51,19 @@ export const RunItem = Type.Object({
   }),
 });
 
-export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, RunItem]);
+const StatusRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
+
+/** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
+export const UnverifiedItem = Type.Object({
+  kind: Type.Literal("unverified"),
+  ticket: TicketSummary,
+  status: Type.Object(StatusRef.properties, { description: "The Done Status the Run completed it to." }),
+  completedBy: Type.Union([StatusRef, Type.Null()], {
+    description: "The Step that completed it, by its Status, where Reopen sends it; null once that Status is removed.",
+  }),
+});
+
+export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem]);
 export type InboxItem = Static<typeof InboxItem>;
 
 export const Inbox = Type.Object({
@@ -66,23 +78,27 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
   type Row = TicketRow & {
     statusName: string;
     inReview: boolean;
+    completedBy: { id: string; name: string } | null;
     handedBack: { outcome: string; step: { statusId: string | null; name: string } } | null;
   };
   const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
        statuses.kind = 'review' as "inReview",
+       case when completed_by.id is not null then json_build_object('id', completed_by.id, 'name', completed_by.name)
+         end as "completedBy",
        case when runs.id is not null then json_build_object(
          'outcome', runs.outcome, 'step', json_build_object('statusId', runs.status_id, 'name', runs.status_name)
        ) end as "handedBack"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      left join runs on runs.id = tickets.needs_you_run_id
+     left join statuses completed_by on completed_by.id = tickets.completed_from_status_id
      where tickets.workspace_id = $1 and tickets.assignee_id = $2
-       and (statuses.kind = 'review' or runs.id is not null or tickets.id = any($3))
+       and (statuses.kind = 'review' or runs.id is not null or tickets.id = any($3) or tickets.verification = 'unverified')
      order by projects.key, tickets.number`,
     [workspaceId, userId, questions.map((q) => q.ticketId)],
   );
-  const summary = ({ statusName: _s, inReview: _r, handedBack: _h, ...row }: Row) => ticketSummary(row);
+  const summary = ({ statusName: _s, inReview: _r, completedBy: _c, handedBack: _h, ...row }: Row) => ticketSummary(row);
   const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
   const items: InboxItem[] = [
     // A Ticket reassigned between the two reads drops out with its Question.
@@ -97,6 +113,11 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
     ),
     ...rows.flatMap((row): InboxItem[] =>
       row.inReview ? [{ kind: "review", ticket: summary(row), status: { id: row.statusId, name: row.statusName } }] : [],
+    ),
+    ...rows.flatMap((row): InboxItem[] =>
+      row.verification === "unverified"
+        ? [{ kind: "unverified", ticket: summary(row), status: { id: row.statusId, name: row.statusName }, completedBy: row.completedBy }]
+        : [],
     ),
   ];
   // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents,

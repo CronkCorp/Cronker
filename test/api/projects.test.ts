@@ -43,6 +43,7 @@ describe("creating a Project", () => {
       name: "Cronker",
       key: "CRONK",
       newTicketsDelegated: false,
+      autonomousDelegationDefault: false,
       statuses: defaultBoard.map((status) => ({
         id: expect.any(String),
         ...status,

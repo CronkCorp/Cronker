@@ -459,3 +459,18 @@ td.actions {
 .run-state.refused {
   color: var(--warn);
 }
+.verification {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.5rem 1rem 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.verification.verified {
+  border-left-color: var(--muted);
+}
+.verification .actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}

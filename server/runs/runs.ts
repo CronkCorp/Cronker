@@ -11,7 +11,7 @@ import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../work/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
-import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
+import { Brief, buildBrief, completes, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
@@ -158,6 +158,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     statusId: string;
     labels: string[];
     delegateId: string | null;
+    autonomousDelegation: boolean | null;
     agentName: string | null;
     runnerId: string | null;
     runnerOwnerId: string | null;
@@ -168,7 +169,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   }>(
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
-       tickets.labels, tickets.delegate_id as "delegateId", agents.name as "agentName", runners.id as "runnerId",
+       tickets.labels, tickets.delegate_id as "delegateId",
+       tickets.autonomous_delegation as "autonomousDelegation", agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
        tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
      from tickets join projects on projects.id = tickets.project_id
@@ -222,7 +224,14 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   await waitForRun(false);
 
   const runId = randomUUID();
-  const brief = buildBrief(context.config, ticket.key, statuses, status as Status & { step: Step }, runId);
+  const brief = buildBrief(
+    context.config,
+    ticket.key,
+    statuses,
+    status as Status & { step: Step },
+    ticket.autonomousDelegation === true,
+    runId,
+  );
   const refusal = !ticket.runnerId
     ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
     : !runner
@@ -510,7 +519,7 @@ export async function finishRun(
     }
     const statuses = await statusesOf(tx, ticket.projectId);
     const step = statuses.find((s) => s.id === run.statusId)?.step;
-    const offered = step ? offeredOutcomes(step, statuses) : [];
+    const offered = step ? offeredOutcomes(step, statuses, ticket.autonomousDelegation === true) : [];
     const outcome = offered.find((o) => o.name.toLowerCase() === input.outcome.trim().toLowerCase());
     if (!outcome) {
       throw new ApiError(400, "outcome_not_offered", `${input.outcome} isn't an Outcome this Run may choose.`, {
@@ -584,6 +593,16 @@ export async function finishRun(
         { field: "status", from: named(ticket.statusId), to: named(applied.statusId) },
       ]);
       await startUnblocked(context, tx, [ticket.id]);
+    }
+    if (completes(applied, statuses)) {
+      // A Run completing its Ticket leaves it Unverified, until a User Accepts or Reopens it.
+      await tx.query("update tickets set verification = 'unverified', completed_from_status_id = $2 where id = $1", [
+        ticket.id,
+        run.statusId,
+      ]);
+      await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [
+        { field: "verification", from: ticket.verification, to: "unverified" },
+      ]);
     }
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     // Moving into a Status by an Outcome counts as entering it.
