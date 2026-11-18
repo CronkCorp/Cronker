@@ -359,6 +359,9 @@ ul.inbox li {
 ul.inbox small {
   color: var(--muted);
 }
+ul.inbox li button {
+  justify-self: start;
+}
 .narrow {
   max-width: 24rem;
 }
@@ -436,8 +439,10 @@ td.actions {
   color: var(--muted);
 }
 .run-marker.failed,
+.run-marker.lost,
 .run-marker.refused,
 .run-state.failed,
+.run-state.lost,
 .run-state.refused {
   color: var(--warn);
 }

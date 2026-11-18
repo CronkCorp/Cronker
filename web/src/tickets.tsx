@@ -655,6 +655,8 @@ const runStateShown: Record<Run["state"], string> = {
   running: "running",
   finished: "finished",
   failed: "failed",
+  lost: "lost",
+  stopped: "stopped",
   refused: "couldn't start",
 };
 

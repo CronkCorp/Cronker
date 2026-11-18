@@ -287,7 +287,7 @@ describe("what finish refuses", () => {
 });
 
 describe("a Run whose Ticket a User moved meanwhile", () => {
-  test("finishing it is refused, leaving the Ticket where the User put it", async () => {
+  test("finishing it is refused, since the move stopped it, leaving the Ticket where the User put it", async () => {
     const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
     const [run] = await runsOf(ticket.id, ada);
@@ -296,19 +296,8 @@ describe("a Run whose Ticket a User moved meanwhile", () => {
     const response = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question: "?" });
 
     expect(response.status).toBe(409);
-    expect(response.json.error).toEqual(expect.objectContaining({ code: "ticket_moved", advice: expect.any(String) }));
+    expect(response.json.error).toEqual(expect.objectContaining({ code: "run_stopped", advice: expect.any(String) }));
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Ready"));
-  });
-
-  test("moving it into another Step's Status records no Run beside the running one, even a refused one", async () => {
-    const { ada, ticket, agent, status } = await adaWithAgent();
-    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
-    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
-
-    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate") });
-
-    const runs = await runsOf(ticket.id, ada);
-    expect(runs.map((r: { step: { name: string }; state: string }) => [r.step.name, r.state])).toEqual([["Triage", "running"]]);
   });
 });
 
@@ -343,10 +332,13 @@ describe("at most one running Run per Ticket", () => {
     ]);
 
     expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    // Each move stops the running Run before starting the next, so only the latest is running.
     const runs = await runsOf(ticket.id, ada);
     expect(runs.filter((r: { state: string }) => r.state === "running")).toHaveLength(1);
-    expect(runs).toHaveLength(1);
-    expect(cronk.runner.starts).toHaveLength(1);
+    expect(runs.at(-1).state).toBe("running");
+    expect(runs.slice(0, -1).every((r: { state: string }) => r.state === "stopped")).toBe(true);
+    // Every Run recorded was asked of the Runner, and only those.
+    expect(cronk.runner.starts.map((s) => s.runId).sort()).toEqual(runs.map((r: { id: string }) => r.id).sort());
   });
 });
 

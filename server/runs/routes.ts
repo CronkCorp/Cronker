@@ -6,7 +6,8 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { createRunner, RunnerRecord, runnersOf, setRunnerLimit } from "./runners.js";
-import { briefOfRun, findRun, finishRun, Run, runsOf } from "./runs.js";
+import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
+import { Ticket } from "../work/tickets.js";
 
 export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
   return async (app) => {
@@ -95,6 +96,25 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => finishRun(context, await requireCaller(context, request), request.params.runId, request.body),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/retry",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Retry a Ticket whose latest Run went wrong",
+          description:
+            "Starts a fresh Run of the same Step on a delegated Ticket whose latest Run failed, was lost or couldn't " +
+            "start, while the Ticket is still in that Run's Status; refused with `nothing_to_retry` otherwise. Only the " +
+            "Delegate's Owner retries, since the Run spends their credentials. Nothing retries by itself. Like any " +
+            "Ticket needing a Run, it waits while its Runner is full or it is blocked. Returns the Ticket: its " +
+            "`lastRun` is the new Run, or its `waiting` says what it waits for.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => retryRun(context, (await requireUser(context, request)).id, request.params.ticketId),
     );
 
     app.get(

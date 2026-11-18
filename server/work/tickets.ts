@@ -8,7 +8,7 @@ import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded, startUnblocked } from "../runs/runs.js";
+import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
 import { Waiting, waitingColumn } from "../runs/waiting.js";
 
@@ -166,7 +166,7 @@ export async function findTicketRow(
   return rows[0];
 }
 
-export async function findTicket(db: Db, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
+export async function findTicket(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
   const row = await findTicketRow(db, viewer, ticketId);
   return row && withMentions(db, row);
 }
@@ -437,10 +437,27 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
-    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
-    // leaving it, or losing its Delegate, ends its wait for one.
+    // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
+    // Only Users get here with either change: Agents set neither a Status nor a Delegate.
     const entered = next.statusId !== ticket.statusId;
     const delegateChanged = next.delegateId !== ticket.delegateId;
+    if (entered || delegateChanged) {
+      const { rows } = await tx.query<{ name: string }>(
+        "select coalesce(email, '@' || github_login) as name from users where id = $1",
+        [userId],
+      );
+      const who = rows[0]!.name;
+      const moved = changes.find((c) => c.field === "status")?.to as { name: string } | undefined;
+      const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
+      const reason = moved
+        ? `${who} moved ${ticket.key} to ${moved.name}.`
+        : delegate
+          ? `${who} delegated ${ticket.key} to ${delegate.name}.`
+          : `${who} undelegated ${ticket.key}.`;
+      await stopRunningRun(context, tx, ticket.id, reason, now);
+    }
+    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
+    // leaving it, or losing its Delegate, ends its wait for one.
     if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];

@@ -5,22 +5,24 @@ import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type Step } from "../work/steps.js";
 import { recordReport } from "../work/reports.js";
-import { findTicketRefByKey, findTicketRow, ticketNotFound } from "../work/tickets.js";
+import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
-import { RunState } from "./states.js";
+import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
  * A delegated Ticket entering a Status with a Step gets a Run, unless it has a running one;
- * the Run ends when its Agent calls `finish` with an Outcome, or when its Runner reports it
- * ended without finishing.
+ * the Run ends when its Agent calls `finish` with an Outcome, when its Runner reports it ended
+ * without finishing, when nothing names it for its Workspace's lost-Run threshold, or when a User
+ * moves, undelegates or re-delegates its Ticket. Nothing starts a Run again after one went wrong
+ * but a User's Retry.
  */
 
 export const Run = Type.Object({
@@ -39,7 +41,7 @@ export const Run = Type.Object({
   outcome: Type.Union([Type.String(), Type.Null()], { description: "The Outcome its Agent finished it with." }),
   question: Type.Union([Type.String(), Type.Null()], { description: "The Question its Agent finished it with, if any." }),
   endReason: Type.Union([Type.String(), Type.Null()], {
-    description: "Why it failed, or why its Runner refused to start it.",
+    description: "Why it failed, was lost or was stopped, or why its Runner refused to start it.",
   }),
   sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow the Run, such as its claude.ai session." }),
   startedAt: Type.String({ format: "date-time" }),
@@ -235,6 +237,13 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
           result.reference.sessionId ?? null,
           result.reference.url ?? null,
         ]);
+      } else if (result.refusal.kind === "rate_limited") {
+        // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits for a slot of its Runner,
+        // rather than showing as couldn't-start. Its slot is freed without handing it on at once, which would
+        // only meet the same limit; the next Run its Runner ends hands it on, as for any waiting Ticket.
+        await lockSlotOf(tx, runId);
+        const { rowCount } = await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
+        if (rowCount) await tx.query("update tickets set waits_for_run = true where id = $1", [ticketId]);
       } else {
         await freeSlot(context, tx, runId);
         await tx.query(
@@ -264,13 +273,18 @@ async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number }> 
  * the Run frees to the Runner's next waiting Ticket.
  */
 async function freeSlot(context: Context, tx: Tx, runId: string): Promise<void> {
+  const runnerId = await lockSlotOf(tx, runId);
+  if (runnerId) afterCommit(tx, () => startWaitingRuns(context, runnerId));
+}
+
+/** Locks the Run, then holds its Runner's slots still; returns the Runner, if it has one. */
+async function lockSlotOf(tx: Tx, runId: string): Promise<string | null> {
   const { rows } = await tx.query<{ runnerId: string | null }>(`select runner_id as "runnerId" from runs where id = $1 for update`, [
     runId,
   ]);
-  const runnerId = rows[0]?.runnerId;
-  if (!runnerId) return;
-  await lockRunner(tx, runnerId);
-  afterCommit(tx, () => startWaitingRuns(context, runnerId));
+  const runnerId = rows[0]?.runnerId ?? null;
+  if (runnerId) await lockRunner(tx, runnerId);
+  return runnerId;
 }
 
 /** Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue. */
@@ -365,6 +379,55 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
 }
 
 /**
+ * Stops the Ticket's running Run, if it has one, because a User took the Ticket away from it: moved,
+ * undelegated or re-delegated it. Call it in the transaction that locked the Ticket. Its slot goes to the
+ * Runner's next waiting Ticket; once the transaction commits, Cronk asks the Run's Runner to stop it too,
+ * where the Runner can. Either way the Run's later calls are refused.
+ */
+export async function stopRunningRun(context: Context, tx: Tx, ticketId: string, reason: string, now: Date): Promise<void> {
+  const { rows: running } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and state = 'running'",
+    [ticketId],
+  );
+  for (const { id } of running) {
+    await freeSlot(context, tx, id);
+    const { rows } = await tx.query<EndedRun>(
+      `update runs set state = 'stopped', end_reason = $2, ended_at = $3 where id = $1 returning ${endedRunColumns}`,
+      [id, reason, now],
+    );
+    for (const run of rows) askRunnerToStop(context, tx, run);
+  }
+}
+
+/** A Run that just ended in Cronk, with what its Runner needs to stop it too. */
+interface EndedRun {
+  runId: string;
+  workspaceId: string;
+  ticketId: string;
+  sessionId: string | null;
+  sessionUrl: string | null;
+  runnerKind: string | null;
+}
+
+const endedRunColumns = `runs.id as "runId", runs.workspace_id as "workspaceId", runs.ticket_id as "ticketId",
+  runs.session_id as "sessionId", runs.session_url as "sessionUrl",
+  (select kind from runners where runners.id = runs.runner_id) as "runnerKind"`;
+
+/** Once the transaction commits, asks the Runner of a Run Cronk ended to stop its session too, where it can. */
+function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
+  const runner = run.runnerKind ? context.runners[run.runnerKind] : undefined;
+  if (!runner?.stop) return;
+  const reference = {
+    ...(run.sessionId === null ? {} : { sessionId: run.sessionId }),
+    ...(run.sessionUrl === null ? {} : { url: run.sessionUrl }),
+  };
+  afterCommit(tx, async () => {
+    // Best effort: the Run has ended in Cronk whatever its Runner says.
+    await runner.stop!({ runId: run.runId, reference }).catch(() => {});
+  });
+}
+
+/**
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
  * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
  */
@@ -395,12 +458,6 @@ export async function finishRun(
       throw new ApiError(409, "run_not_running", `This Run is ${run.state}, not running, so it can't be finished.`, {
         rule: finishRule,
         advice: "Nothing more is needed for this Run; leave a Comment on its Ticket if you have more to say.",
-      });
-    }
-    if (ticket.statusId !== run.statusId) {
-      throw new ApiError(409, "ticket_moved", `${ticket.key} was moved out of ${run.step.name} while this Run was running.`, {
-        rule: "A Run's Outcome moves its Ticket only from the Status the Run was started in.",
-        advice: `Stop working on ${ticket.key}: a User moved it on. Leave a Comment if there is something they should know.`,
       });
     }
     const statuses = await statusesOf(tx, ticket.projectId);
@@ -443,6 +500,91 @@ export async function finishRun(
     await startRunIfNeeded(context, tx, ticket.id, now);
     return present((await findRunRow(tx, caller, run.id))!);
   });
+}
+
+/**
+ * Starts a fresh Run of the same Step on a Ticket whose latest Run failed, was lost or couldn't
+ * start, while the Ticket is still delegated and in that Run's Status. Only the Delegate's Owner
+ * retries, since the Run spends their credentials. Like any Ticket needing a Run, it waits while its
+ * Runner is full or it is blocked. Returns the Ticket, with its new latest Run or what it waits for.
+ */
+export async function retryRun(context: Context, userId: string, ticketId: string): Promise<Ticket> {
+  return transaction(context.db, async (tx) => {
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    if (!ticket) throw ticketNotFound();
+    const { rows } = await tx.query<{ state: RunState; statusId: string | null }>(
+      `select state, status_id as "statusId" from runs where ticket_id = $1 order by seq desc limit 1`,
+      [ticket.id],
+    );
+    const latest = rows[0];
+    const why = !latest
+      ? `${ticket.key} has had no Run`
+      : !wentWrong(latest.state)
+        ? `${ticket.key}'s latest Run is ${latest.state}`
+        : latest.statusId !== ticket.statusId
+          ? `${ticket.key} has moved on from the Status its latest Run was in`
+          : !ticket.delegateId
+            ? `${ticket.key} isn't delegated`
+            : null;
+    if (why) {
+      throw new ApiError(409, "nothing_to_retry", `${why}, so there is nothing to retry.`, {
+        rule: "Retry starts a fresh Run on a delegated Ticket whose latest Run failed, was lost or couldn't start, while it is still in that Run's Status.",
+        advice: "Move the Ticket into a Status with a Step, or delegate it, to start a Run there.",
+      });
+    }
+    const { rows: owners } = await tx.query<{ ownerId: string; agentName: string; ownerName: string }>(
+      `select agents.owner_id as "ownerId", agents.name as "agentName", coalesce(users.email, '@' || users.github_login) as "ownerName"
+       from agents join users on users.id = agents.owner_id where agents.id = $1`,
+      [ticket.delegateId],
+    );
+    const owner = owners[0]!;
+    if (owner.ownerId !== userId) {
+      throw new ApiError(
+        403,
+        "not_delegates_owner",
+        `Only ${owner.ownerName}, the Owner of ${owner.agentName}, retries ${ticket.key}: its Runs spend their credentials.`,
+      );
+    }
+    await startRunIfNeeded(context, tx, ticket.id, context.clock.now());
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    return (await findTicket(tx, userViewer(userId), ticket.id))!;
+  });
+}
+
+/**
+ * Makes lost every running Run whose Agent made no call naming it or its Ticket for its Workspace's
+ * lost-Run threshold, each in a transaction of its own. The server runs this periodically; tests run it
+ * directly after moving the clock. A lost Run's Ticket stays where it is, waiting for Retry; its slot goes
+ * to the Runner's next waiting Ticket, and its Runner is asked to stop it, where it can.
+ */
+export async function checkForLostRuns(context: Context): Promise<void> {
+  const silent = `runs.state = 'running' and workspaces.id = runs.workspace_id
+    and coalesce(runs.last_call_at, runs.started_at) <= $1::timestamptz - make_interval(mins => workspaces.lost_run_minutes)`;
+  const now = context.clock.now();
+  const { rows: candidates } = await context.db.query<{ id: string }>(
+    `select runs.id from runs, workspaces where ${silent}`,
+    [now],
+  );
+  for (const { id } of candidates) {
+    await transaction(context.db, async (tx) => {
+      await freeSlot(context, tx, id);
+      // Checked again under the lock: a call may have named the Run meanwhile.
+      const { rows } = await tx.query<EndedRun & { projectId: string }>(
+        `update runs set state = 'lost', ended_at = $1,
+           end_reason = format('No call named the Run or %s for %s minutes.', projects.key || '-' || tickets.number,
+             workspaces.lost_run_minutes)
+         from tickets, projects, workspaces
+         where runs.id = $2 and tickets.id = runs.ticket_id and projects.id = tickets.project_id and ${silent}
+         returning ${endedRunColumns}, tickets.project_id as "projectId"`,
+        [now, id],
+      );
+      for (const run of rows) {
+        context.live.publish(tx, run.workspaceId, { type: "ticket.changed", projectId: run.projectId, ticketId: run.ticketId });
+        // A lost Run's session may yet be alive: stopping it keeps a Retry from running beside it.
+        askRunnerToStop(context, tx, run);
+      }
+    });
+  }
 }
 
 /** What a request names: a Run, a Ticket by id, or a Ticket by its key. */
