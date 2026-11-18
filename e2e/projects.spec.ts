@@ -39,8 +39,8 @@ test("create a Project, see its empty board and list, and edit its Statuses in s
   await page.getByRole("button", { name: "Create Project" }).click();
 
   await expect(page.getByRole("heading", { name: "Cronker" })).toBeVisible();
-  const columns = page.getByRole("region", { name: "Board" }).getByRole("heading", { level: 2 });
-  await expect(columns).toHaveText(defaultBoard);
+  const statusHeadings = page.getByRole("region", { name: "Board" }).getByRole("heading", { level: 2 });
+  await expect(statusHeadings).toHaveText(defaultBoard);
 
   await page.getByRole("link", { name: "List" }).click();
   await expect(page.getByRole("region", { name: "List" }).getByRole("heading", { level: 2 })).toHaveText(defaultBoard);
@@ -69,7 +69,7 @@ test("create a Project, see its empty board and list, and edit its Statuses in s
   await expect(page.getByLabel("Name of Investigate")).toHaveCount(0);
 
   await page.getByRole("link", { name: "Board" }).click();
-  await expect(columns).toHaveText([
+  await expect(statusHeadings).toHaveText([
     "Backlog",
     "Triage",
     "Todo",
@@ -82,7 +82,7 @@ test("create a Project, see its empty board and list, and edit its Statuses in s
   ]);
 
   await page.reload();
-  await expect(columns).toHaveText([
+  await expect(statusHeadings).toHaveText([
     "Backlog",
     "Triage",
     "Todo",

@@ -174,6 +174,7 @@ function WorkspaceScreen({
           projectPath ? (
             <ProjectScreen
               key={projectPath[1]}
+              workspace={workspace}
               projectId={projectPath[1]!}
               view={(projectPath[2] as "list" | "settings" | undefined) ?? "board"}
             />

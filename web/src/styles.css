@@ -124,19 +124,19 @@ form.inline {
   overflow-x: auto;
   padding-bottom: 1rem;
 }
-.column {
+.lane {
   flex: 0 0 14rem;
   min-height: 50vh;
   padding: 0 0.75rem;
   border: 1px solid var(--line);
   border-radius: 8px;
 }
-.column h2,
+.lane h2,
 .list h2 {
   font-size: 1rem;
   margin: 0.75rem 0 0;
 }
-.column p {
+.lane p {
   margin: 0.25rem 0;
   font-size: 0.85rem;
 }

@@ -62,14 +62,18 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
 type View = "board" | "list" | "settings";
 
-/** A Project as a board, as a list, or its settings. */
-export function ProjectScreen({ projectId, view }: { projectId: string; view: View }) {
+/** A Project of the Workspace on screen, as a board, as a list, or its settings. */
+export function ProjectScreen({ workspace, projectId, view }: { workspace: Workspace; projectId: string; view: View }) {
   const [project, setProject] = useState<Project | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
   useEffect(() => {
-    api.project(projectId).then(setProject, (e: Error) => setFailure(e.message));
-  }, [projectId]);
+    api.project(projectId).then(
+      // A Project of another of the User's Workspaces isn't shown under this one's name.
+      (found) => (found.workspaceId === workspace.id ? setProject(found) : setFailure("No such Project.")),
+      (e: Error) => setFailure(e.message),
+    );
+  }, [projectId, workspace.id]);
 
   if (failure) return <p role="alert">{failure}</p>;
   if (!project) return <p>Loading…</p>;
@@ -101,7 +105,7 @@ function Board({ project }: { project: Project }) {
   return (
     <section aria-label="Board" className="board">
       {project.statuses.map((status) => (
-        <section key={status.id} aria-label={status.name} className="column">
+        <section key={status.id} aria-label={status.name} className="lane">
           <h2>{status.name}</h2>
           <p className="muted">{kindLabel(status.kind)}</p>
         </section>
