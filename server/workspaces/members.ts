@@ -8,6 +8,7 @@ import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
+import { stopRunningRun } from "../runs/runs.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
@@ -198,9 +199,12 @@ export async function setAdmin(db: Db, workspaceId: string, userId: string, isAd
 
 /**
  * Removes a member, who then sees nothing of the Workspace. Their unused links to join
- * it end too, and so do their streams of its events. Refused if it would leave the Workspace without an Admin.
+ * it end too, and so do their streams of its events. Their Agents stop working there: their
+ * running Runs are stopped, and their calls refused from then on. Refused if it would leave
+ * the Workspace without an Admin.
  */
-export async function removeMember({ db, live }: Context, workspaceId: string, userId: string): Promise<void> {
+export async function removeMember(context: Context, adminId: string, workspaceId: string, userId: string): Promise<void> {
+  const { db, live, clock } = context;
   await transaction(db, async (tx) => {
     const members = await lockMembers(tx, workspaceId);
     const member = members.find((m) => m.user_id === userId);
@@ -211,8 +215,27 @@ export async function removeMember({ db, live }: Context, workspaceId: string, u
       "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null",
       [workspaceId, userId],
     );
+    const now = clock.now();
+    const reason = `${await nameOf(tx, adminId)} removed ${await nameOf(tx, userId)} from the Workspace.`;
+    const { rows: running } = await tx.query<{ ticketId: string }>(
+      `select tickets.id as "ticketId" from tickets
+       where tickets.id in (select runs.ticket_id from runs join agents on agents.id = runs.agent_id
+         where runs.workspace_id = $1 and runs.state = 'running' and agents.owner_id = $2)
+       order by tickets.id for update`,
+      [workspaceId, userId],
+    );
+    for (const { ticketId } of running) await stopRunningRun(context, tx, ticketId, reason, now);
     live.endAfterCommit(tx, (stream) => stream.workspaceId === workspaceId && stream.userId === userId);
   });
+}
+
+/** How Cronk names a User in what it writes: by email, or by GitHub login until their email is known. */
+async function nameOf(tx: Tx, userId: string): Promise<string> {
+  const { rows } = await tx.query<{ name: string }>(
+    "select coalesce(email, '@' || github_login) as name from users where id = $1",
+    [userId],
+  );
+  return rows[0]!.name;
 }
 
 /**
