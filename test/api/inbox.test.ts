@@ -187,6 +187,18 @@ describe("the Inbox count, live", () => {
     expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
   });
 
+  test("a change to an item already in the Inbox is sent too, so the Inbox page can show it", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "Old title");
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+    const stream = await events(workspace.id, ada.cookie);
+    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
+
+    await editTicket(ada.cookie, ticket.id, { title: "New title" });
+
+    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
+  });
+
   test("changing a Status's kind updates the count", async () => {
     const { ada, workspace, project, statusId } = await workspaceWithProject();
     const ticket = await createTicket(ada.cookie, project.id, "Waiting");

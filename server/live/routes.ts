@@ -23,7 +23,8 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "A Workspace's event stream",
           description:
             "Server-sent events for the signed-in User in this Workspace, sent after the changes behind them commit. " +
-            "`inbox` carries `{ count }`, the User's Inbox count: once when the stream opens, then whenever it changes. " +
+            "`inbox` carries `{ count }`, the User's Inbox count: once when the stream opens, then whenever their Inbox " +
+            "changes, even if its count stays the same. " +
             "The stream ends if the User leaves the Workspace.",
           params: Type.Object({ workspaceId: Type.String() }),
           response: {
@@ -47,7 +48,7 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
         const send = (event: string, data: unknown) => raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
         let ended = false;
-        let lastCount: number | undefined;
+        let last: string | undefined;
         let refreshing: Promise<void> | undefined;
         let again = false;
         // Changes may arrive faster than the Inbox is worked out; they are folded into one more refresh.
@@ -60,10 +61,11 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
             do {
               again = false;
               if (!(await findWorkspace(db, user.id, workspace.id))) return end();
-              const { count } = await inboxOf(db, user.id, workspace.id);
-              if (ended || count === lastCount) continue;
-              lastCount = count;
-              send("inbox", { count });
+              const inbox = await inboxOf(db, user.id, workspace.id);
+              const seen = JSON.stringify(inbox);
+              if (ended || seen === last) continue;
+              last = seen;
+              send("inbox", { count: inbox.count });
             } while (again && !ended);
           })()
             .catch((error: unknown) => {
