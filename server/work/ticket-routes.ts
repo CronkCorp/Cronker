@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { addComment, Comment, commentsOn } from "./comments.js";
 import {
   createTicket,
   editTicket,
@@ -112,6 +113,43 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return editTicket(db, user.id, request.params.ticketId, request.body);
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/comments",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Comments",
+          description: "Oldest first. A reply names the Comment it answers.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(Comment), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return commentsOn(db, user.id, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/comments",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Comment on a Ticket, or reply to a Comment",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            body: Type.String({ minLength: 1, maxLength: 100_000, pattern: "\\S", description: "Markdown." }),
+            replyToId: Type.Optional(Type.String({ description: "The Comment on this Ticket being replied to." })),
+          }),
+          response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        return reply.code(201).send(await addComment(db, clock, user.id, request.params.ticketId, request.body));
       },
     );
   };

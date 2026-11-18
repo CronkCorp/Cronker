@@ -65,7 +65,7 @@ export function ticketNotFound(): ApiError {
 }
 
 /** A Ticket, if the User belongs to its Workspace; otherwise nothing, as if it didn't exist. */
-async function findRow(db: Db | Tx, userId: string, ticketId: string, { lock = false } = {}) {
+export async function findTicketRow(db: Db | Tx, userId: string, ticketId: string, { lock = false } = {}) {
   if (!isUuid(ticketId)) return undefined;
   const { rows } = await db.query<Row>(
     `select ${columns}, tickets.workspace_id as "workspaceId"
@@ -78,7 +78,7 @@ async function findRow(db: Db | Tx, userId: string, ticketId: string, { lock = f
 }
 
 export async function findTicket(db: Db, userId: string, ticketId: string): Promise<Ticket | undefined> {
-  const row = await findRow(db, userId, ticketId);
+  const row = await findTicketRow(db, userId, ticketId);
   return row && withMentions(db, row);
 }
 
@@ -124,7 +124,7 @@ export async function createTicket(
        returning id`,
       [project.workspaceId, project.id, input.title.trim(), input.description ?? "", backlog.id, userId, clock.now()],
     );
-    return withMentions(tx, (await findRow(tx, userId, rows[0]!.id))!);
+    return withMentions(tx, (await findTicketRow(tx, userId, rows[0]!.id))!);
   });
 }
 
@@ -191,7 +191,7 @@ export async function editTicket(
   edit: TicketEdit,
 ): Promise<Ticket> {
   return transaction(db, async (tx) => {
-    const ticket = await findRow(tx, userId, ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, userId, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     const next = { ...ticket };
     if (edit.title !== undefined) next.title = edit.title.trim();

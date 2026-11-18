@@ -294,3 +294,61 @@ describe("listing and filtering Tickets", () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe("Comments", () => {
+  const comment = (cookie: string, ticketId: string, body: Record<string, unknown>) =>
+    cronk.request("POST", `/api/tickets/${ticketId}/comments`, { cookie, body });
+
+  test("a User comments on a Ticket and replies to a Comment", async () => {
+    const { user, cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Discuss" });
+
+    const first = await comment(cookie, ticket.id, { body: "Shall we use **SSE**?" });
+    expect(first.status).toBe(201);
+    const question = await first.json();
+    expect(question).toEqual({
+      id: expect.any(String),
+      ticketId: ticket.id,
+      replyToId: null,
+      body: "Shall we use **SSE**?",
+      author: { kind: "user", id: user.id, name: user.email },
+      createdAt: "2026-01-01T09:00:00.000Z",
+      mentions: [],
+    });
+
+    cronk.clock.advance(60_000);
+    const second = await comment(cookie, ticket.id, { body: "Yes.", replyToId: question.id });
+    expect(second.status).toBe(201);
+    const reply = await second.json();
+    expect(reply).toMatchObject({ replyToId: question.id, body: "Yes.", createdAt: "2026-01-01T09:01:00.000Z" });
+
+    const listed = await cronk.request("GET", `/api/tickets/${ticket.id}/comments`, { cookie });
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual([question, reply]);
+  });
+
+  test("a reply to a Comment on another Ticket is refused", async () => {
+    const { cookie, project } = await newProject();
+    const one = await createTicket(cookie, project.id, { title: "One" });
+    const two = await createTicket(cookie, project.id, { title: "Two" });
+    const elsewhere = await (await comment(cookie, one.id, { body: "Over here" })).json();
+
+    for (const replyToId of [elsewhere.id, "00000000-0000-4000-8000-000000000000"]) {
+      const response = await comment(cookie, two.id, { body: "Reply", replyToId });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: { code: "unknown_comment", message: "Replies go to a Comment on the same Ticket." },
+      });
+    }
+  });
+
+  test("a blank Comment is refused, and Comments on a Ticket the User can't see answer 404", async () => {
+    const { cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Quiet" });
+
+    expect((await comment(cookie, ticket.id, { body: "  " })).status).toBe(400);
+    const missing = "00000000-0000-4000-8000-000000000000";
+    expect((await comment(cookie, missing, { body: "Hello" })).status).toBe(404);
+    expect((await cronk.request("GET", `/api/tickets/${missing}/comments`, { cookie })).status).toBe(404);
+  });
+});

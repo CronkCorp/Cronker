@@ -28,3 +28,21 @@ create table tickets (
 );
 create index tickets_status_id_idx on tickets (status_id);
 create index tickets_workspace_id_idx on tickets (workspace_id);
+
+-- Lets records on a Ticket insist they carry the Ticket's own Workspace.
+alter table tickets add constraint tickets_id_workspace_key unique (id, workspace_id);
+
+-- Comments on a Ticket, each by an Actor; only Users so far. A reply is to a Comment on the same Ticket.
+create table comments (
+  id uuid primary key default gen_random_uuid(),
+  workspace_id uuid not null references workspaces (id),
+  ticket_id uuid not null,
+  reply_to_id uuid,
+  author_user_id uuid not null references users (id),
+  body text not null,
+  created_at timestamptz not null,
+  foreign key (ticket_id, workspace_id) references tickets (id, workspace_id),
+  constraint comments_id_ticket_key unique (id, ticket_id),
+  foreign key (reply_to_id, ticket_id) references comments (id, ticket_id)
+);
+create index comments_ticket_id_idx on comments (ticket_id, created_at);
