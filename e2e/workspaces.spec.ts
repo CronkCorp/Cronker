@@ -53,7 +53,8 @@ test("an Admin adds a User by email, who joins through the link", async ({ page,
   await page.getByRole("button", { name: "Add by email" }).click();
   const link = await page.getByLabel("Link for bea@example.com").inputValue();
   expect(link).toContain("/link#cronk_join_");
-  await expect(page.getByRole("row", { name: /bea@example\.com/ })).toHaveCount(0);
+  const members = page.getByRole("table", { name: "Members" });
+  await expect(members.getByRole("row", { name: /bea@example\.com/ })).toHaveCount(0);
 
   const bea = await (await browser.newContext()).newPage();
   await bea.goto(link);
@@ -67,10 +68,29 @@ test("an Admin adds a User by email, who joins through the link", async ({ page,
   await expect(bea.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
 
   await page.reload();
-  const row = page.getByRole("row", { name: /bea@example\.com/ });
+  const row = members.getByRole("row", { name: /bea@example\.com/ });
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Make Admin" }).click();
   await expect(row.getByRole("button", { name: "Remove Admin" })).toBeVisible();
   await row.getByRole("button", { name: "Remove from Workspace" }).click();
   await expect(row).toHaveCount(0);
+});
+
+test("an Admin sees a pending add and cancels it, which ends its link", async ({ page, cronk, browser }) => {
+  await setUpAndSignIn(page, cronk);
+
+  await page.getByRole("link", { name: "Members" }).click();
+  await page.getByLabel("Email").fill("bea@example.com");
+  await page.getByRole("button", { name: "Add by email" }).click();
+  const link = await page.getByLabel("Link for bea@example.com").inputValue();
+
+  const pending = page.getByRole("table", { name: "Added, not joined yet" });
+  const row = pending.getByRole("row", { name: /bea@example\.com/ });
+  await expect(row).toContainText("by email");
+  await row.getByRole("button", { name: "Cancel add" }).click();
+  await expect(row).toHaveCount(0);
+
+  const bea = await (await browser.newContext()).newPage();
+  await bea.goto(link);
+  await expect(bea.getByRole("heading", { name: "This link doesn't work" })).toBeVisible();
 });

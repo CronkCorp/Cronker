@@ -70,7 +70,7 @@ export async function pendingAddsOf({ db, clock }: Context, workspaceId: string)
      ) pending
      join users on users.id = pending.user_id
      where not exists (select 1 from memberships where workspace_id = $1 and user_id = pending.user_id)
-     order by pending.added_at, users.id`,
+     order by pending.added_at, lower(coalesce(users.email, users.github_login))`,
     [workspaceId, clock.now()],
   );
   return rows.map(({ added_by, added_at, expires_at, ...user }) => ({

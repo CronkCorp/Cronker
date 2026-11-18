@@ -34,6 +34,14 @@ export interface Member {
   isAdmin: boolean;
 }
 
+export interface PendingAdd {
+  user: User;
+  addedBy: "email" | "github";
+  addedAt: string;
+  /** When the last of their join links expires; null for an add by GitHub login. */
+  expiresAt: string | null;
+}
+
 export interface Link {
   url: string;
   expiresAt: string;
@@ -292,6 +300,9 @@ export const api = {
   setAdmin: (id: string, userId: string, isAdmin: boolean) =>
     call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
   removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
+  pendingAdds: (id: string) => call<PendingAdd[]>("GET", `${ws(id)}/pending-adds`),
+  cancelPendingAdd: (id: string, userId: string) =>
+    call<void>("DELETE", `${ws(id)}/pending-adds/${encodeURIComponent(userId)}`),
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
   addMemberByGitHub: (id: string, login: string) =>
     call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
