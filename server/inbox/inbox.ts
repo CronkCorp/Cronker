@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
+import { User } from "../identity/user.js";
 import { openQuestionsFor, Question } from "../runs/questions.js";
 import { WentWrongState, wentWrongStates } from "../runs/states.js";
 import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
@@ -70,7 +71,14 @@ export const DiscoveredItem = Type.Object({
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Agent that filed it." }),
 });
 
-export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem]);
+/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it to someone. */
+export const ReassignItem = Type.Object({
+  kind: Type.Literal("reassign"),
+  ticket: TicketSummary,
+  formerAssignee: User,
+});
+
+export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem, ReassignItem]);
 export type InboxItem = Static<typeof InboxItem>;
 
 export const Inbox = Type.Object({
@@ -79,8 +87,9 @@ export const Inbox = Type.Object({
 });
 export type Inbox = Static<typeof Inbox>;
 
-/** The User's Inbox in the Workspace; the caller checks they belong to it. */
-export async function inboxOf(db: Db, userId: string, workspaceId: string): Promise<Inbox> {
+/** The User's Inbox in the Workspace; the caller checks they belong to it, and whether they are its Admin. */
+export async function inboxOf(db: Db, userId: string, workspace: { id: string; isAdmin: boolean }): Promise<Inbox> {
+  const workspaceId = workspace.id;
   const questions = await openQuestionsFor(db, userId, workspaceId);
   type Row = TicketRow & {
     statusName: string;
@@ -152,6 +161,18 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
     [workspaceId, userId],
   );
   for (const { agent, ...row } of discovered) items.push({ kind: "discovered", ticket: ticketSummary(row), agent });
+  if (workspace.isAdmin) {
+    const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User }>(
+      `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
+         json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee"
+       from tickets join projects on projects.id = tickets.project_id
+       join users on users.id = tickets.former_assignee_id
+       where tickets.workspace_id = $1 and tickets.assignee_id is null
+       order by projects.key, tickets.number`,
+      [workspaceId],
+    );
+    for (const { formerAssignee, ...row } of toReassign) items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee });
+  }
   return { count: items.length, items };
 }
 

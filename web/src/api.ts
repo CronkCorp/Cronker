@@ -382,7 +382,14 @@ export interface DiscoveredItem {
   agent: { id: string; name: string };
 }
 
-export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem;
+/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
+export interface ReassignItem {
+  kind: "reassign";
+  ticket: TicketSummary;
+  formerAssignee: User;
+}
+
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem | ReassignItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {

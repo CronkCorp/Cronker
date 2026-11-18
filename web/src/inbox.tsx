@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type DiscoveredItem, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
+import { api, nameOf, type DiscoveredItem, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { Link } from "./router.js";
@@ -142,6 +142,8 @@ function ItemDetail({ item }: { item: InboxItem }) {
       return <WentWrong item={item} />;
     case "discovered":
       return <Discovered item={item} />;
+    case "reassign":
+      return <small>{nameOf(item.formerAssignee)} was removed from the Workspace: assign it to someone</small>;
   }
 }
 

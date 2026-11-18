@@ -462,7 +462,8 @@ const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "lab
 /**
  * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
  * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
- * each of its Changes names.
+ * each of its Changes names. Assigning a Ticket whose Assignee was removed from the Workspace takes it out
+ * of the Admins' Inbox.
  */
 export async function editTicket(
   context: Context,
@@ -576,6 +577,7 @@ export async function editTicket(
     }
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
+       former_assignee_id = case when $6::uuid is null then former_assignee_id end,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
        status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
        -- Moving the Ticket ends its waiting from a needs you Outcome.
