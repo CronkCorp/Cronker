@@ -117,6 +117,24 @@ describe("Relations", () => {
     ]);
   });
 
+  test("the other Ticket may be named by its key, matched ignoring case", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Board");
+    const ops = await createProject(cookie, workspace.id, "Operations", "OPS");
+    const deploy = await createTicket(cookie, ops.id, "Deploy");
+
+    const response = await cronk.request("POST", `/api/tickets/${tickets[0]!.id}/relations`, {
+      cookie,
+      body: { kind: "blockedBy", ticketKey: "ops-1" },
+    });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ id: expect.any(String), kind: "blockedBy", ticket: deploy });
+    for (const body of [{ kind: "blocks", ticketKey: "OPS-2" }, { kind: "blocks" }]) {
+      const refused = await cronk.request("POST", `/api/tickets/${tickets[0]!.id}/relations`, { cookie, body });
+      expect(refused.status).toBe(400);
+    }
+  });
+
   test("a Ticket of another Workspace, or none at all, is refused", async () => {
     const { cookie, tickets } = await withTickets("Board");
     const created = await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Elsewhere" } });

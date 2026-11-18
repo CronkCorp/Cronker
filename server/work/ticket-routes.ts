@@ -114,7 +114,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
                 Type.String({
                   format: "uuid",
                   description:
-                    "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; never of itself or of one of its own Sub-Tickets.",
+                    "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; " +
+                    "never of itself or of one of its own Sub-Tickets.",
                 }),
               ),
             ),
@@ -189,12 +190,18 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Tickets"],
           summary: "Relate a Ticket to another",
           description:
-            "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace.",
+            "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace, " +
+            "named by its id or its key.",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Object({
-            kind: RelationKind,
-            ticketId: Type.String({ description: "The other Ticket." }),
-          }),
+          body: Type.Union([
+            Type.Object({ kind: RelationKind, ticketId: Type.String({ description: "The other Ticket." }) }),
+            Type.Object({
+              kind: RelationKind,
+              ticketKey: Type.String({
+                description: "The other Ticket's key, such as `CRONK-12`, matched ignoring case.",
+              }),
+            }),
+          ]),
           response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

@@ -37,7 +37,7 @@ export function TicketScreen({
   const [comments, setComments] = useState<Comment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
-  const [workspaceTickets, setWorkspaceTickets] = useState<TicketSummary[]>([]);
+  const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const otherWorkspace = useRef(onOtherWorkspace);
@@ -57,15 +57,12 @@ export function TicketScreen({
       }
       setProject(ticketProject);
       setTicket(found);
+      api.tickets(ticketProject.id).then(setProjectTickets, fail);
     }, fail);
     api.members(workspace.id).then(setMembers, fail);
     api.comments(ticketId).then(setComments, fail);
     loadTimeline().catch(fail);
     loadRelations().catch(fail);
-    api
-      .projects(workspace.id)
-      .then((projects) => Promise.all(projects.map((p) => api.tickets(p.id))))
-      .then((lists) => setWorkspaceTickets(lists.flat()), fail);
   }, [ticketId, workspace.id, loadTimeline, loadRelations]);
 
   const save = async (edit: TicketEdit) => {
@@ -102,7 +99,7 @@ export function TicketScreen({
           <Relations
             ticket={ticket}
             relations={relations}
-            workspaceTickets={workspaceTickets}
+            suggestions={projectTickets.filter((t) => t.id !== ticket.id)}
             onChanged={() => Promise.all([loadRelations(), loadTimeline()]).then(() => undefined)}
           />
           <Comments ticket={ticket} comments={comments} onAdded={(c) => setComments([...comments, c])} />
@@ -112,7 +109,7 @@ export function TicketScreen({
           ticket={ticket}
           project={project}
           members={members}
-          projectTickets={workspaceTickets.filter((t) => t.projectId === project.id && t.id !== ticket.id)}
+          projectTickets={projectTickets.filter((t) => t.id !== ticket.id)}
           onSave={save}
         />
       </div>
@@ -286,21 +283,19 @@ function TicketLink({ ticket }: { ticket: TicketRef }) {
 function Relations({
   ticket,
   relations,
-  workspaceTickets,
+  suggestions,
   onChanged,
 }: {
   ticket: Ticket;
   relations: TicketRelations;
-  /** Every Ticket of the Workspace, to find one by key. */
-  workspaceTickets: TicketSummary[];
+  /** Tickets to offer while typing a key; any Ticket of the Workspace may be named. */
+  suggestions: TicketSummary[];
   onChanged: () => Promise<void>;
 }) {
   const [removeError, setRemoveError] = useState<string | null>(null);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
-    const key = field(form, "ticket").trim().split(/\s/)[0]!.toUpperCase();
-    const other = workspaceTickets.find((t) => t.key.toUpperCase() === key);
-    if (!other) throw new Error(`No Ticket ${key} in this Workspace.`);
-    await api.relate(ticket.id, { kind: field(form, "kind") as RelationKind, ticketId: other.id });
+    const ticketKey = field(form, "ticket").trim();
+    await api.relate(ticket.id, { kind: field(form, "kind") as RelationKind, ticketKey });
     // Keeps the kind chosen, for adding several of one kind in a row.
     (element.elements.namedItem("ticket") as HTMLInputElement).value = "";
     await onChanged();
@@ -371,13 +366,11 @@ function Relations({
           <input name="ticket" required list="relation-tickets" placeholder="Key, such as CRONK-12" />
         </label>
         <datalist id="relation-tickets">
-          {workspaceTickets
-            .filter((t) => t.id !== ticket.id)
-            .map((t) => (
-              <option key={t.id} value={t.key}>
-                {t.title}
-              </option>
-            ))}
+          {suggestions.map((t) => (
+            <option key={t.id} value={t.key}>
+              {t.title}
+            </option>
+          ))}
         </datalist>
         <button type="submit" disabled={busy}>
           Add
@@ -481,7 +474,7 @@ const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | Rela
 const ticketShown = (ref: TicketRef) => `${ref.key} ${ref.title}`;
 
 /** How the timeline tells of a Sub-Ticket or Relation added (`to` set) or removed (`from` set). */
-const linkChanges: Record<"subTicket" | RelationKind, { added: string; removed: string }> = {
+const relationChanges: Record<"subTicket" | RelationKind, { added: string; removed: string }> = {
   subTicket: { added: "added Sub-Ticket", removed: "removed Sub-Ticket" },
   blocks: { added: "marked this as blocking", removed: "removed that this blocks" },
   blockedBy: { added: "marked this blocked by", removed: "removed the blocker" },
@@ -491,8 +484,8 @@ const linkChanges: Record<"subTicket" | RelationKind, { added: string; removed: 
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "description") return "changed the Description";
-  if (change.field in linkChanges) {
-    const { added, removed } = linkChanges[change.field as keyof typeof linkChanges];
+  if (change.field in relationChanges) {
+    const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
     return change.to
       ? `${added} ${ticketShown(change.to as TicketRef)}`
       : `${removed} ${ticketShown(change.from as TicketRef)}`;

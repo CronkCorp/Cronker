@@ -253,7 +253,7 @@ export const api = {
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   relations: (ticketId: string) =>
     call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
-  relate: (ticketId: string, input: { kind: RelationKind; ticketId: string }) =>
+  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),

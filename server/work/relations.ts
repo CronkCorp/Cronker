@@ -4,7 +4,15 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { recordChanges } from "./changes.js";
-import { findTicketRef, findTicketRow, ticketNotFound, TicketRef, ticketRefColumn, unknownTicket } from "./tickets.js";
+import {
+  findTicketRef,
+  findTicketRefByKey,
+  findTicketRow,
+  ticketNotFound,
+  TicketRef,
+  ticketRefColumn,
+  unknownTicket,
+} from "./tickets.js";
 
 /** A Relation as seen from one of its Tickets: this Ticket blocks, is blocked by, or relates to the other. */
 export const RelationKind = Type.Union([Type.Literal("blocks"), Type.Literal("blockedBy"), Type.Literal("relatesTo")]);
@@ -29,12 +37,15 @@ export async function addRelation(
   clock: Clock,
   userId: string,
   ticketId: string,
-  input: { kind: RelationKind; ticketId: string },
+  input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string }),
 ): Promise<Relation> {
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId);
     if (!ticket) throw ticketNotFound();
-    const other = await findTicketRef(tx, ticket.workspaceId, input.ticketId);
+    const other =
+      "ticketId" in input
+        ? await findTicketRef(tx, ticket.workspaceId, input.ticketId)
+        : await findTicketRefByKey(tx, ticket.workspaceId, input.ticketKey);
     if (!other) throw unknownTicket();
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
     const [from, to] = input.kind === "blockedBy" ? [other.id, ticket.id] : [ticket.id, other.id];
@@ -50,7 +61,7 @@ export async function addRelation(
        values ($1, $2, $3, $4, $5, $6)
        on conflict (kind, least(ticket_id, other_ticket_id), greatest(ticket_id, other_ticket_id)) do nothing
        returning id`,
-      [ticket.workspaceId, input.kind === "relatesTo" ? "relates" : "blocks", from, to, userId, clock.now()],
+      [ticket.workspaceId, storedKind[input.kind], from, to, userId, clock.now()],
     );
     if (!rows[0]) throw new ApiError(409, "relation_exists", "These Tickets already have that Relation.");
     const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
@@ -58,6 +69,12 @@ export async function addRelation(
     return { id: rows[0]!.id, kind: input.kind, ticket: other };
   });
 }
+
+/** How a Relation is stored: a block always from the blocking Ticket to the blocked one. */
+type StoredKind = "blocks" | "relates";
+const storedKind: Record<RelationKind, StoredKind> = { blocks: "blocks", blockedBy: "blocks", relatesTo: "relates" };
+/** A stored Relation as seen from its `ticket_id` side. */
+const kindFromTicket: Record<StoredKind, RelationKind> = { blocks: "blocks", relates: "relatesTo" };
 
 function relationNotFound(): ApiError {
   return new ApiError(404, "not_found", "This Ticket has no such Relation.");
@@ -72,8 +89,9 @@ export async function removeRelation(
 ): Promise<void> {
   await transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId);
-    if (!ticket || !isUuid(relationId)) throw relationNotFound();
-    const { rows } = await tx.query<{ kind: "blocks" | "relates"; ticketId: string; otherTicketId: string }>(
+    if (!ticket) throw ticketNotFound();
+    if (!isUuid(relationId)) throw relationNotFound();
+    const { rows } = await tx.query<{ kind: StoredKind; ticketId: string; otherTicketId: string }>(
       `delete from relations where id = $1 and $2 in (ticket_id, other_ticket_id)
        returning kind, ticket_id as "ticketId", other_ticket_id as "otherTicketId"`,
       [relationId, ticket.id],
@@ -82,7 +100,7 @@ export async function removeRelation(
     if (!removed) throw relationNotFound();
     const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
-    const kind = removed.kind === "relates" ? "relatesTo" : "blocks";
+    const kind = kindFromTicket[removed.kind];
     await recordRelationChanges(tx, ticket.workspaceId, userId, clock.now(), kind, from, to, "removed");
   });
 }
@@ -102,10 +120,10 @@ async function recordRelationChanges(
   kind: RelationKind,
   ticket: TicketRef,
   other: TicketRef,
-  how: "added" | "removed",
+  addedOrRemoved: "added" | "removed",
 ): Promise<void> {
   const change = (field: RelationKind, ref: TicketRef) =>
-    how === "added" ? { field, from: null, to: ref } : { field, from: ref, to: null };
+    addedOrRemoved === "added" ? { field, from: null, to: ref } : { field, from: ref, to: null };
   await recordChanges(tx, { id: ticket.id, workspaceId }, userId, at, [change(kind, other)]);
   await recordChanges(tx, { id: other.id, workspaceId }, userId, at, [change(opposite[kind], ticket)]);
 }

@@ -16,7 +16,8 @@ create table relations (
   foreign key (other_ticket_id, workspace_id) references tickets (id, workspace_id),
   constraint relations_not_to_itself check (ticket_id <> other_ticket_id)
 );
-create unique index relations_pair_key on relations (kind, least(ticket_id, other_ticket_id), greatest(ticket_id, other_ticket_id));
+create unique index relations_pair_key
+  on relations (kind, least(ticket_id, other_ticket_id), greatest(ticket_id, other_ticket_id));
 create index relations_ticket_id_idx on relations (ticket_id);
 create index relations_other_ticket_id_idx on relations (other_ticket_id);
 

@@ -54,7 +54,8 @@ export type Ticket = Static<typeof Ticket>;
 
 const columns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
-  tickets.assignee_id as "assigneeId", tickets.parent_id as "parentId", to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
+  tickets.assignee_id as "assigneeId", tickets.parent_id as "parentId",
+  to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt"`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
@@ -80,18 +81,37 @@ export const ticketRefColumn = (tickets: string, projects: string) =>
   `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
      'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
-/** A Ticket of the Workspace as a TicketRef, with its Workspace, if there is one with that id. */
+/** A Ticket of the Workspace as a TicketRef, if there is one with that id. */
 export async function findTicketRef(
   db: Db | Tx,
   workspaceId: string,
   ticketId: string,
 ): Promise<TicketRef | undefined> {
   if (!isUuid(ticketId)) return undefined;
+  return findRef(db, "tickets.id = $2", [workspaceId, ticketId]);
+}
+
+/** A Ticket of the Workspace as a TicketRef, if there is one with that key, matched ignoring case. */
+export async function findTicketRefByKey(
+  db: Db | Tx,
+  workspaceId: string,
+  key: string,
+): Promise<TicketRef | undefined> {
+  const [projectKey, number] = key.trim().split("-");
+  if (!projectKey || !number || !/^[1-9][0-9]{0,8}$/.test(number)) return undefined;
+  return findRef(db, "lower(projects.key) = lower($2) and tickets.number = $3", [
+    workspaceId,
+    projectKey,
+    Number(number),
+  ]);
+}
+
+async function findRef(db: Db | Tx, where: string, params: unknown[]): Promise<TicketRef | undefined> {
   const { rows } = await db.query<{ ref: TicketRef }>(
     `select ${ticketRefColumn("tickets", "projects")} as ref
      from tickets join projects on projects.id = tickets.project_id
-     where tickets.id = $1 and tickets.workspace_id = $2`,
-    [ticketId, workspaceId],
+     where tickets.workspace_id = $1 and ${where}`,
+    params,
   );
   return rows[0]?.ref;
 }
@@ -272,7 +292,7 @@ export async function editTicket(
     };
     const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
     const userNamed = (id: string | null) => named(tx, "select id, email as name from users where id = $1", id);
-    const parentRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
+    const ticketRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
 
     if (edit.title !== undefined) await change("title", "title", edit.title.trim());
     if (edit.description !== undefined) await change("description", "description", edit.description);
@@ -288,7 +308,7 @@ export async function editTicket(
     }
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
-      await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : parentRef(id)));
+      await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
     }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
