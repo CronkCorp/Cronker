@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { days } from "../harness/clock.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream as open, type OpenStream } from "../harness/stream.js";
@@ -205,6 +206,16 @@ describe("Workspaces apart", () => {
 
     await stream.ended();
     await expect(stillOpen.ended(300)).rejects.toThrow("still open");
+  });
+
+  test("a stream carries nothing once its sign-in has expired, and ends", async () => {
+    const { workspace, cookie, project } = await newProject();
+    const stream = await openStream(cookie, workspace.id);
+
+    cronk.clock.advance(days(30));
+    await createTicket(await signIn(cronk), project.id, "After the sign-in ran out");
+
+    await stream.ended();
   });
 
   test("changing a password ends the streams of the User's other sign-ins", async () => {

@@ -45,7 +45,13 @@ export class Live {
   publish(tx: Tx, workspaceId: string, event: LiveEvent): void {
     afterCommit(tx, () => {
       for (const subscriber of this.subscribers) {
-        if (subscriber.workspaceId === workspaceId) subscriber.send(event);
+        if (subscriber.workspaceId !== workspaceId) continue;
+        // The change has committed whatever happens to one stream, so a failing stream only ends.
+        try {
+          subscriber.send(event);
+        } catch {
+          this.end((other) => other === subscriber);
+        }
       }
     });
   }

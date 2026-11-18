@@ -63,15 +63,28 @@ export async function signOut({ db, live }: Context, request: FastifyRequest, re
 }
 
 /** The User the request's sign-in cookie belongs to, or a 401 refusal. */
-export async function requireUser({ db, clock }: Context, request: FastifyRequest): Promise<User> {
+export async function requireUser(context: Context, request: FastifyRequest): Promise<User> {
+  return (await requireSignIn(context, request)).user;
+}
+
+/** The request's sign-in: its User, the hash of its token and when it expires; or a 401 refusal. */
+export async function requireSignIn(
+  { db, clock }: Context,
+  request: FastifyRequest,
+): Promise<{ user: User; hash: string; expiresAt: Date }> {
   const token = request.cookies[signInCookie];
   if (token) {
-    const { rows } = await db.query<User>(
-      `select users.id, users.email from sign_ins join users on users.id = sign_ins.user_id
+    const hash = hashSecret(token);
+    const { rows } = await db.query<User & { expiresAt: Date }>(
+      `select users.id, users.email, sign_ins.expires_at as "expiresAt"
+       from sign_ins join users on users.id = sign_ins.user_id
        where sign_ins.token_hash = $1 and sign_ins.expires_at > $2`,
-      [hashSecret(token), clock.now()],
+      [hash, clock.now()],
     );
-    if (rows[0]) return rows[0];
+    if (rows[0]) {
+      const { expiresAt, ...user } = rows[0];
+      return { user, hash, expiresAt };
+    }
   }
   throw new ApiError(401, "not_signed_in", "Sign in first.");
 }
