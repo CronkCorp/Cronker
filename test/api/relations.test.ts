@@ -428,6 +428,39 @@ describe("a Sub-Ticket's Delegation", () => {
 
     expect(subTicket).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: agent.id }));
   });
+
+  test("delegating a parent gives its undelegated Sub-Tickets, however deep, its Assignee and Delegate", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Relations", "Ticket view", "Board view");
+    const [parent, view, board] = tickets as [TicketRef, TicketRef, TicketRef];
+    await edit(cookie, view.id, { parentId: parent.id });
+    await edit(cookie, board.id, { parentId: view.id });
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const beasAgent = await createAgent(bea.cookie, workspace.id, "bea-bot");
+
+    await edit(bea.cookie, parent.id, { delegateId: beasAgent.id });
+
+    for (const subTicket of [view, board]) {
+      const got = await (await cronk.request("GET", `/api/tickets/${subTicket.id}`, { cookie })).json();
+      expect(got).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
+      const timeline = await timelineOf(cookie, subTicket.id);
+      expect(timeline).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            actor: expect.objectContaining({ id: bea.user.id }),
+            field: "assignee",
+            from: null,
+            to: { id: bea.user.id, name: "bea@example.com" },
+          }),
+          expect.objectContaining({
+            actor: expect.objectContaining({ id: bea.user.id }),
+            field: "delegate",
+            from: null,
+            to: { id: beasAgent.id, name: "bea-bot" },
+          }),
+        ]),
+      );
+    }
+  });
 });
 
 async function timelineOf(cookie: string, ticketId: string) {
