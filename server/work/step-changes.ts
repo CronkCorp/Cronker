@@ -4,7 +4,7 @@ import { ApiError } from "../http/errors.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject, projectNotFound, statusesOf, type Project } from "./projects.js";
-import { checkOutcomes, removeStep, writeStep, type Step } from "./steps.js";
+import { checkOutcomes, mayHaveStep, removeStep, stepOnDoneOrCanceled, writeStep, type Step } from "./steps.js";
 
 /**
  * Changes to the Step on one of a Project's Statuses, made under a lock on the Project
@@ -23,10 +23,10 @@ export async function changeStep(
   return transaction(db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
-    if (!project.statuses.some((s) => s.id === statusId)) {
-      throw new ApiError(404, "not_found", "No such Status in this Project.");
-    }
+    const status = project.statuses.find((s) => s.id === statusId);
+    if (!status) throw new ApiError(404, "not_found", "No such Status in this Project.");
     if (change.type === "put") {
+      if (!mayHaveStep(status.kind)) throw stepOnDoneOrCanceled(status);
       checkOutcomes(change.step.outcomes, project.statuses);
       await writeStep(tx, project, statusId, change.step, clock.now());
     } else {
