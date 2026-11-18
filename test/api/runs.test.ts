@@ -106,7 +106,9 @@ describe("starting Runs", () => {
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
         "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
-          "and write Reports on it; leave everything else to its Users.",
+          "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
+        "- File anything you find that isn't part of CRONK-1's work with `file_ticket`, giving your Run id: it waits " +
+          "for CRONK-1's Assignee as a Discovered Ticket.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );
