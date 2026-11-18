@@ -230,12 +230,11 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
           result.reference.url ?? null,
         ]);
       } else {
-        await lockRunner(tx, ticket.runnerId!);
+        await freeSlot(context, tx, runId);
         await tx.query(
           "update runs set state = 'refused', end_reason = $2, ended_at = $3 where id = $1 and state = 'running'",
           [runId, result.refusal.message, context.clock.now()],
         );
-        afterCommit(tx, () => startWaitingRuns(context, ticket.runnerId!));
       }
       context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
     });
@@ -252,6 +251,20 @@ async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number }> 
     runnerId,
   ]);
   return rows[0]!;
+}
+
+/**
+ * Call before ending the Run: locks it, then holds its Runner's slots still (always in that order), and once the transaction commits gives the slot
+ * the Run frees to the Runner's next waiting Ticket.
+ */
+async function freeSlot(context: Context, tx: Tx, runId: string): Promise<void> {
+  const { rows } = await tx.query<{ runnerId: string | null }>(`select runner_id as "runnerId" from runs where id = $1 for update`, [
+    runId,
+  ]);
+  const runnerId = rows[0]?.runnerId;
+  if (!runnerId) return;
+  await lockRunner(tx, runnerId);
+  afterCommit(tx, () => startWaitingRuns(context, runnerId));
 }
 
 /** Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue. */
@@ -345,6 +358,7 @@ export async function finishRun(
     }
 
     const now = clock.now();
+    await freeSlot(context, tx, run.id);
     await tx.query(
       `update runs set state = 'finished', outcome = $2, question = $3, report = $4, ended_at = $5 where id = $1`,
       [run.id, outcome.name, input.question ?? null, input.report ?? null, now],
@@ -372,6 +386,7 @@ export function runReports(context: Context): RunReports {
   return {
     async endedWithoutFinishing(runId, reason) {
       await transaction(context.db, async (tx) => {
+        await freeSlot(context, tx, runId);
         const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
           `update runs set state = 'failed', end_reason = $2, ended_at = $3
            from tickets where runs.id = $1 and runs.state = 'running' and tickets.id = runs.ticket_id
