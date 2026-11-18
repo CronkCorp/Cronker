@@ -4,11 +4,9 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser, signIn, signOut } from "./sign-ins.js";
 import { isSetUp, runSetup } from "./setup.js";
-import { User } from "./user.js";
-import { Membership, Workspace, workspacesOf } from "../workspaces/workspaces.js";
-
-const Email = Type.String({ format: "email", maxLength: 320 });
-const Password = Type.String({ minLength: 8, maxLength: 1024 });
+import { Email, Password, User } from "./user.js";
+import { LinkDetails, lookUpLink, useLink } from "./links.js";
+import { Membership, Workspace, WorkspaceName, workspacesOf } from "../workspaces/workspaces.js";
 
 export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -37,7 +35,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
             setupCode: Type.String(),
             email: Email,
             password: Password,
-            workspaceName: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }),
+            workspaceName: WorkspaceName,
           }),
           response: { 201: Type.Object({ user: User, workspace: Workspace }), 403: ErrorBody, 409: ErrorBody },
         },
@@ -99,6 +97,36 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         return { user, workspaces: await workspacesOf(db, user.id) };
       },
+    );
+
+    app.post(
+      "/api/links/lookup",
+      {
+        schema: {
+          tags: ["Links"],
+          summary: "What a one-time link does",
+          description:
+            "Takes the secret from a join or reset link's fragment and says what using it will do, without using it.",
+          body: Type.Object({ token: Type.String() }),
+          response: { 200: LinkDetails, 404: ErrorBody },
+        },
+      },
+      async (request) => lookUpLink(context, request.body.token),
+    );
+
+    app.post(
+      "/api/links/use",
+      {
+        schema: {
+          tags: ["Links"],
+          summary: "Use a one-time link",
+          description:
+            "A join link sets the User's password (if they have none yet) and makes them a member of its Workspace. A reset link sets a new password and ends all the User's sign-ins. Either works once.",
+          body: Type.Object({ token: Type.String(), password: Type.Optional(Password) }),
+          response: { 200: Type.Object({ user: User }), 400: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => ({ user: await useLink(context, request.body.token, request.body.password) }),
     );
   };
 }
