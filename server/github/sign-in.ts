@@ -94,17 +94,22 @@ async function userFor(tx: Tx, account: GitHubUser): Promise<string> {
     "update users set github_login = $2 where github_id = $1 returning id",
     [account.id, account.login],
   );
-  if (linked.rows[0]) {
+  const id = linked.rows[0]?.id;
+  if (id && account.verifiedEmail) {
+    const existing = await tx.query<{ id: string }>(
+      "select id from users where lower(email) = lower($1) and github_id is null",
+      [account.verifiedEmail],
+    );
+    const byEmail = existing.rows[0];
+    if (byEmail && (await isPlaceholder(tx, id))) return mergeInto(tx, id, byEmail.id, account);
     // A User added by GitHub login learns their email at their first sign-in, unless another User has it.
-    if (account.verifiedEmail) {
-      await tx.query(
-        `update users set email = $2 where id = $1 and email is null
-         and not exists (select 1 from users other where lower(other.email) = lower($2))`,
-        [linked.rows[0].id, account.verifiedEmail],
-      );
-    }
-    return linked.rows[0].id;
+    await tx.query(
+      `update users set email = $2 where id = $1 and email is null
+       and not exists (select 1 from users other where lower(other.email) = lower($2))`,
+      [id, account.verifiedEmail],
+    );
   }
+  if (id) return id;
 
   if (account.verifiedEmail) {
     const byEmail = await tx.query<{ id: string }>(
@@ -120,6 +125,35 @@ async function userFor(tx: Tx, account: GitHubUser): Promise<string> {
     "unknown_github_user",
     `No User has the GitHub account ${account.login}. Ask an Admin to add you to their Workspace.`,
   );
+}
+
+/** Whether the User is only what adding by GitHub login made: no email, no password, in no Workspace yet. */
+async function isPlaceholder(tx: Tx, userId: string): Promise<boolean> {
+  const { rowCount } = await tx.query(
+    `select 1 from users where id = $1 and email is null and password_hash is null
+     and not exists (select 1 from memberships where user_id = $1)`,
+    [userId],
+  );
+  return rowCount !== 0;
+}
+
+/**
+ * Someone added by GitHub login who already had a User by email is one person: their
+ * Workspaces to join move to that User, which takes the GitHub account, and the
+ * placeholder goes.
+ */
+async function mergeInto(tx: Tx, placeholderId: string, userId: string, account: GitHubUser): Promise<string> {
+  await tx.query(
+    `insert into github_joins (workspace_id, user_id, added_by, created_at)
+     select workspace_id, $2, added_by, created_at from github_joins where user_id = $1
+     on conflict do nothing`,
+    [placeholderId, userId],
+  );
+  await tx.query("delete from github_joins where user_id = $1", [placeholderId]);
+  await tx.query("delete from sign_ins where user_id = $1", [placeholderId]);
+  await tx.query("delete from users where id = $1", [placeholderId]);
+  await tx.query("update users set github_id = $2, github_login = $3 where id = $1", [userId, account.id, account.login]);
+  return userId;
 }
 
 /**

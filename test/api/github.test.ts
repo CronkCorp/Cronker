@@ -340,3 +340,23 @@ describe("a password and GitHub sign-in together", () => {
     expect(me.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", isAdmin: false }]);
   });
 });
+
+describe("one person, one User", () => {
+  test("someone added by GitHub login who already has a User by email becomes that User at their first GitHub sign-in", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const beaOnGitHub = cronk.github.account("bea", "bea@example.com");
+    const other = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Other" } })).json();
+    const added = await cronk.request("POST", `/api/workspaces/${other.id}/members/github`, { cookie, body: { login: "bea" } });
+    expect(added.status).toBe(201);
+
+    const signedIn = await signInWithGitHub(cronk, beaOnGitHub);
+
+    const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
+    expect(me.user).toEqual({ id: bea.user.id, email: "bea@example.com", githubLogin: "bea" });
+    expect(me.workspaces.map((w: { name: string }) => w.name).sort()).toEqual(["Ada's Workspace", "Other"]);
+    expect((await cronk.request("POST", "/api/sign-in", { body: { email: "bea@example.com", password: bea.password } })).status).toBe(200);
+  });
+});
