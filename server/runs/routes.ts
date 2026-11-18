@@ -86,6 +86,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
               Type.String({
                 minLength: 1,
                 maxLength: 500_000,
+                pattern: "\\S",
                 description: "Markdown, added to the Ticket's Reports titled after the Run's Step, such as `Triage report`.",
               }),
             ),

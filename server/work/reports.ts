@@ -6,7 +6,10 @@ import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
 import { findTicketRow, runOfAgent, ticketNotFound } from "./tickets.js";
 
-/** Markdown a Run writes on its Ticket, such as an investigation's findings; later Runs on the Ticket read it. */
+/**
+ * A Document a Run writes on its Ticket, such as an investigation's findings, listed with the Ticket instead of
+ * in a page tree; later Runs on the Ticket read it. Kept as Markdown with a title until Documents exist.
+ */
 export const Report = Type.Object({
   id: Type.String({ format: "uuid" }),
   ticketId: Type.String({ format: "uuid" }),
@@ -64,7 +67,7 @@ export async function recordReport(
   return present(report!);
 }
 
-/** An Agent writes a Report on a Ticket during its own running Run on it; Users write Documents instead. */
+/** An Agent writes a Report on a Ticket during its own running Run on it; Users comment instead. */
 export async function writeReport(
   context: Context,
   writer: Caller,
