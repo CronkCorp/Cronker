@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type MouseEvent } from "react";
 
 /** A minimal client-side router over the History API. The server serves the web client for any page path. */
 
@@ -24,15 +24,17 @@ export function usePath(): string {
   return path;
 }
 
-export function Link({ to, children, current }: { to: string; children: ReactNode; current?: boolean }) {
+export function Link({
+  to,
+  current,
+  ...props
+}: { to: string; current?: boolean } & Omit<ComponentProps<"a">, "href" | "onClick">) {
   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     navigate(to);
   };
   return (
-    <a href={to} onClick={onClick} aria-current={current ? "page" : undefined}>
-      {children}
-    </a>
+    <a {...props} href={to} onClick={onClick} aria-current={current ? "page" : undefined} />
   );
 }

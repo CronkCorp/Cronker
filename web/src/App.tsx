@@ -3,6 +3,7 @@ import { api, ApiError, type User, type Workspace } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, usePath } from "./router.js";
+import { TicketScreen } from "./tickets.js";
 
 type Screen =
   | { kind: "loading" }
@@ -156,6 +157,7 @@ function WorkspaceScreen({
     onSignedOut();
   });
   const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings))?\/?$/.exec(path);
+  const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   return (
     <div className="shell">
       <header>
@@ -178,6 +180,8 @@ function WorkspaceScreen({
               projectId={projectPath[1]!}
               view={(projectPath[2] as "list" | "settings" | undefined) ?? "board"}
             />
+          ) : ticketPath ? (
+            <TicketScreen key={ticketPath[1]} workspace={workspace} ticketId={ticketPath[1]!} />
           ) : (
             <WorkspaceHome workspace={workspace} />
           )

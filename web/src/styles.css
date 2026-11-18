@@ -162,3 +162,92 @@ form.inline {
 .statuses li button[aria-label^="Move"] {
   padding: 0.5rem 0.7rem;
 }
+textarea {
+  font: inherit;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  resize: vertical;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0 1rem;
+}
+.lane.target {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.card {
+  display: block;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  text-decoration: none;
+  cursor: grab;
+}
+.card small {
+  display: block;
+  margin-top: 0.25rem;
+}
+.list > section {
+  display: block;
+}
+.list-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.list .card {
+  cursor: pointer;
+}
+.ticket-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16rem;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .ticket-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.fields {
+  display: grid;
+  gap: 0.75rem;
+}
+.description,
+.comments,
+.timeline {
+  margin-top: 1.25rem;
+}
+.comments h2,
+.timeline h2 {
+  font-size: 1rem;
+}
+.comment {
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border-left: 2px solid var(--line);
+}
+.comment-meta {
+  font-size: 0.9rem;
+}
+button.link {
+  padding: 0;
+  background: none;
+  color: var(--accent);
+}
+.timeline ol {
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+.markdown code {
+  font-size: 0.9em;
+}
