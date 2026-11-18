@@ -397,6 +397,40 @@ describe("Outcome refusals", () => {
     });
   });
 
+  test("a needs you Outcome targeting the Status its Step is on is refused, naming the Outcome and the Status", async () => {
+    expect(
+      await attempt((id) => [outcome("planned", id("Investigate"), { default: true }), outcome("ask", id("Ready"), { needsYou: true })]),
+    ).toEqual({
+      status: 409,
+      error: {
+        code: "outcome_target_not_allowed",
+        message:
+          "The needs you Outcome ask can't move Tickets to Ready, the Status its Step is on: " +
+          "asking a User must hand the Ticket back, not start the next Run at once.",
+      },
+    });
+  });
+
+  test("a default Outcome or one counting as a round may still target the Status its Step is on", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const step = {
+      brief: "Plan the work.",
+      model: "sonnet",
+      roundLimit: 2,
+      labelRule: null,
+      outcomes: [
+        outcome("again", id("Ready"), { default: true }),
+        outcome("retry", id("Ready"), { countsAsRound: true }),
+        outcome("needs you", id("Backlog"), { needsYou: true }),
+      ],
+    };
+
+    const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, { cookie, body: step });
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step).toEqual(step);
+  });
+
   test("an Outcome targeting a Status outside the Project is refused", async () => {
     expect(
       await attempt(() => [
