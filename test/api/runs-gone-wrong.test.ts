@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -381,5 +382,21 @@ describe("nothing retries by itself", () => {
     expect(await states(lost.id, ada)).toEqual([["Implement", "lost"]]);
     expect(await states(refused.id, ada)).toEqual([["Implement", "refused"]]);
     expect((await inbox()).count).toBe(3);
+  });
+});
+
+describe("live", () => {
+  test("a Run becoming lost, and a Retry, each tell the Workspace's streams its Ticket changed", async () => {
+    const { workspace, ada, project, ticket } = await runningRun();
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+    const changed = { type: "ticket.changed", data: { projectId: project.id, ticketId: ticket.id } };
+
+    cronk.clock.advance(minutes(30));
+    await cronk.checkForLostRuns();
+    expect(await stream.next()).toEqual(changed);
+
+    await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
+    expect(await stream.next()).toEqual(changed);
+    stream.close();
   });
 });

@@ -244,7 +244,7 @@ export interface Change {
   to: unknown;
 }
 
-export type RunState = "running" | "finished" | "failed" | "refused";
+export type RunState = "running" | "finished" | "failed" | "lost" | "stopped" | "refused";
 
 /** One agent execution Cronk started for a Ticket. */
 export interface Run {
@@ -270,7 +270,19 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
-export type InboxItem = ReviewItem;
+/** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */
+export interface RunItem {
+  kind: "run";
+  ticket: TicketSummary;
+  run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
+}
+
+export type InboxItem = ReviewItem | RunItem;
+
+/** A Workspace's settings beyond its name, set by its Admins. */
+export interface WorkspaceSettings {
+  lostRunMinutes: number;
+}
 
 export interface Inbox {
   count: number;
@@ -322,6 +334,9 @@ export const api = {
   workspace: (id: string) => call<Workspace>("GET", ws(id)),
   createWorkspace: (name: string) => call<WorkspaceSummary>("POST", "/api/workspaces", { name }),
   renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
+  workspaceSettings: (id: string) => call<WorkspaceSettings>("GET", `${ws(id)}/settings`),
+  changeWorkspaceSettings: (id: string, change: Partial<WorkspaceSettings>) =>
+    call<WorkspaceSettings>("PATCH", `${ws(id)}/settings`, change),
   members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
   addMember: (id: string, email: string) =>
     call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email }),
@@ -399,6 +414,7 @@ export const api = {
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
+  retry: (ticketId: string) => call<Run>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
