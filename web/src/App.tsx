@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, type User, type Workspace } from "./api.js";
+import { field, useSubmit } from "./forms.js";
+import { ProjectScreen, WorkspaceHome } from "./projects.js";
+import { Link, usePath } from "./router.js";
 
 type Screen =
   | { kind: "loading" }
@@ -72,25 +75,6 @@ function Centered({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function useSubmit(action: (form: FormData) => Promise<void>) {
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await action(new FormData(event.currentTarget));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return { error, busy, onSubmit };
-}
-
-const field = (form: FormData, name: string) => String(form.get(name) ?? "");
 
 function SetupScreen({ onDone }: { onDone: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
@@ -166,14 +150,16 @@ function WorkspaceScreen({
   workspace: Workspace | null;
   onSignedOut: () => void;
 }) {
+  const path = usePath();
   const { error, busy, onSubmit } = useSubmit(async () => {
     await api.signOut();
     onSignedOut();
   });
+  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings))?\/?$/.exec(path);
   return (
     <div className="shell">
       <header>
-        <strong>{workspace?.name ?? "Cronk"}</strong>
+        <strong>{workspace ? <Link to="/">{workspace.name}</Link> : "Cronk"}</strong>
         <span className="spacer" />
         <span>{user.email}</span>
         <form onSubmit={onSubmit}>
@@ -185,10 +171,15 @@ function WorkspaceScreen({
       <main>
         {error && <p role="alert">{error}</p>}
         {workspace ? (
-          <>
-            <h1>{workspace.name}</h1>
-            <p>No Projects yet.</p>
-          </>
+          projectPath ? (
+            <ProjectScreen
+              key={projectPath[1]}
+              projectId={projectPath[1]!}
+              view={(projectPath[2] as "list" | "settings" | undefined) ?? "board"}
+            />
+          ) : (
+            <WorkspaceHome workspace={workspace} />
+          )
         ) : (
           <p>You don't belong to any Workspace yet.</p>
         )}

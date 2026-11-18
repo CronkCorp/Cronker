@@ -75,3 +75,90 @@ button:disabled {
 .shell main {
   padding: 0 16px;
 }
+a {
+  color: var(--accent);
+}
+header a {
+  color: inherit;
+  text-decoration: none;
+}
+.muted {
+  color: var(--muted);
+  font-weight: normal;
+}
+select {
+  font: inherit;
+  padding: 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+form.inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+}
+.projects {
+  padding-left: 1.2rem;
+}
+.tabs {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.tabs a {
+  padding: 0.4rem 0;
+  text-decoration: none;
+  color: var(--muted);
+}
+.tabs a[aria-current="page"] {
+  color: var(--fg);
+  border-bottom: 2px solid var(--accent);
+}
+.board {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 1rem;
+}
+.column {
+  flex: 0 0 14rem;
+  min-height: 50vh;
+  padding: 0 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.column h2,
+.list h2 {
+  font-size: 1rem;
+  margin: 0.75rem 0 0;
+}
+.column p {
+  margin: 0.25rem 0;
+  font-size: 0.85rem;
+}
+.list > section {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.25rem 0 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.statuses {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+.statuses li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.statuses li button[aria-label^="Move"] {
+  padding: 0.5rem 0.7rem;
+}
