@@ -362,7 +362,8 @@ export async function createTicket(
       live.publish(tx, parent.workspaceId, { type: "ticket.changed", projectId: parent.projectId, ticketId: parent.id });
     }
     await startRunIfNeeded(context, tx, ticket.id, now);
-    return withMentions(tx, ticket);
+    // Read it again: a Run it started, or its wait for one, shows on it.
+    return withMentions(tx, (await findTicketRow(tx, creator, ticket.id))!);
   });
 }
 
@@ -677,7 +678,8 @@ export async function editTicket(
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
     if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
-    return withMentions(tx, next);
+    // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
+    return withMentions(tx, (await findTicketRow(tx, editor, ticket.id))!);
   });
 }
 
