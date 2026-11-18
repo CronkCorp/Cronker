@@ -5,11 +5,14 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { Email, User } from "../identity/user.js";
 import {
   AddedMember,
+  cancelPendingAdd,
   addMember,
   addMemberByGitHub,
   issueResetLink,
   Member,
   membersOf,
+  PendingAdd,
+  pendingAddsOf,
   removeMember,
   requireAdmin,
   requireMember,
@@ -91,6 +94,45 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const workspace = await findWorkspace(db, caller, request.params.workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
         return membersOf(db, workspace.id);
+      },
+    );
+
+    app.get(
+      "/api/workspaces/:workspaceId/pending-adds",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Who an Admin added but hasn't joined yet (Admins only)",
+          description:
+            "Each says how they were added: by email, joining through a one-time link not used or expired yet, or by GitHub login, joining at their next sign-in with GitHub.",
+          params: Type.Object({ workspaceId: Type.String() }),
+          response: { 200: Type.Array(PendingAdd), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        return pendingAddsOf(context, workspace.id);
+      },
+    );
+
+    app.delete(
+      "/api/workspaces/:workspaceId/pending-adds/:userId",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Cancel a pending add (Admins only)",
+          description:
+            "Ends the User's unused links to join the Workspace and their add by GitHub login, so they can join by neither. They can be added again.",
+          params: Type.Object({ workspaceId: Type.String(), userId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        await cancelPendingAdd(context, workspace.id, request.params.userId);
+        return reply.code(204).send(null);
       },
     );
 
