@@ -97,6 +97,7 @@ export interface ProjectSummary {
 }
 
 export interface Project extends ProjectSummary {
+  newTicketsDelegated: boolean;
   statuses: Status[];
 }
 
@@ -127,11 +128,13 @@ export interface TicketSummary {
   priority: Priority;
   labels: string[];
   assigneeId: string | null;
+  delegateId: string | null;
   parentId: string | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
   createdAt: string;
+  lastRun: { id: string; state: RunState } | null;
 }
 
 export interface Ticket extends TicketSummary {
@@ -145,6 +148,7 @@ export interface TicketEdit {
   priority?: Priority;
   labels?: string[];
   assigneeId?: string | null;
+  delegateId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
   parentId?: string | null;
@@ -185,6 +189,7 @@ export interface Agent {
   workspaceId: string;
   name: string;
   owner: User;
+  runnerId: string | null;
   createdAt: string;
 }
 
@@ -229,9 +234,29 @@ export interface Change {
     | "estimate"
     | "parent"
     | "subTicket"
+    | "delegate"
     | RelationKind;
   from: unknown;
   to: unknown;
+}
+
+export type RunState = "running" | "finished" | "failed" | "refused";
+
+/** One agent execution Cronk started for a Ticket. */
+export interface Run {
+  id: string;
+  ticketId: string;
+  step: { statusId: string | null; name: string };
+  agent: { id: string; name: string };
+  model: string;
+  state: RunState;
+  outcome: string | null;
+  question: string | null;
+  report: string | null;
+  endReason: string | null;
+  sessionUrl: string | null;
+  startedAt: string;
+  endedAt: string | null;
 }
 
 /** A Ticket in a Review Status, waiting for its Assignee's review. */
@@ -305,6 +330,8 @@ export const api = {
   createProject: (workspaceId: string, input: { name: string; key: string }) =>
     call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
+  editProject: (id: string, edit: { newTicketsDelegated?: boolean }) =>
+    call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>
@@ -357,6 +384,7 @@ export const api = {
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
+  runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 

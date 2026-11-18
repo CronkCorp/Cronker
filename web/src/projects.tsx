@@ -133,7 +133,7 @@ export function ProjectScreen({
       loadTickets();
     } else if (event.projectId !== projectId) {
       return;
-    } else if (event.type === "statuses.changed") {
+    } else if (event.type === "statuses.changed" || event.type === "project.changed") {
       loadProject();
     } else if (event.type === "ticket.created" || event.type === "ticket.changed") {
       loadTickets();
@@ -176,6 +176,7 @@ export function ProjectScreen({
       )}
       {view === "settings" && (
         <>
+          <DelegationSettings project={project} onChange={setProject} />
           <Settings project={project} onChange={setProject} />
           <StepsSettings project={project} onChange={setProject} />
           <BriefPreview project={project} />
@@ -297,9 +298,15 @@ function TicketItem({
     >
       <span className="muted">{ticket.key}</span> <span>{ticket.title}</span>
       {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
+      {ticket.lastRun && ticket.lastRun.state !== "finished" && (
+        <small className={`run-marker ${ticket.lastRun.state}`}> {runMarkers[ticket.lastRun.state]}</small>
+      )}
     </Link>
   );
 }
+
+/** How a card marks its Ticket's latest Run, unless it finished. */
+const runMarkers = { running: "Run running", failed: "Run failed", refused: "Run couldn't start" } as const;
 
 const ticketDrag = "application/x-cronk-ticket";
 
@@ -390,6 +397,37 @@ function List({
           </section>
         );
       })}
+    </section>
+  );
+}
+
+function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const toggle = async (newTicketsDelegated: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onChange(await api.editProject(project.id, { newTicketsDelegated }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section aria-labelledby="delegation-heading" className="settings">
+      <h2 id="delegation-heading">Delegation</h2>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.newTicketsDelegated}
+          disabled={busy}
+          onChange={(e) => void toggle(e.target.checked)}
+        />
+        New Tickets start delegated to their creator's Agent
+      </label>
+      {error && <p role="alert">{error}</p>}
     </section>
   );
 }

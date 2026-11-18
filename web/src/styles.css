@@ -4,6 +4,7 @@
   --muted: #6b6b70;
   --line: #d9d9de;
   --accent: #3b5bdb;
+  --warn: #c92a2a;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -14,6 +15,7 @@
     --muted: #9a9aa3;
     --line: #34343a;
     --accent: #7b93ff;
+    --warn: #ff8787;
   }
 }
 body {
@@ -413,4 +415,19 @@ td.actions {
   gap: 0.5rem;
   align-items: end;
   margin-top: 0.75rem;
+}
+/* A Ticket's latest Run on its card, and Run states on the timeline. */
+.run-marker,
+.run-state {
+  font-weight: 600;
+}
+.run-marker.running,
+.run-state.running {
+  color: var(--accent);
+}
+.run-marker.failed,
+.run-marker.refused,
+.run-state.failed,
+.run-state.refused {
+  color: var(--warn);
 }
