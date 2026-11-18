@@ -291,11 +291,18 @@ describe("every Status kind keeps a Status", () => {
       body: { name: "Won't do", kind: "canceled" },
     });
 
+    const changed = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Canceled")}`, {
+      cookie,
+      body: { kind: "done" },
+    });
+    expect(changed.status).toBe(200);
+    expect(board(await changed.json()).slice(-2)).toEqual(["Canceled:done", "Won't do:canceled"]);
+
     const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Canceled")}`, {
       cookie,
     });
     expect(removed.status).toBe(200);
-    expect(board(await removed.json()).at(-1)).toBe("Won't do:canceled");
+    expect(board(await removed.json()).slice(-2)).toEqual(["Done:done", "Won't do:canceled"]);
   });
 
   test("removing every Status of a kind one by one is refused at the last", async () => {
