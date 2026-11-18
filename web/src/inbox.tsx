@@ -41,13 +41,19 @@ export function InboxScreen({ workspace, version }: { workspace: Workspace; vers
   const [inbox, setInbox] = useState<Inbox | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
+    // Only the latest fetch is shown: an earlier one may answer after a later one.
+    let latest = true;
     api.inbox(workspace.id).then(
       (loaded) => {
+        if (!latest) return;
         setInbox(loaded);
         setFailure(null);
       },
-      (e: Error) => setFailure(e.message),
+      (e: Error) => latest && setFailure(e.message),
     );
+    return () => {
+      latest = false;
+    };
   }, [workspace.id, version]);
 
   return (

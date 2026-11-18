@@ -229,7 +229,7 @@ export const api = {
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
-  /** The Workspace's live event stream; see `useInboxCount`. */
+  /** The Workspace's live event stream; see `useInboxSignal`. */
   eventsUrl: (workspaceId: string) => `${ws(workspaceId)}/events`,
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
