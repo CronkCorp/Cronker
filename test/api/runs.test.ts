@@ -126,6 +126,27 @@ describe("starting Runs", () => {
     expect(cronk.runner.starts).toEqual([]);
   });
 
+  test("no Run starts for a Ticket in a Done or Canceled Status, which can never have a Step", async () => {
+    const { ada, ticket, agent, project, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    const step = {
+      brief: "Wrap up.",
+      model: "haiku",
+      outcomes: [
+        { name: "again", statusId: status("In Review"), default: true, needsYou: false, countsAsRound: false },
+        { name: "needs you", statusId: status("Backlog"), default: false, needsYou: true, countsAsRound: false },
+      ],
+    };
+    for (const name of ["Done", "Canceled"]) {
+      expect((await call("PUT", `/api/projects/${project.id}/statuses/${status(name)}/step`, ada, step)).status).toBe(409);
+      await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status(name) });
+    }
+    expect((await call("PATCH", `/api/projects/${project.id}/statuses/${status("Investigate")}`, ada, { kind: "done" })).status).toBe(409);
+
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+    expect(cronk.runner.starts).toEqual([]);
+  });
+
   test("delegating a Ticket already in a Status with a Step starts a Run there", async () => {
     const { ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate") });

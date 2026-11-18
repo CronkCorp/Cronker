@@ -165,7 +165,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Rename, move or change the kind of a Status",
-          description: `Changes whichever of name, kind and position are given. ${kindRule} Returns the Project.`,
+          description:
+            `Changes whichever of name, kind and position are given. ${kindRule} ` +
+            "A Status with a Step can't become Done or Canceled: remove its Step first. Returns the Project.",
           params: StatusParams,
           body: Type.Object({
             name: Type.Optional(StatusName),
@@ -210,6 +212,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Attach or edit a Status's Step",
           description:
             "Gives the Status this Step, replacing any it had: Tickets entering it get Runs. " +
+            "Refused on a Done or Canceled Status, where Tickets get no Runs. " +
             `${outcomeRules} Returns the Project.`,
           params: StatusParams,
           body: StepBody,
