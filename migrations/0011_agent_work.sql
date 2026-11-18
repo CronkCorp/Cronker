@@ -27,3 +27,6 @@ insert into reports (workspace_id, ticket_id, run_id, agent_id, title, body, cre
 select workspace_id, ticket_id, id, agent_id, status_name || ' report', report, ended_at
 from runs where report is not null order by seq;
 alter table runs drop column report;
+
+-- When a Run's Agent last called Cronk naming the Run or its Ticket; none before its first call.
+alter table runs add column last_call_at timestamptz;

@@ -4,13 +4,13 @@ import type { Context } from "../context.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import type { Caller } from "../identity/callers.js";
+import type { AgentCaller, Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Step } from "../work/steps.js";
 import { recordReport } from "../work/reports.js";
-import { findTicketRow, ticketNotFound } from "../work/tickets.js";
+import { findTicketRefByKey, findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { RunState } from "./states.js";
@@ -43,12 +43,16 @@ export const Run = Type.Object({
   sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow the Run, such as its claude.ai session." }),
   startedAt: Type.String({ format: "date-time" }),
   endedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
+  lastCallAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description: "When, while it was running, its Agent last called Cronk naming the Run or its Ticket; null before its first call.",
+  }),
 });
 export type Run = Static<typeof Run>;
 
-type Row = Omit<Run, "startedAt" | "endedAt"> & {
+type Row = Omit<Run, "startedAt" | "endedAt" | "lastCallAt"> & {
   startedAt: Date;
   endedAt: Date | null;
+  lastCallAt: Date | null;
   workspaceId: string;
   agentId: string;
   statusId: string | null;
@@ -59,13 +63,14 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
   runs.question, runs.end_reason as "endReason", runs.session_url as "sessionUrl",
-  runs.started_at as "startedAt", runs.ended_at as "endedAt",
+  runs.started_at as "startedAt", runs.ended_at as "endedAt", runs.last_call_at as "lastCallAt",
   runs.workspace_id as "workspaceId", runs.agent_id as "agentId", runs.status_id as "statusId", runs.brief`;
 
-const present = ({ startedAt, endedAt, workspaceId: _w, agentId: _a, statusId: _s, brief: _b, ...row }: Row): Run => ({
+const present = ({ startedAt, endedAt, lastCallAt, workspaceId: _w, agentId: _a, statusId: _s, brief: _b, ...row }: Row): Run => ({
   ...row,
   startedAt: startedAt.toISOString(),
   endedAt: endedAt?.toISOString() ?? null,
+  lastCallAt: lastCallAt?.toISOString() ?? null,
 });
 
 export function runNotFound(): ApiError {
@@ -286,6 +291,33 @@ export async function finishRun(
     await startRunIfNeeded(context, tx, ticket.id, now);
     return present((await findRunRow(tx, caller, run.id))!);
   });
+}
+
+/** What a request names: a Run, a Ticket by id, or a Ticket by its key. */
+export interface NamedInCall {
+  runId?: string;
+  ticketId?: string;
+  ticketKey?: string;
+}
+
+/**
+ * Records that the Agent called Cronk naming one of its running Runs or that Run's Ticket, whether the
+ * call was allowed or not: a Run long without such a call is lost.
+ */
+export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
+  const { runId, ticketId, ticketKey } = named;
+  const ticket = ticketId && isUuid(ticketId)
+    ? ticketId
+    : ticketKey
+      ? (await findTicketRefByKey(db, agent.workspace.id, ticketKey))?.id
+      : undefined;
+  const run = runId && isUuid(runId) ? runId : undefined;
+  if (!ticket && !run) return;
+  await db.query(
+    `update runs set last_call_at = $3
+     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4)`,
+    [agent.id, run ?? null, clock.now(), ticket ?? null],
+  );
 }
 
 /** Where Runners report their Runs' ends. */

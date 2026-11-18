@@ -11,6 +11,7 @@ import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/err
 import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
 import { runRoutes } from "./runs/routes.js";
+import { noteRunCall } from "./runs/runs.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
@@ -56,6 +57,16 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   });
 
   refuseOtherOrigins(app, context.config.publicUrl);
+
+  // An Agent's call naming one of its running Runs, or that Run's Ticket, shows the Run is still alive.
+  app.addHook("onSend", async (request, _reply, payload) => {
+    const agent = agentOfRequest(request);
+    if (agent) {
+      const params = (request.params ?? {}) as Record<string, string | undefined>;
+      await noteRunCall(context, agent, { runId: params.runId, ticketId: params.ticketId, ticketKey: params.key });
+    }
+    return payload;
+  });
 
   await app.register(swagger, {
     openapi: {

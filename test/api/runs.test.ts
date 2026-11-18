@@ -68,6 +68,7 @@ describe("starting Runs", () => {
         sessionUrl: "https://claude.ai/code/session_1",
         startedAt: "2026-01-01T09:00:00.000Z",
         endedAt: null,
+        lastCallAt: null,
       },
     ]);
     const [run] = runs;

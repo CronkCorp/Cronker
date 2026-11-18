@@ -245,3 +245,39 @@ describe("Reports", () => {
     stream.close();
   });
 });
+
+describe("a Run's last call", () => {
+  test("its Agent's calls naming the Run or its Ticket record when it last called, refused ones too", async () => {
+    const { workspace, ada, ticket, run, asAgent } = await runningRun();
+    const lastCall = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).lastCallAt;
+    expect(await lastCall()).toBeNull();
+
+    const minute = (n: number) => `2026-01-01T09:${String(n).padStart(2, "0")}:00.000Z`;
+    const calls: [string, string, unknown?][] = [
+      ["GET", `/api/tickets/${ticket.id}`],
+      ["GET", `/api/workspaces/${workspace.id}/tickets/cronk-1`],
+      ["POST", `/api/tickets/${ticket.id}/comments`, { body: "Starting." }],
+      ["GET", `/api/runs/${run.id}/brief`],
+      ["PATCH", `/api/tickets/${ticket.id}`, { title: "Refused" }],
+    ];
+    for (const [i, [method, path, body]] of calls.entries()) {
+      cronk.clock.advance(60_000);
+      await call(method, path, asAgent, body);
+      expect(await lastCall(), `${method} ${path}`).toBe(minute(i + 1));
+    }
+  });
+
+  test("calls naming other Tickets, and calls by Users or other Agents, record nothing", async () => {
+    const { workspace, ada, ticket, other, run, asAgent } = await runningRun();
+    const bot = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other-bot" });
+    const { secret } = await ok("POST", `/api/agents/${bot.id}/tokens`, ada, { name: "cloud", access: "full" });
+    cronk.clock.advance(60_000);
+
+    await ok("GET", `/api/tickets/${other.id}`, asAgent);
+    await ok("GET", `/api/workspaces/${workspace.id}/projects`, asAgent);
+    await ok("GET", `/api/tickets/${ticket.id}`, ada);
+    await ok("GET", `/api/tickets/${ticket.id}`, { headers: { authorization: `Bearer ${secret}` } });
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).lastCallAt).toBeNull();
+  });
+});
