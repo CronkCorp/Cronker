@@ -3,7 +3,7 @@ import type { Db, Tx } from "../db.js";
 import { Actor, actorColumn } from "./actors.js";
 
 /** Who made a Change: a User, an Agent, or Cronk itself, such as when it moves a Ticket on past a skipped Step. */
-export const ChangeActor = Type.Union([
+export const ChangedBy = Type.Union([
   Actor,
   Type.Object({ kind: Type.Literal("cronk"), name: Type.Literal("Cronk") }, { description: "Cronk itself." }),
 ]);
@@ -35,7 +35,7 @@ export type ChangeField = (typeof changeFields)[number];
 
 export const Change = Type.Object({
   id: Type.String({ format: "uuid" }),
-  actor: ChangeActor,
+  actor: ChangedBy,
   at: Type.String({ format: "date-time" }),
   field: Type.Union(changeFields.map((f) => Type.Literal(f))),
   from: Type.Unknown({
@@ -56,12 +56,12 @@ export interface NewChange {
 }
 
 /** Who makes a Change: a User, by id, an Agent, or Cronk itself. */
-export type ChangeMaker = string | { kind: "agent"; id: string } | { kind: "cronk" };
+export type ChangeActor = string | { kind: "agent"; id: string } | { kind: "cronk" };
 
 export async function recordChanges(
   tx: Tx,
   ticket: { id: string; workspaceId: string },
-  actor: ChangeMaker,
+  actor: ChangeActor,
   at: Date,
   changes: NewChange[],
 ): Promise<void> {

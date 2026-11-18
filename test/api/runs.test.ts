@@ -574,7 +574,7 @@ describe("rounds", () => {
       await finishWith(setup, "changes");
       await finishWith(setup, "done");
     }
-    // Ada takes the Ticket out of the loop and puts it back into Code review.
+    // Code review approves it into In Review, and Ada moves it back into Code review by hand.
     await finishWith(setup, "approve");
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
 
