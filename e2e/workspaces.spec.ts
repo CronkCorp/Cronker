@@ -50,7 +50,7 @@ test("an Admin adds a User by email, who joins through the link", async ({ page,
 
   await page.getByRole("link", { name: "Members" }).click();
   await page.getByLabel("Email").fill("bea@example.com");
-  await page.getByRole("button", { name: "Add" }).click();
+  await page.getByRole("button", { name: "Add by email" }).click();
   const link = await page.getByLabel("Link for bea@example.com").inputValue();
   expect(link).toContain("/link#cronk_join_");
   await expect(page.getByRole("row", { name: /bea@example\.com/ })).toHaveCount(0);

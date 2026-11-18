@@ -2,7 +2,20 @@
 
 export interface User {
   id: string;
-  email: string;
+  /** Unknown for a User added by GitHub login until they first sign in. */
+  email: string | null;
+  githubLogin: string | null;
+}
+
+/** How to show a User: their email, else their GitHub login. */
+export function nameOf(user: User): string {
+  return user.email ?? `@${user.githubLogin}`;
+}
+
+export interface GitHubApp {
+  name: string;
+  githubAccount: string;
+  htmlUrl: string;
 }
 
 export interface WorkspaceSummary {
@@ -28,9 +41,10 @@ export interface Link {
 
 export interface LinkDetails {
   kind: "join" | "reset";
-  email: string;
+  email: string | null;
   workspace: Workspace | null;
   setsPassword: boolean;
+  signInWithGitHub: boolean;
 }
 
 export type StatusKind = "backlog" | "active" | "review" | "done" | "canceled";
@@ -222,6 +236,11 @@ export const api = {
     call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
   removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
+  addMemberByGitHub: (id: string, login: string) =>
+    call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
+  githubApp: () => call<{ app: GitHubApp | null }>("GET", "/api/github/app").then((r) => r.app),
+  startGitHubApp: (githubOrganization?: string) =>
+    call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization }),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
   useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
   projects: (workspaceId: string) =>

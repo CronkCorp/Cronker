@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import type { Clock } from "../clock.js";
+import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -33,13 +33,12 @@ export const TicketRelations = Type.Object({
 export type TicketRelations = Static<typeof TicketRelations>;
 
 export async function addRelation(
-  db: Db,
-  clock: Clock,
+  context: Context,
   userId: string,
   ticketId: string,
   input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string }),
 ): Promise<Relation> {
-  return transaction(db, async (tx) => {
+  return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId);
     if (!ticket) throw ticketNotFound();
     const other =
@@ -61,11 +60,11 @@ export async function addRelation(
        values ($1, $2, $3, $4, $5, $6)
        on conflict (kind, least(ticket_id, other_ticket_id), greatest(ticket_id, other_ticket_id)) do nothing
        returning id`,
-      [ticket.workspaceId, storedKind[input.kind], from, to, userId, clock.now()],
+      [ticket.workspaceId, storedKind[input.kind], from, to, userId, context.clock.now()],
     );
     if (!rows[0]) throw new ApiError(409, "relation_exists", "These Tickets already have that Relation.");
     const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
-    await recordRelationChanges(tx, ticket.workspaceId, userId, clock.now(), input.kind, self, other, "added");
+    await recordRelationChanges(context, tx, ticket.workspaceId, userId, input.kind, self, other, "added");
     return { id: rows[0]!.id, kind: input.kind, ticket: other };
   });
 }
@@ -81,13 +80,12 @@ function relationNotFound(): ApiError {
 }
 
 export async function removeRelation(
-  db: Db,
-  clock: Clock,
+  context: Context,
   userId: string,
   ticketId: string,
   relationId: string,
 ): Promise<void> {
-  await transaction(db, async (tx) => {
+  await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId);
     if (!ticket) throw ticketNotFound();
     if (!isUuid(relationId)) throw relationNotFound();
@@ -101,7 +99,7 @@ export async function removeRelation(
     const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
-    await recordRelationChanges(tx, ticket.workspaceId, userId, clock.now(), kind, from, to, "removed");
+    await recordRelationChanges(context, tx, ticket.workspaceId, userId, kind, from, to, "removed");
   });
 }
 
@@ -111,21 +109,30 @@ const opposite: Record<RelationKind, RelationKind> = {
   relatesTo: "relatesTo",
 };
 
-/** Records a Relation added or removed on both its Tickets' timelines, each naming the other Ticket. */
+/**
+ * Records a Relation added or removed on both its Tickets' timelines, each naming the other Ticket, and tells
+ * the Workspace's live streams both Tickets changed.
+ */
 async function recordRelationChanges(
+  { clock, live }: Context,
   tx: Tx,
   workspaceId: string,
   userId: string,
-  at: Date,
   kind: RelationKind,
   ticket: TicketRef,
   other: TicketRef,
   addedOrRemoved: "added" | "removed",
 ): Promise<void> {
+  const at = clock.now();
   const change = (field: RelationKind, ref: TicketRef) =>
     addedOrRemoved === "added" ? { field, from: null, to: ref } : { field, from: ref, to: null };
-  await recordChanges(tx, { id: ticket.id, workspaceId }, userId, at, [change(kind, other)]);
-  await recordChanges(tx, { id: other.id, workspaceId }, userId, at, [change(opposite[kind], ticket)]);
+  for (const [one, field, otherOne] of [
+    [ticket, kind, other],
+    [other, opposite[kind], ticket],
+  ] as const) {
+    await recordChanges(tx, { id: one.id, workspaceId }, userId, at, [change(field, otherOne)]);
+    live.publish(tx, workspaceId, { type: "ticket.changed", projectId: one.projectId, ticketId: one.id });
+  }
 }
 
 /**
