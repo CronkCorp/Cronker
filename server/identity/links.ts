@@ -4,7 +4,7 @@ import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { hashSecret, issueSecret } from "./secrets.js";
-import type { User } from "./user.js";
+import { userColumns, type User } from "./user.js";
 
 /**
  * One-time links Cronk hands to an Admin (or an operator) to pass on: a **join** link
@@ -155,14 +155,15 @@ export async function useLink(context: Context, token: string, password: string)
       );
     }
     await tx.query("update links set used_at = $1 where id = $2", [now, link.id]);
-    return { id: link.user_id, email: link.email };
+    const { rows } = await tx.query<User>(`select ${userColumns} from users where id = $1`, [link.user_id]);
+    return rows[0]!;
   });
 }
 
 /** A reset link for whichever User has the email, for an operator when nobody can sign in. */
 export async function issueResetLinkByEmail(context: Context, email: string): Promise<{ user: User; link: Link }> {
   return transaction(context.db, async (tx) => {
-    const { rows } = await tx.query<User>("select id, email from users where lower(email) = lower($1)", [email.trim()]);
+    const { rows } = await tx.query<User>(`select ${userColumns} from users where lower(email) = lower($1)`, [email.trim()]);
     const user = rows[0];
     if (!user) throw new ApiError(404, "not_found", `No User has the email ${email.trim()}.`);
     return { user, link: await issueLink(context, tx, "reset", user.id) };

@@ -24,3 +24,8 @@ create table github_app_states (
   expires_at timestamptz not null
 );
 create index github_app_states_user_id_idx on github_app_states (user_id);
+
+-- A User's GitHub account, linked when they first sign in with GitHub. Users are unique
+-- by GitHub account id; the login is kept for showing, and updated at each sign-in since
+-- GitHub logins can change.
+alter table users add column github_id bigint unique, add column github_login text;

@@ -17,6 +17,11 @@ test("OpenAPI documentation is generated from the routes and served", async () =
   expect(document.openapi).toMatch(/^3\./);
   expect(document.servers).toEqual([{ url: cronk.url }]);
   expect(Object.keys(document.paths).sort()).toEqual([
+    "/api/github/app",
+    "/api/github/app/created",
+    "/api/github/app/manifest",
+    "/api/github/callback",
+    "/api/github/sign-in",
     "/api/links/lookup",
     "/api/links/use",
     "/api/me",

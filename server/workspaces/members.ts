@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
-import { User, type User as UserRecord } from "../identity/user.js";
+import { User, userColumns, type User as UserRecord } from "../identity/user.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
@@ -33,13 +33,13 @@ export async function requireAdmin(db: Db, userId: string, workspaceId: string):
 }
 
 export async function membersOf(db: Db, workspaceId: string): Promise<Member[]> {
-  const { rows } = await db.query<{ id: string; email: string; is_admin: boolean }>(
-    `select users.id, users.email, memberships.is_admin
+  const { rows } = await db.query<UserRecord & { is_admin: boolean }>(
+    `select ${userColumns}, memberships.is_admin
      from memberships join users on users.id = memberships.user_id
      where memberships.workspace_id = $1 order by memberships.created_at, lower(users.email)`,
     [workspaceId],
   );
-  return rows.map((r) => ({ user: { id: r.id, email: r.email }, isAdmin: r.is_admin }));
+  return rows.map(({ is_admin, ...user }) => ({ user, isAdmin: is_admin }));
 }
 
 /**
@@ -52,7 +52,7 @@ export async function addMember(context: Context, workspaceId: string, email: st
       email,
       context.clock.now(),
     ]);
-    const { rows } = await tx.query<UserRecord>("select id, email from users where lower(email) = lower($1)", [email]);
+    const { rows } = await tx.query<UserRecord>(`select ${userColumns} from users where lower(email) = lower($1)`, [email]);
     const user = rows[0]!;
     const isMember = await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [
       workspaceId,
@@ -87,7 +87,7 @@ export async function setAdmin(db: Db, workspaceId: string, userId: string, isAd
       workspaceId,
       userId,
     ]);
-    const { rows } = await tx.query<UserRecord>("select id, email from users where id = $1", [userId]);
+    const { rows } = await tx.query<UserRecord>(`select ${userColumns} from users where id = $1`, [userId]);
     return { user: rows[0]!, isAdmin };
   });
 }

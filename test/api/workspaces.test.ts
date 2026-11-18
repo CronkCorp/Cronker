@@ -54,7 +54,7 @@ describe("adding Users by email", () => {
 
     expect(added.status).toBe(201);
     const { user, link } = await added.json();
-    expect(user).toEqual({ id: expect.any(String), email: "bea@example.com" });
+    expect(user).toEqual({ id: expect.any(String), email: "bea@example.com", githubLogin: null });
     expect(link.url).toMatch(new RegExp(`^${cronk.url}/link#cronk_join_[A-Za-z0-9_-]{20,}$`));
     expect(link.expiresAt).toBe("2026-01-08T09:00:00.000Z");
     const token = tokenOf(link.url);
@@ -82,7 +82,7 @@ describe("adding Users by email", () => {
 
     const members = await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie: beaCookie });
     expect(await members.json()).toEqual([
-      { user: { id: expect.any(String), email: "ada@example.com" }, isAdmin: true },
+      { user: { id: expect.any(String), email: "ada@example.com", githubLogin: null }, isAdmin: true },
       { user, isAdmin: false },
     ]);
   });
