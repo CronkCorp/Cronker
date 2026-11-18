@@ -352,3 +352,70 @@ describe("Comments", () => {
     expect((await cronk.request("GET", `/api/tickets/${missing}/comments`, { cookie })).status).toBe(404);
   });
 });
+
+describe("the Ticket's timeline", () => {
+  const timeline = async (cookie: string, ticketId: string) => {
+    const response = await cronk.request("GET", `/api/tickets/${ticketId}/timeline`, { cookie });
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+
+  test("every Change shows its Actor, its time, and what it was before and after", async () => {
+    const { user, cookie, project, statusId } = await newProject();
+    const ada = { kind: "user", id: user.id, name: user.email };
+    const ticket = await createTicket(cookie, project.id, { title: "Draft", description: "First" });
+
+    cronk.clock.advance(60_000);
+    await edit(cookie, ticket.id, {
+      title: "Final",
+      description: "Second",
+      priority: "low",
+      labels: ["bug"],
+      assigneeId: user.id,
+      dueDate: "2026-03-01",
+      estimate: 2,
+    });
+    cronk.clock.advance(60_000);
+    await edit(cookie, ticket.id, { statusId: statusId("Ready"), assigneeId: null, estimate: null });
+
+    const at = (minute: number) => `2026-01-01T09:0${minute}:00.000Z`;
+    const assignee = { id: user.id, name: user.email };
+    expect(await timeline(cookie, ticket.id)).toEqual([
+      { id: expect.any(String), actor: ada, at: at(0), field: "created", from: null, to: null },
+      { id: expect.any(String), actor: ada, at: at(1), field: "title", from: "Draft", to: "Final" },
+      { id: expect.any(String), actor: ada, at: at(1), field: "description", from: "First", to: "Second" },
+      { id: expect.any(String), actor: ada, at: at(1), field: "priority", from: "none", to: "low" },
+      { id: expect.any(String), actor: ada, at: at(1), field: "labels", from: [], to: ["bug"] },
+      { id: expect.any(String), actor: ada, at: at(1), field: "assignee", from: null, to: assignee },
+      { id: expect.any(String), actor: ada, at: at(1), field: "dueDate", from: null, to: "2026-03-01" },
+      { id: expect.any(String), actor: ada, at: at(1), field: "estimate", from: null, to: 2 },
+      {
+        id: expect.any(String),
+        actor: ada,
+        at: at(2),
+        field: "status",
+        from: { id: statusId("Backlog"), name: "Backlog" },
+        to: { id: statusId("Ready"), name: "Ready" },
+      },
+      { id: expect.any(String), actor: ada, at: at(2), field: "assignee", from: assignee, to: null },
+      { id: expect.any(String), actor: ada, at: at(2), field: "estimate", from: 2, to: null },
+    ]);
+  });
+
+  test("an edit that changes nothing adds no Change", async () => {
+    const { cookie, project } = await newProject();
+    const ticket = await createTicket(cookie, project.id, { title: "Same" });
+
+    await edit(cookie, ticket.id, { title: "Same", priority: "none", labels: [], statusId: ticket.statusId });
+
+    expect((await timeline(cookie, ticket.id)).map((c: { field: string }) => c.field)).toEqual(["created"]);
+  });
+
+  test("the timeline of a Ticket the User can't see answers 404", async () => {
+    const { cookie } = await newProject();
+    const response = await cronk.request("GET", "/api/tickets/00000000-0000-4000-8000-000000000000/timeline", {
+      cookie,
+    });
+    expect(response.status).toBe(404);
+  });
+});

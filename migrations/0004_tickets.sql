@@ -46,3 +46,21 @@ create table comments (
   foreign key (reply_to_id, ticket_id) references comments (id, ticket_id)
 );
 create index comments_ticket_id_idx on comments (ticket_id, created_at);
+
+-- Every Change to a Ticket: who made it, when, and the field's value before and after.
+-- Statuses and Assignees are kept as they were named then, so renaming or removing them later
+-- doesn't rewrite history.
+create table changes (
+  id uuid primary key default gen_random_uuid(),
+  -- Orders Changes made at the same instant in the order they were made.
+  seq bigint generated always as identity,
+  workspace_id uuid not null references workspaces (id),
+  ticket_id uuid not null,
+  actor_user_id uuid not null references users (id),
+  at timestamptz not null,
+  field text not null,
+  from_value jsonb,
+  to_value jsonb,
+  foreign key (ticket_id, workspace_id) references tickets (id, workspace_id)
+);
+create index changes_ticket_id_idx on changes (ticket_id, seq);

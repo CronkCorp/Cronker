@@ -3,11 +3,13 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
 import {
   createTicket,
   editTicket,
   findTicket,
+  findTicketRow,
   listTickets,
   Priority,
   Ticket,
@@ -112,7 +114,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return editTicket(db, user.id, request.params.ticketId, request.body);
+        return editTicket(db, clock, user.id, request.params.ticketId, request.body);
       },
     );
 
@@ -150,6 +152,25 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         return reply.code(201).send(await addComment(db, clock, user.id, request.params.ticketId, request.body));
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/timeline",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's timeline of Changes",
+          description: "Every Change to the Ticket, oldest first, with its Actor and time.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(Change), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const ticket = await findTicketRow(db, user.id, request.params.ticketId);
+        if (!ticket) throw ticketNotFound();
+        return changesOf(db, ticket.id);
       },
     );
   };

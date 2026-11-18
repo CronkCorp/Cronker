@@ -3,6 +3,7 @@ import type { Clock } from "../clock.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
 
 /** How urgent a Ticket is. */
@@ -114,6 +115,7 @@ export async function createTicket(
     const project = await findProject(tx, userId, projectId, { lock: true });
     if (!project) throw projectNotFound();
     const backlog = project.statuses.find((s) => s.kind === "backlog")!;
+    const now = clock.now();
     const { rows } = await tx.query<{ id: string }>(
       `with numbered as (
          update projects set next_ticket_number = next_ticket_number + 1 where id = $2
@@ -122,9 +124,11 @@ export async function createTicket(
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at)
        select $1, $2, number, $3, $4, $5, $6, $7 from numbered
        returning id`,
-      [project.workspaceId, project.id, input.title.trim(), input.description ?? "", backlog.id, userId, clock.now()],
+      [project.workspaceId, project.id, input.title.trim(), input.description ?? "", backlog.id, userId, now],
     );
-    return withMentions(tx, (await findTicketRow(tx, userId, rows[0]!.id))!);
+    const ticket = (await findTicketRow(tx, userId, rows[0]!.id))!;
+    await recordChanges(tx, ticket, userId, now, [{ field: "created", from: null, to: null }]);
+    return withMentions(tx, ticket);
   });
 }
 
@@ -183,9 +187,10 @@ export interface TicketEdit {
   statusId?: string;
 }
 
-/** Changes whichever of a Ticket's fields are given. */
+/** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
 export async function editTicket(
   db: Db,
+  clock: Clock,
   userId: string,
   ticketId: string,
   edit: TicketEdit,
@@ -194,20 +199,41 @@ export async function editTicket(
     const ticket = await findTicketRow(tx, userId, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     const next = { ...ticket };
-    if (edit.title !== undefined) next.title = edit.title.trim();
-    if (edit.description !== undefined) next.description = edit.description;
-    if (edit.priority !== undefined) next.priority = edit.priority;
-    if (edit.labels !== undefined) next.labels = distinctLabels(edit.labels);
-    if (edit.assigneeId !== undefined) {
-      if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
-      next.assigneeId = edit.assigneeId;
-    }
-    if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
-    if (edit.estimate !== undefined) next.estimate = edit.estimate;
+    const changes: NewChange[] = [];
+    const set = <K extends keyof Row & keyof TicketEdit>(key: K, field: NewChange["field"], value: Row[K]) => {
+      if (JSON.stringify(value) === JSON.stringify(ticket[key])) return false;
+      next[key] = value;
+      changes.push({ field, from: ticket[key], to: value });
+      return true;
+    };
+
+    if (edit.title !== undefined) set("title", "title", edit.title.trim());
+    if (edit.description !== undefined) set("description", "description", edit.description);
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
-      next.statusId = edit.statusId;
+      if (set("statusId", "status", edit.statusId)) {
+        changes[changes.length - 1] = {
+          field: "status",
+          from: await named(tx, "select id, name from statuses where id = $1", ticket.statusId),
+          to: await named(tx, "select id, name from statuses where id = $1", edit.statusId),
+        };
+      }
     }
+    if (edit.priority !== undefined) set("priority", "priority", edit.priority);
+    if (edit.labels !== undefined) set("labels", "labels", distinctLabels(edit.labels));
+    if (edit.assigneeId !== undefined) {
+      if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
+      if (set("assigneeId", "assignee", edit.assigneeId)) {
+        changes[changes.length - 1] = {
+          field: "assignee",
+          from: await named(tx, "select id, email as name from users where id = $1", ticket.assigneeId),
+          to: await named(tx, "select id, email as name from users where id = $1", edit.assigneeId),
+        };
+      }
+    }
+    if (edit.dueDate !== undefined) set("dueDate", "dueDate", edit.dueDate);
+    if (edit.estimate !== undefined) set("estimate", "estimate", edit.estimate);
+    if (changes.length === 0) return withMentions(tx, ticket);
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
@@ -224,8 +250,16 @@ export async function editTicket(
         next.statusId,
       ],
     );
+    await recordChanges(tx, ticket, userId, clock.now(), changes);
     return withMentions(tx, next);
   });
+}
+
+/** A Status or User as `{ id, name }`, as it is named now; or null for no id. */
+async function named(tx: Tx, query: string, id: string | null): Promise<{ id: string; name: string } | null> {
+  if (id === null) return null;
+  const { rows } = await tx.query<{ id: string; name: string }>(query, [id]);
+  return rows[0] ?? null;
 }
 
 /** Labels are matched ignoring case: one of each, kept as first written. */
