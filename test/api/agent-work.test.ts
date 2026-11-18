@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -151,5 +152,69 @@ describe("what an Agent may not edit", () => {
     expect(unchanged).toEqual(
       expect.objectContaining({ title: "Make it so", priority: "none", delegateId: agent.id, parentId: null }),
     );
+  });
+});
+
+describe("Reports", () => {
+  test("an Agent writes Reports on its Ticket during its Run, listed with the Ticket oldest first", async () => {
+    const { ada, ticket, agent, run, asAgent } = await runningRun();
+
+    const written = await call("POST", `/api/tickets/${ticket.id}/reports`, asAgent, {
+      title: "Findings",
+      body: "The bug is in **parsing**.",
+    });
+    cronk.clock.advance(60_000);
+    await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Plan", body: "Fix the parser." });
+
+    expect(written.status).toBe(201);
+    const findings = {
+      id: expect.any(String),
+      ticketId: ticket.id,
+      runId: run.id,
+      agent: { id: agent.id, name: "claude-max" },
+      title: "Findings",
+      body: "The bug is in **parsing**.",
+      createdAt: "2026-01-01T09:00:00.000Z",
+    };
+    expect(written.json).toEqual(findings);
+    const reports = await ok("GET", `/api/tickets/${ticket.id}/reports`, ada);
+    expect(reports).toEqual([
+      findings,
+      { ...findings, title: "Plan", body: "Fix the parser.", createdAt: "2026-01-01T09:01:00.000Z" },
+    ]);
+    // Agents read them too, as later Runs on the Ticket do.
+    expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, asAgent)).toEqual(reports);
+  });
+
+  test("an Agent writes no Report outside its running Run on the Ticket, and Users write none", async () => {
+    const { ada, ticket, other, run, asAgent } = await runningRun();
+    const report = { title: "Findings", body: "Nothing." };
+
+    const onOther = await call("POST", `/api/tickets/${other.id}/reports`, asAgent, report);
+    expect(onOther.status).toBe(403);
+    expect(onOther.json.error).toEqual(expect.objectContaining({ code: "no_running_run", advice: expect.any(String) }));
+
+    const byUser = await call("POST", `/api/tickets/${ticket.id}/reports`, ada, report);
+    expect(byUser.status).toBe(403);
+    expect(byUser.json.error.code).toBe("only_runs_report");
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    const afterRun = await call("POST", `/api/tickets/${ticket.id}/reports`, asAgent, report);
+    expect(afterRun.status).toBe(403);
+    expect(afterRun.json.error.code).toBe("no_running_run");
+    expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([]);
+  });
+
+  test("a Report written tells the Workspace's streams", async () => {
+    const { workspace, ada, project, ticket, asAgent } = await runningRun();
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+
+    const report = await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: "…" });
+
+    expect(await stream.next()).toEqual({
+      type: "report.added",
+      data: { projectId: project.id, ticketId: ticket.id, reportId: report.id },
+    });
+    stream.close();
   });
 });
