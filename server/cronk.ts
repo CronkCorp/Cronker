@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import type { Writable } from "node:stream";
-import type { FastifyInstance } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import pg from "pg";
 import { buildApp } from "./app.js";
 import { systemClock, type Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Context } from "./context.js";
-import { migrate } from "./db.js";
+import { createPool, droppedConnection, migrate } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
@@ -34,7 +34,12 @@ export interface Cronk {
 
 /** Migrates the database, issues a setup code if the installation is fresh, and builds the app. */
 export async function createCronk({ config, clock = systemClock, logStream, runnerKinds = {} }: CronkOptions): Promise<Cronk> {
-  const db = new pg.Pool({ connectionString: config.databaseUrl });
+  // Until the app (and its logger) exists, which is while migrating, a dropped connection goes to stderr.
+  let log: FastifyBaseLogger | undefined;
+  const db = createPool(config.databaseUrl, (error) => {
+    if (log) log.error({ err: error }, droppedConnection);
+    else console.error(`${droppedConnection}: ${error.message}`);
+  });
   try {
     await migrate(db);
     const context: Context = { config, db, clock, live: new Live(), runners: {} };
@@ -42,6 +47,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
     context.runners.subscription = subscriptionRunner(context);
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
+    log = app.log;
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
     return {

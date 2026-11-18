@@ -46,6 +46,8 @@ export interface StartedCronk {
   /** The setup code from the server log. */
   setupCode(): string;
   request(method: string, path: string, options?: RequestOptions): Promise<Response>;
+  /** Terminates Cronk's idle database connections from an admin connection, as a Postgres restart would; returns how many. */
+  terminateIdleDatabaseConnections(): Promise<number>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
   command(...args: string[]): Promise<CommandResult>;
   stop(): Promise<void>;
@@ -136,6 +138,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       if (!line) throw new Error("no setup code in the server log");
       return line.setupCode as string;
     },
+    terminateIdleDatabaseConnections: () => database.terminateIdleConnections(),
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
       const all: Record<string, string> = { ...headers };
       if (body !== undefined) all["content-type"] = "application/json";
