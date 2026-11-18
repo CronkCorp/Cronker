@@ -85,19 +85,19 @@ export async function answerQuestion(
   answerId: string,
 ): Promise<void> {
   const now = context.clock.now();
-  const { rows } = await tx.query<{ runId: string; stepStatusId: string | null; handedBackByRunId: string | null }>(
+  const { rows } = await tx.query<{ runId: string; stepStatusId: string | null; needsYouRunId: string | null }>(
     `update questions set answer_comment_id = $2, answered_at = $3
      from tickets where questions.comment_id = $1 and questions.answered_at is null and tickets.id = questions.ticket_id
      returning questions.run_id as "runId", questions.step_status_id as "stepStatusId",
-       tickets.handed_back_by_run_id as "handedBackByRunId"`,
+       tickets.needs_you_run_id as "needsYouRunId"`,
     [replyToId, answerId, now],
   );
   const question = rows[0];
   if (!question) return;
   context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-  if (question.handedBackByRunId !== question.runId || !question.stepStatusId) return;
+  if (question.needsYouRunId !== question.runId || !question.stepStatusId) return;
 
-  await tx.query("update tickets set status_id = $2, handed_back_by_run_id = null where id = $1", [
+  await tx.query("update tickets set status_id = $2, needs_you_run_id = null where id = $1", [
     ticket.id,
     question.stepStatusId,
   ]);

@@ -63,7 +63,7 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
        ) end as "handedBack"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
-     left join runs on runs.id = tickets.handed_back_by_run_id
+     left join runs on runs.id = tickets.needs_you_run_id
      where tickets.workspace_id = $1 and tickets.assignee_id = $2
        and (statuses.kind = 'review' or runs.id is not null or tickets.id = any($3))
      order by projects.key, tickets.number`,
@@ -72,7 +72,11 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
   const summary = ({ statusName: _s, inReview: _r, handedBack: _h, ...row }: Row) => ticketSummary(row);
   const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
   const items: InboxItem[] = [
-    ...questions.map(({ ticketId, ...question }): InboxItem => ({ kind: "question", ticket: tickets.get(ticketId)!, question })),
+    // A Ticket reassigned between the two reads drops out with its Question.
+    ...questions.flatMap(({ ticketId, ...question }): InboxItem[] => {
+      const ticket = tickets.get(ticketId);
+      return ticket ? [{ kind: "question", ticket, question }] : [];
+    }),
     ...rows.flatMap((row): InboxItem[] =>
       row.handedBack
         ? [{ kind: "needsYou", ticket: summary(row), status: { id: row.statusId, name: row.statusName }, ...row.handedBack }]

@@ -286,7 +286,7 @@ export async function finishRun(
     }
     if (outcome.statusId !== ticket.statusId) {
       // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
-      await tx.query("update tickets set status_id = $2, handed_back_by_run_id = $3 where id = $1", [
+      await tx.query("update tickets set status_id = $2, needs_you_run_id = $3 where id = $1", [
         ticket.id,
         outcome.statusId,
         outcome.needsYou ? run.id : null,

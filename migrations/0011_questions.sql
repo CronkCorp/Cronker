@@ -24,4 +24,4 @@ create table questions (
 create index questions_ticket_id_idx on questions (ticket_id);
 
 -- The Run whose *needs you* Outcome moved the Ticket into its Status, until the Ticket moves again.
-alter table tickets add column handed_back_by_run_id uuid references runs (id);
+alter table tickets add column needs_you_run_id uuid references runs (id);

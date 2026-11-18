@@ -387,7 +387,7 @@ export async function editTicket(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
        -- Moving the Ticket ends its waiting from a needs you Outcome.
-       handed_back_by_run_id = case when status_id = $9 then handed_back_by_run_id end
+       needs_you_run_id = case when status_id = $9 then needs_you_run_id end
        where id = $1`,
       [
         ticket.id,
