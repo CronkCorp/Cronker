@@ -9,6 +9,7 @@ import {
   type WorkspaceSummary,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { InboxLink, InboxScreen, useInboxSignal } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
 import { TicketScreen } from "./tickets.js";
@@ -234,7 +235,7 @@ function SignedIn({
     await api.signOut();
     onSignedOut();
   });
-  const workspacePath = /^\/workspaces\/([^/]+)(\/members)?\/?$/.exec(path);
+  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|inbox))?\/?$/.exec(path);
   const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings))?\/?$/.exec(path);
   const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
@@ -248,6 +249,7 @@ function SignedIn({
   const current = routedId
     ? workspaces.find((w) => w.id === routedId)
     : (workspaces.find((w) => w.id === selectedId) ?? workspaces[0]);
+  const inbox = useInboxSignal(current?.id);
 
   useEffect(() => {
     if (path === "/" && workspaces[0]) replace(`/workspaces/${workspaces[0].id}`);
@@ -292,7 +294,9 @@ function SignedIn({
         }}
       />
     );
-  } else if (current && workspacePath?.[2]) {
+  } else if (current && workspacePath?.[2] === "inbox") {
+    page = <InboxScreen key={current.id} workspace={current} version={inbox.version} />;
+  } else if (current && workspacePath?.[2] === "members") {
     page = (
       <Members
         key={current.id}
@@ -332,6 +336,9 @@ function SignedIn({
           </select>
         )}
         <nav>
+          {current && (
+            <InboxLink workspaceId={current.id} count={inbox.count} current={workspacePath?.[2] === "inbox"} />
+          )}
           {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}
           <Link to="/workspaces/new">New Workspace</Link>
         </nav>
