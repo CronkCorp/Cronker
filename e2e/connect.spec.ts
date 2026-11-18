@@ -40,7 +40,7 @@ test("a User connects a claude.ai connector as one of their Agents on the consen
   await page.route(`${callback}**`, (route) => route.fulfill({ body: "Back at claude.ai" }));
 
   await page.goto(authorize.href);
-  await expect(page.getByText("Sign in to Cronk to connect an app as one of your Agents.")).toBeVisible();
+  await expect(page.getByText("Sign in to Cronk to choose which of your Agents the connector acts as.")).toBeVisible();
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();

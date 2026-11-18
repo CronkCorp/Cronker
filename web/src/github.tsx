@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type GitHubApp, type WorkspaceSummary } from "./api.js";
-import { returnAfterSignInKey } from "./connect.js";
 import { field, useSubmit } from "./forms.js";
+import { returnAfterSignIn } from "./storage.js";
 
 /** What the codes Cronk sends the browser back with mean, for whoever is signing in or creating the App. */
 const githubErrors: Record<string, string> = {
@@ -47,15 +47,6 @@ async function createApp(githubOrganization?: string): Promise<void> {
   form.submit();
 }
 
-/** Browser storage can be unavailable, such as in a private window; nothing here depends on it. */
-export function safely<T>(fn: () => T): T | undefined {
-  try {
-    return fn();
-  } catch {
-    return undefined;
-  }
-}
-
 /** "Sign in with GitHub", shown once the installation has its GitHub App. */
 export function GitHubSignIn({ label = "Sign in with GitHub", returnTo }: { label?: string; returnTo?: string }) {
   const [app, setApp] = useState<GitHubApp | null>(null);
@@ -69,7 +60,7 @@ export function GitHubSignIn({ label = "Sign in with GitHub", returnTo }: { labe
       href="/api/github/sign-in"
       onClick={() => {
         // GitHub sends the browser back to `/`; carry on from here once signed in.
-        if (returnTo) safely(() => sessionStorage.setItem(returnAfterSignInKey, returnTo));
+        if (returnTo) returnAfterSignIn(returnTo);
       }}
     >
       {label}

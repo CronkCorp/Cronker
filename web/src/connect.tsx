@@ -3,7 +3,7 @@ import { api, ApiError, type ConnectRequest } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 
 /**
- * The consent screen of Cronk's OAuth server: an app such as a claude.ai connector asks to
+ * The consent screen of Cronk's OAuth server: a connector, such as claude.ai's, asks to
  * act in Cronk, and the signed-in User picks which of their Agents it acts as. Cronk opens it
  * as `/connect?request=<id>`, or `/connect?error=<code>` when it can't send the browser back.
  */
@@ -11,15 +11,12 @@ import { field, useSubmit } from "./forms.js";
 /** Why Cronk couldn't even ask, by the OAuth error code it sends the browser here with. */
 const connectErrors: Record<string, string> = {
   invalid_client:
-    "Cronk doesn't know the app asking to connect, or couldn't read the metadata document it named. Start connecting again from the app.",
-  invalid_request: "The app asked to send you back to an address it didn't register, so Cronk stopped here.",
+    "Cronk doesn't know the connector asking to connect, or couldn't read the metadata document it named. Start connecting again from where you began.",
+  invalid_request: "The connector asked to send you back to an address it didn't register, so Cronk stopped here.",
 };
 
 export const connectErrorMessage = (code: string) =>
-  connectErrors[code] ?? "The app's request to connect didn't work. Start connecting again from the app.";
-
-/** Where the browser is sent back to once signed in with GitHub, so connecting carries on. */
-export const returnAfterSignInKey = "cronk_return_after_sign_in";
+  connectErrors[code] ?? "The connector's request to connect didn't work. Start connecting again from where you began.";
 
 export function ConnectScreen({ requestId }: { requestId: string }) {
   const [request, setRequest] = useState<ConnectRequest | { failed: string } | null>(null);
@@ -28,7 +25,7 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
       setRequest({
         failed:
           error instanceof ApiError && error.status === 404
-            ? "It has expired or was already answered. Start connecting again from the app."
+            ? "It has expired or was already answered. Start connecting again from where you began."
             : String(error instanceof Error ? error.message : error),
       }),
     );
@@ -53,10 +50,10 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
       </ConnectFrame>
     );
   }
-  const name = request.client.name ?? "An app";
+  const name = request.client.name ?? "A connector";
   const returnHost = new URL(request.redirectUri).host;
   return (
-    <ConnectFrame title={`Connect ${request.client.name ?? "an app"} to Cronk`}>
+    <ConnectFrame title={`Connect ${request.client.name ?? "a connector"} to Cronk`}>
       <p>
         <strong>{name}</strong> asks to act in Cronk as one of your Agents: to read its Workspace, and to do what that
         Agent may. Once you choose, you go back to <strong>{returnHost}</strong>.
