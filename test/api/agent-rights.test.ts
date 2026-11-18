@@ -42,6 +42,7 @@ describe("what an Agent reads", () => {
       `/api/tickets/${ticket.id}`,
       `/api/tickets/${ticket.id}/comments`,
       `/api/tickets/${ticket.id}/timeline`,
+      `/api/workspaces/${workspace.id}/agents`,
     ]) {
       const response = await cronk.request("GET", path, { headers });
       expect(response.status, path).toBe(200);
@@ -150,7 +151,6 @@ describe("what an Agent may change", () => {
       ["DELETE", `/api/projects/${project.id}/statuses/${backlog}`],
       ["POST", `/api/projects/${project.id}/tickets`, { title: "Mine" }],
       ["PATCH", `/api/tickets/${ticket.id}`, { title: "Mine" }],
-      ["GET", `/api/workspaces/${workspace.id}/agents`],
       ["POST", `/api/workspaces/${workspace.id}/agents`, { name: "mine" }],
       ["DELETE", `/api/agents/${agent.id}`],
       ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "full" }],
@@ -167,6 +167,30 @@ describe("what an Agent may change", () => {
     }
     const unchanged = await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { headers })).json();
     expect(unchanged.title).toBe("Read me");
+  });
+
+  test("every refusal an Agent meets names the rule and what it may do instead", async () => {
+    const { ticket, headers } = await agentWithTicket();
+
+    const refusals = [
+      await cronk.request("GET", "/api/tickets/00000000-0000-0000-0000-000000000000", { headers }),
+      await cronk.request("POST", `/api/tickets/${ticket.id}/comments`, { headers, body: { body: " " } }),
+      await cronk.request("POST", `/api/tickets/${ticket.id}/comments`, {
+        headers,
+        body: { body: "Hi", replyToId: "00000000-0000-0000-0000-000000000000" },
+      }),
+    ];
+
+    for (const response of refusals) {
+      const { error } = await response.json();
+      expect(error, error.code).toEqual({
+        code: expect.any(String),
+        message: expect.any(String),
+        rule: expect.any(String),
+        advice: expect.any(String),
+      });
+    }
+    expect(refusals.map((r) => r.status)).toEqual([404, 400, 400]);
   });
 
   test("an Agent of another member is refused the same way", async () => {

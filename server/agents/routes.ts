@@ -1,14 +1,13 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ErrorBody } from "../http/errors.js";
-import { requireUser } from "../identity/sign-ins.js";
-import { ApiError } from "../http/errors.js";
+import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
-import { Workspace } from "../workspaces/workspaces.js";
-import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, tokensOf } from "./tokens.js";
+import { requireUser } from "../identity/sign-ins.js";
 import { requireMember } from "../workspaces/members.js";
+import { findWorkspace, Workspace } from "../workspaces/workspaces.js";
 import { Agent, AgentName, agentsOf, createAgent, findAgent, removeAgent, renameAgent, requireOwnAgent } from "./agents.js";
+import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, tokensOf } from "./tokens.js";
 
 export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -19,14 +18,15 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Agents"],
           summary: "The Workspace's Agents",
-          description: "Every member's Agents, by name.",
+          description: "Every member's Agents, by name. Agents may list their own Workspace's.",
           params: Type.Object({ workspaceId: Type.String() }),
           response: { 200: Type.Array(Agent), 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        const workspace = await requireMember(db, user.id, request.params.workspaceId);
+        const caller = await requireCaller(context, request);
+        const workspace = await findWorkspace(db, caller, request.params.workspaceId);
+        if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
         return agentsOf(db, workspace.id);
       },
     );
@@ -169,7 +169,10 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
         if (caller.kind !== "agent") {
           throw new ApiError(403, "not_an_agent", "Only an Agent's token can ask which Agent it is. Users see themselves at /api/me.");
         }
-        return { agent: (await findAgent(db, caller.id))!, workspace: caller.workspace, access: caller.access };
+        // Removed since its token was checked: refused like any token of a removed Agent.
+        const agent = await findAgent(db, caller.id);
+        if (!agent) throw new ApiError(401, "invalid_token", "This token's Agent has been removed.");
+        return { agent, workspace: caller.workspace, access: caller.access };
       },
     );
   };

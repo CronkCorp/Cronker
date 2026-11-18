@@ -6,7 +6,8 @@ import fastifyStatic from "@fastify/static";
 import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
-import { ApiError, sendError } from "./http/errors.js";
+import { agentOfRequest, agentOfToken } from "./agents/tokens.js";
+import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
 import { mcpRoutes } from "./mcp/routes.js";
@@ -25,11 +26,21 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     logger: logStream ? { stream: logStream } : true,
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  app.setErrorHandler((error, request, reply) => {
-    if (error instanceof ApiError) return sendError(reply, error.statusCode, error.code, error.message, error.guidance);
+  app.setErrorHandler(async (error, request, reply) => {
+    // Every refusal an Agent meets names the rule and what it may do instead, including
+    // refusals of a malformed request, made before its route looked at the token.
+    const header = request.headers.authorization;
+    const byAgent =
+      agentOfRequest(request) !== undefined ||
+      (header !== undefined && (await agentOfToken(context, header).then(() => true, () => false)));
+    const guide = (statusCode: number, guidance?: Guidance) =>
+      guidance ?? (byAgent ? guidanceForAgent(statusCode) : undefined);
+    if (error instanceof ApiError) {
+      return sendError(reply, error.statusCode, error.code, error.message, guide(error.statusCode, error.guidance));
+    }
     const { validation, statusCode, message } = error as { validation?: unknown; statusCode?: number; message: string };
-    if (validation) return sendError(reply, 400, "invalid_request", message);
-    if (statusCode && statusCode < 500) return sendError(reply, statusCode, "invalid_request", message);
+    if (validation) return sendError(reply, 400, "invalid_request", message, guide(400));
+    if (statusCode && statusCode < 500) return sendError(reply, statusCode, "invalid_request", message, guide(statusCode));
     request.log.error(error);
     return sendError(reply, 500, "internal", "Something went wrong inside Cronk.");
   });

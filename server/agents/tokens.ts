@@ -81,6 +81,11 @@ export async function revokeToken(db: Db, agent: Agent, tokenId: string): Promis
 
 const safeMethods = new Set(["GET", "HEAD"]);
 
+const agentsOfRequests = new WeakMap<FastifyRequest, AgentCaller>();
+
+/** The Agent a request was authenticated as, if any, for wording its refusals. */
+export const agentOfRequest = (request: FastifyRequest): AgentCaller | undefined => agentsOfRequests.get(request);
+
 /**
  * The Agent whose token the request carries as `Authorization: Bearer …`, or nothing if it
  * carries none. Refuses a token that was revoked, whose Agent was removed or whose Owner has
@@ -90,6 +95,7 @@ export async function authenticateAgent(context: Context, request: FastifyReques
   const header = request.headers.authorization;
   if (header === undefined) return undefined;
   const agent = await agentOfToken(context, header);
+  agentsOfRequests.set(request, agent);
   if (agent.access === "read" && !safeMethods.has(request.method)) {
     throw new ApiError(403, "read_only_token", `This token of ${agent.name} is read-only.`, {
       rule: "A read-only token may only read.",
