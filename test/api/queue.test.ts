@@ -308,6 +308,23 @@ describe("limits per Runner", () => {
   });
 });
 
+describe("an Agent changing Runners", () => {
+  test("its waiting Tickets take the free slots of the Runner it now uses", async () => {
+    const { ada, agent, runner, ticket, delegateToTriage } = await adaWithAgent();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    await delegateToTriage((await ticket("First")).id);
+    await delegateToTriage((await ticket("Second")).id);
+    const spare = await ok("POST", "/api/runners", ada, { name: "Spare", kind: "fake" });
+
+    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: spare.id });
+
+    expect(cronk.runner.starts.map((s) => [s.ticket.key, s.runner.name])).toEqual([
+      ["CRONK-1", "Fake"],
+      ["CRONK-2", "Spare"],
+    ]);
+  });
+});
+
 describe("waiting live", () => {
   /** The Tickets the stream says changed, until it goes quiet. */
   async function changedTickets(stream: OpenStream) {
