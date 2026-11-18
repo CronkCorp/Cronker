@@ -119,18 +119,21 @@ function checkKinds(board: Draft[], before: Draft[]): void {
 
 async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Promise<void> {
   const kept = board.flatMap((s) => (s.id ? [s.id] : []));
-  const { rows: holding } = await tx.query<{ name: string; tickets: number }>(
-    `select name, (select count(*)::int from tickets where tickets.status_id = statuses.id) as tickets
-     from statuses where project_id = $1 and not (id = any($2::uuid[]))`,
+  const { rows: occupied } = await tx.query<{ name: string; ticketCount: number }>(
+    `select statuses.name, count(*)::int as "ticketCount"
+     from statuses join tickets on tickets.status_id = statuses.id
+     where statuses.project_id = $1 and not (statuses.id = any($2::uuid[]))
+     group by statuses.id, statuses.name`,
     [project.id, kept],
   );
-  const occupied = holding.find((s) => s.tickets > 0);
-  if (occupied) {
-    const [tickets, them] = occupied.tickets === 1 ? ["1 Ticket", "it"] : [`${occupied.tickets} Tickets`, "them"];
+  if (occupied[0]) {
+    const { name, ticketCount } = occupied[0];
     throw new ApiError(
       409,
       "status_has_tickets",
-      `${occupied.name} holds ${tickets}. Move ${them} to another Status before removing it.`,
+      ticketCount === 1
+        ? `${name} holds 1 Ticket. Move it to another Status before removing ${name}.`
+        : `${name} holds ${ticketCount} Tickets. Move them to another Status before removing ${name}.`,
     );
   }
   await tx.query("delete from statuses where project_id = $1 and not (id = any($2::uuid[]))", [project.id, kept]);

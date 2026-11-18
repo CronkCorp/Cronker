@@ -93,8 +93,6 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
 
   await page.getByRole("link", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Remove Ready" }).click();
-  await expect(page.getByRole("alert")).toHaveText(
-    "Ready holds 1 Ticket. Move it to another Status before removing it.",
-  );
+  await expect(page.getByRole("alert")).toContainText("Ready holds 1 Ticket");
   await expect(page.getByLabel("Name of Ready")).toBeVisible();
 });
