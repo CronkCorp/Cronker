@@ -3,6 +3,8 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import type { Caller } from "../identity/callers.js";
+import type { Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "./actors.js";
 import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
 
@@ -20,11 +22,13 @@ export type Comment = Static<typeof Comment>;
 type Row = Omit<Comment, "createdAt" | "mentions"> & { createdAt: Date };
 
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.reply_to_id as "replyToId", comments.body,
-  ${actorColumn("actors")} as actor, comments.created_at as "createdAt"`;
+  ${actorColumn("users", "agents")} as actor, comments.created_at as "createdAt"`;
 
 async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promise<Row[]> {
   const { rows } = await db.query<Row>(
-    `select ${columns} from comments join users actors on actors.id = comments.actor_user_id
+    `select ${columns} from comments
+     left join users on users.id = comments.actor_user_id
+     left join agents on agents.id = comments.actor_agent_id
      where comments.ticket_id = $1 ${commentId ? "and comments.id = $2" : ""}
      order by comments.seq`,
     commentId ? [ticketId, commentId] : [ticketId],
@@ -38,20 +42,20 @@ async function present(db: Db | Tx, workspaceId: string, rows: Row[]): Promise<C
   return rows.map((row, i) => ({ ...row, createdAt: row.createdAt.toISOString(), mentions: mentions[i]! }));
 }
 
-export async function commentsOn(db: Db, userId: string, ticketId: string): Promise<Comment[]> {
-  const ticket = await findTicketRow(db, userId, ticketId);
+export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Comment[]> {
+  const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
   return present(db, ticket.workspaceId, await rowsOf(db, ticket.id));
 }
 
 export async function addComment(
   { db, clock, live }: Context,
-  userId: string,
+  actor: Caller,
   ticketId: string,
   input: { body: string; replyToId?: string },
 ): Promise<Comment> {
   return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, userId, ticketId);
+    const ticket = await findTicketRow(tx, actor, ticketId);
     if (!ticket) throw ticketNotFound();
     if (input.replyToId !== undefined) {
       const { rowCount } = isUuid(input.replyToId)
@@ -60,9 +64,17 @@ export async function addComment(
       if (rowCount === 0) throw new ApiError(400, "unknown_comment", "Replies go to a Comment on the same Ticket.");
     }
     const { rows } = await tx.query<{ id: string }>(
-      `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, body, created_at)
-       values ($1, $2, $3, $4, $5, $6) returning id`,
-      [ticket.workspaceId, ticket.id, input.replyToId ?? null, userId, input.body, clock.now()],
+      `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+      [
+        ticket.workspaceId,
+        ticket.id,
+        input.replyToId ?? null,
+        actor.kind === "user" ? actor.id : null,
+        actor.kind === "agent" ? actor.id : null,
+        input.body,
+        clock.now(),
+      ],
     );
     const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, rows[0]!.id));
     live.publish(tx, ticket.workspaceId, {

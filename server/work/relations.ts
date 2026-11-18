@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "./changes.js";
 import {
   findTicketRef,
@@ -39,7 +40,7 @@ export async function addRelation(
   input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string }),
 ): Promise<Relation> {
   return transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, userId, ticketId);
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId);
     if (!ticket) throw ticketNotFound();
     const other =
       "ticketId" in input
@@ -86,7 +87,7 @@ export async function removeRelation(
   relationId: string,
 ): Promise<void> {
   await transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, userId, ticketId);
+    const ticket = await findTicketRow(tx, userViewer(userId), ticketId);
     if (!ticket) throw ticketNotFound();
     if (!isUuid(relationId)) throw relationNotFound();
     const { rows } = await tx.query<{ kind: StoredKind; ticketId: string; otherTicketId: string }>(
@@ -154,8 +155,8 @@ async function blocksTransitively(tx: Tx, workspaceId: string, blocker: string, 
   return (rowCount ?? 0) > 0;
 }
 
-export async function relationsOf(db: Db, userId: string, ticketId: string): Promise<TicketRelations> {
-  const ticket = await findTicketRow(db, userId, ticketId);
+export async function relationsOf(db: Db, viewer: Viewer, ticketId: string): Promise<TicketRelations> {
+  const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
   const { rows } = await db.query<Relation>(
     `select relations.id,

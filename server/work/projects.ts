@@ -1,8 +1,9 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { inView, type Viewer } from "../identity/viewers.js";
 
 /** What a Status means, whatever its name. Every Project keeps at least one Status of each kind. */
 export const statusKinds = ["backlog", "active", "review", "done", "canceled"] as const;
@@ -63,22 +64,21 @@ export async function statusesOf(db: Db | Tx, projectId: string): Promise<Status
 }
 
 /**
- * A Project, if the User belongs to its Workspace; otherwise nothing, as if it didn't exist.
+ * A Project in the Viewer's view; otherwise nothing, as if it didn't exist.
  * With `lock`, the Project's row stays locked until the transaction ends, so changes to it queue up.
  */
 export async function findProject(
   db: Db | Tx,
-  userId: string,
+  viewer: Viewer,
   projectId: string,
   { lock = false } = {},
 ): Promise<Project | undefined> {
   if (!isUuid(projectId)) return undefined;
+  const view = inView(viewer, "projects.workspace_id", "$2");
   const { rows } = await db.query<ProjectSummary>(
-    `select ${summaryColumns} from projects
-     join memberships on memberships.workspace_id = projects.workspace_id
-     where projects.id = $1 and memberships.user_id = $2
+    `select ${summaryColumns} from projects where projects.id = $1 and ${view.sql}
      ${lock ? "for update of projects" : ""}`,
-    [projectId, userId],
+    [projectId, view.value],
   );
   const project = rows[0];
   return project && { ...project, statuses: await statusesOf(db, project.id) };
@@ -131,12 +131,6 @@ export async function insertStatus(
      values ($1, $2, $3, $4, $5, $6)`,
     [project.workspaceId, project.id, status.name, status.kind, position, now],
   );
-}
-
-/** Whether a query failed on the named unique index. */
-function violates(error: unknown, constraint: string): boolean {
-  const { code, constraint: violated } = error as { code?: string; constraint?: string };
-  return code === "23505" && violated === constraint;
 }
 
 export function projectNotFound(): ApiError {

@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
@@ -10,6 +11,7 @@ import {
   createTicket,
   editTicket,
   findTicket,
+  findTicketByKey,
   findTicketRow,
   listTickets,
   Priority,
@@ -65,8 +67,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        return listTickets(db, user.id, request.params.projectId, request.query);
+        const caller = await requireCaller(context, request);
+        return listTickets(db, caller, request.params.projectId, request.query);
       },
     );
 
@@ -81,8 +83,27 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        const ticket = await findTicket(db, user.id, request.params.ticketId);
+        const caller = await requireCaller(context, request);
+        const ticket = await findTicket(db, caller, request.params.ticketId);
+        if (!ticket) throw ticketNotFound();
+        return ticket;
+      },
+    );
+
+    app.get(
+      "/api/workspaces/:workspaceId/tickets/:key",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket of a Workspace, by its key",
+          description: "The key, such as `CRONK-12`, is matched ignoring case.",
+          params: Type.Object({ workspaceId: Type.String(), key: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const ticket = await findTicketByKey(db, caller, request.params.workspaceId, request.params.key);
         if (!ticket) throw ticketNotFound();
         return ticket;
       },
@@ -141,8 +162,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        return commentsOn(db, user.id, request.params.ticketId);
+        const caller = await requireCaller(context, request);
+        return commentsOn(db, caller, request.params.ticketId);
       },
     );
 
@@ -152,6 +173,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "Comment on a Ticket, or reply to a Comment",
+          description: "Users and Agents with a full token may comment on any Ticket of their Workspace.",
           params: Type.Object({ ticketId: Type.String() }),
           body: Type.Object({
             body: Type.String({ minLength: 1, maxLength: 100_000, pattern: "\\S", description: "Markdown." }),
@@ -161,8 +183,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        return reply.code(201).send(await addComment(context, user.id, request.params.ticketId, request.body));
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await addComment(context, caller, request.params.ticketId, request.body));
       },
     );
 
@@ -172,14 +194,15 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "A Ticket's Relations, parent and Sub-Tickets",
-          description: "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other.",
+          description:
+            "Each Relation as seen from this Ticket: it blocks, is blocked by, or relates to the other. Agents may read them too.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: TicketRelations, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        return relationsOf(db, user.id, request.params.ticketId);
+        const caller = await requireCaller(context, request);
+        return relationsOf(db, caller, request.params.ticketId);
       },
     );
 
@@ -241,8 +264,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        const ticket = await findTicketRow(db, user.id, request.params.ticketId);
+        const caller = await requireCaller(context, request);
+        const ticket = await findTicketRow(db, caller, request.params.ticketId);
         if (!ticket) throw ticketNotFound();
         return changesOf(db, ticket.id);
       },

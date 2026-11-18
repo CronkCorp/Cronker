@@ -1,13 +1,20 @@
 import { Type, type Static } from "typebox";
 
-/** Whoever performed an action: a User, or (later) an Agent. */
+/** Whoever performed an action: a User or an Agent. */
 export const Actor = Type.Object({
-  kind: Type.Literal("user"),
+  kind: Type.Union([Type.Literal("user"), Type.Literal("agent")]),
   id: Type.String({ format: "uuid" }),
-  name: Type.String({ description: "How to show the Actor: a User's email." }),
+  name: Type.String({ description: "How to show the Actor: a User's email, or an Agent's name." }),
 });
 export type Actor = Static<typeof Actor>;
 
-/** Selects a User as an Actor, from `users` joined as the given alias. */
-export const actorColumn = (users: string) =>
-  `json_build_object('kind', 'user', 'id', ${users}.id, 'name', ${users}.email)`;
+/**
+ * Selects an Actor from `users` joined as the given alias, or, given an alias `agents`
+ * is joined as, from whichever of the two is there.
+ */
+export const actorColumn = (users: string, agents?: string) => {
+  const user = `json_build_object('kind', 'user', 'id', ${users}.id, 'name', ${users}.email)`;
+  if (!agents) return user;
+  return `case when ${agents}.id is null then ${user}
+    else json_build_object('kind', 'agent', 'id', ${agents}.id, 'name', ${agents}.name) end`;
+};

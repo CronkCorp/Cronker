@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireSignIn } from "../identity/sign-ins.js";
+import { userViewer } from "../identity/viewers.js";
 import { findWorkspace } from "../workspaces/workspaces.js";
 import { liveEventTypes, type LiveEvent } from "./live.js";
 
@@ -45,7 +46,7 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const allowed = async () => {
           const signIn = await requireSignIn(context, request);
-          const workspace = await findWorkspace(db, signIn.user.id, request.params.workspaceId);
+          const workspace = await findWorkspace(db, userViewer(signIn.user.id), request.params.workspaceId);
           if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
           return { ...signIn, workspace };
         };

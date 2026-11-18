@@ -2,6 +2,7 @@ import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import { userViewer } from "../identity/viewers.js";
 import {
   findProject,
   insertStatus,
@@ -44,7 +45,7 @@ export async function changeStatuses(
   change: StatusChange,
 ): Promise<Project> {
   return transaction(db, async (tx) => {
-    const project = await findProject(tx, userId, projectId, { lock: true });
+    const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
     const { statuses } = project;
 

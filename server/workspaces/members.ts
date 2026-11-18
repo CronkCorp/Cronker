@@ -4,6 +4,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
 import { User, userColumns, type User as UserRecord } from "../identity/user.js";
+import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
@@ -18,7 +19,7 @@ const notFound = () => new ApiError(404, "not_found", "No such Workspace.");
 
 /** The Workspace and whether the User is its Admin; 404 if they don't belong to it. */
 export async function requireMember(db: Db, userId: string, workspaceId: string): Promise<Workspace & { isAdmin: boolean }> {
-  const workspace = await findWorkspace(db, userId, workspaceId);
+  const workspace = await findWorkspace(db, userViewer(userId), workspaceId);
   if (!workspace) throw notFound();
   const { rows } = await db.query<{ is_admin: boolean }>(
     "select is_admin from memberships where workspace_id = $1 and user_id = $2",

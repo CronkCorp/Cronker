@@ -462,7 +462,8 @@ function Comments({
         return (
           <article key={comment.id} className="comment" style={{ marginLeft: `${Math.min(depth, 4) * 1.5}rem` }}>
             <div className="comment-meta">
-              <strong>{comment.actor.name}</strong> <When at={comment.createdAt} />
+              <strong>{comment.actor.name}</strong>
+              {comment.actor.kind === "agent" && <span className="muted"> (Agent)</span>} <When at={comment.createdAt} />
               {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
