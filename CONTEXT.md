@@ -76,6 +76,14 @@ _Avoid_: Prompt, clarification, blocker
 A free-form tag on a Ticket, matched ignoring case. A Step may require a Label or be skipped by one; a skipped Step sends the Ticket straight on by its default Outcome.
 _Avoid_: Tag, category
 
+**Comment**:
+A Markdown message an Actor writes on a Ticket, possibly as a reply to another Comment on the same Ticket.
+_Avoid_: Note, message, post
+
+**Change**:
+One recorded edit to a Ticket: which field, its value before and after, the Actor who made it and when. A Ticket's Changes make up its timeline.
+_Avoid_: Event, activity, history entry, audit log
+
 **Inbox**:
 A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs, Unverified completions and Tickets waiting for their review.
 _Avoid_: Notifications, review queue, to-do
