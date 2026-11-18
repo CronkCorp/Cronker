@@ -329,6 +329,30 @@ export async function retryRun(context: Context, viewer: Viewer, ticketId: strin
   });
 }
 
+/**
+ * Makes lost every running Run whose Agent made no call naming it or its Ticket for its Workspace's
+ * lost-Run threshold. The server runs this periodically; tests run it directly after moving the clock.
+ * A lost Run's Ticket stays where it is, waiting for Retry.
+ */
+export async function checkForLostRuns(context: Context): Promise<void> {
+  await transaction(context.db, async (tx) => {
+    const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
+      `update runs set state = 'lost', ended_at = $1,
+         end_reason = format('No call named the Run or %s for %s minutes.', projects.key || '-' || tickets.number,
+           workspaces.lost_run_minutes)
+       from tickets, projects, workspaces
+       where runs.state = 'running' and tickets.id = runs.ticket_id and projects.id = tickets.project_id
+         and workspaces.id = runs.workspace_id
+         and coalesce(runs.last_call_at, runs.started_at) <= $1::timestamptz - make_interval(mins => workspaces.lost_run_minutes)
+       returning runs.workspace_id as "workspaceId", tickets.project_id as "projectId", runs.ticket_id as "ticketId"`,
+      [context.clock.now()],
+    );
+    for (const { workspaceId, projectId, ticketId } of rows) {
+      context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
+    }
+  });
+}
+
 /** Where Runners report their Runs' ends. */
 export function runReports(context: Context): RunReports {
   return {

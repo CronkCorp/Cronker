@@ -11,7 +11,7 @@ import { migrate } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
-import { runReports } from "./runs/runs.js";
+import { checkForLostRuns, runReports } from "./runs/runs.js";
 
 export interface CronkOptions {
   config: Config;
@@ -24,6 +24,8 @@ export interface CronkOptions {
 export interface Cronk {
   app: FastifyInstance;
   listen(): Promise<void>;
+  /** Makes lost the Runs nothing has named for their Workspace's lost-Run threshold. */
+  checkForLostRuns(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -43,6 +45,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
       async listen() {
         await app.listen({ host: config.host, port: config.port });
       },
+      checkForLostRuns: () => checkForLostRuns(context),
       async close() {
         await app.close();
         await db.end();

@@ -190,3 +190,46 @@ describe("Retry", () => {
     expect(cronk.runner.starts).toHaveLength(1);
   });
 });
+
+describe("lost Runs", () => {
+  test("a Run with no calls for 30 minutes is lost and waits in the Inbox; until then it keeps running", async () => {
+    const { ada, ticket, run, inbox } = await runningRun();
+
+    cronk.clock.advance(minutes(29));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+
+    cronk.clock.advance(minutes(1));
+    await cronk.checkForLostRuns();
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({ state: "lost", endReason: "No call named the Run or CRONK-1 for 30 minutes.", endedAt: "2026-01-01T09:30:00.000Z" }),
+    );
+    expect((await inbox()).items).toEqual([
+      expect.objectContaining({ kind: "run", ticket: expect.objectContaining({ id: ticket.id }), run: expect.objectContaining({ state: "lost" }) }),
+    ]);
+  });
+
+  test("each call its Agent makes naming the Run or its Ticket keeps it alive for another 30 minutes", async () => {
+    const { workspace, ada, project, ticket, run, asAgent } = await runningRun();
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Another" });
+    const alive = async (after: number) => {
+      cronk.clock.advance(minutes(after));
+      await cronk.checkForLostRuns();
+      return (await ok("GET", `/api/runs/${run.id}`, ada)).state;
+    };
+
+    cronk.clock.advance(minutes(20));
+    await ok("GET", `/api/tickets/${ticket.id}`, asAgent);
+    expect(await alive(29)).toBe("running");
+    await ok("GET", `/api/workspaces/${workspace.id}/tickets/CRONK-1`, asAgent);
+    expect(await alive(29)).toBe("running");
+    await ok("GET", `/api/runs/${run.id}/brief`, asAgent);
+    expect(await alive(29)).toBe("running");
+
+    // Neither a User's calls nor the Agent's calls about other Tickets keep it alive.
+    await ok("GET", `/api/tickets/${ticket.id}`, ada);
+    await ok("GET", `/api/tickets/${other.id}`, asAgent);
+    expect(await alive(1)).toBe("lost");
+  });
+});

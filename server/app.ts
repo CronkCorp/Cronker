@@ -10,6 +10,7 @@ import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
 import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
+import { watchRunCalls } from "./runs/calls.js";
 import { runRoutes } from "./runs/routes.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { oauthRoutes } from "./oauth/routes.js";
@@ -79,6 +80,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   app.get("/api/openapi.json", { schema: { hide: true } }, async () => app.swagger());
 
   await app.register(cookie);
+  watchRunCalls(app, context);
   await app.register(identityRoutes(context));
   await app.register(githubRoutes(context));
   await app.register(workspaceRoutes(context));
