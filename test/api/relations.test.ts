@@ -497,6 +497,52 @@ describe("a Sub-Ticket's Delegation", () => {
       expect.objectContaining({ state: "running", agent: { id: beasAgent.id, name: "bea-bot" } }),
     );
   });
+
+  test("undelegating a parent undelegates the Sub-Tickets that held its Delegation, stopping their running Runs", async () => {
+    const { user, cookie, workspace, project, tickets } = await withTickets("Relations", "Ticket view", "Board view");
+    const [parent, view, boardView] = tickets as [TicketRef, TicketRef, TicketRef];
+    await edit(cookie, view.id, { parentId: parent.id });
+    await edit(cookie, boardView.id, { parentId: view.id });
+    const agent = await agentWithRunner(cookie, workspace.id, "claude-max");
+    await edit(cookie, parent.id, { delegateId: agent.id });
+    const board = await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json();
+    const triage = board.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    await edit(cookie, boardView.id, { statusId: triage });
+    const runsOf = async () => (await cronk.request("GET", `/api/tickets/${boardView.id}/runs`, { cookie })).json();
+    const [run] = await runsOf();
+    expect(run.state).toBe("running");
+
+    await edit(cookie, parent.id, { delegateId: null });
+
+    for (const subTicket of [view, boardView]) {
+      const got = await (await cronk.request("GET", `/api/tickets/${subTicket.id}`, { cookie })).json();
+      expect(got).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: null }));
+      expect(await changesOf(cookie, subTicket.id)).toEqual(
+        expect.arrayContaining([{ field: "delegate", from: { id: agent.id, name: "claude-max" }, to: null }]),
+      );
+    }
+    expect(await runsOf()).toEqual([
+      expect.objectContaining({
+        id: run.id,
+        state: "stopped",
+        endReason: `ada@example.com undelegated ${parent.key}, and so its Sub-Ticket ${boardView.key}.`,
+      }),
+    ]);
+  });
+
+  test("undelegating a parent leaves a Sub-Ticket delegated to another Agent as it is", async () => {
+    const { user, cookie, workspace, tickets } = await withTickets("Relations", "Ticket view");
+    const [parent, view] = tickets as [TicketRef, TicketRef];
+    await edit(cookie, view.id, { parentId: parent.id });
+    await edit(cookie, parent.id, { delegateId: (await createAgent(cookie, workspace.id, "claude-max")).id });
+    const other = await createAgent(cookie, workspace.id, "claude-pro");
+    await edit(cookie, view.id, { delegateId: other.id });
+
+    await edit(cookie, parent.id, { delegateId: null });
+
+    const subTicket = await (await cronk.request("GET", `/api/tickets/${view.id}`, { cookie })).json();
+    expect(subTicket).toEqual(expect.objectContaining({ assigneeId: user.id, delegateId: other.id }));
+  });
 });
 
 async function timelineOf(cookie: string, ticketId: string) {

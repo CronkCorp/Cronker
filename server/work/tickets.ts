@@ -752,9 +752,10 @@ async function passAutonomousDelegationDown(
 }
 
 /**
- * Gives the Ticket's Sub-Tickets, however deep, its new Delegation, as each Sub-Ticket inherits it: delegated, they
- * take its Assignee and Delegate. Each records the User's Changes, and a running Run on one whose Delegate changed
- * stops, as on any re-delegation.
+ * Gives the Ticket's Sub-Tickets, however deep, its new Delegation, as each Sub-Ticket inherits it. Delegated, they
+ * take its Assignee and Delegate, even over a Delegation of their own; undelegated, those that held its Delegate
+ * lose it and keep their Assignee, while any delegated to another Agent keep theirs. Each records the User's Changes,
+ * and a running Run on one whose Delegate changed stops, as on any re-delegation.
  */
 async function passDelegationDown(
   context: Context,
@@ -764,7 +765,7 @@ async function passDelegationDown(
   userId: string,
   now: Date,
 ): Promise<void> {
-  if (next.delegateId === null) return;
+  const undelegated = next.delegateId === null;
   const { rows } = await tx.query<{
     id: string;
     key: string;
@@ -783,25 +784,26 @@ async function passDelegationDown(
        tickets.delegate_id as "delegateId", agents.name as delegate
      from tickets join descendants using (id) join projects on projects.id = tickets.project_id
      left join users on users.id = tickets.assignee_id left join agents on agents.id = tickets.delegate_id
-     where tickets.assignee_id is distinct from $2 or tickets.delegate_id is distinct from $3
+     where ${undelegated ? "tickets.delegate_id = $2" : "tickets.assignee_id is distinct from $3 or tickets.delegate_id is distinct from $2"}
      order by tickets.id for update of tickets`,
-    [ticket.id, next.assigneeId, next.delegateId],
+    undelegated ? [ticket.id, ticket.delegateId] : [ticket.id, next.delegateId, next.assigneeId],
   );
   if (rows.length === 0) return;
   const named = async (sql: string, id: string | null) =>
     id === null ? null : (await tx.query<{ id: string; name: string }>(sql, [id])).rows[0]!;
   const assignee = await named("select id, email as name from users where id = $1", next.assigneeId);
-  const delegate = (await named("select id, name from agents where id = $1", next.delegateId))!;
+  const delegate = await named("select id, name from agents where id = $1", next.delegateId);
   const who = await nameOfUser(tx, userId);
   for (const subTicket of rows) {
+    const assigneeId = undelegated ? subTicket.assigneeId : next.assigneeId;
     await tx.query(
       `update tickets set assignee_id = $2, delegate_id = $3,
-       discovery_waits = case when delegate_id is distinct from $3 then false else discovery_waits end
+       discovery_waits = case when $3::uuid is not null and delegate_id is distinct from $3 then false else discovery_waits end
        where id = $1`,
-      [subTicket.id, next.assigneeId, next.delegateId],
+      [subTicket.id, assigneeId, next.delegateId],
     );
     const changes: NewChange[] = [];
-    if (subTicket.assigneeId !== next.assigneeId) {
+    if (subTicket.assigneeId !== assigneeId) {
       const from = subTicket.assigneeId === null ? null : { id: subTicket.assigneeId, name: subTicket.assignee };
       changes.push({ field: "assignee", from, to: assignee });
     }
@@ -812,8 +814,11 @@ async function passDelegationDown(
     await recordChanges(tx, { id: subTicket.id, workspaceId: ticket.workspaceId }, userId, now, changes);
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: subTicket.id });
     if (subTicket.delegateId !== next.delegateId) {
-      const reason = `${who} delegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}, to ${delegate.name}.`;
+      const reason = delegate
+        ? `${who} delegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}, to ${delegate.name}.`
+        : `${who} undelegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}.`;
       await stopRunningRun(context, tx, subTicket.id, reason, now);
+      // Gaining a Delegate may get the Sub-Ticket a Run; losing it ends its wait for one.
       await startRunIfNeeded(context, tx, subTicket.id, now);
     }
   }
