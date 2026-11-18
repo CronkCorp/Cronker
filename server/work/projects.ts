@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import { isUuid } from "../http/ids.js";
 
 /** What a Status means, whatever its name. Every Project keeps at least one Status of each kind. */
 export const statusKinds = ["backlog", "active", "review", "done", "canceled"] as const;
@@ -43,8 +44,6 @@ const defaultStatuses: { name: string; kind: StatusKind }[] = [
   { name: "Canceled", kind: "canceled" },
 ];
 
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 const summaryColumns = `projects.id, projects.workspace_id as "workspaceId", projects.name, projects.key`;
 
 export async function projectsOf(db: Db, workspaceId: string): Promise<ProjectSummary[]> {
@@ -55,7 +54,7 @@ export async function projectsOf(db: Db, workspaceId: string): Promise<ProjectSu
   return rows;
 }
 
-async function statusesOf(db: Db | Tx, projectId: string): Promise<Status[]> {
+export async function statusesOf(db: Db | Tx, projectId: string): Promise<Status[]> {
   const { rows } = await db.query<Status>(
     "select id, name, kind from statuses where project_id = $1 order by position",
     [projectId],
@@ -63,13 +62,22 @@ async function statusesOf(db: Db | Tx, projectId: string): Promise<Status[]> {
   return rows;
 }
 
-/** A Project, if the User belongs to its Workspace; otherwise nothing, as if it didn't exist. */
-export async function findProject(db: Db | Tx, userId: string, projectId: string): Promise<Project | undefined> {
-  if (!uuid.test(projectId)) return undefined;
+/**
+ * A Project, if the User belongs to its Workspace; otherwise nothing, as if it didn't exist.
+ * With `lock`, the Project's row stays locked until the transaction ends, so changes to it queue up.
+ */
+export async function findProject(
+  db: Db | Tx,
+  userId: string,
+  projectId: string,
+  { lock = false } = {},
+): Promise<Project | undefined> {
+  if (!isUuid(projectId)) return undefined;
   const { rows } = await db.query<ProjectSummary>(
     `select ${summaryColumns} from projects
      join memberships on memberships.workspace_id = projects.workspace_id
-     where projects.id = $1 and memberships.user_id = $2`,
+     where projects.id = $1 and memberships.user_id = $2
+     ${lock ? "for update of projects" : ""}`,
     [projectId, userId],
   );
   const project = rows[0];
@@ -105,14 +113,24 @@ export async function createProject(
         },
       );
     for (const [position, status] of defaultStatuses.entries()) {
-      await tx.query(
-        `insert into statuses (workspace_id, project_id, name, kind, position, created_at)
-         values ($1, $2, $3, $4, $5, $6)`,
-        [workspaceId, project.id, status.name, status.kind, position, now],
-      );
+      await insertStatus(tx, project, status, position, now);
     }
     return { ...project, statuses: await statusesOf(tx, project.id) };
   });
+}
+
+export async function insertStatus(
+  tx: Tx,
+  project: ProjectSummary,
+  status: { name: string; kind: StatusKind },
+  position: number,
+  now: Date,
+): Promise<void> {
+  await tx.query(
+    `insert into statuses (workspace_id, project_id, name, kind, position, created_at)
+     values ($1, $2, $3, $4, $5, $6)`,
+    [project.workspaceId, project.id, status.name, status.kind, position, now],
+  );
 }
 
 /** Whether a query failed on the named unique index. */
@@ -121,6 +139,6 @@ function violates(error: unknown, constraint: string): boolean {
   return code === "23505" && violated === constraint;
 }
 
-export function notFound(): ApiError {
+export function projectNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Project.");
 }

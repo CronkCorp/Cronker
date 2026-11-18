@@ -1,7 +1,15 @@
 import type { Clock } from "../clock.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { findProject, notFound, statusKinds, type Project, type StatusKind } from "./projects.js";
+import {
+  findProject,
+  insertStatus,
+  projectNotFound,
+  statusesOf,
+  statusKinds,
+  type Project,
+  type StatusKind,
+} from "./projects.js";
 
 /**
  * Changes to a Project's Statuses. Each change is worked out on the whole board in
@@ -36,11 +44,9 @@ export async function changeStatuses(
   change: StatusChange,
 ): Promise<Project> {
   return transaction(db, async (tx) => {
-    const project = await findProject(tx, userId, projectId);
-    if (!project) throw notFound();
-    await tx.query("select 1 from projects where id = $1 for update", [project.id]);
-    // Read again under the lock, so the board is the one this change applies to.
-    const { statuses } = (await findProject(tx, userId, projectId))!;
+    const project = await findProject(tx, userId, projectId, { lock: true });
+    if (!project) throw projectNotFound();
+    const { statuses } = project;
 
     const board: Draft[] = statuses.map((s) => ({ ...s }));
     let created: Draft | undefined;
@@ -70,7 +76,7 @@ export async function changeStatuses(
     checkNames(board);
     checkKinds(board, statuses);
     await write(tx, clock, project, board);
-    return (await findProject(tx, userId, projectId))!;
+    return { ...project, statuses: await statusesOf(tx, project.id) };
   });
 }
 
@@ -123,11 +129,7 @@ async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Pr
         position,
       ]);
     } else {
-      await tx.query(
-        `insert into statuses (workspace_id, project_id, name, kind, position, created_at)
-         values ($1, $2, $3, $4, $5, $6)`,
-        [project.workspaceId, project.id, status.name, status.kind, position, clock.now()],
-      );
+      await insertStatus(tx, project, status, position, clock.now());
     }
   }
 }

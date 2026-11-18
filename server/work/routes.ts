@@ -5,7 +5,7 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
-import { createProject, findProject, notFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
+import { createProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
@@ -78,7 +78,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const project = await findProject(db, user.id, request.params.projectId);
-        if (!project) throw notFound();
+        if (!project) throw projectNotFound();
         return project;
       },
     );
