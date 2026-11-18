@@ -17,6 +17,10 @@ Right after setup, Cronk offers to create the installation's GitHub App through 
 
 Once it exists, Users can sign in with GitHub. A GitHub account is linked to its User at the first sign-in: the User an Admin added by that GitHub login, or else the User whose email is the account's verified primary email. Admins add people by GitHub login on the Members page; they join at their next sign-in with GitHub. GitHub accounts no User has are refused. A User may sign in both ways.
 
+### Running Runs on your Claude subscription
+
+A User's Agents start Runs through one of that User's Runners, set up on the **Runners** page. The subscription Runner fires Claude Code on the web scheduled tasks, spending the User's own Claude subscription. In claude.ai, create one scheduled task per model you want Runs on (for example triage on Haiku, investigate on Sonnet, implement on Opus) with the Repository and Cronk's connector, add an API trigger, and write its prompt to follow the instructions in the fire payload: claude.ai hands the fire text to the session as untrusted data unless the prompt says to act on it. On the Runners page, save each task's trigger id and token under the model label its Steps use, for all Projects or overriding them for one Project, then point your Agents at the Runner. Cronk sends the Run's Brief as the fire text and never a secret; tokens are stored encrypted with `CRONK_SECRET_KEY` and never shown again. When claude.ai rate limits a Runner, its queue pauses until the time claude.ai gives and Tickets keep waiting; a missing trigger or a rejected token puts the Ticket in the Inbox as *couldn't start*, with the reason. The subscription Runner can't see a session end, so a Run that stops calling Cronk becomes lost after the Workspace's lost-Run threshold.
+
 Cronk itself doesn't need Docker: it is a Node.js (22+) server and a Postgres (16+) database. `npm ci && npm run build && npm start` runs it anywhere, configured by the same environment variables.
 
 ### When nobody can sign in
@@ -38,9 +42,10 @@ Without Docker, run `npm run command -- reset-link ada@example.com` with the ser
 | `PORT` | no | Port to listen on (default `3000`). |
 | `HOST` | no | Address to listen on (default `0.0.0.0`). |
 | `CRONK_WEB_ROOT` | no | Directory of the built web client (default: `dist/web`). |
-| `CRONK_SECRET_KEY` | for GitHub | At least 32 characters, such as the output of `openssl rand -base64 32`. Encrypts the secrets Cronk keeps, such as the GitHub App's credentials. Keep it: a different key can't read what the old one encrypted. |
+| `CRONK_SECRET_KEY` | for GitHub and Runners | At least 32 characters, such as the output of `openssl rand -base64 32`. Encrypts the secrets Cronk keeps, such as the GitHub App's credentials and Runners' trigger tokens. Keep it: a different key can't read what the old one encrypted. |
 | `CRONK_GITHUB_URL` | no | GitHub's web address (default `https://github.com`), for GitHub Enterprise Server. |
 | `CRONK_GITHUB_API_URL` | no | GitHub's API address (default `https://api.github.com`), such as `https://github.example.com/api/v3`. |
+| `CRONK_CLAUDE_API_URL` | no | The Claude API's address (default `https://api.anthropic.com`), whose scheduled-task fire endpoint the subscription Runner calls. |
 
 The Compose file also reads `CRONK_PORT` (published port, default `3000`), `POSTGRES_PASSWORD` and `CRONK_SECRET_KEY`.
 
