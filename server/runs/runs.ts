@@ -17,8 +17,10 @@ import { RunState } from "./states.js";
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
  * A delegated Ticket entering a Status with a Step gets a Run, unless it has a running one;
- * the Run ends when its Agent calls `finish` with an Outcome, or when its Runner reports it
- * ended without finishing.
+ * the Run ends when its Agent calls `finish` with an Outcome, when its Runner reports it ended
+ * without finishing, when nothing names it for its Workspace's lost-Run threshold, or when a User
+ * moves, undelegates or re-delegates its Ticket. Nothing starts a Run again after one went wrong
+ * but a User's Retry.
  */
 
 export const Run = Type.Object({
@@ -38,7 +40,7 @@ export const Run = Type.Object({
   question: Type.Union([Type.String(), Type.Null()], { description: "The Question its Agent finished it with, if any." }),
   report: Type.Union([Type.String(), Type.Null()], { description: "The Report its Agent finished it with, if any, in Markdown." }),
   endReason: Type.Union([Type.String(), Type.Null()], {
-    description: "Why it failed, or why its Runner refused to start it.",
+    description: "Why it failed, was lost or was stopped, or why its Runner refused to start it.",
   }),
   sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow the Run, such as its claude.ai session." }),
   startedAt: Type.String({ format: "date-time" }),
