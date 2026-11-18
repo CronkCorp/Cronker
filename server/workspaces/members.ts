@@ -5,6 +5,8 @@ import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
 import { User, userColumns, type User as UserRecord } from "../identity/user.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
+import { findApp } from "../github/app.js";
+import { accountByLogin } from "../github/client.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
@@ -60,6 +62,46 @@ export async function addMember(context: Context, workspaceId: string, email: st
     ]);
     if (isMember.rowCount) throw new ApiError(409, "already_member", `${user.email} already belongs to this Workspace.`);
     return { user, link: await issueLink(context, tx, "join", user.id, { workspaceId }) };
+  });
+}
+
+/**
+ * Adds someone to the Workspace by GitHub login, creating a User for that GitHub account if
+ * no User has it. They join at their next sign-in with GitHub.
+ */
+export async function addMemberByGitHub(
+  context: Context,
+  adminId: string,
+  workspaceId: string,
+  login: string,
+): Promise<UserRecord> {
+  if (!(await findApp(context.db))) {
+    throw new ApiError(409, "github_not_set_up", "Create the installation's GitHub App first, so people can sign in with GitHub.");
+  }
+  const account = await accountByLogin(context.config, login);
+  if (!account) throw new ApiError(404, "unknown_github_login", `GitHub has no account with the login ${login}.`);
+  return transaction(context.db, async (tx) => {
+    const now = context.clock.now();
+    await tx.query(
+      `insert into users (github_id, github_login, created_at) values ($1, $2, $3)
+       on conflict (github_id) do nothing`,
+      [account.id, account.login, now],
+    );
+    const { rows } = await tx.query<UserRecord>(`select ${userColumns} from users where github_id = $1`, [account.id]);
+    const user = rows[0]!;
+    const isMember = await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [
+      workspaceId,
+      user.id,
+    ]);
+    if (isMember.rowCount) {
+      throw new ApiError(409, "already_member", `${account.login} already belongs to this Workspace.`);
+    }
+    await tx.query(
+      `insert into github_joins (workspace_id, user_id, added_by, created_at) values ($1, $2, $3, $4)
+       on conflict do nothing`,
+      [workspaceId, user.id, adminId, now],
+    );
+    return user;
   });
 }
 

@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../context.js";
-import { transaction } from "../db.js";
+import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { startSignIn } from "../identity/sign-ins.js";
 import { appCredentials, callbackPath } from "./app.js";
@@ -80,32 +80,68 @@ export async function finishSignIn(
   const token = await exchangeCode(context.config, app, code, callbackUrl(context));
   if (!token) throw new ApiError(403, "github_denied", "GitHub didn't accept the sign-in. Try again.");
   const account = await userOf(context.config, token);
-  const userId = await userFor(context, account);
+  const userId = await transaction(context.db, async (tx) => {
+    const id = await userFor(tx, account);
+    await joinWhereAdded(tx, context.clock.now(), id);
+    return id;
+  });
   await startSignIn(context, reply, userId);
 }
 
 /** The User the GitHub account signs in as, linking it if it isn't yet; refused if there is none. */
-async function userFor({ db }: Context, account: GitHubUser): Promise<string> {
-  return transaction(db, async (tx) => {
-    const linked = await tx.query<{ id: string }>(
-      "update users set github_login = $2 where github_id = $1 returning id",
-      [account.id, account.login],
-    );
-    if (linked.rows[0]) return linked.rows[0].id;
-
+async function userFor(tx: Tx, account: GitHubUser): Promise<string> {
+  const linked = await tx.query<{ id: string }>(
+    "update users set github_login = $2 where github_id = $1 returning id",
+    [account.id, account.login],
+  );
+  if (linked.rows[0]) {
+    // A User added by GitHub login learns their email at their first sign-in, unless another User has it.
     if (account.verifiedEmail) {
-      const byEmail = await tx.query<{ id: string }>(
-        `update users set github_id = $1, github_login = $2
-         where lower(email) = lower($3) and github_id is null returning id`,
-        [account.id, account.login, account.verifiedEmail],
+      await tx.query(
+        `update users set email = $2 where id = $1 and email is null
+         and not exists (select 1 from users other where lower(other.email) = lower($2))`,
+        [linked.rows[0].id, account.verifiedEmail],
       );
-      if (byEmail.rows[0]) return byEmail.rows[0].id;
     }
+    return linked.rows[0].id;
+  }
 
-    throw new ApiError(
-      403,
-      "unknown_github_user",
-      `No User has the GitHub account ${account.login}. Ask an Admin to add you to their Workspace.`,
+  if (account.verifiedEmail) {
+    const byEmail = await tx.query<{ id: string }>(
+      `update users set github_id = $1, github_login = $2
+       where lower(email) = lower($3) and github_id is null returning id`,
+      [account.id, account.login, account.verifiedEmail],
     );
-  });
+    if (byEmail.rows[0]) return byEmail.rows[0].id;
+  }
+
+  throw new ApiError(
+    403,
+    "unknown_github_user",
+    `No User has the GitHub account ${account.login}. Ask an Admin to add you to their Workspace.`,
+  );
+}
+
+/**
+ * Joins the User to every Workspace an Admin added them to and they haven't joined: by
+ * GitHub login, or by email with a join link not used yet, since signing in with the
+ * GitHub account of that email shows it is theirs as well as the link would.
+ */
+async function joinWhereAdded(tx: Tx, now: Date, userId: string): Promise<void> {
+  const links = await tx.query<{ workspace_id: string }>(
+    `update links set used_at = $2 where kind = 'join' and user_id = $1 and used_at is null and expires_at > $2
+     returning workspace_id`,
+    [userId, now],
+  );
+  const joins = await tx.query<{ workspace_id: string }>(
+    "delete from github_joins where user_id = $1 returning workspace_id",
+    [userId],
+  );
+  for (const { workspace_id } of [...links.rows, ...joins.rows]) {
+    await tx.query(
+      `insert into memberships (workspace_id, user_id, is_admin, created_at) values ($1, $2, false, $3)
+       on conflict do nothing`,
+      [workspace_id, userId, now],
+    );
+  }
 }

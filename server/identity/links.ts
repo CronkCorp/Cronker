@@ -30,9 +30,11 @@ export type Link = Static<typeof Link>;
 
 export const LinkDetails = Type.Object({
   kind: Type.Union([Type.Literal("join"), Type.Literal("reset")]),
-  email: Type.String(),
+  email: Type.Union([Type.String(), Type.Null()]),
   workspace: Type.Union([Type.Object({ id: Type.String(), name: Type.String() }), Type.Null()]),
   setsPassword: Type.Boolean(),
+  /** A join link whose User signs in only with GitHub: they join by signing in with GitHub instead. */
+  signInWithGitHub: Type.Boolean(),
 });
 export type LinkDetails = Static<typeof LinkDetails>;
 
@@ -66,8 +68,9 @@ interface LinkRow {
   id: string;
   kind: LinkKind;
   user_id: string;
-  email: string;
+  email: string | null;
   password_hash: string | null;
+  github_id: string | null;
   workspace_id: string | null;
   workspace_name: string | null;
   issued_by: string | null;
@@ -99,7 +102,7 @@ export async function endResetLinks(tx: Tx, userId: string): Promise<void> {
 
 async function findLink(tx: Tx, { clock }: Context, token: string, lock: boolean): Promise<LinkRow> {
   const { rows } = await tx.query<LinkRow>(
-    `select links.id, links.kind, links.user_id, users.email, users.password_hash,
+    `select links.id, links.kind, links.user_id, users.email, users.password_hash, users.github_id,
             links.workspace_id, workspaces.name as workspace_name, links.issued_by
      from links join users on users.id = links.user_id
      left join workspaces on workspaces.id = links.workspace_id
@@ -116,6 +119,14 @@ async function findLink(tx: Tx, { clock }: Context, token: string, lock: boolean
   return link;
 }
 
+/**
+ * A join link can't set the password of a User who signs in only with GitHub: whoever holds
+ * the link could take over their sign-in. They join by signing in with GitHub instead.
+ */
+function joinsWithGitHub(link: LinkRow): boolean {
+  return link.kind === "join" && link.password_hash === null && link.github_id !== null;
+}
+
 /** What a link would do, so its page can say so before it is used. */
 export async function lookUpLink(context: Context, token: string): Promise<LinkDetails> {
   return transaction(context.db, async (tx) => {
@@ -124,7 +135,8 @@ export async function lookUpLink(context: Context, token: string): Promise<LinkD
       kind: link.kind,
       email: link.email,
       workspace: link.workspace_id ? { id: link.workspace_id, name: link.workspace_name! } : null,
-      setsPassword: link.kind === "reset" || link.password_hash === null,
+      setsPassword: link.kind === "reset" || (link.password_hash === null && link.github_id === null),
+      signInWithGitHub: joinsWithGitHub(link),
     };
   });
 }
@@ -139,6 +151,9 @@ export async function useLink(context: Context, token: string, password: string)
   return transaction(context.db, async (tx) => {
     const link = await findLink(tx, context, token, true);
     const now = context.clock.now();
+    if (joinsWithGitHub(link)) {
+      throw new ApiError(409, "sign_in_with_github", "This User signs in with GitHub. Sign in with GitHub to join.");
+    }
     if (link.kind === "reset" || link.password_hash === null) {
       await tx.query("update users set password_hash = $1 where id = $2", [passwordHash, link.user_id]);
     } else if (!(await verifyPassword(password, link.password_hash))) {

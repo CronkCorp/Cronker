@@ -70,6 +70,7 @@ describe("adding Users by email", () => {
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
       setsPassword: true,
+      signInWithGitHub: false,
     });
 
     const used = await cronk.request("POST", "/api/links/use", { body: { token, password: "bea's long password" } });
@@ -145,6 +146,7 @@ describe("adding Users by email", () => {
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
       setsPassword: false,
+      signInWithGitHub: false,
     });
 
     const wrong = await cronk.request("POST", "/api/links/use", { body: { token, password: "not bea's password" } });
@@ -369,6 +371,7 @@ describe("passwords", () => {
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
       setsPassword: true,
+      signInWithGitHub: false,
     });
     // Issuing a link changes nothing until it is used.
     expect((await cronk.request("GET", "/api/me", { cookie: bea.cookie })).status).toBe(200);

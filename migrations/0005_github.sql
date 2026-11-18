@@ -29,3 +29,17 @@ create index github_app_states_user_id_idx on github_app_states (user_id);
 -- by GitHub account id; the login is kept for showing, and updated at each sign-in since
 -- GitHub logins can change.
 alter table users add column github_id bigint unique, add column github_login text;
+
+-- A User an Admin added by GitHub login has no email until their first sign-in with GitHub
+-- tells Cronk their verified one.
+alter table users alter column email drop not null;
+
+-- Workspaces Users were added to by GitHub login and join at their next sign-in with GitHub.
+create table github_joins (
+  workspace_id uuid not null references workspaces (id),
+  user_id uuid not null references users (id),
+  added_by uuid references users (id),
+  created_at timestamptz not null,
+  primary key (workspace_id, user_id)
+);
+create index github_joins_user_id_idx on github_joins (user_id);

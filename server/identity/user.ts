@@ -2,7 +2,8 @@ import { Type, type Static } from "typebox";
 
 export const User = Type.Object({
   id: Type.String({ format: "uuid" }),
-  email: Type.String(),
+  /** Unknown (`null`) for a User added by GitHub login until they first sign in with GitHub. */
+  email: Type.Union([Type.String(), Type.Null()]),
   /** The login of the User's GitHub account, once linked. */
   githubLogin: Type.Union([Type.String(), Type.Null()]),
 });
