@@ -1,3 +1,5 @@
+import type { LabelRule } from "./steps.js";
+
 /**
  * The Steps of the default board every new Project starts with, by the name of the Status
  * each sits on. Outcomes name their target Status the same way. Their Briefs are only
@@ -6,6 +8,7 @@
 export interface DefaultStep {
   brief: string;
   model: string;
+  labelRule?: LabelRule;
   outcomes: { name: string; status: string; default?: boolean; needsYou?: boolean; countsAsRound?: boolean }[];
 }
 
@@ -70,6 +73,7 @@ export const defaultSteps: Record<string, DefaultStep> = {
   "Code review": {
     brief: codeReview,
     model: "sonnet",
+    labelRule: { kind: "skippedBy", label: "no-review" },
     outcomes: [
       { name: "approve", status: "In Review", default: true },
       { name: "changes", status: "Implement", countsAsRound: true },

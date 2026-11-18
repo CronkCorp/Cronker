@@ -42,6 +42,8 @@ describe("delegating a Ticket", () => {
     expect(timeline.slice(1).map((c: { field: string; to: unknown }) => [c.field, c.to])).toEqual([
       ["assignee", { id: user.id, name: "ada@example.com" }],
       ["delegate", { id: agent.id, name: "claude-max" }],
+      // First delegated, it takes its Project's Autonomous Delegation.
+      ["autonomousDelegation", false],
     ]);
   });
 
@@ -99,7 +101,7 @@ describe("delegating a Ticket", () => {
     });
 
     expect(response.status).toBe(403);
-    expect((await response.json()).error.code).toBe("agent_not_allowed");
+    expect((await response.json()).error.code).toBe("agent_field_not_allowed");
   });
 });
 

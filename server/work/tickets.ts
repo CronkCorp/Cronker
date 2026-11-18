@@ -4,10 +4,13 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
-import { recordChanges, type NewChange } from "./changes.js";
+import type { AgentCaller, Caller } from "../identity/callers.js";
+import { ownerName } from "../agents/tokens.js";
+import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded } from "../runs/runs.js";
+import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
+import { Waiting, waitingColumn } from "../runs/waiting.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -41,6 +44,16 @@ export const TicketSummary = Type.Object({
   delegateId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Assignee's Agent the Ticket is delegated to; only a delegated Ticket gets Runs.",
   }),
+  autonomousDelegation: Type.Union([Type.Boolean(), Type.Null()], {
+    description:
+      "Whether a Step may complete the Ticket itself, as Unverified, instead of stopping for a User. Null until a User " +
+      "sets it or the Ticket is first delegated, when it takes its Project's default; Sub-Tickets take their parent's.",
+  }),
+  verification: Type.Union([Type.Literal("unverified"), Type.Literal("verified"), Type.Null()], {
+    description:
+      "For a Ticket a Run completed: `unverified` until a User Accepts it (`verified`) or Reopens it. " +
+      "Null for a Ticket no Run completed.",
+  }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Ticket this is a Sub-Ticket of, in the same Project.",
   }),
@@ -58,6 +71,7 @@ export const TicketSummary = Type.Object({
     ],
     { description: "The Ticket's latest Run, for marking the board's card; its Runs list them all." },
   ),
+  waiting: Waiting,
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
@@ -71,11 +85,13 @@ export type Ticket = Static<typeof Ticket>;
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
-  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId", tickets.parent_id as "parentId",
+  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId",
+  tickets.autonomous_delegation as "autonomousDelegation", tickets.verification, tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
-   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun"`;
+   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
+  ${waitingColumn("tickets")} as waiting`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -161,7 +177,7 @@ export async function findTicketRow(
   return rows[0];
 }
 
-export async function findTicket(db: Db, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
+export async function findTicket(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
   const row = await findTicketRow(db, viewer, ticketId);
   return row && withMentions(db, row);
 }
@@ -229,8 +245,8 @@ export async function createTicket(
          returning next_ticket_number - 1 as number
        )
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
-         assignee_id, delegate_id)
-       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9 from numbered
+         assignee_id, delegate_id, status_entered_at, autonomous_delegation)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7, $10 from numbered
        returning id`,
       [
         project.workspaceId,
@@ -242,6 +258,8 @@ export async function createTicket(
         now,
         delegate ? userId : null,
         delegate,
+        // Delegated from the start, it takes its Project's Autonomous Delegation at once.
+        delegate ? project.autonomousDelegationDefault : null,
       ],
     );
     const ticket = (await findTicketRow(tx, userViewer(userId), rows[0]!.id))!;
@@ -316,23 +334,36 @@ export interface TicketEdit {
   labels?: string[];
   assigneeId?: string | null;
   delegateId?: string | null;
+  autonomousDelegation?: boolean;
   dueDate?: string | null;
   estimate?: number | null;
   statusId?: string;
   parentId?: string | null;
 }
 
-/** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
+/** The fields of a Ticket an Agent may edit, during its running Run on it. */
+const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate"]);
+
+/**
+ * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
+ * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
+ * each of its Changes names.
+ */
 export async function editTicket(
   context: Context,
-  userId: string,
+  editor: Caller,
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
+  if (editor.kind === "agent") checkAgentFields(editor, edit);
   return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    const actor: ChangeActor =
+      editor.kind === "user" ? editor.id : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+    // Only Users get this far with fields that name a User.
+    const userId = editor.id;
     const next = { ...ticket };
     const changes: NewChange[] = [];
     /** Sets a field and records the Change, if the value differs; `shown` gives how the Change shows a value. */
@@ -355,7 +386,23 @@ export async function editTicket(
     if (edit.description !== undefined) await change("description", "description", edit.description);
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
+      if (edit.statusId !== ticket.statusId && ticket.verification === "unverified") {
+        throw new ApiError(
+          409,
+          "ticket_unverified",
+          `${ticket.key} was completed by a Run and is Unverified: it leaves Done only by Accept or Reopen.`,
+          {
+            rule: "A Ticket a Run completed stays in its Done Status until a User Accepts or Reopens it.",
+            advice: "Accept it to keep it done, or Reopen it with a Comment saying why to send it back to the Step that completed it.",
+          },
+        );
+      }
       await change("statusId", "status", edit.statusId, statusNamed);
+      // Leaving its Done Status, an Accepted Ticket is no longer Verified: Verification is of that completion.
+      if (next.statusId !== ticket.statusId && ticket.verification !== null) {
+        next.verification = null;
+        changes.push({ field: "verification", from: ticket.verification, to: null });
+      }
     }
     if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
     if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
@@ -379,13 +426,37 @@ export async function editTicket(
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
     }
+    if (edit.autonomousDelegation !== undefined) {
+      await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
+    } else {
+      // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
+      const inherited = next.parentId !== ticket.parentId && next.parentId !== null
+        ? await autonomousDelegationOf(tx, next.parentId)
+        : null;
+      if (inherited !== null) {
+        await change("autonomousDelegation", "autonomousDelegation", inherited);
+      } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
+        const { rows } = await tx.query<{ value: boolean }>(
+          "select autonomous_delegation_default as value from projects where id = $1",
+          [ticket.projectId],
+        );
+        await change("autonomousDelegation", "autonomousDelegation", rows[0]!.value);
+      }
+    }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
 
+    const now = clock.now();
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11 where id = $1`,
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
+       status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
+       -- Moving the Ticket ends its waiting from a needs you Outcome.
+       needs_you_run_id = case when status_id = $9 then needs_you_run_id end,
+       autonomous_delegation = $13, verification = $14,
+       completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end
+       where id = $1`,
       [
         ticket.id,
         next.title,
@@ -398,17 +469,19 @@ export async function editTicket(
         next.statusId,
         next.parentId,
         next.delegateId,
+        now,
+        next.autonomousDelegation,
+        next.verification,
       ],
     );
-    const now = clock.now();
-    await recordChanges(tx, ticket, userId, now, changes);
+    await recordChanges(tx, ticket, actor, now, changes);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     if (next.parentId !== ticket.parentId) {
       // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
       const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
       const subTicketChange = async (parentId: string | null, change: NewChange) => {
         if (parentId === null) return;
-        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
+        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, actor, now, [change]);
         live.publish(tx, ticket.workspaceId, {
           type: "ticket.changed",
           projectId: ticket.projectId,
@@ -418,11 +491,110 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
-    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
+    if (next.autonomousDelegation !== ticket.autonomousDelegation && next.autonomousDelegation !== null) {
+      await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
+    }
+    // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
+    // Only Users get here with either change: Agents set neither a Status nor a Delegate.
     const entered = next.statusId !== ticket.statusId;
-    const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
-    if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
+    const delegateChanged = next.delegateId !== ticket.delegateId;
+    if (entered || delegateChanged) {
+      const { rows } = await tx.query<{ name: string }>(
+        "select coalesce(email, '@' || github_login) as name from users where id = $1",
+        [userId],
+      );
+      const who = rows[0]!.name;
+      const moved = changes.find((c) => c.field === "status")?.to as { name: string } | undefined;
+      const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
+      const reason = moved
+        ? `${who} moved ${ticket.key} to ${moved.name}.`
+        : delegate
+          ? `${who} delegated ${ticket.key} to ${delegate.name}.`
+          : `${who} undelegated ${ticket.key}.`;
+      await stopRunningRun(context, tx, ticket.id, reason, now);
+    }
+    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
+    // leaving it, or losing its Delegate, ends its wait for one.
+    // A User moving the Ticket by hand starts its rounds afresh at every Step.
+    if (entered) await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
+    if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
+    // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
+    const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
+    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
     return withMentions(tx, next);
+  });
+}
+
+async function autonomousDelegationOf(tx: Tx, ticketId: string): Promise<boolean | null> {
+  const { rows } = await tx.query<{ value: boolean | null }>(
+    "select autonomous_delegation as value from tickets where id = $1",
+    [ticketId],
+  );
+  return rows[0]?.value ?? null;
+}
+
+/** Gives the Ticket's Sub-Tickets, however deep, its Autonomous Delegation, recording a Change on each that differed. */
+async function passAutonomousDelegationDown(
+  { live }: Context,
+  tx: Tx,
+  ticket: TicketRow,
+  value: boolean,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const { rows } = await tx.query<{ id: string; from: boolean | null }>(
+    `with recursive descendants (id) as (
+       select id from tickets where parent_id = $1
+       union
+       select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
+     ),
+     changed as (
+       select tickets.id, tickets.autonomous_delegation as from from tickets join descendants using (id)
+       where tickets.autonomous_delegation is distinct from $2
+       for update of tickets
+     )
+     update tickets set autonomous_delegation = $2 from changed where tickets.id = changed.id
+     returning tickets.id, changed.from`,
+    [ticket.id, value],
+  );
+  for (const row of rows) {
+    const subTicket = { id: row.id, workspaceId: ticket.workspaceId };
+    await recordChanges(tx, subTicket, userId, now, [{ field: "autonomousDelegation", from: row.from, to: value }]);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: row.id });
+  }
+}
+
+/** Refuses an Agent's edit of a field only Users edit. */
+function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
+  const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
+    (field) => edit[field] !== undefined && !agentEditable.has(field),
+  );
+  if (refused.length === 0) return;
+  throw new ApiError(
+    403,
+    "agent_field_not_allowed",
+    `${agent.name} is an Agent, and Agents don't edit a Ticket's ${refused.join(", ")}.`,
+    {
+      rule:
+        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate; " +
+        "its title, Assignee, Delegation, parent and Status are for Users to change.",
+      advice:
+        `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
+        "to change the rest; a Run moves its Ticket with `finish`.",
+    },
+  );
+}
+
+/** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
+export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
+    [ticket.id, agent.id],
+  );
+  if (rows[0]) return rows[0].id;
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
+    rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
+    advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
   });
 }
 

@@ -7,6 +7,8 @@ import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
+import { Report, reportsOn, writeReport } from "./reports.js";
+import { acceptTicket, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
@@ -139,6 +141,13 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
                 }),
               ),
             ),
+            autonomousDelegation: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Lets a Step complete the Ticket itself, as Unverified, or stops that. Only Users set it; " +
+                  "its Sub-Tickets take it too.",
+              }),
+            ),
             dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
             estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
             statusId: Type.Optional(
@@ -168,8 +177,54 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               "the Outcome moves the Ticket.",
           });
         }
+        return editTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId, request.body);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/accept",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Accept an Unverified Ticket",
+          description:
+            "Marks a Ticket a Run completed as Verified, leaving it in its Done Status. Only Users Accept; " +
+            "a Ticket that isn't Unverified is refused with `not_unverified`.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
         const user = await requireUser(context, request);
-        return editTicket(context, user.id, request.params.ticketId, request.body);
+        return acceptTicket(context, user, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/reopen",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Reopen an Unverified Ticket",
+          description:
+            "Sends a Ticket a Run completed back to the Status of the Step that completed it, with a Comment saying why, " +
+            "so a new Run picks it up there; it blocks again the Tickets it blocks. Only Users Reopen; a Ticket that " +
+            "isn't Unverified is refused with `not_unverified`.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            comment: Type.String({
+              minLength: 1,
+              maxLength: 100_000,
+              pattern: "\\S",
+              description: "Why it is reopened, in Markdown; added to the Ticket's Comments.",
+            }),
+          }),
+          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return reopenTicket(context, user, request.params.ticketId, request.body.comment);
       },
     );
 
@@ -208,6 +263,43 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const caller = await requireCaller(context, request);
         return reply.code(201).send(await addComment(context, caller, request.params.ticketId, request.body));
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/reports",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Reports",
+          description: "Oldest first: what its Runs wrote, each naming its Run and Agent. Later Runs on the Ticket read them.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(Report), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => reportsOn(db, await requireCaller(context, request), request.params.ticketId),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/reports",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Write a Report on a Ticket",
+          description:
+            "For an Agent, during its own running Run on the Ticket (`no_running_run` otherwise): Markdown such as an " +
+            "investigation's findings, listed with the Ticket. Users comment instead (`only_runs_report`).",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            title: Title,
+            body: Type.String({ minLength: 1, maxLength: 500_000, pattern: "\\S", description: "Markdown." }),
+          }),
+          response: { 201: Report, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await writeReport(context, caller, request.params.ticketId, request.body));
       },
     );
 

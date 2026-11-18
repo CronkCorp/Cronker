@@ -6,10 +6,13 @@ import {
   type Agent,
   type Change,
   type Comment,
+  labelRuleShown,
+  type LabelRule,
   type Member,
   type Priority,
   type Project,
   type RelationKind,
+  type Report,
   type Run,
   type Ticket,
   type TicketEdit,
@@ -25,7 +28,7 @@ import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 
-/** A Ticket: its fields, its description, its Relations, its Comments and its timeline of Changes. */
+/** A Ticket: its fields, its description, its Reports, its Relations, its Comments and its timeline of Changes. */
 export function TicketScreen({
   workspace,
   user,
@@ -43,6 +46,7 @@ export function TicketScreen({
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [reports, setReports] = useState<Report[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -56,6 +60,7 @@ export function TicketScreen({
   const latestTicket = useLatest();
   const latestProject = useLatest();
   const latestComments = useLatest();
+  const latestReports = useLatest();
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
   const latestRelations = useLatest();
@@ -87,10 +92,11 @@ export function TicketScreen({
     api.members(workspace.id).then(setMembers, fail);
     api.agents(workspace.id).then(setAgents, fail);
     latestComments(api.comments(ticketId), setComments, fail);
+    latestReports(api.reports(ticketId), setReports, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
     latestRuns(api.runs(ticketId), setRuns, fail);
     loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -102,6 +108,7 @@ export function TicketScreen({
       loadRelations();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
+    if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
     if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
       latestProject(api.project(project.id), setProject, fail);
     }
@@ -112,10 +119,10 @@ export function TicketScreen({
     }
   });
 
-  const save = async (edit: TicketEdit) => {
+  /** Shows the Ticket a change returns, and what else it changed; or why it was refused. */
+  const apply = async (saved: Promise<Ticket>) => {
     setError(null);
     try {
-      const saved = api.editTicket(ticketId, edit);
       latestTicket(saved, setTicket);
       await saved;
       loadTimeline();
@@ -124,6 +131,7 @@ export function TicketScreen({
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+  const save = (edit: TicketEdit) => apply(api.editTicket(ticketId, edit));
 
   // The live refetch may have shown the new Comment already.
   const addComment = (comment: Comment) =>
@@ -140,6 +148,19 @@ export function TicketScreen({
         <span className="muted">{ticket.key}</span> {ticket.title}
       </h1>
       {error && <p role="alert">{error}</p>}
+      {ticket.verification && (
+        <Verification
+          ticket={ticket}
+          runs={runs}
+          onAccept={() => apply(api.acceptTicket(ticket.id))}
+          onReopen={async (comment) => {
+            const reopened = api.reopenTicket(ticket.id, comment);
+            await apply(reopened);
+            await reopened;
+            latestComments(api.comments(ticketId), setComments, fail);
+          }}
+        />
+      )}
       <div className="ticket-layout">
         <div>
           <TextFields ticket={ticket} onSave={save} />
@@ -150,6 +171,7 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
+          <Reports reports={reports} />
           <Relations
             ticket={ticket}
             relations={relations}
@@ -245,7 +267,12 @@ function Fields({
     <aside className="fields" aria-label="Fields">
       <label>
         Status
-        <select value={ticket.statusId} onChange={(e) => void onSave({ statusId: e.target.value })}>
+        <select
+          value={ticket.statusId}
+          // An Unverified Ticket leaves its Done Status only by Accept or Reopen.
+          disabled={ticket.verification === "unverified"}
+          onChange={(e) => void onSave({ statusId: e.target.value })}
+        >
           {project.statuses.map((status) => (
             <option key={status.id} value={status.id}>
               {status.name}
@@ -380,7 +407,84 @@ function Delegation({
         <p className="muted">You have no Agent in this Workspace to delegate to.</p>
       )}
       {delegate && delegate.owner.id !== user.id && <p className="muted">{nameOf(delegate.owner)}'s Agent.</p>}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={ticket.autonomousDelegation === true}
+          onChange={(e) => void onSave({ autonomousDelegation: e.target.checked })}
+        />
+        Autonomous Delegation: a Step may complete it, as Unverified
+      </label>
+      {ticket.autonomousDelegation === null && (
+        <p className="muted">Until set, it takes the Project's setting when first delegated.</p>
+      )}
     </fieldset>
+  );
+}
+
+/**
+ * A Ticket a Run completed: Unverified until the User Accepts it, or Reopens it with a Comment saying why,
+ * sending it back to the Step that completed it.
+ */
+function Verification({
+  ticket,
+  runs,
+  onAccept,
+  onReopen,
+}: {
+  ticket: Ticket;
+  runs: Run[];
+  onAccept: () => Promise<void>;
+  onReopen: (comment: string) => Promise<void>;
+}) {
+  const [reopening, setReopening] = useState(false);
+  const { error, busy, onSubmit } = useSubmit(async (form) => {
+    await onReopen(field(form, "comment"));
+    setReopening(false);
+  });
+  const completing = runs.filter((r) => r.state === "finished").at(-1);
+  const by = completing ? `${completing.agent.name}'s Run of the ${completing.step.name} Step` : "A Run";
+  return (
+    <section aria-label="Verification" className={`verification ${ticket.verification}`}>
+      {ticket.verification === "verified" ? (
+        <p>
+          <strong>Verified.</strong> A Run completed this and a User Accepted it.
+        </p>
+      ) : (
+        <>
+          <p>
+            <strong>{by} completed this. It is Unverified</strong> until you Accept it, or Reopen it to send it back to
+            that Step.
+          </p>
+          {reopening ? (
+            <form onSubmit={onSubmit}>
+              <label>
+                Why reopen it?
+                <textarea name="comment" required rows={3} autoFocus />
+              </label>
+              {error && <p role="alert">{error}</p>}
+              <div className="actions">
+                <button type="submit" disabled={busy}>
+                  Reopen
+                </button>
+                <button type="button" className="link" onClick={() => setReopening(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="actions">
+              <button type="button" onClick={() => void onAccept()}>
+                Accept
+              </button>
+              <button type="button" className="secondary" onClick={() => setReopening(true)}>
+                Reopen
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -500,6 +604,25 @@ function Relations({
   );
 }
 
+/** What the Ticket's Runs wrote, oldest first; shown only once there is one. */
+function Reports({ reports }: { reports: Report[] }) {
+  if (reports.length === 0) return null;
+  return (
+    <section aria-label="Reports" className="reports">
+      <h2>Reports</h2>
+      {reports.map((report) => (
+        <article key={report.id} aria-label={report.title} className="comment">
+          <h3>{report.title}</h3>
+          <div className="comment-meta">
+            <strong>{report.agent.name}</strong> <span className="muted">(Agent)</span> <When at={report.createdAt} />
+          </div>
+          <Markdown text={report.body} mentions={[]} />
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function When({ at }: { at: string }) {
   return <time dateTime={at}>{new Date(at).toLocaleString()}</time>;
 }
@@ -538,6 +661,7 @@ function Comments({
               <strong>{comment.actor.name}</strong>
               {comment.actor.kind === "agent" && <span className="muted"> (Agent)</span>} <When at={comment.createdAt} />
               {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
+              {comment.questionId && <span className="badge">Question</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
             {replyingTo === comment.id ? (
@@ -579,7 +703,7 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | RelationKind>, string> = {
+const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | RelationKind>, string> = {
   delegate: "Delegate",
   title: "Title",
   description: "Description",
@@ -590,6 +714,8 @@ const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | Rela
   dueDate: "Due date",
   estimate: "Estimate",
   parent: "Parent",
+  autonomousDelegation: "Autonomous Delegation",
+  verification: "Verification",
 };
 
 const ticketShown = (ref: TicketRef) => `${ref.key} ${ref.title}`;
@@ -602,8 +728,19 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
   relatesTo: { added: "related this to", removed: "removed the relation to" },
 };
 
+/** What a `stepSkipped` Change records: the Status whose Step was skipped, its Label rule and the default Outcome. */
+interface StepSkipped {
+  status: { id: string; name: string };
+  labelRule: LabelRule;
+  outcome: string;
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
+  if (change.field === "stepSkipped") {
+    const { status, labelRule, outcome } = change.to as StepSkipped;
+    return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;
+  }
   if (change.field === "description") return "changed the Description";
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
@@ -622,6 +759,8 @@ function shown(change: Change, value: unknown): string {
     return (value as { name: string }).name;
   }
   if (change.field === "parent") return ticketShown(value as TicketRef);
+  if (change.field === "autonomousDelegation") return value ? "on" : "off";
+  if (change.field === "verification") return value === "verified" ? "Verified" : "Unverified";
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 }
@@ -630,6 +769,8 @@ const runStateShown: Record<Run["state"], string> = {
   running: "running",
   finished: "finished",
   failed: "failed",
+  lost: "lost",
+  stopped: "stopped",
   refused: "couldn't start",
 };
 
@@ -640,7 +781,12 @@ function RunEntry({ run }: { run: Run }) {
       {run.agent.name} ran the {run.step.name} Step on {run.model}:{" "}
       <span className={`run-state ${run.state}`}>{runStateShown[run.state]}</span>
       {run.outcome && <> with {run.outcome}</>}
-      {run.endReason && <>: {run.endReason}</>}{" "}
+      {run.endReason && <>: {run.endReason}</>}
+      {run.question && (
+        <>
+          , {run.questionBy === "cronk" ? "Cronk" : run.agent.name} asking: <q>{run.question}</q>
+        </>
+      )}{" "}
       <span className="muted">
         <When at={run.startedAt} />
         {run.endedAt && (
@@ -668,6 +814,7 @@ function Timeline({ changes, runs }: { changes: Change[]; runs: Run[] }) {
     ...changes.map((change) => ({ at: change.at, key: `change:${change.id}`, change })),
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, run })),
   ].sort((a, b) => a.at.localeCompare(b.at));
+  const runOf = new Map(runs.map((run) => [run.id, run]));
   return (
     <section aria-label="Timeline" className="timeline">
       <h2>Timeline</h2>
@@ -677,7 +824,10 @@ function Timeline({ changes, runs }: { changes: Change[]; runs: Run[] }) {
             <RunEntry key={entry.key} run={entry.run} />
           ) : (
             <li key={entry.key}>
-              {entry.change.actor.name} {described(entry.change)}{" "}
+              {entry.change.actor.name} {described(entry.change)}
+              {entry.change.runId && runOf.has(entry.change.runId) && (
+                <> in its {runOf.get(entry.change.runId)!.step.name} Run</>
+              )}{" "}
               <span className="muted">
                 <When at={entry.change.at} />
               </span>

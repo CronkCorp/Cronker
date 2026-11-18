@@ -9,7 +9,7 @@ import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { defaultRoundLimit, Outcome } from "./steps.js";
+import { defaultRoundLimit, LabelRule, Outcome } from "./steps.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
@@ -33,6 +33,14 @@ const StepBody = Type.Object({
       maximum: 100,
       default: defaultRoundLimit,
       description: "How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*.",
+    }),
+  ),
+  labelRule: Type.Optional(
+    Type.Union([LabelRule, Type.Null()], {
+      default: null,
+      description:
+        "Which Tickets the Step lets through; none by default, letting every Ticket through. A Ticket that doesn't pass " +
+        "gets no Run and moves on by the default Outcome.",
     }),
   ),
   outcomes: Type.Array(Outcome, { minItems: 2, maxItems: 20 }),
@@ -119,6 +127,12 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
             newTicketsDelegated: Type.Optional(
               Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
             ),
+            autonomousDelegationDefault: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it on the Ticket already.",
+              }),
+            ),
           }),
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },
@@ -157,7 +171,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Rename, move or change the kind of a Status",
-          description: `Changes whichever of name, kind and position are given. ${kindRule} Returns the Project.`,
+          description:
+            `Changes whichever of name, kind and position are given. ${kindRule} ` +
+            "A Status with a Step can't become Done or Canceled: remove its Step first. Returns the Project.",
           params: StatusParams,
           body: Type.Object({
             name: Type.Optional(StatusName),
@@ -202,6 +218,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Attach or edit a Status's Step",
           description:
             "Gives the Status this Step, replacing any it had: Tickets entering it get Runs. " +
+            "Refused on a Done or Canceled Status, where Tickets get no Runs. " +
             `${outcomeRules} Returns the Project.`,
           params: StatusParams,
           body: StepBody,
@@ -211,8 +228,8 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        const { roundLimit = defaultRoundLimit, ...step } = request.body;
-        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit } });
+        const { roundLimit = defaultRoundLimit, labelRule = null, ...step } = request.body;
+        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit, labelRule } });
       },
     );
 

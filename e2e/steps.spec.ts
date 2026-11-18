@@ -42,7 +42,19 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   const open = (status: string) => summary(status).getByText(status, { exact: true }).click();
 
   await expect(summary("Triage")).toContainText("haiku, 2 Outcomes");
+  await expect(summary("Code review")).toContainText("sonnet, 4 Outcomes, skipped by no-review");
   await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
+
+  // Done and Canceled Statuses never have a Step: the refusal shows on the Status.
+  await open("Done");
+  await steps.getByRole("button", { name: "Add a Step to Done" }).click();
+  await steps.getByLabel("Brief for Done").fill("Wrap up.");
+  await steps.getByLabel("Model for Done").fill("haiku");
+  await steps.getByLabel("Status done of Done moves to").selectOption("In Review");
+  await steps.getByRole("button", { name: "Save the Step on Done" }).click();
+  await expect(steps.getByRole("alert")).toContainText("Done is a Done Status, so it can't have a Step");
+  await steps.getByRole("button", { name: "Cancel" }).click();
+  await expect(steps.getByRole("alert")).toHaveCount(0);
 
   // An unsaved draft on one Step outlives saving another.
   await open("Investigate");
@@ -58,8 +70,10 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   await expect(steps.getByRole("alert")).toContainText("asking a User must never complete work");
 
   await steps.getByLabel("Status needs you of Ready moves to").selectOption("Backlog");
+  await steps.getByLabel("Label rule for Ready").selectOption("Requires a Label");
+  await steps.getByLabel("Label for the rule of Ready").fill("planned");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
-  await expect(summary("Ready")).toContainText("opus, 2 Outcomes");
+  await expect(summary("Ready")).toContainText("opus, 2 Outcomes, requires planned");
 
   await expect(steps.getByLabel("Model for Investigate")).toHaveValue("opus");
   await steps.getByRole("button", { name: "Save the Step on Investigate" }).click();

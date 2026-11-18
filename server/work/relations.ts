@@ -4,6 +4,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer, type Viewer } from "../identity/viewers.js";
+import { startUnblocked } from "../runs/runs.js";
 import { recordChanges } from "./changes.js";
 import {
   findTicketRef,
@@ -101,6 +102,7 @@ export async function removeRelation(
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
     await recordRelationChanges(context, tx, ticket.workspaceId, userId, kind, from, to, "removed");
+    if (removed.kind === "blocks") await startUnblocked(context, tx, [], [removed.otherTicketId]);
   });
 }
 

@@ -61,12 +61,15 @@ describe("creating a Ticket", () => {
       labels: [],
       assigneeId: null,
       delegateId: null,
+      autonomousDelegation: null,
+      verification: null,
       parentId: null,
       dueDate: null,
       estimate: null,
       createdBy: user.id,
       createdAt: "2026-01-01T09:00:00.000Z",
       lastRun: null,
+      waiting: null,
       mentions: [],
     });
 
@@ -367,6 +370,7 @@ describe("Comments", () => {
       actor: { kind: "user", id: user.id, name: user.email },
       createdAt: "2026-01-01T09:00:00.000Z",
       mentions: [],
+      questionId: null,
     });
 
     cronk.clock.advance(60_000);
@@ -444,24 +448,25 @@ describe("the Ticket's timeline", () => {
     const at = (minute: number) => `2026-01-01T09:0${minute}:00.000Z`;
     const assignee = { id: user.id, name: user.email };
     expect(await timeline(cookie, ticket.id)).toEqual([
-      { id: expect.any(String), actor: ada, at: at(0), field: "created", from: null, to: null },
-      { id: expect.any(String), actor: ada, at: at(1), field: "title", from: "Draft", to: "Final" },
-      { id: expect.any(String), actor: ada, at: at(1), field: "description", from: "First", to: "Second" },
-      { id: expect.any(String), actor: ada, at: at(1), field: "priority", from: "none", to: "low" },
-      { id: expect.any(String), actor: ada, at: at(1), field: "labels", from: [], to: ["bug"] },
-      { id: expect.any(String), actor: ada, at: at(1), field: "assignee", from: null, to: assignee },
-      { id: expect.any(String), actor: ada, at: at(1), field: "dueDate", from: null, to: "2026-03-01" },
-      { id: expect.any(String), actor: ada, at: at(1), field: "estimate", from: null, to: 2 },
+      { id: expect.any(String), actor: ada, runId: null, at: at(0), field: "created", from: null, to: null },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "title", from: "Draft", to: "Final" },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "description", from: "First", to: "Second" },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "priority", from: "none", to: "low" },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "labels", from: [], to: ["bug"] },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "assignee", from: null, to: assignee },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "dueDate", from: null, to: "2026-03-01" },
+      { id: expect.any(String), actor: ada, runId: null, at: at(1), field: "estimate", from: null, to: 2 },
       {
         id: expect.any(String),
         actor: ada,
+        runId: null,
         at: at(2),
         field: "status",
         from: { id: statusId("Backlog"), name: "Backlog" },
         to: { id: statusId("Ready"), name: "Ready" },
       },
-      { id: expect.any(String), actor: ada, at: at(2), field: "assignee", from: assignee, to: null },
-      { id: expect.any(String), actor: ada, at: at(2), field: "estimate", from: 2, to: null },
+      { id: expect.any(String), actor: ada, runId: null, at: at(2), field: "assignee", from: assignee, to: null },
+      { id: expect.any(String), actor: ada, runId: null, at: at(2), field: "estimate", from: 2, to: null },
     ]);
   });
 

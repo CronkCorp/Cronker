@@ -344,7 +344,7 @@ describe("the timeline", () => {
     cronk.clock.advance(60_000);
     await cronk.request("DELETE", `/api/tickets/${signInTicket.id}/relations/${blocks.id}`, { cookie });
 
-    const by = { actor: expect.objectContaining({ id: user.id }) };
+    const by = { actor: expect.objectContaining({ id: user.id }), runId: null };
     expect(await timelineOf(cookie, signInTicket.id)).toEqual([
       { ...by, id: expect.any(String), at: "2026-01-01T09:00:00.000Z", field: "blocks", from: null, to: board },
       { ...by, id: expect.any(String), at: "2026-01-01T09:02:00.000Z", field: "blocks", from: board, to: null },

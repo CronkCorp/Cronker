@@ -45,7 +45,7 @@ A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backl
 _Avoid_: Follow-up, spin-off, finding
 
 **Step**:
-The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User.
+The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User. Done and Canceled Statuses never have one, so finished or canceled work gets no Runs.
 _Avoid_: Stage, phase, pipeline step, job
 
 **Outcome**:
@@ -81,11 +81,11 @@ A Markdown message an Actor writes on a Ticket, possibly as a reply to another C
 _Avoid_: Note, message, post
 
 **Change**:
-One recorded edit to a Ticket: which field, its value before and after, the Actor who made it and when. A Ticket's Changes make up its timeline.
+One recorded edit to a Ticket: which field, its value before and after, the Actor who made it (or Cronk itself, such as when it moves a Ticket on past a skipped Step) and when. A Ticket's Changes make up its timeline.
 _Avoid_: Event, activity, history entry, audit log
 
 **Inbox**:
-A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs, Unverified completions and Tickets waiting for their review.
+A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions and Tickets waiting for their review.
 _Avoid_: Notifications, review queue, to-do
 
 **Brief**:
@@ -169,5 +169,5 @@ A way for Cronk to start Runs, set up by a User with their own credentials: thei
 _Avoid_: Provider, backend, executor
 
 **Run**:
-One agent execution Cronk starts for one Ticket, acting as an Agent through one of its Owner's Runners. It is **running** until the agent reports it **finished**, or it becomes **failed** (the Runner says it ended without finishing) or **lost** (no word from it for too long); a Run its Runner wouldn't start is **refused**. A Ticket has at most one running Run.
+One agent execution Cronk starts for one Ticket, acting as an Agent through one of its Owner's Runners. It is **running** until the agent reports it **finished**, or it becomes **failed** (the Runner says it ended without finishing), **lost** (no call naming it or its Ticket for the Workspace's lost-Run threshold) or **stopped** (a User moved, undelegated or re-delegated its Ticket, after which Cronk refuses its calls); a Run its Runner wouldn't start is **refused**, and its Ticket *couldn't start*. A rate-limited Runner refuses nothing: the Ticket waits. A Ticket has at most one running Run. After a failed, lost or refused Run, only a User's **Retry** starts the same Step again.
 _Avoid_: Session, job, claim, task

@@ -298,15 +298,28 @@ function TicketItem({
     >
       <span className="muted">{ticket.key}</span> <span>{ticket.title}</span>
       {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
-      {ticket.lastRun && ticket.lastRun.state !== "finished" && (
-        <small className={`run-marker ${ticket.lastRun.state}`}> {runMarkers[ticket.lastRun.state]}</small>
+      {ticket.waiting ? (
+        <small className={`run-marker ${ticket.waiting}`}> {waitingMarkers[ticket.waiting]}</small>
+      ) : (
+        ticket.lastRun &&
+        ticket.lastRun.state in runMarkers && (
+          <small className={`run-marker ${ticket.lastRun.state}`}> {runMarkers[ticket.lastRun.state as keyof typeof runMarkers]}</small>
+        )
       )}
     </Link>
   );
 }
 
-/** How a card marks its Ticket's latest Run, unless it finished. */
-const runMarkers = { running: "Run running", failed: "Run failed", refused: "Run couldn't start" } as const;
+/** How a card marks its Ticket's latest Run, unless it finished or a User stopped it. */
+const runMarkers = {
+  running: "Run running",
+  failed: "Run failed",
+  lost: "Run lost",
+  refused: "Run couldn't start",
+} as const;
+
+/** How a card marks a Ticket that needs a Run but waits for one; this replaces its latest Run's marker. */
+const waitingMarkers = { runnerSlot: "Waiting for a Runner slot", blocked: "Blocked" } as const;
 
 const ticketDrag = "application/x-cronk-ticket";
 
@@ -404,11 +417,11 @@ function List({
 function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const toggle = async (newTicketsDelegated: boolean) => {
+  const toggle = async (edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) => {
     setBusy(true);
     setError(null);
     try {
-      onChange(await api.editProject(project.id, { newTicketsDelegated }));
+      onChange(await api.editProject(project.id, edit));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -423,10 +436,23 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
           type="checkbox"
           checked={project.newTicketsDelegated}
           disabled={busy}
-          onChange={(e) => void toggle(e.target.checked)}
+          onChange={(e) => void toggle({ newTicketsDelegated: e.target.checked })}
         />
         New Tickets start delegated to their creator's Agent
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.autonomousDelegationDefault}
+          disabled={busy}
+          onChange={(e) => void toggle({ autonomousDelegationDefault: e.target.checked })}
+        />
+        Tickets first delegated get Autonomous Delegation
+      </label>
+      <p className="muted">
+        Under Autonomous Delegation a Step may complete a Ticket itself, as Unverified, until its Assignee Accepts or
+        Reopens it. Sub-Tickets take their parent's setting.
+      </p>
       {error && <p role="alert">{error}</p>}
     </section>
   );

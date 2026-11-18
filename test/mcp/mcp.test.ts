@@ -74,7 +74,14 @@ describe("MCP with an Agent token", () => {
 
     const { tools } = await client.listTools();
 
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["comment", "finish", "list_tickets", "read_ticket"]);
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "comment",
+      "edit_ticket",
+      "finish",
+      "list_tickets",
+      "read_ticket",
+      "write_report",
+    ]);
   });
 
   test("an Agent reads a Ticket by key with its Comments and Relations", async () => {
@@ -157,9 +164,53 @@ describe("MCP with an Agent token", () => {
     const { isError, json } = await call(client, "finish", { run: runId, outcome: "ready", report: "Clear." });
 
     expect(isError).toBe(false);
-    expect(json).toEqual(expect.objectContaining({ id: runId, state: "finished", outcome: "ready", report: "Clear." }));
+    expect(json).toEqual(expect.objectContaining({ id: runId, state: "finished", outcome: "ready" }));
     const moved = await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json();
     expect(moved.statusId).toBe(status("Ready"));
+    const after = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(after.json.reports).toEqual([expect.objectContaining({ runId, title: "Triage report", body: "Clear." })]);
+  });
+
+  test("during its Run an Agent edits its Ticket and writes Reports, which a later Run reads", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Investigate") },
+    });
+    const client = await connect(secret);
+
+    const edited = await call(client, "edit_ticket", {
+      ticket: "CRONK-1",
+      description: "Do it, carefully.",
+      priority: "high",
+      labels: ["parser"],
+      dueDate: "2026-02-01",
+      estimate: 2,
+    });
+    expect(edited.isError).toBe(false);
+    expect(edited.json).toEqual(
+      expect.objectContaining({ description: "Do it, carefully.", priority: "high", labels: ["parser"], dueDate: "2026-02-01", estimate: 2 }),
+    );
+    const cleared = await call(client, "edit_ticket", { ticket: "CRONK-1", dueDate: null });
+    expect(cleared.json.dueDate).toBeNull();
+    const refused = await call(client, "edit_ticket", { ticket: "CRONK-2", priority: "low" });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run", advice: expect.any(String) }) });
+
+    const written = await call(client, "write_report", { ticket: "CRONK-1", title: "Findings", body: "In the parser." });
+    expect(written.isError).toBe(false);
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    await call(client, "finish", { run: read.runs[0].id, outcome: "done" });
+
+    // The next Run, of Implement, reads what the earlier one wrote.
+    const later = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(later.json.runs.map((r: { step: { name: string } }) => r.step.name)).toEqual(["Investigate", "Implement"]);
+    expect(later.json.reports).toEqual([
+      expect.objectContaining({ runId: read.runs[0].id, title: "Findings", body: "In the parser." }),
+    ]);
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {
