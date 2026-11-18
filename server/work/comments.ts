@@ -6,6 +6,7 @@ import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
 import { answerQuestion } from "../runs/questions.js";
+import { insertComment } from "./comment-writes.js";
 import { Actor, actorColumn } from "./actors.js";
 import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
 
@@ -76,31 +77,4 @@ export async function addComment(
     const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, commentId));
     return comment!;
   });
-}
-
-/** Writes a Comment on the Ticket as the Actor, telling the Workspace, and returns its id. */
-export async function insertComment(
-  { clock, live }: Context,
-  tx: Tx,
-  ticket: { id: string; workspaceId: string; projectId: string },
-  actor: { kind: "user" | "agent"; id: string },
-  body: string,
-  replyToId: string | null,
-): Promise<string> {
-  const { rows } = await tx.query<{ id: string }>(
-    `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-    [
-      ticket.workspaceId,
-      ticket.id,
-      replyToId,
-      actor.kind === "user" ? actor.id : null,
-      actor.kind === "agent" ? actor.id : null,
-      body,
-      clock.now(),
-    ],
-  );
-  const commentId = rows[0]!.id;
-  live.publish(tx, ticket.workspaceId, { type: "comment.added", projectId: ticket.projectId, ticketId: ticket.id, commentId });
-  return commentId;
 }

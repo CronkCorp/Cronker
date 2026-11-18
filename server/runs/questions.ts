@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
-import { insertComment } from "../work/comments.js";
+import { insertComment } from "../work/comment-writes.js";
 import { statusesOf } from "../work/projects.js";
 import { startRunIfNeeded } from "./runs.js";
 

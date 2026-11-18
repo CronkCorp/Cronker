@@ -112,6 +112,7 @@ describe("what an Agent may change", () => {
       actor: { kind: "agent", id: agent.id, name: "claude-max" },
       createdAt: expect.any(String),
       mentions: [],
+      questionId: null,
     });
   });
 
