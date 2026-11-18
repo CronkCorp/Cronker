@@ -293,7 +293,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Relate a Ticket to another",
           description:
             "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace, " +
-            "named by its id or its key.",
+            "named by its id or its key. An Agent adds only blocks (`agent_adds_only_blocks`), and only from a " +
+            "Discovered Ticket it filed that still waits for a User (`not_your_discovered_ticket`).",
           params: Type.Object({ ticketId: Type.String() }),
           body: Type.Union([
             Type.Object({ kind: RelationKind, ticketId: Type.String({ description: "The other Ticket." }) }),
@@ -304,12 +305,12 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               }),
             }),
           ]),
-          response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        return reply.code(201).send(await addRelation(context, user.id, request.params.ticketId, request.body));
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await addRelation(context, caller, request.params.ticketId, request.body));
       },
     );
 

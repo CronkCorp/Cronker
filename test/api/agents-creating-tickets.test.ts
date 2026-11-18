@@ -227,6 +227,40 @@ describe("the filing Agent and its Discovered Ticket", () => {
     expect(moved.json.error.code).toBe("agent_sets_no_status");
   });
 
+  test("adds blocks from it to Tickets of its Workspace, each Change naming the Agent", async () => {
+    const { ada, ticket, agent, found, asAgent } = await discovered();
+
+    const relation = await ok("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketKey: "cronk-1" });
+
+    expect(relation).toEqual(expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-1" }) }));
+    const { relations } = await ok("GET", `/api/tickets/${ticket.id}/relations`, ada);
+    expect(relations.map((r: { kind: string; ticket: { key: string } }) => [r.kind, r.ticket.key])).toEqual([["blockedBy", "CRONK-3"]]);
+    const [blockedBy] = (await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada)).slice(-1);
+    expect(blockedBy).toEqual(expect.objectContaining({ field: "blockedBy", actor: expect.objectContaining({ id: agent.id }), runId: null }));
+  });
+
+  test("adds only blocks from it: no other Relation, and none from another Ticket", async () => {
+    const { ticket, other, found, asAgent } = await discovered();
+
+    for (const kind of ["blockedBy", "relatesTo"]) {
+      const refused = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind, ticketId: ticket.id });
+      expect(refused.status, kind).toBe(403);
+      expect(refused.json.error.code, kind).toBe("agent_adds_only_blocks");
+    }
+    const fromOther = await call("POST", `/api/tickets/${other.id}/relations`, asAgent, { kind: "blocks", ticketId: ticket.id });
+    expect(fromOther.status).toBe(403);
+    expect(fromOther.json.error).toEqual(expect.objectContaining({ code: "not_your_discovered_ticket", advice: expect.any(String) }));
+  });
+
+  test("a block that would form a cycle is still refused", async () => {
+    const { ada, ticket, found, asAgent } = await discovered();
+    await ok("POST", `/api/tickets/${ticket.id}/relations`, ada, { kind: "blocks", ticketId: found.id });
+
+    const refused = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketId: ticket.id });
+
+    expect(refused.json.error.code).toBe("blocking_cycle");
+  });
+
   test("another Agent doesn't edit it", async () => {
     const { workspace, ada, found } = await discovered();
     const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
