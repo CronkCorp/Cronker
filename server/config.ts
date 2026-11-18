@@ -11,6 +11,8 @@ export interface Config {
   secretKey?: string;
   /** Where GitHub is: its web address (`https://github.com`) and its API's (`https://api.github.com`). */
   github: { url: URL; apiUrl: URL };
+  /** Where the Claude API is, whose scheduled-task fire endpoint the subscription Runner calls (`https://api.anthropic.com`). */
+  claudeApiUrl: URL;
 }
 
 export class ConfigError extends Error {}
@@ -69,5 +71,6 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { webRoot?: string 
       url: httpUrl(env, "CRONK_GITHUB_URL", "https://github.com"),
       apiUrl: httpUrl(env, "CRONK_GITHUB_API_URL", "https://api.github.com"),
     },
+    claudeApiUrl: httpUrl(env, "CRONK_CLAUDE_API_URL", "https://api.anthropic.com"),
   };
 }

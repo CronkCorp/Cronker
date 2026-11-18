@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createCronk, type Cronk } from "../../server/cronk.js";
 import { TestClock } from "./clock.js";
 import { createTestDatabase } from "./database.js";
+import { startStandInClaude, type StandInClaude } from "./claude.js";
 import { startStandInGitHub, type StandInGitHub } from "./github.js";
 import { FakeRunner } from "./runner.js";
 
@@ -32,11 +33,15 @@ export interface StartedCronk {
   url: string;
   /** The stand-in GitHub this Cronk talks to instead of the real one. */
   github: StandInGitHub;
+  /** The stand-in claude.ai fire endpoint the subscription Runner fires scheduled tasks at. */
+  claude: StandInClaude;
   /** The fake Runner, installed as the Runner kind `fake`: what it was asked to start, and what to do next. */
   runner: FakeRunner;
   clock: TestClock;
   /** Runs the periodic check that makes Runs lost, as the server does every minute; move the clock first. */
   checkForLostRuns(): Promise<void>;
+  /** Resumes the queues of Runners whose rate limit has passed, as the server does every minute; move the clock first. */
+  resumePausedRunners(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -79,6 +84,7 @@ async function freePort(): Promise<number> {
 export async function startCronk(options: StartCronkOptions = {}): Promise<StartedCronk> {
   const database = await createTestDatabase();
   const github = await startStandInGitHub();
+  const claude = await startStandInClaude();
   const clock = options.clock ?? new TestClock();
   const runner = new FakeRunner();
   const logs: LogLine[] = [];
@@ -104,6 +110,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
         webRoot: options.webRoot,
         secretKey: options.noSecretKey ? undefined : randomBytes(32).toString("base64"),
         github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
+        claudeApiUrl: new URL(claude.apiUrl),
       },
       clock,
       logStream,
@@ -111,16 +118,18 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     });
     await cronk.listen();
   } catch (error) {
-    await Promise.all([database.drop(), github.stop()]);
+    await Promise.all([database.drop(), github.stop(), claude.stop()]);
     throw error;
   }
 
   return {
     url,
     github,
+    claude,
     runner,
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),
+    resumePausedRunners: () => cronk.resumePausedRunners(),
     logs,
     setupCode() {
       const line = logs.find((l) => typeof l.setupCode === "string");
@@ -150,7 +159,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async stop() {
       await cronk.close();
-      await Promise.all([database.drop(), github.stop()]);
+      await Promise.all([database.drop(), github.stop(), claude.stop()]);
     },
   };
 }

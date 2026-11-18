@@ -4,12 +4,16 @@ import { Type } from "typebox";
  * What a Ticket that needs a Run waits for. Kept apart from `runs.ts`, which imports `work/tickets.ts`:
  * Tickets build their schema and columns from it as they load, before `runs.ts` would have finished loading.
  */
-export const Waiting = Type.Union([Type.Literal("runnerSlot"), Type.Literal("blocked"), Type.Null()], {
-  description:
-    "What the Ticket waits for before it gets the Run it needs: `runnerSlot` while its Runner already has as many " +
-    "Runs as its limit, `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished. " +
-    "Null when it needs no Run, or has one.",
-});
+export const Waiting = Type.Union(
+  [Type.Literal("runnerSlot"), Type.Literal("runnerPaused"), Type.Literal("blocked"), Type.Null()],
+  {
+    description:
+      "What the Ticket waits for before it gets the Run it needs: `runnerSlot` while its Runner already has as many " +
+      "Runs as its limit, `runnerPaused` while its Runner's queue is paused by a rate limit (see the Runner's " +
+      "`pausedUntil`), `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished. " +
+      "Null when it needs no Run, or has one.",
+  },
+);
 
 /** Status kinds whose Tickets count as finished, for what they block and for their parents. */
 export const finishedKinds = "('done', 'canceled')";
@@ -25,7 +29,10 @@ export const isBlocked = (alias: string) =>
 
 /** SQL for what the Ticket `alias` waits for, as `Waiting`. */
 export const waitingColumn = (alias: string) =>
-  `case when not ${alias}.waits_for_run then null when ${isBlocked(alias)} then 'blocked' else 'runnerSlot' end`;
+  `case when not ${alias}.waits_for_run then null when ${isBlocked(alias)} then 'blocked'
+     when exists (select 1 from agents join runners on runners.id = agents.runner_id
+       where agents.id = ${alias}.delegate_id and runners.paused_until is not null) then 'runnerPaused'
+     else 'runnerSlot' end`;
 
 /**
  * SQL for where the Ticket `alias` stands in its Runner's queue, earliest first: highest Priority, then the

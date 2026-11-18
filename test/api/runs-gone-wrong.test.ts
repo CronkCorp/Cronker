@@ -125,12 +125,12 @@ describe("rate limits", () => {
     expect(cronk.runner.starts).toHaveLength(1);
     expect(await runsOf(ticket.id, ada)).toEqual([]);
     expect(await ok("GET", `/api/tickets/${ticket.id}`, ada)).toEqual(
-      expect.objectContaining({ lastRun: null, waiting: "runnerSlot" }),
+      expect.objectContaining({ lastRun: null, waiting: "runnerPaused" }),
     );
     expect(await inbox()).toEqual({ count: 0, items: [] });
   });
 
-  test("the rate-limited Ticket gets a Run once another Run of its Runner ends, not before", async () => {
+  test("the rate-limited Ticket gets a Run once its Runner's pause has passed, not when another Run ends before", async () => {
     const { ada, project, agent, asAgent, status } = await adaWithAgent();
     const first = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "First" });
     const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
@@ -141,6 +141,10 @@ describe("rate limits", () => {
 
     const [firstRun] = await runsOf(first.id, ada);
     await ok("POST", `/api/runs/${firstRun.id}/finish`, asAgent, { outcome: "ready" });
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-2", "CRONK-3"]);
+
+    cronk.clock.advance(minutes(60));
+    await cronk.resumePausedRunners();
 
     expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-2", "CRONK-3", "CRONK-3"]);
     expect(await states(second.id, ada)).toEqual([["Triage", "running"]]);

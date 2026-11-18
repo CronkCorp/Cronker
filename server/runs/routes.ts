@@ -6,7 +6,7 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
-import { createRunner, RunnerRecord, runnersOf, setRunnerLimit } from "./runners.js";
+import { createRunner, removeTrigger, RunnerRecord, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
 import { Ticket } from "../work/tickets.js";
 
@@ -187,6 +187,51 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return setRunnerLimit(context, user.id, request.params.runnerId, request.body.limit);
+      },
+    );
+
+    app.post(
+      "/api/runners/:runnerId/triggers",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Save a trigger of your subscription Runner",
+          description:
+            "The claude.ai scheduled task your `subscription` Runner fires for Steps wanting the model, with its API " +
+            "trigger's id and token. With a `projectId`, it overrides the Runner's own trigger for the model on that " +
+            "Project's Tickets. Replaces the trigger saved for the same model and Project. The token is stored " +
+            "encrypted and never returned. Refused with `runner_has_no_triggers` for other kinds of Runner, and with " +
+            "`no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+          params: Type.Object({ runnerId: Type.String() }),
+          body: Type.Object({
+            model: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, such as `haiku`." }),
+            projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
+            triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
+            token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }),
+          }),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return saveTrigger(context, user.id, request.params.runnerId, request.body);
+      },
+    );
+
+    app.delete(
+      "/api/runners/:runnerId/triggers/:triggerId",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Remove a trigger of your subscription Runner",
+          description: "Runs needing it then couldn't start, with the reason in your Inbox, until another is saved.",
+          params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
+          response: { 200: RunnerRecord, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return removeTrigger(context, user.id, request.params.runnerId, request.params.triggerId);
       },
     );
   };

@@ -19,9 +19,11 @@ const cronk = await createCronk({ config });
 await cronk.listen();
 cronk.app.log.info(`Cronk is at ${config.publicUrl.origin}`);
 
-// Runs nothing has named for their Workspace's lost-Run threshold become lost; checked every minute.
+// Every minute: Runs nothing has named for their Workspace's lost-Run threshold become lost, and
+// rate-limited Runners whose pause has passed resume their queues.
 const lostRuns = setInterval(() => {
   cronk.checkForLostRuns().catch((error: unknown) => cronk.app.log.error(error));
+  cronk.resumePausedRunners().catch((error: unknown) => cronk.app.log.error(error));
 }, 60_000);
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
