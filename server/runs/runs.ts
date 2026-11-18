@@ -13,6 +13,7 @@ import { recordReport } from "../work/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
+import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 
@@ -198,7 +199,10 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
     skipped.add(status.id);
     const target = statuses.find((s) => s.id === outcome.statusId)!;
-    await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticketId, target.id, now]);
+    await tx.query(
+      "update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null where id = $1",
+      [ticketId, target.id, now],
+    );
     const named = ({ id, name }: Status) => ({ id, name });
     await recordChanges(tx, { id: ticketId, workspaceId: ticket.workspaceId }, { kind: "cronk" }, now, [
       { field: "stepSkipped", from: null, to: { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name } },
@@ -518,6 +522,13 @@ export async function finishRun(
       });
     }
 
+    if (outcome.needsYou && !input.question?.trim()) {
+      throw new ApiError(400, "question_needed", `${outcome.name} hands ${ticket.key} back to its Assignee, so it takes a Question.`, {
+        rule: "A Run that finishes with its Step's needs you Outcome says what it needs in a Question.",
+        advice: `Finish with ${outcome.name} again, giving a Question that says what you need from the Assignee.`,
+      });
+    }
+
     // An Outcome counting as a round adds one for this Ticket and Step, until the count has reached the
     // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
     let applied = outcome;
@@ -555,11 +566,18 @@ export async function finishRun(
     if (input.report !== undefined) {
       await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
     }
+    // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, stays on the Run.
+    if (applied.needsYou && questionBy === "agent") {
+      const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
+      await askQuestion(context, tx, ticket, asking, question!, now);
+    }
     if (applied.statusId !== ticket.statusId) {
-      await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [
+      // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
+      await tx.query("update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = $4 where id = $1", [
         ticket.id,
         applied.statusId,
         now,
+        applied.needsYou ? run.id : null,
       ]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [

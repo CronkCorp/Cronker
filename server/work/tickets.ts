@@ -404,7 +404,10 @@ export async function editTicket(
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
-       status_entered_at = case when status_id = $9 then status_entered_at else $12 end where id = $1`,
+       status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
+       -- Moving the Ticket ends its waiting from a needs you Outcome.
+       needs_you_run_id = case when status_id = $9 then needs_you_run_id end
+       where id = $1`,
       [
         ticket.id,
         next.title,

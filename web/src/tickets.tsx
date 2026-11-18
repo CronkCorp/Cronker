@@ -565,6 +565,7 @@ function Comments({
               <strong>{comment.actor.name}</strong>
               {comment.actor.kind === "agent" && <span className="muted"> (Agent)</span>} <When at={comment.createdAt} />
               {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
+              {comment.questionId && <span className="badge">Question</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
             {replyingTo === comment.id ? (

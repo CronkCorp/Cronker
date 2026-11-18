@@ -233,6 +233,8 @@ export interface Comment {
   actor: Actor;
   createdAt: string;
   mentions: Mention[];
+  /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
+  questionId: string | null;
 }
 
 /** Markdown a Run wrote on its Ticket. */
@@ -300,6 +302,29 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
+/** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
+export interface QuestionItem {
+  kind: "question";
+  ticket: TicketSummary;
+  question: {
+    id: string;
+    commentId: string;
+    body: string;
+    agent: { id: string; name: string };
+    step: { statusId: string | null; name: string };
+    askedAt: string;
+  };
+}
+
+/** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
+export interface NeedsYouItem {
+  kind: "needsYou";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  outcome: string;
+  step: { statusId: string | null; name: string };
+}
+
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */
 export interface RunItem {
   kind: "run";
@@ -307,7 +332,7 @@ export interface RunItem {
   run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
 }
 
-export type InboxItem = ReviewItem | RunItem;
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | RunItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
@@ -429,6 +454,7 @@ export const api = {
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
+  dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
