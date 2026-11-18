@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { days } from "../harness/clock.js";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -166,5 +166,99 @@ describe("adding people by email", () => {
     const none = await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(link.url) } });
     expect(none.status).toBe(400);
     expect(await none.json()).toEqual({ error: { code: "password_needed", message: expect.any(String) } });
+  });
+});
+
+describe("Admins", () => {
+  test("an Admin can make another member Admin, and take it away", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const path = `/api/workspaces/${workspace.id}/members/${bea.user.id}`;
+
+    const made = await cronk.request("PATCH", path, { cookie, body: { isAdmin: true } });
+    expect(made.status).toBe(200);
+    expect(await made.json()).toEqual({ user: bea.user, isAdmin: true });
+    const asBea = await (await cronk.request("GET", "/api/me", { cookie: bea.cookie })).json();
+    expect(asBea.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", isAdmin: true }]);
+
+    const unmade = await cronk.request("PATCH", path, { cookie, body: { isAdmin: false } });
+    expect(await unmade.json()).toEqual({ user: bea.user, isAdmin: false });
+    const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(members.map((m: { isAdmin: boolean }) => m.isAdmin)).toEqual([true, false]);
+  });
+
+  test("a Workspace can't be left without an Admin", async () => {
+    const { user: ada, workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const adaPath = `/api/workspaces/${workspace.id}/members/${ada.id}`;
+
+    for (const [method, body] of [
+      ["PATCH", { isAdmin: false }],
+      ["DELETE", undefined],
+    ] as const) {
+      const refused = await cronk.request(method, adaPath, { cookie, body });
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({ error: { code: "last_admin", message: expect.any(String) } });
+    }
+
+    // With another Admin, the first may step down.
+    await cronk.request("PATCH", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie, body: { isAdmin: true } });
+    expect((await cronk.request("PATCH", adaPath, { cookie, body: { isAdmin: false } })).status).toBe(200);
+    const left = await cronk.request("PATCH", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, {
+      cookie: bea.cookie,
+      body: { isAdmin: false },
+    });
+    expect(left.status).toBe(409);
+  });
+});
+
+describe("removing members", () => {
+  test("an Admin removes a member, who then gets 404 for that Workspace", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const other = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    await cronk.request("POST", `/api/workspaces/${other.id}/members`, { cookie, body: { email: "bea@example.com" } });
+
+    const removed = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
+
+    expect(removed.status).toBe(204);
+    for (const path of [`/api/workspaces/${workspace.id}`, `/api/workspaces/${workspace.id}/members`]) {
+      const response = await cronk.request("GET", path, { cookie: bea.cookie });
+      expect(response.status).toBe(404);
+    }
+    const me = await (await cronk.request("GET", "/api/me", { cookie: bea.cookie })).json();
+    expect(me.workspaces).toEqual([{ id: other.id, name: "Friends", isAdmin: false }]);
+    const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(members.map((m: { user: { email: string } }) => m.user.email)).toEqual(["ada@example.com"]);
+
+    const again = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
+    expect(again.status).toBe(404);
+  });
+
+  test("a removed member can be added again", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
+
+    const again = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } });
+    expect(await again.json()).toEqual({ user: bea.user, link: null });
+    expect((await cronk.request("GET", `/api/workspaces/${workspace.id}`, { cookie: bea.cookie })).status).toBe(200);
+  });
+
+  test("a removed member can't rejoin through an unused link", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const add = () => cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } });
+    const first = await (await add()).json();
+    const second = await (await add()).json();
+    await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(first.link.url), password: "bea's long password" } });
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${first.user.id}`, { cookie });
+
+    const rejoin = await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(second.link.url) } });
+    expect(rejoin.status).toBe(404);
   });
 });

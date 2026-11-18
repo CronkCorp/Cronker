@@ -3,7 +3,16 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { Email } from "../identity/user.js";
-import { AddedMember, addMember, Member, membersOf, requireAdmin, requireMember } from "./members.js";
+import {
+  AddedMember,
+  addMember,
+  Member,
+  membersOf,
+  removeMember,
+  requireAdmin,
+  requireMember,
+  setAdmin,
+} from "./members.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { createWorkspace, findWorkspace, Membership, Workspace, WorkspaceName } from "./workspaces.js";
 
@@ -79,6 +88,47 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
         return reply.code(201).send(await addMember(context, workspace.id, request.body.email.trim()));
+      },
+    );
+
+    const MemberParams = Type.Object({ workspaceId: Type.String(), userId: Type.String() });
+
+    app.patch(
+      "/api/workspaces/:workspaceId/members/:userId",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Make a member Admin or not (Admins only)",
+          description: "Refused with `last_admin` if it would leave the Workspace without an Admin.",
+          params: MemberParams,
+          body: Type.Object({ isAdmin: Type.Boolean() }),
+          response: { 200: Member, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        return setAdmin(db, workspace.id, request.params.userId, request.body.isAdmin);
+      },
+    );
+
+    app.delete(
+      "/api/workspaces/:workspaceId/members/:userId",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Remove a member (Admins only)",
+          description:
+            "The member loses access to the Workspace at once. Refused with `last_admin` if it would leave the Workspace without an Admin.",
+          params: MemberParams,
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        await removeMember(db, workspace.id, request.params.userId);
+        return reply.code(204).send(null);
       },
     );
   };

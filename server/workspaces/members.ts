@@ -1,9 +1,9 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db } from "../db.js";
+import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { issueLink, Link } from "../identity/links.js";
-import { User } from "../identity/user.js";
+import { User, type User as UserRecord } from "../identity/user.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
@@ -70,5 +70,52 @@ export async function addMember(context: Context, workspaceId: string, email: st
       return { user: added, link: null };
     }
     return { user: added, link: await issueLink(context, tx, "join", user.id, workspaceId) };
+  });
+}
+
+async function lockMembers(tx: Tx, workspaceId: string) {
+  const { rows } = await tx.query<{ user_id: string; is_admin: boolean }>(
+    "select user_id, is_admin from memberships where workspace_id = $1 for update",
+    [workspaceId],
+  );
+  return rows;
+}
+
+const memberNotFound = () => new ApiError(404, "not_found", "No such member of this Workspace.");
+const lastAdmin = () =>
+  new ApiError(409, "last_admin", "A Workspace can't be left without an Admin. Make another member Admin first.");
+
+/** Makes a member Admin or not; refused if it would leave the Workspace without an Admin. */
+export async function setAdmin(db: Db, workspaceId: string, userId: string, isAdmin: boolean): Promise<Member> {
+  return transaction(db, async (tx) => {
+    const members = await lockMembers(tx, workspaceId);
+    const member = members.find((m) => m.user_id === userId);
+    if (!member) throw memberNotFound();
+    if (!isAdmin && member.is_admin && members.filter((m) => m.is_admin).length === 1) throw lastAdmin();
+    await tx.query("update memberships set is_admin = $1 where workspace_id = $2 and user_id = $3", [
+      isAdmin,
+      workspaceId,
+      userId,
+    ]);
+    const { rows } = await tx.query<UserRecord>("select id, email from users where id = $1", [userId]);
+    return { user: rows[0]!, isAdmin };
+  });
+}
+
+/**
+ * Removes a member, who then sees nothing of the Workspace. Their unused links to join
+ * it end too. Refused if it would leave the Workspace without an Admin.
+ */
+export async function removeMember(db: Db, workspaceId: string, userId: string): Promise<void> {
+  await transaction(db, async (tx) => {
+    const members = await lockMembers(tx, workspaceId);
+    const member = members.find((m) => m.user_id === userId);
+    if (!member) throw memberNotFound();
+    if (member.is_admin && members.filter((m) => m.is_admin).length === 1) throw lastAdmin();
+    await tx.query("delete from memberships where workspace_id = $1 and user_id = $2", [workspaceId, userId]);
+    await tx.query(
+      "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null",
+      [workspaceId, userId],
+    );
   });
 }
