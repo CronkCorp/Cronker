@@ -232,3 +232,78 @@ describe("Relations", () => {
     expect((await relationsOf(cookie, board.id)).relations).toHaveLength(1);
   });
 });
+
+const setParent = (cookie: string, ticketId: string, parentId: string | null) =>
+  cronk.request("PATCH", `/api/tickets/${ticketId}`, { cookie, body: { parentId } });
+
+describe("Sub-Tickets", () => {
+  test("a Ticket made a Sub-Ticket names its parent, and the parent lists its Sub-Tickets by key", async () => {
+    const { cookie, tickets } = await withTickets("Relations", "Cycle check", "Ticket view");
+    const [parent, cycles, view] = tickets as [TicketRef, TicketRef, TicketRef];
+
+    const response = await setParent(cookie, view.id, parent.id);
+    expect(response.status).toBe(200);
+    expect((await response.json()).parentId).toBe(parent.id);
+    expect((await setParent(cookie, cycles.id, parent.id)).status).toBe(200);
+
+    expect(await relationsOf(cookie, parent.id)).toEqual({ parent: null, subTickets: [cycles, view], relations: [] });
+    expect(await relationsOf(cookie, view.id)).toEqual({ parent, subTickets: [], relations: [] });
+    expect((await (await cronk.request("GET", `/api/tickets/${view.id}`, { cookie })).json()).parentId).toBe(parent.id);
+  });
+
+  test("clearing the parent makes the Ticket stand alone again", async () => {
+    const { cookie, tickets } = await withTickets("Relations", "Ticket view");
+    const [parent, view] = tickets as [TicketRef, TicketRef];
+    await setParent(cookie, view.id, parent.id);
+
+    const response = await setParent(cookie, view.id, null);
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).parentId).toBeNull();
+    expect((await relationsOf(cookie, parent.id)).subTickets).toEqual([]);
+    expect((await relationsOf(cookie, view.id)).parent).toBeNull();
+  });
+
+  test("a parent in another Project is refused", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Ticket view");
+    const ops = await createProject(cookie, workspace.id, "Operations", "OPS");
+    const deploy = await createTicket(cookie, ops.id, "Deploy");
+
+    const response = await setParent(cookie, tickets[0]!.id, deploy.id);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("parent_in_other_project");
+    expect((await relationsOf(cookie, tickets[0]!.id)).parent).toBeNull();
+  });
+
+  test("a parent that isn't a Ticket of the Workspace is refused", async () => {
+    const { cookie, tickets } = await withTickets("Ticket view");
+    const created = await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Elsewhere" } });
+    const elsewhere = await createProject(cookie, (await created.json()).id, "Elsewhere", "ELSE");
+    const foreign = await createTicket(cookie, elsewhere.id, "Not here");
+
+    for (const parentId of [foreign.id, "00000000-0000-4000-8000-000000000000"]) {
+      const response = await setParent(cookie, tickets[0]!.id, parentId);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe("unknown_ticket");
+    }
+  });
+
+  test("a parent cycle is refused: a Ticket can't sit under itself or under its own Sub-Tickets", async () => {
+    const { cookie, tickets } = await withTickets("Relations", "Ticket view", "Lists");
+    const [relations, view, lists] = tickets as [TicketRef, TicketRef, TicketRef];
+    expect((await setParent(cookie, view.id, relations.id)).status).toBe(200);
+    expect((await setParent(cookie, lists.id, view.id)).status).toBe(200);
+
+    for (const [ticket, parent] of [
+      [relations, relations],
+      [relations, view],
+      [relations, lists],
+    ] as const) {
+      const response = await setParent(cookie, ticket.id, parent.id);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe("parent_cycle");
+    }
+    expect((await relationsOf(cookie, relations.id)).parent).toBeNull();
+  });
+});

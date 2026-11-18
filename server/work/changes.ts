@@ -13,6 +13,7 @@ export const changeFields = [
   "assignee",
   "dueDate",
   "estimate",
+  "parent",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 

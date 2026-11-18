@@ -109,6 +109,15 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             statusId: Type.Optional(
               Type.String({ format: "uuid", description: "Moves the Ticket to this Status of its Project." }),
             ),
+            parentId: Type.Optional(
+              nullable(
+                Type.String({
+                  format: "uuid",
+                  description:
+                    "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; never of itself or of one of its own Sub-Tickets.",
+                }),
+              ),
+            ),
           }),
           response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },

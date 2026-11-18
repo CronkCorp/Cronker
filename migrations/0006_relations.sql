@@ -19,3 +19,11 @@ create table relations (
 create unique index relations_pair_key on relations (kind, least(ticket_id, other_ticket_id), greatest(ticket_id, other_ticket_id));
 create index relations_ticket_id_idx on relations (ticket_id);
 create index relations_other_ticket_id_idx on relations (other_ticket_id);
+
+-- A Sub-Ticket's parent is a Ticket of the same Project, never the Ticket itself.
+alter table tickets add constraint tickets_id_project_key unique (id, project_id);
+alter table tickets add column parent_id uuid;
+alter table tickets add constraint tickets_parent_same_project
+  foreign key (parent_id, project_id) references tickets (id, project_id);
+alter table tickets add constraint tickets_not_own_parent check (parent_id <> id);
+create index tickets_parent_id_idx on tickets (parent_id);

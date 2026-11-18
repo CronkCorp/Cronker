@@ -3,16 +3,7 @@ import type { Clock } from "../clock.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { findTicketRow, ticketNotFound } from "./tickets.js";
-
-/** A Ticket as another Ticket's Relations, parent and Sub-Tickets name it. */
-export const TicketRef = Type.Object({
-  id: Type.String({ format: "uuid" }),
-  projectId: Type.String({ format: "uuid" }),
-  key: Type.String(),
-  title: Type.String(),
-});
-export type TicketRef = Static<typeof TicketRef>;
+import { findTicketRef, findTicketRow, ticketNotFound, TicketRef, ticketRefColumn, unknownTicket } from "./tickets.js";
 
 /** A Relation as seen from one of its Tickets: this Ticket blocks, is blocked by, or relates to the other. */
 export const RelationKind = Type.Union([Type.Literal("blocks"), Type.Literal("blockedBy"), Type.Literal("relatesTo")]);
@@ -32,24 +23,6 @@ export const TicketRelations = Type.Object({
 });
 export type TicketRelations = Static<typeof TicketRelations>;
 
-const refColumns = (tickets: string, projects: string) =>
-  `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
-     'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
-
-/** The other Ticket of a new Relation, which must be of the same Workspace. */
-async function otherTicket(tx: Tx, workspaceId: string, ticketId: string): Promise<TicketRef> {
-  const { rows } = isUuid(ticketId)
-    ? await tx.query<{ ref: TicketRef }>(
-        `select ${refColumns("tickets", "projects")} as ref
-         from tickets join projects on projects.id = tickets.project_id
-         where tickets.id = $1 and tickets.workspace_id = $2`,
-        [ticketId, workspaceId],
-      )
-    : { rows: [] };
-  if (!rows[0]) throw new ApiError(400, "unknown_ticket", "That Ticket isn't in this Workspace.");
-  return rows[0].ref;
-}
-
 export async function addRelation(
   db: Db,
   clock: Clock,
@@ -60,7 +33,8 @@ export async function addRelation(
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userId, ticketId);
     if (!ticket) throw ticketNotFound();
-    const other = await otherTicket(tx, ticket.workspaceId, input.ticketId);
+    const other = await findTicketRef(tx, ticket.workspaceId, input.ticketId);
+    if (!other) throw unknownTicket();
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
     const [from, to] = input.kind === "blockedBy" ? [other.id, ticket.id] : [ticket.id, other.id];
     if (input.kind !== "relatesTo" && (await blocksTransitively(tx, ticket.workspaceId, to, from))) {
@@ -120,7 +94,7 @@ export async function relationsOf(db: Db, userId: string, ticketId: string): Pro
     `select relations.id,
        case when relations.kind = 'relates' then 'relatesTo'
             when relations.ticket_id = $1 then 'blocks' else 'blockedBy' end as kind,
-       ${refColumns("others", "projects")} as ticket
+       ${ticketRefColumn("others", "projects")} as ticket
      from relations
      join tickets others on others.id =
        case when relations.ticket_id = $1 then relations.other_ticket_id else relations.ticket_id end
@@ -129,5 +103,12 @@ export async function relationsOf(db: Db, userId: string, ticketId: string): Pro
      order by relations.seq`,
     [ticket.id],
   );
-  return { parent: null, subTickets: [], relations: rows };
+  const parent = ticket.parentId === null ? null : (await findTicketRef(db, ticket.workspaceId, ticket.parentId))!;
+  const subTickets = await db.query<{ ref: TicketRef }>(
+    `select ${ticketRefColumn("tickets", "projects")} as ref
+     from tickets join projects on projects.id = tickets.project_id
+     where tickets.parent_id = $1 order by tickets.number`,
+    [ticket.id],
+  );
+  return { parent, subTickets: subTickets.rows.map((row) => row.ref), relations: rows };
 }
