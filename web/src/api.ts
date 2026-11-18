@@ -101,6 +101,7 @@ export interface TicketSummary {
   priority: Priority;
   labels: string[];
   assigneeId: string | null;
+  parentId: string | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
@@ -120,6 +121,30 @@ export interface TicketEdit {
   assigneeId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
+  parentId?: string | null;
+}
+
+/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
+export interface TicketRef {
+  id: string;
+  projectId: string;
+  key: string;
+  title: string;
+}
+
+/** A Relation as seen from one of its Tickets. */
+export type RelationKind = "blocks" | "blockedBy" | "relatesTo";
+
+export interface Relation {
+  id: string;
+  kind: RelationKind;
+  ticket: TicketRef;
+}
+
+export interface TicketRelations {
+  parent: TicketRef | null;
+  subTickets: TicketRef[];
+  relations: Relation[];
 }
 
 export interface TicketFilter {
@@ -149,7 +174,19 @@ export interface Change {
   id: string;
   actor: Actor;
   at: string;
-  field: "created" | "title" | "description" | "status" | "priority" | "labels" | "assignee" | "dueDate" | "estimate";
+  field:
+    | "created"
+    | "title"
+    | "description"
+    | "status"
+    | "priority"
+    | "labels"
+    | "assignee"
+    | "dueDate"
+    | "estimate"
+    | "parent"
+    | "subTicket"
+    | RelationKind;
   from: unknown;
   to: unknown;
 }
@@ -233,6 +270,12 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  relations: (ticketId: string) =>
+    call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
+  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
+    call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
+  removeRelation: (ticketId: string, relationId: string) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 

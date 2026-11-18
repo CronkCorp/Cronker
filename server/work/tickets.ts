@@ -35,6 +35,9 @@ export const TicketSummary = Type.Object({
   priority: Priority,
   labels: Type.Array(Type.String()),
   assigneeId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
+  parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Ticket this is a Sub-Ticket of, in the same Project.",
+  }),
   dueDate: Type.Union([Type.String({ format: "date" }), Type.Null()]),
   estimate: Type.Union([Type.Number(), Type.Null()]),
   createdBy: Type.String({ format: "uuid" }),
@@ -51,7 +54,8 @@ export type Ticket = Static<typeof Ticket>;
 
 const columns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
-  tickets.assignee_id as "assigneeId", to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
+  tickets.assignee_id as "assigneeId", tickets.parent_id as "parentId",
+  to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt"`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
@@ -62,6 +66,59 @@ const summary = ({ workspaceId: _, createdAt, ...row }: Row): TicketSummary => (
   ...row,
   createdAt: createdAt.toISOString(),
 });
+
+/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
+export const TicketRef = Type.Object({
+  id: Type.String({ format: "uuid" }),
+  projectId: Type.String({ format: "uuid" }),
+  key: Type.String(),
+  title: Type.String(),
+});
+export type TicketRef = Static<typeof TicketRef>;
+
+/** Selects a Ticket as a TicketRef, from `tickets` and its `projects` joined as the given aliases. */
+export const ticketRefColumn = (tickets: string, projects: string) =>
+  `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
+     'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
+
+/** A Ticket of the Workspace as a TicketRef, if there is one with that id. */
+export async function findTicketRef(
+  db: Db | Tx,
+  workspaceId: string,
+  ticketId: string,
+): Promise<TicketRef | undefined> {
+  if (!isUuid(ticketId)) return undefined;
+  return findRef(db, "tickets.id = $2", [workspaceId, ticketId]);
+}
+
+/** A Ticket of the Workspace as a TicketRef, if there is one with that key, matched ignoring case. */
+export async function findTicketRefByKey(
+  db: Db | Tx,
+  workspaceId: string,
+  key: string,
+): Promise<TicketRef | undefined> {
+  const [projectKey, number] = key.trim().split("-");
+  if (!projectKey || !number || !/^[1-9][0-9]{0,8}$/.test(number)) return undefined;
+  return findRef(db, "lower(projects.key) = lower($2) and tickets.number = $3", [
+    workspaceId,
+    projectKey,
+    Number(number),
+  ]);
+}
+
+async function findRef(db: Db | Tx, where: string, params: unknown[]): Promise<TicketRef | undefined> {
+  const { rows } = await db.query<{ ref: TicketRef }>(
+    `select ${ticketRefColumn("tickets", "projects")} as ref
+     from tickets join projects on projects.id = tickets.project_id
+     where tickets.workspace_id = $1 and ${where}`,
+    params,
+  );
+  return rows[0]?.ref;
+}
+
+export function unknownTicket(): ApiError {
+  return new ApiError(400, "unknown_ticket", "That Ticket isn't in this Workspace.");
+}
 
 export function ticketNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Ticket.");
@@ -206,6 +263,7 @@ export interface TicketEdit {
   dueDate?: string | null;
   estimate?: number | null;
   statusId?: string;
+  parentId?: string | null;
 }
 
 /** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
@@ -233,6 +291,7 @@ export async function editTicket(
     };
     const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
     const userNamed = (id: string | null) => named(tx, "select id, email as name from users where id = $1", id);
+    const ticketRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
 
     if (edit.title !== undefined) await change("title", "title", edit.title.trim());
     if (edit.description !== undefined) await change("description", "description", edit.description);
@@ -246,13 +305,17 @@ export async function editTicket(
       if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
       await change("assigneeId", "assignee", edit.assigneeId, userNamed);
     }
+    if (edit.parentId !== undefined) {
+      const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
+      await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
+    }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9 where id = $1`,
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10 where id = $1`,
       [
         ticket.id,
         next.title,
@@ -263,10 +326,27 @@ export async function editTicket(
         next.dueDate,
         next.estimate,
         next.statusId,
+        next.parentId,
       ],
     );
-    await recordChanges(tx, ticket, userId, clock.now(), changes);
+    const now = clock.now();
+    await recordChanges(tx, ticket, userId, now, changes);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    if (next.parentId !== ticket.parentId) {
+      // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
+      const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
+      const subTicketChange = async (parentId: string | null, change: NewChange) => {
+        if (parentId === null) return;
+        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
+        live.publish(tx, ticket.workspaceId, {
+          type: "ticket.changed",
+          projectId: ticket.projectId,
+          ticketId: parentId,
+        });
+      };
+      await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
+      await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
+    }
     return withMentions(tx, next);
   });
 }
@@ -302,4 +382,30 @@ async function checkStatus(tx: Tx, projectId: string, statusId: string): Promise
     ? await tx.query("select 1 from statuses where project_id = $1 and id = $2", [projectId, statusId])
     : { rowCount: 0 };
   if (rowCount === 0) throw new ApiError(400, "unknown_status", "That Status isn't on this Ticket's board.");
+}
+
+/**
+ * Checks a parent is a Ticket of the same Project that isn't the Ticket itself or one of its Sub-Tickets,
+ * however deep. Holds the Workspace's parents still until the transaction ends, so two parents set at once
+ * can't close a cycle between them.
+ */
+async function checkParent(tx: Tx, ticket: TicketRow, parentId: string): Promise<TicketRef> {
+  const parent = await findTicketRef(tx, ticket.workspaceId, parentId);
+  if (!parent) throw unknownTicket();
+  if (parent.projectId !== ticket.projectId) {
+    throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
+  }
+  await tx.query("select pg_advisory_xact_lock(hashtext('parents'), hashtext($1))", [ticket.workspaceId]);
+  const { rowCount } = await tx.query(
+    `with recursive ancestors (id) as (
+       select $1::uuid
+       union
+       select tickets.parent_id from tickets join ancestors on tickets.id = ancestors.id
+       where tickets.parent_id is not null
+     )
+     select 1 from ancestors where id = $2`,
+    [parent.id, ticket.id],
+  );
+  if (rowCount) throw new ApiError(400, "parent_cycle", "A Ticket can't sit under itself or one of its Sub-Tickets.");
+  return parent;
 }

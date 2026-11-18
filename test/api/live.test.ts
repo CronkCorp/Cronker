@@ -74,6 +74,42 @@ describe("a Workspace's event stream", () => {
     await stream.expectQuiet();
   });
 
+  test("tells about both Tickets of a Relation added or removed, and each parent a Sub-Ticket leaves or joins", async () => {
+    const { workspace, cookie, project } = await newProject();
+    const [one, two, three] = [
+      await createTicket(cookie, project.id, "One"),
+      await createTicket(cookie, project.id, "Two"),
+      await createTicket(cookie, project.id, "Three"),
+    ];
+    await cronk.request("PATCH", `/api/tickets/${three.id}`, { cookie, body: { parentId: one.id } });
+    const stream = await openStream(cookie, workspace.id);
+    const changed = (ticket: { id: string }) => ({
+      type: "ticket.changed",
+      data: { projectId: project.id, ticketId: ticket.id },
+    });
+
+    const added = await cronk.request("POST", `/api/tickets/${one.id}/relations`, {
+      cookie,
+      body: { kind: "blocks", ticketId: two.id },
+    });
+    expect(added.status).toBe(201);
+    expect([await stream.next(), await stream.next()]).toEqual([changed(one), changed(two)]);
+
+    const removed = await cronk.request("DELETE", `/api/tickets/${two.id}/relations/${(await added.json()).id}`, {
+      cookie,
+    });
+    expect(removed.status).toBe(204);
+    expect([await stream.next(), await stream.next()]).toEqual([changed(one), changed(two)]);
+
+    await cronk.request("PATCH", `/api/tickets/${three.id}`, { cookie, body: { parentId: two.id } });
+    expect([await stream.next(), await stream.next(), await stream.next()]).toEqual([
+      changed(three),
+      changed(one),
+      changed(two),
+    ]);
+    await stream.expectQuiet();
+  });
+
   test("tells about a Comment and a reply", async () => {
     const { workspace, cookie, project } = await newProject();
     const ticket = await createTicket(cookie, project.id, "Discuss");

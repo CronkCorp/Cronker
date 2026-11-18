@@ -15,7 +15,7 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.created": "A Project was created, with its Statuses.",
   "statuses.changed": "A Project's Statuses were added, renamed, moved, given another kind or removed.",
   "ticket.created": "A Ticket was created.",
-  "ticket.changed": "A Ticket's fields changed, its Status among them.",
+  "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets.",
   "comment.added": "A Comment was added to a Ticket.",
 };
 
