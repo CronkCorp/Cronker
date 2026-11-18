@@ -382,6 +382,129 @@ describe("Runners and Agents", () => {
   });
 });
 
+describe("Label rules", () => {
+  /** Puts a Label rule on the Step of the named Status, keeping the rest of the Step. */
+  async function setLabelRule(
+    setup: Awaited<ReturnType<typeof adaWithAgent>>,
+    statusName: string,
+    labelRule: { kind: "requires" | "skippedBy"; label: string },
+  ) {
+    const { ada, project, status } = setup;
+    const { step } = project.statuses.find((s: { name: string }) => s.name === statusName);
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status(statusName)}/step`, ada, { ...step, labelRule });
+  }
+
+  test("a Ticket labelled no-review skips Code review: no Run, and it moves on by approve, which Cronk records", async () => {
+    const { ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, labels: ["No-Review"] });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("In Review"));
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+    expect(cronk.runner.starts).toEqual([]);
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.slice(-3)).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }),
+        field: "status",
+        to: { id: status("Code review"), name: "Code review" },
+      }),
+      expect.objectContaining({
+        actor: { kind: "cronk", name: "Cronk" },
+        field: "stepSkipped",
+        from: null,
+        to: {
+          status: { id: status("Code review"), name: "Code review" },
+          labelRule: { kind: "skippedBy", label: "no-review" },
+          outcome: "approve",
+        },
+      }),
+      expect.objectContaining({
+        actor: { kind: "cronk", name: "Cronk" },
+        field: "status",
+        from: { id: status("Code review"), name: "Code review" },
+        to: { id: status("In Review"), name: "In Review" },
+      }),
+    ]);
+  });
+
+  test("an Outcome moving a Ticket into a skipped Step passes it on too", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Implement") });
+    const [run] = await runsOf(ticket.id, ada);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { labels: ["no-review"] });
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "done" });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("In Review"));
+    expect((await runsOf(ticket.id, ada)).map((r: { step: { name: string } }) => r.step.name)).toEqual(["Implement"]);
+  });
+
+  test("a Ticket without a Step's required Label skips it, chaining into the next Step's Run", async () => {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, status } = setup;
+    await setLabelRule(setup, "Investigate", { kind: "requires", label: "unclear" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate") });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Implement"));
+    const runs = await runsOf(ticket.id, ada);
+    expect(runs.map((r: { step: { name: string }; state: string }) => [r.step.name, r.state])).toEqual([["Implement", "running"]]);
+    expect(cronk.runner.starts.map((s) => s.model)).toEqual(["opus"]);
+  });
+
+  test("a Ticket with a Step's required Label gets its Run", async () => {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, status } = setup;
+    await setLabelRule(setup, "Investigate", { kind: "requires", label: "unclear" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate"), labels: ["UNCLEAR"] });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
+    expect((await runsOf(ticket.id, ada)).map((r: { step: { name: string } }) => r.step.name)).toEqual(["Investigate"]);
+  });
+
+  test("delegating a Ticket that sits in a Step it doesn't pass moves it on", async () => {
+    const { ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review"), labels: ["no-review"] });
+    // Undelegated, it waits there for a User like any other Ticket.
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Code review"));
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("In Review"));
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+  });
+
+  test("skipped Steps that pass a Ticket round in a circle stop where it came back to, with no Run", async () => {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, status } = setup;
+    // Implement's default sends to Code review, and Code review's default is changed to send back to Implement.
+    const { project } = setup;
+    const review = project.statuses.find((s: { name: string }) => s.name === "Code review").step;
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Code review")}/step`, ada, {
+      ...review,
+      outcomes: review.outcomes.map((o: { name: string; default: boolean }) => ({ ...o, default: o.name === "changes" })),
+    });
+    await setLabelRule(setup, "Implement", { kind: "skippedBy", label: "no-review" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, labels: ["no-review"] });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Implement") });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Implement"));
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.filter((c: { field: string }) => c.field === "status").map((c: { to: { name: string } }) => c.to.name)).toEqual([
+      "Implement",
+      "Code review",
+      "Implement",
+    ]);
+  });
+});
+
 describe("Runs on the board", () => {
   test("each Ticket on the board carries its latest Run's state", async () => {
     const { ada, project, ticket, agent, asAgent, status } = await adaWithAgent();

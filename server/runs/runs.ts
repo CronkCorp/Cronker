@@ -8,7 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
-import type { Step } from "../work/steps.js";
+import type { LabelRule, Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
@@ -112,8 +112,18 @@ export async function briefOfRun(db: Db, viewer: Viewer, runId: string): Promise
  * has no running Run. Call it, in the transaction that locked the Ticket, after the Ticket entered
  * its Status or was delegated. The Run is recorded as running at once, and the Runner is asked to
  * start it once the transaction commits. A Delegate using no Runner gets a Run refused at once.
+ *
+ * A delegated Ticket that doesn't pass the Step's Label rule gets no Run: Cronk moves it on by the
+ * Step's default Outcome, which counts as entering that Status in turn. A chain of skips that comes
+ * back to a Status it already passed stops there, so the Ticket waits for a User.
  */
-export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<void> {
+export async function startRunIfNeeded(
+  context: Context,
+  tx: Tx,
+  ticketId: string,
+  now: Date,
+  skipped: Set<string> = new Set(),
+): Promise<void> {
   const { rows } = await tx.query<{
     workspaceId: string;
     projectId: string;
@@ -121,6 +131,7 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
     projectName: string;
     key: string;
     statusId: string;
+    labels: string[];
     delegateId: string | null;
     agentName: string | null;
     runnerId: string | null;
@@ -130,7 +141,7 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
   }>(
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
-       tickets.delegate_id as "delegateId", agents.name as "agentName", runners.id as "runnerId",
+       tickets.labels, tickets.delegate_id as "delegateId", agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind"
      from tickets join projects on projects.id = tickets.project_id
      left join agents on agents.id = tickets.delegate_id
@@ -143,6 +154,21 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   if (!status.step) return;
+  if (!passes(status.step.labelRule, ticket.labels)) {
+    if (skipped.has(status.id)) return;
+    skipped.add(status.id);
+    const outcome = status.step.outcomes.find((o) => o.default)!;
+    if (outcome.statusId === status.id) return;
+    const target = statuses.find((s) => s.id === outcome.statusId)!;
+    await tx.query("update tickets set status_id = $2 where id = $1", [ticketId, target.id]);
+    const named = ({ id, name }: Status) => ({ id, name });
+    await recordChanges(tx, { id: ticketId, workspaceId: ticket.workspaceId }, { kind: "cronk" }, now, [
+      { field: "stepSkipped", from: null, to: { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name } },
+      { field: "status", from: named(status), to: named(target) },
+    ]);
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
+    return startRunIfNeeded(context, tx, ticketId, now, skipped);
+  }
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
   const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
   if (running) return;
@@ -211,6 +237,13 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
       context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
     });
   });
+}
+
+/** Whether a Ticket with these Labels passes the Label rule, matching Labels ignoring case. */
+function passes(rule: LabelRule | null, labels: string[]): boolean {
+  if (!rule) return true;
+  const has = labels.some((label) => label.toLowerCase() === rule.label.toLowerCase());
+  return rule.kind === "requires" ? has : !has;
 }
 
 /**
