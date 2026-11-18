@@ -1,0 +1,77 @@
+:root {
+  --bg: #fafafa;
+  --fg: #1d1d1f;
+  --muted: #6b6b70;
+  --line: #d9d9de;
+  --accent: #3b5bdb;
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --fg: #ececf1;
+    --muted: #9a9aa3;
+    --line: #34343a;
+    --accent: #7b93ff;
+  }
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+}
+.centered {
+  max-width: 24rem;
+  margin: 10vh auto;
+  padding: 0 16px;
+}
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+input {
+  font: inherit;
+  padding: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+}
+button {
+  font: inherit;
+  padding: 0.5rem 0.9rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.6;
+}
+[role="alert"] {
+  color: #d9480f;
+}
+.shell header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 16px;
+  border-bottom: 1px solid var(--line);
+}
+.shell header form {
+  display: block;
+}
+.spacer {
+  flex: 1;
+}
+.shell main {
+  padding: 0 16px;
+}
