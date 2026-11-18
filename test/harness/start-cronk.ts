@@ -119,7 +119,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
           process.execPath,
           ["--import", "tsx", commandScript, ...args],
           { env: { ...process.env, DATABASE_URL: database.url, CRONK_PUBLIC_URL: url } },
-          (error, stdout, stderr) => resolve({ code: error ? Number(error.code ?? 1) : 0, stdout, stderr }),
+          (error, stdout, stderr) => resolve({ code: error ? (typeof error.code === "number" ? error.code : 1) : 0, stdout, stderr }),
         );
       });
     },
