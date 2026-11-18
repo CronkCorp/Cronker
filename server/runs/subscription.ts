@@ -1,5 +1,5 @@
 import type { Context } from "../context.js";
-import { secretBox } from "../encryption.js";
+import { requireSecretBox } from "../encryption.js";
 import type { Runner, RunnerRefusal, RunToStart, StartResult } from "./runner.js";
 
 /**
@@ -9,20 +9,27 @@ import type { Runner, RunnerRefusal, RunToStart, StartResult } from "./runner.js
  * Run fires the trigger for the Step's model with the Brief as the fire's `text`. The Brief carries no
  * secret: the session reaches Cronk through its own claude.ai connector.
  *
- * It reports no ends: lost-Run detection covers sessions that end without calling `finish`.
+ * It reports no ends: a Run whose claude.ai session ends without calling `finish` becomes lost.
  */
 
 /** The beta the fire endpoint ships under; breaking changes come under a newer dated one. */
 const fireBeta = "experimental-cc-routine-2026-04-01";
 /** How long a 429 without a usable `Retry-After` pauses the Runner's queue. */
 const defaultRetryAfterMs = 60_000;
+/** The longest a 429 pauses the Runner's queue, whatever its `Retry-After` says. */
+const longestRetryAfterMs = 24 * 60 * 60 * 1000;
+/** An HTTP date, such as `Thu, 01 Jan 2026 10:00:00 GMT` (RFC 9110's preferred form). */
+const httpDate = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+
+/** A sealed trigger as stored. */
+interface StoredTrigger {
+  triggerId: string;
+  tokenSealed: string;
+}
 
 /** The trigger for the model on the Project's Tickets: the Project's own, else the Runner's. */
-async function triggerFor(
-  { db }: Context,
-  run: RunToStart,
-): Promise<{ triggerId: string; tokenSealed: string } | undefined> {
-  const { rows } = await db.query<{ triggerId: string; tokenSealed: string }>(
+async function triggerFor({ db }: Context, run: RunToStart): Promise<StoredTrigger | undefined> {
+  const { rows } = await db.query<StoredTrigger>(
     `select trigger_id as "triggerId", token_sealed as "tokenSealed" from runner_triggers
      where runner_id = $1 and lower(model) = lower($2) and (project_id = $3 or project_id is null)
      order by project_id nulls last limit 1`,
@@ -31,13 +38,16 @@ async function triggerFor(
   return rows[0];
 }
 
-/** When to try again after a 429, from its `Retry-After`: seconds or an HTTP date. */
+/**
+ * When to try again after a 429, from its `Retry-After`: seconds or an HTTP date, a minute when it is
+ * neither, and a day at most.
+ */
 function retryAt(now: Date, retryAfter: string | null): Date {
   const value = retryAfter?.trim() ?? "";
-  if (/^\d+$/.test(value)) return new Date(now.getTime() + Number(value) * 1000);
-  const date = value ? new Date(value) : undefined;
-  if (date && !Number.isNaN(date.getTime())) return date > now ? date : now;
-  return new Date(now.getTime() + defaultRetryAfterMs);
+  let waitMs = defaultRetryAfterMs;
+  if (/^\d+$/.test(value)) waitMs = Number(value) * 1000;
+  else if (httpDate.test(value)) waitMs = Math.max(0, Date.parse(value) - now.getTime());
+  return new Date(now.getTime() + Math.min(waitMs, longestRetryAfterMs));
 }
 
 export function subscriptionRunner(context: Context): Runner {
@@ -53,20 +63,19 @@ export function subscriptionRunner(context: Context): Runner {
             `settings, for all Projects or for ${run.project.name}.`,
         });
       }
+      const named = `the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}`;
       let token: string;
       try {
-        if (!context.config.secretKey) throw new Error("no CRONK_SECRET_KEY");
-        token = secretBox(context.config.secretKey).open(trigger.tokenSealed);
+        token = requireSecretBox(context.config).open(trigger.tokenSealed);
       } catch {
         return refuse({
           kind: "not_configured",
           message:
-            `Cronk can't read the token of the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}, ` +
-            "as CRONK_SECRET_KEY changed or is unset: its Owner saves the trigger again.",
+            `Cronk can't read the token of ${named}, as CRONK_SECRET_KEY changed or is unset: ` +
+            "its Owner saves the trigger again.",
         });
       }
 
-      const named = `the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}`;
       const url = new URL(
         `v1/claude_code/routines/${encodeURIComponent(trigger.triggerId)}/fire`,
         context.config.claudeApiUrl,
@@ -110,10 +119,10 @@ export function subscriptionRunner(context: Context): Runner {
         return refuse({ kind: "unavailable", message: `claude.ai answered ${response.status} when firing ${named}.` });
       }
       const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      const string = (value: unknown) => (typeof value === "string" ? value : undefined);
+      const textOrNone = (value: unknown) => (typeof value === "string" ? value : undefined);
       return {
         started: true,
-        reference: { sessionId: string(body.claude_code_session_id), url: string(body.claude_code_session_url) },
+        reference: { sessionId: textOrNone(body.claude_code_session_id), url: textOrNone(body.claude_code_session_url) },
       };
     },
   };

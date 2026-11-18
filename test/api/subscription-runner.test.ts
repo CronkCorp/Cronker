@@ -348,6 +348,22 @@ describe("rate limits", () => {
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).waiting).toBeNull();
   });
 
+  test.each([
+    ["no Retry-After", undefined, "2026-01-01T09:01:00.000Z"],
+    ["one that is neither seconds nor a date", "soon", "2026-01-01T09:01:00.000Z"],
+    ["a fraction", "1.5", "2026-01-01T09:01:00.000Z"],
+    ["a date already passed", "Thu, 01 Jan 2026 08:00:00 GMT", "2026-01-01T09:00:00.000Z"],
+    ["one beyond a day", "99999999999999", "2026-01-02T09:00:00.000Z"],
+  ])("a 429 with %s pauses the queue for a minute, not at all, or a day at most", async (_, retryAfter, until) => {
+    const { ada, ticket, agent, status } = await adaWithSubscriptionRunner();
+    cronk.claude.rateLimitNext(retryAfter);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+
+    expect((await ok("GET", "/api/runners", ada))[0].pausedUntil).toBe(until);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).waiting).toBe("runnerPaused");
+  });
+
   test("a Run of the Runner ending while it is paused starts no waiting Ticket", async () => {
     const { ada, project, ticket, agent, agentToken, status } = await adaWithSubscriptionRunner();
     const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
