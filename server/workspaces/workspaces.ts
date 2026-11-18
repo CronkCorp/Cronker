@@ -62,3 +62,30 @@ export async function renameWorkspace(db: Db, workspaceId: string, name: string)
   ]);
   return rows[0]!;
 }
+
+/** A Workspace's settings beyond its name, set by its Admins. */
+export const WorkspaceSettings = Type.Object({
+  lostRunMinutes: Type.Integer({
+    minimum: 1,
+    maximum: 10_080,
+    description: "How long a Run may go without a call naming it or its Ticket before it is lost. 30 unless changed.",
+  }),
+});
+export type WorkspaceSettings = Static<typeof WorkspaceSettings>;
+
+export async function settingsOf(db: Db, workspaceId: string): Promise<WorkspaceSettings> {
+  const { rows } = await db.query<WorkspaceSettings>(
+    `select lost_run_minutes as "lostRunMinutes" from workspaces where id = $1`,
+    [workspaceId],
+  );
+  return rows[0]!;
+}
+
+export async function changeSettings(db: Db, workspaceId: string, change: Partial<WorkspaceSettings>): Promise<WorkspaceSettings> {
+  const { rows } = await db.query<WorkspaceSettings>(
+    `update workspaces set lost_run_minutes = coalesce($2, lost_run_minutes) where id = $1
+     returning lost_run_minutes as "lostRunMinutes"`,
+    [workspaceId, change.lostRunMinutes ?? null],
+  );
+  return rows[0]!;
+}

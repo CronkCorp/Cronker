@@ -7,7 +7,7 @@ import { inView, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
 import { statusesOf } from "../work/projects.js";
-import { startRunIfNeeded } from "./runs.js";
+import { startRunIfNeeded, startUnblocked } from "./runs.js";
 
 /**
  * Questions: what a Run asks a User when it finishes with its Step's *needs you* Outcome. A Question is
@@ -97,16 +97,20 @@ export async function answerQuestion(
   context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   if (question.needsYouRunId !== question.runId || !question.stepStatusId) return;
 
-  await tx.query("update tickets set status_id = $2, needs_you_run_id = null where id = $1", [
+  // The User moves it back, as moving it by hand would: entering the Status resets its rounds.
+  await tx.query("update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null where id = $1", [
     ticket.id,
     question.stepStatusId,
+    now,
   ]);
   const statuses = await statusesOf(tx, ticket.projectId);
   const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
   await recordChanges(tx, ticket, userId, now, [
     { field: "status", from: named(ticket.statusId), to: named(question.stepStatusId) },
   ]);
+  await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
   await startRunIfNeeded(context, tx, ticket.id, now);
+  await startUnblocked(context, tx, [ticket.id]);
 }
 
 /**

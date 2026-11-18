@@ -8,6 +8,7 @@ import {
   nameOf,
   type PendingAdd,
   type User,
+  type WorkspaceSettings,
   type WorkspaceSummary,
 } from "./api.js";
 import { AgentScreen, Agents } from "./agents.js";
@@ -513,6 +514,13 @@ function Members({
     await api.renameWorkspace(workspace.id, field(form, "name"));
     onChanged();
   });
+  const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
+  useEffect(() => {
+    api.workspaceSettings(workspace.id).then(setSettings, (e: Error) => setError(e.message));
+  }, [workspace.id]);
+  const changeSettings = useSubmit(async (form) => {
+    setSettings(await api.changeWorkspaceSettings(workspace.id, { lostRunMinutes: Number(field(form, "lostRunMinutes")) }));
+  });
   const add = useSubmit(async (form, element) => {
     setNotice(null);
     const email = field(form, "email");
@@ -544,6 +552,18 @@ function Members({
               Rename
             </button>
           </form>
+          {settings && (
+            <form onSubmit={changeSettings.onSubmit}>
+              <label>
+                Lost-Run threshold (minutes)
+                <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
+              </label>
+              {changeSettings.error && <p role="alert">{changeSettings.error}</p>}
+              <button type="submit" disabled={changeSettings.busy}>
+                Save threshold
+              </button>
+            </form>
+          )}
           <form onSubmit={add.onSubmit}>
             <label>
               Email

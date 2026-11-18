@@ -99,7 +99,7 @@ describe("delegating a Ticket", () => {
     });
 
     expect(response.status).toBe(403);
-    expect((await response.json()).error.code).toBe("agent_not_allowed");
+    expect((await response.json()).error.code).toBe("agent_field_not_allowed");
   });
 });
 

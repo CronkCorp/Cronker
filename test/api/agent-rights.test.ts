@@ -153,7 +153,6 @@ describe("what an Agent may change", () => {
       ["POST", `/api/projects/${project.id}/statuses`, { name: "Mine", kind: "active" }],
       ["DELETE", `/api/projects/${project.id}/statuses/${backlog}`],
       ["POST", `/api/projects/${project.id}/tickets`, { title: "Mine" }],
-      ["PATCH", `/api/tickets/${ticket.id}`, { title: "Mine" }],
       ["POST", `/api/workspaces/${workspace.id}/agents`, { name: "mine" }],
       ["DELETE", `/api/agents/${agent.id}`],
       ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "full" }],
@@ -164,7 +163,7 @@ describe("what an Agent may change", () => {
       expect((await response.json()).error, `${method} ${path}`).toEqual({
         code: "agent_not_allowed",
         message: expect.any(String),
-        rule: "Agents may read their Workspace, comment on its Tickets and finish their own Runs; everything else needs a User.",
+        rule: "Agents may read their Workspace and comment on its Tickets; during their running Run on a Ticket they may also edit it, write Reports on it and finish the Run. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
@@ -209,6 +208,8 @@ describe("what an Agent may change", () => {
     });
 
     expect(response.status).toBe(403);
-    expect((await response.json()).error.advice).toContain("bea@example.com");
+    expect((await response.json()).error).toEqual(
+      expect.objectContaining({ code: "agent_field_not_allowed", advice: expect.stringContaining("bea@example.com") }),
+    );
   });
 });

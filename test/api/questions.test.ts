@@ -255,3 +255,24 @@ describe("Tickets moved by needs you", () => {
     expect(await inbox()).toEqual({ count: 0, items: [] });
   });
 });
+
+describe("needs you at a round limit", () => {
+  test("Cronk's own Question leaves no Agent Comment, but the Ticket waits in the Inbox until it moves", async () => {
+    const setup = await investigating();
+    const { workspace, ada, project, ticket, asAgent, status } = setup;
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Code review");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Code review")}/step`, ada, { ...step, roundLimit: 0 });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+    const running = (await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).find((r: { state: string }) => r.state === "running");
+
+    const run = await ok("POST", `/api/runs/${running.id}/finish`, asAgent, { outcome: "changes" });
+
+    expect(run).toEqual(expect.objectContaining({ outcome: "needs you", questionBy: "cronk" }));
+    expect(await ok("GET", `/api/tickets/${ticket.id}/comments`, ada)).toEqual([]);
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.map((i: { kind: string }) => i.kind)).toEqual(["needsYou", "review"]);
+    expect(items[0]).toEqual(
+      expect.objectContaining({ status: { id: status("In Review"), name: "In Review" }, outcome: "needs you" }),
+    );
+  });
+});

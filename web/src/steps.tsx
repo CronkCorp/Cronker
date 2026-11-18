@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type Brief, type Outcome, type Project, type Status, type Step } from "./api.js";
+import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 
 /** A new Step's starting point: sends Tickets on to the next Status, or back to the first one for a User. */
@@ -10,6 +10,7 @@ function newStep(project: Project, status: Status): Step {
     brief: "",
     model: "sonnet",
     roundLimit: 2,
+    labelRule: null,
     outcomes: [
       { name: "done", statusId: next.id, default: true, needsYou: false, countsAsRound: false },
       { name: "needs you", statusId: project.statuses[0]!.id, default: false, needsYou: true, countsAsRound: false },
@@ -24,7 +25,8 @@ export function StepsSettings({ project, onChange }: { project: Project; onChang
       <h2 id="steps-heading">Steps</h2>
       <p className="muted">
         A delegated Ticket entering a Status with a Step gets a Run, which ends by choosing one of the Step's Outcomes.
-        Tickets in a Status without a Step wait for a User.
+        One its Label rule doesn't let through gets no Run and moves on by the default Outcome. Tickets in a Status
+        without a Step wait for a User.
       </p>
       <ul className="steps">
         {project.statuses.map((status) => (
@@ -65,7 +67,11 @@ function StepItem({
   };
 
   const summary = status.step
-    ? `${status.step.model}, ${status.step.outcomes.length} Outcomes`
+    ? [
+        status.step.model,
+        `${status.step.outcomes.length} Outcomes`,
+        ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : []),
+      ].join(", ")
     : "No Step: Tickets here wait for a User";
 
   return (
@@ -87,7 +93,11 @@ function StepItem({
             busy={busy}
             onDraft={setDraft}
             onSave={() => run(() => api.putStep(project.id, status.id, draft))}
-            onCancel={() => setDraft(status.step)}
+            onCancel={() => {
+              // A refusal of the draft goes with it.
+              setDraft(status.step);
+              setError(null);
+            }}
             onRemove={() => run(() => api.removeStep(project.id, status.id))}
           />
         )}
@@ -168,6 +178,34 @@ function StepForm({
             onChange={(e) => onDraft({ ...draft, roundLimit: Number(e.target.value) })}
           />
         </label>
+      </div>
+      <div className="inline">
+        <label>
+          Label rule for {of}
+          <select
+            value={draft.labelRule?.kind ?? ""}
+            onChange={(e) => {
+              const kind = e.target.value as LabelRule["kind"] | "";
+              onDraft({ ...draft, labelRule: kind ? { kind, label: draft.labelRule?.label ?? "" } : null });
+            }}
+          >
+            <option value="">None: every Ticket gets a Run</option>
+            <option value="requires">Requires a Label</option>
+            <option value="skippedBy">Skipped by a Label</option>
+          </select>
+        </label>
+        {draft.labelRule && (
+          <label>
+            Label for the rule of {of}
+            <input
+              required
+              maxLength={50}
+              pattern=".*\S.*"
+              value={draft.labelRule.label}
+              onChange={(e) => onDraft({ ...draft, labelRule: { ...draft.labelRule!, label: e.target.value } })}
+            />
+          </label>
+        )}
       </div>
       <fieldset>
         <legend>Outcomes of {of}</legend>
