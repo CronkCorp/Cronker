@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
+import { api, nameOf, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
 
@@ -67,7 +67,7 @@ function Item({ item }: { item: InboxItem }) {
         <small>Waiting for your review in {item.status.name}</small>
       ) : item.kind === "reassign" ? (
         <small>
-          {item.formerAssignee.email ?? `@${item.formerAssignee.githubLogin}`} was removed from the Workspace: assign it to
+          {nameOf(item.formerAssignee)} was removed from the Workspace: assign it to
           someone
         </small>
       ) : (

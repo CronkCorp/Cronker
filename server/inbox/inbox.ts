@@ -77,7 +77,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
   );
   for (const { run, ...row } of wentWrong) items.push({ kind: "run", ticket: ticketSummary(row), run });
   if (workspace.isAdmin) {
-    const { rows: left } = await db.query<TicketRow & { formerAssignee: User }>(
+    const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User }>(
       `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
          json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee"
        from tickets join projects on projects.id = tickets.project_id
@@ -86,7 +86,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
        order by projects.key, tickets.number`,
       [workspaceId],
     );
-    for (const { formerAssignee, ...row } of left) items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee });
+    for (const { formerAssignee, ...row } of toReassign) items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee });
   }
   return { count: items.length, items };
 }
