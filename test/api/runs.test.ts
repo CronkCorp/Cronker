@@ -64,6 +64,7 @@ describe("starting Runs", () => {
         state: "running",
         outcome: null,
         question: null,
+        questionBy: null,
         report: null,
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
@@ -502,6 +503,86 @@ describe("Label rules", () => {
       "Code review",
       "Implement",
     ]);
+  });
+});
+
+describe("rounds", () => {
+  /** Finishes the Ticket's running Run as its Agent with the Outcome, and returns the finished Run. */
+  async function finishWith(setup: Awaited<ReturnType<typeof adaWithAgent>>, outcome: string, extra: object = {}) {
+    const { ada, asAgent, ticket } = setup;
+    const running = (await runsOf(ticket.id, ada)).find((r: { state: string }) => r.state === "running");
+    return ok("POST", `/api/runs/${running.id}/finish`, asAgent, { outcome, ...extra });
+  }
+
+  test("past Code review's round limit of 2, changes applies needs you instead, with Cronk's Question", async () => {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, status } = setup;
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Code review") });
+
+    for (let round = 1; round <= 2; round++) {
+      const sentBack = await finishWith(setup, "changes");
+      expect(sentBack).toEqual(expect.objectContaining({ outcome: "changes", question: null, questionBy: null }));
+      expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Implement"));
+      await finishWith(setup, "done");
+    }
+    const third = await finishWith(setup, "changes", { report: "Still broken." });
+
+    expect(third).toEqual(
+      expect.objectContaining({
+        state: "finished",
+        outcome: "needs you",
+        report: "Still broken.",
+        question:
+          "Code review sent CRONK-1 back by changes 2 times, its round limit, so it comes to you instead. " +
+          "Read the latest Reports, then move it on yourself.",
+        questionBy: "cronk",
+      }),
+    );
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("In Review"));
+    expect((await runsOf(ticket.id, ada)).filter((r: { state: string }) => r.state === "running")).toEqual([]);
+  });
+
+  test("a Question an Agent asks with needs you is its own", async () => {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, status } = setup;
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+
+    const run = await finishWith(setup, "needs you", { question: "What is it for?" });
+
+    expect(run).toEqual(expect.objectContaining({ outcome: "needs you", question: "What is it for?", questionBy: "agent" }));
+  });
+
+  test("a round limit of 0 sends the first round to needs you", async () => {
+    const setup = await adaWithAgent();
+    const { ada, project, ticket, agent, status } = setup;
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Code review");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Code review")}/step`, ada, { ...step, roundLimit: 0 });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Code review") });
+
+    const run = await finishWith(setup, "changes");
+
+    expect(run).toEqual(expect.objectContaining({ outcome: "needs you", questionBy: "cronk" }));
+    expect(run.question).toMatch(/^Code review sent CRONK-1 back by changes 0 times, its round limit/);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("In Review"));
+  });
+
+  test("a User moving the Ticket by hand resets its round counts", async () => {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, status } = setup;
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Code review") });
+    for (let round = 1; round <= 2; round++) {
+      await finishWith(setup, "changes");
+      await finishWith(setup, "done");
+    }
+    // Ada takes the Ticket out of the loop and puts it back into Code review.
+    await finishWith(setup, "approve");
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+
+    for (let round = 1; round <= 2; round++) {
+      expect((await finishWith(setup, "changes")).outcome).toBe("changes");
+      await finishWith(setup, "done");
+    }
+    expect((await finishWith(setup, "changes")).outcome).toBe("needs you");
   });
 });
 

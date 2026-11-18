@@ -35,7 +35,14 @@ export const Run = Type.Object({
   model: Type.String({ description: "The label of the model the Step wanted when the Run started." }),
   state: RunState,
   outcome: Type.Union([Type.String(), Type.Null()], { description: "The Outcome its Agent finished it with." }),
-  question: Type.Union([Type.String(), Type.Null()], { description: "The Question its Agent finished it with, if any." }),
+  question: Type.Union([Type.String(), Type.Null()], {
+    description: "The Question it ended with, if any: its Agent's, or Cronk's own when its Step's round limit was reached.",
+  }),
+  questionBy: Type.Union([Type.Literal("agent"), Type.Literal("cronk"), Type.Null()], {
+    description:
+      "Who asked the Question: `agent`, its Agent, or `cronk`, when the Agent chose an Outcome counting as a round " +
+      "once the Step's round limit was reached, so Cronk applied *needs you* instead.",
+  }),
   report: Type.Union([Type.String(), Type.Null()], { description: "The Report its Agent finished it with, if any, in Markdown." }),
   endReason: Type.Union([Type.String(), Type.Null()], {
     description: "Why it failed, or why its Runner refused to start it.",
@@ -58,7 +65,7 @@ type Row = Omit<Run, "startedAt" | "endedAt"> & {
 const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
-  runs.question, runs.report, runs.end_reason as "endReason", runs.session_url as "sessionUrl",
+  runs.question, runs.question_by as "questionBy", runs.report, runs.end_reason as "endReason", runs.session_url as "sessionUrl",
   runs.started_at as "startedAt", runs.ended_at as "endedAt",
   runs.workspace_id as "workspaceId", runs.agent_id as "agentId", runs.status_id as "statusId", runs.brief`;
 
@@ -239,6 +246,8 @@ export async function startRunIfNeeded(
   });
 }
 
+const times = (n: number) => (n === 1 ? "once" : `${n} times`);
+
 /** Whether a Ticket with these Labels passes the Label rule, matching Labels ignoring case. */
 function passes(rule: LabelRule | null, labels: string[]): boolean {
   if (!rule) return true;
@@ -299,16 +308,45 @@ export async function finishRun(
       });
     }
 
+    // An Outcome counting as a round adds one for this Ticket and Step, until the count has reached the
+    // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
+    let applied = outcome;
+    let question = input.question ?? null;
+    let questionBy: "agent" | "cronk" | null = question === null ? null : "agent";
+    if (outcome.countsAsRound && step) {
+      const { rows } = await tx.query<{ stepId: string; count: number | null }>(
+        `select steps.id as "stepId", round_counts.count from steps
+         left join round_counts on round_counts.step_id = steps.id and round_counts.ticket_id = $2
+         where steps.status_id = $1`,
+        [run.statusId, ticket.id],
+      );
+      const { stepId, count } = rows[0]!;
+      if ((count ?? 0) >= step.roundLimit) {
+        applied = step.outcomes.find((o) => o.needsYou)!;
+        question =
+          `${run.step.name} sent ${ticket.key} back by ${outcome.name} ${times(step.roundLimit)}, its round limit, ` +
+          "so it comes to you instead. Read the latest Reports, then move it on yourself.";
+        questionBy = "cronk";
+      } else {
+        await tx.query(
+          `insert into round_counts (ticket_id, step_id, count) values ($1, $2, 1)
+           on conflict (ticket_id, step_id) do update set count = round_counts.count + 1`,
+          [ticket.id, stepId],
+        );
+      }
+    }
+
     const now = clock.now();
     await tx.query(
-      `update runs set state = 'finished', outcome = $2, question = $3, report = $4, ended_at = $5 where id = $1`,
-      [run.id, outcome.name, input.question ?? null, input.report ?? null, now],
+      `update runs set state = 'finished', outcome = $2, question = $3, question_by = $4, report = $5, ended_at = $6
+       where id = $1`,
+      [run.id, applied.name, question, questionBy, input.report ?? null, now],
     );
-    if (outcome.statusId !== ticket.statusId) {
-      await tx.query("update tickets set status_id = $2 where id = $1", [ticket.id, outcome.statusId]);
+    if (applied.statusId !== ticket.statusId) {
+      await tx.query("update tickets set status_id = $2 where id = $1", [ticket.id, applied.statusId]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id }, now, [
-        { field: "status", from: named(ticket.statusId), to: named(outcome.statusId) },
+        { field: "status", from: named(ticket.statusId), to: named(applied.statusId) },
       ]);
     }
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });

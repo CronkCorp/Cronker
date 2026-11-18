@@ -420,6 +420,8 @@ export async function editTicket(
     }
     // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
     const entered = next.statusId !== ticket.statusId;
+    // A User moving the Ticket by hand starts its rounds afresh at every Step.
+    if (entered) await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
     if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, next);
