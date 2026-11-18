@@ -81,7 +81,11 @@ export const ticketRefColumn = (tickets: string, projects: string) =>
      'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
 /** A Ticket of the Workspace as a TicketRef, with its Workspace, if there is one with that id. */
-export async function findTicketRef(db: Db | Tx, workspaceId: string, ticketId: string): Promise<TicketRef | undefined> {
+export async function findTicketRef(
+  db: Db | Tx,
+  workspaceId: string,
+  ticketId: string,
+): Promise<TicketRef | undefined> {
   if (!isUuid(ticketId)) return undefined;
   const { rows } = await db.query<{ ref: TicketRef }>(
     `select ${ticketRefColumn("tickets", "projects")} as ref
@@ -312,7 +316,9 @@ export async function editTicket(
       // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
       const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
       const subTicketChange = (parentId: string | null, change: NewChange) =>
-        parentId === null ? undefined : recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
+        parentId === null
+          ? undefined
+          : recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }

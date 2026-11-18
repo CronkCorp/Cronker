@@ -332,9 +332,23 @@ describe("the timeline", () => {
       { ...by, id: expect.any(String), at: "2026-01-01T09:02:00.000Z", field: "blocks", from: board, to: null },
     ]);
     expect(await timelineOf(cookie, board.id)).toEqual([
-      { ...by, id: expect.any(String), at: "2026-01-01T09:00:00.000Z", field: "blockedBy", from: null, to: signInTicket },
+      {
+        ...by,
+        id: expect.any(String),
+        at: "2026-01-01T09:00:00.000Z",
+        field: "blockedBy",
+        from: null,
+        to: signInTicket,
+      },
       { ...by, id: expect.any(String), at: "2026-01-01T09:01:00.000Z", field: "relatesTo", from: null, to: list },
-      { ...by, id: expect.any(String), at: "2026-01-01T09:02:00.000Z", field: "blockedBy", from: signInTicket, to: null },
+      {
+        ...by,
+        id: expect.any(String),
+        at: "2026-01-01T09:02:00.000Z",
+        field: "blockedBy",
+        from: signInTicket,
+        to: null,
+      },
     ]);
     expect(await timelineOf(cookie, list.id)).toEqual([
       { ...by, id: expect.any(String), at: "2026-01-01T09:01:00.000Z", field: "relatesTo", from: null, to: board },

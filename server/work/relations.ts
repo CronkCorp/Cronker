@@ -39,7 +39,11 @@ export async function addRelation(
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
     const [from, to] = input.kind === "blockedBy" ? [other.id, ticket.id] : [ticket.id, other.id];
     if (input.kind !== "relatesTo" && (await blocksTransitively(tx, ticket.workspaceId, to, from))) {
-      throw new ApiError(400, "blocking_cycle", "That block would form a cycle: the other Ticket already waits on this one.");
+      throw new ApiError(
+        400,
+        "blocking_cycle",
+        "That block would form a cycle: the other Ticket already waits on this one.",
+      );
     }
     const { rows } = await tx.query<{ id: string }>(
       `insert into relations (workspace_id, kind, ticket_id, other_ticket_id, created_by, created_at)
@@ -83,7 +87,11 @@ export async function removeRelation(
   });
 }
 
-const opposite: Record<RelationKind, RelationKind> = { blocks: "blockedBy", blockedBy: "blocks", relatesTo: "relatesTo" };
+const opposite: Record<RelationKind, RelationKind> = {
+  blocks: "blockedBy",
+  blockedBy: "blocks",
+  relatesTo: "relatesTo",
+};
 
 /** Records a Relation added or removed on both its Tickets' timelines, each naming the other Ticket. */
 async function recordRelationChanges(
