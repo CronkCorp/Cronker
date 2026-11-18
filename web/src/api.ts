@@ -101,6 +101,7 @@ export interface TicketSummary {
   priority: Priority;
   labels: string[];
   assigneeId: string | null;
+  parentId: string | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
@@ -120,6 +121,30 @@ export interface TicketEdit {
   assigneeId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
+  parentId?: string | null;
+}
+
+/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
+export interface TicketRef {
+  id: string;
+  projectId: string;
+  key: string;
+  title: string;
+}
+
+/** A Relation as seen from one of its Tickets. */
+export type RelationKind = "blocks" | "blockedBy" | "relatesTo";
+
+export interface Relation {
+  id: string;
+  kind: RelationKind;
+  ticket: TicketRef;
+}
+
+export interface TicketRelations {
+  parent: TicketRef | null;
+  subTickets: TicketRef[];
+  relations: Relation[];
 }
 
 export interface TicketFilter {
@@ -129,8 +154,25 @@ export interface TicketFilter {
   label?: string;
 }
 
+export interface Agent {
+  id: string;
+  workspaceId: string;
+  name: string;
+  owner: User;
+  createdAt: string;
+}
+
+export type TokenAccess = "full" | "read";
+
+export interface AgentToken {
+  id: string;
+  name: string;
+  access: TokenAccess;
+  createdAt: string;
+}
+
 export interface Actor {
-  kind: "user";
+  kind: "user" | "agent";
   id: string;
   name: string;
 }
@@ -149,7 +191,19 @@ export interface Change {
   id: string;
   actor: Actor;
   at: string;
-  field: "created" | "title" | "description" | "status" | "priority" | "labels" | "assignee" | "dueDate" | "estimate";
+  field:
+    | "created"
+    | "title"
+    | "description"
+    | "status"
+    | "priority"
+    | "labels"
+    | "assignee"
+    | "dueDate"
+    | "estimate"
+    | "parent"
+    | "subTicket"
+    | RelationKind;
   from: unknown;
   to: unknown;
 }
@@ -248,11 +302,28 @@ export const api = {
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
-  /** The Workspace's live event stream; see `useInboxSignal`. */
-  eventsUrl: (workspaceId: string) => `${ws(workspaceId)}/events`,
+  agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
+  createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
+  renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
+  removeAgent: (id: string) => call<void>("DELETE", agent(id)),
+  tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
+  issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
+    call<{ token: AgentToken; secret: string }>("POST", `${agent(agentId)}/tokens`, input),
+  revokeToken: (agentId: string, tokenId: string) =>
+    call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
+  relations: (ticketId: string) =>
+    call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
+  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
+    call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
+  removeRelation: (ticketId: string, relationId: string) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;
+}
+
+function agent(id: string) {
+  return `/api/agents/${encodeURIComponent(id)}`;
 }

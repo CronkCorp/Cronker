@@ -8,5 +8,6 @@ export interface Context {
   config: Config;
   db: Db;
   clock: Clock;
+  /** The open event streams, told about changes once they commit. */
   live: Live;
 }

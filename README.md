@@ -46,6 +46,18 @@ The Compose file also reads `CRONK_PORT` (published port, default `3000`), `POST
 
 The API is documented at `/api/docs` (OpenAPI at `/api/openapi.json`).
 
+### Connecting an agent
+
+Each User creates Agents of their own on a Workspace's **Agents** page and issues them tokens, full (read and comment) or read-only. A token is shown once; Cronk keeps only its hash, and revoking it or removing its Agent refuses it from the next request.
+
+An Agent's token works as `Authorization: Bearer …` on the HTTP API, and on Cronk's MCP server (streamable HTTP at `/mcp` on the public address). For Claude Code:
+
+```sh
+claude mcp add --transport http cronk https://cronk.example.com/mcp --header "Authorization: Bearer cronk_agent_…"
+```
+
+For now an Agent may read its Workspace and comment on its Tickets. Anything else is refused with a stable `code`, the `rule` it met and `advice` on what it may do instead.
+
 ## Developing
 
 ```sh

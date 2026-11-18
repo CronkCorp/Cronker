@@ -2,103 +2,102 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
-import { requireUser } from "../identity/sign-ins.js";
-import { inboxOf } from "../inbox/inbox.js";
-import { requireMember } from "../workspaces/members.js";
+import { requireSignIn } from "../identity/sign-ins.js";
+import { userViewer } from "../identity/viewers.js";
 import { findWorkspace } from "../workspaces/workspaces.js";
+import { liveEventTypes, type LiveEvent } from "./live.js";
 
-/** How often an idle stream sends a comment, so proxies along the way keep it open. */
+/** Comments keep idle streams open through proxies that close quiet connections. */
 const keepAliveMs = 25_000;
 
+const eventList = Object.entries(liveEventTypes)
+  .map(([type, meaning]) => `- \`${type}\`: ${meaning}`)
+  .join("\n");
+
 export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, live } = context;
+  const { db, clock, live } = context;
   return async (app) => {
-    app.addHook("preClose", async () => live.endAll());
+    // Open streams would otherwise keep the server from closing.
+    app.addHook("preClose", async () => live.end(() => true));
 
     app.get(
       "/api/workspaces/:workspaceId/events",
       {
         schema: {
-          tags: ["Live"],
-          summary: "A Workspace's event stream",
+          tags: ["Live updates"],
+          summary: "The Workspace's event stream",
           description:
-            "Server-sent events for the signed-in User in this Workspace, sent after the changes behind them commit. " +
-            "`inbox` carries `{ count }`, the User's Inbox count: once when the stream opens, then whenever their Inbox " +
-            "changes, even if its count stays the same. " +
-            "The stream ends at the next change once the User has signed out or left the Workspace.",
+            "A `text/event-stream` of server-sent events, each telling of a change once it has committed. " +
+            "The event's name is its type; its data is JSON naming the records that changed by id " +
+            "(`projectId`, and `ticketId` and `commentId` where they apply), so clients fetch them again. " +
+            "Events are sent only for changes in this Workspace, and only while the client belongs to it: " +
+            "the stream ends when its sign-in ends or its User is removed from the Workspace. " +
+            "Nothing is replayed after a reconnect, so a client fetches what it shows again then.\n\n" +
+            eventList,
           params: Type.Object({ workspaceId: Type.String() }),
+          produces: ["text/event-stream"],
           response: {
-            200: Type.String({ description: "A `text/event-stream`." }),
+            200: Type.String({ description: "The event stream." }),
             401: ErrorBody,
             404: ErrorBody,
           },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        const workspace = await requireMember(db, user.id, request.params.workspaceId);
+        const allowed = async () => {
+          const signIn = await requireSignIn(context, request);
+          const workspace = await findWorkspace(db, userViewer(signIn.user.id), request.params.workspaceId);
+          if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
+          return { ...signIn, workspace };
+        };
+        const { user, hash, expiresAt, workspace } = await allowed();
+
+        const raw = reply.raw;
+        let started = false;
+        let open = true;
+        const write = (chunk: string) => {
+          if (!started || !open) return;
+          // An expired sign-in is ended by nothing else, so its stream ends on its next write.
+          if (clock.now() >= expiresAt) return close();
+          raw.write(chunk);
+        };
+        const close = () => {
+          if (!open) return;
+          open = false;
+          clearInterval(keepAlive);
+          unsubscribe();
+          if (started) raw.end();
+        };
+        const unsubscribe = live.subscribe({
+          workspaceId: workspace.id,
+          userId: user.id,
+          signIn: hash,
+          send: ({ type, ...data }: LiveEvent) => write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`),
+          end: close,
+        });
+        const keepAlive = setInterval(() => write(": keep-alive\n\n"), keepAliveMs);
+        keepAlive.unref();
+
+        // A sign-out or removal that committed between the check and subscribing found no stream to end.
+        try {
+          await allowed();
+        } catch (error) {
+          close();
+          throw error;
+        }
+        if (!open) throw new ApiError(404, "not_found", "No such Workspace.");
 
         reply.hijack();
-        const raw = reply.raw;
+        raw.on("close", close);
         raw.writeHead(200, {
-          "content-type": "text/event-stream",
-          "cache-control": "no-store",
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
           connection: "keep-alive",
+          "x-accel-buffering": "no",
         });
-        const send = (event: string, data: unknown) => raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-
-        let ended = false;
-        let last: string | undefined;
-        /** The stream lasts only while its sign-in lasts and its User belongs to the Workspace. */
-        const stillAllowed = async () => {
-          const signedIn = await requireUser(context, request).then(
-            (current) => current.id === user.id,
-            (error: unknown) => (error instanceof ApiError ? false : Promise.reject(error)),
-          );
-          return signedIn && (await findWorkspace(db, user.id, workspace.id)) !== undefined;
-        };
-
-        let refreshing = false;
-        let again = false;
-        // Changes may arrive faster than the Inbox is worked out; they are folded into one more
-        // pass. `refreshing` is cleared in the same step as the last check of `again`, so no
-        // change can arrive in between and be missed.
-        const refresh = async () => {
-          if (refreshing) {
-            again = true;
-            return;
-          }
-          refreshing = true;
-          try {
-            do {
-              again = false;
-              if (!(await stillAllowed())) return end();
-              const inbox = await inboxOf(db, user.id, workspace.id);
-              const seen = JSON.stringify(inbox);
-              if (ended || seen === last) continue;
-              last = seen;
-              send("inbox", { count: inbox.count });
-            } while (again && !ended);
-          } catch (error) {
-            request.log.error(error);
-            end();
-          } finally {
-            refreshing = false;
-          }
-        };
-
-        const keepAlive = setInterval(() => raw.write(":\n\n"), keepAliveMs);
-        keepAlive.unref();
-        const unwatch = live.watch(workspace.id, { changed: () => void refresh(), end: () => end() });
-        function end() {
-          if (ended) return;
-          ended = true;
-          clearInterval(keepAlive);
-          unwatch();
-          raw.end();
-        }
-        raw.on("close", end);
-        void refresh();
+        started = true;
+        raw.write(": connected\n\n");
+        if (request.socket.destroyed) close();
       },
     );
   };

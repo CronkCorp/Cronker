@@ -334,3 +334,25 @@ td.actions {
     flex-wrap: wrap;
   }
 }
+
+.relations {
+  margin-top: 1.25rem;
+}
+.relations h2 {
+  font-size: 1rem;
+}
+.relations h3 {
+  font-size: 0.9rem;
+  margin: 0.75rem 0 0.25rem;
+}
+.relations ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.relation-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+  margin-top: 0.75rem;
+}

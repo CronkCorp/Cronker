@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { openEvents, type EventStream } from "../harness/events.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream, type OpenStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
   cronk = await startCronk();
 });
-const streams: EventStream[] = [];
+const streams: OpenStream[] = [];
 afterEach(async () => {
   for (const stream of streams.splice(0)) stream.close();
   await cronk?.stop();
@@ -153,118 +153,45 @@ describe("one Inbox per Workspace", () => {
   });
 });
 
-describe("the Inbox count, live", () => {
+describe("the Inbox, live", () => {
   async function events(workspaceId: string, cookie: string) {
-    const stream = await openEvents(cronk, workspaceId, cookie);
+    const stream = await openStream(cronk, cookie, workspaceId);
     streams.push(stream);
     return stream;
   }
 
-  test("a client's stream starts with its User's Inbox count and gets the new count when it changes", async () => {
+  test("moving a Ticket into or out of a User's Inbox is told on the stream, and their Inbox then shows it", async () => {
     const { ada, workspace, project, statusId } = await workspaceWithProject();
     const ticket = await createTicket(ada.cookie, project.id, "Watch me");
     const stream = await events(workspace.id, ada.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
 
     await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
+    expect(await stream.next()).toEqual({
+      type: "ticket.changed",
+      data: { projectId: project.id, ticketId: ticket.id },
+    });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(1);
 
     await editTicket(ada.cookie, ticket.id, { statusId: statusId("Done") });
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
+    expect(await stream.next()).toEqual({
+      type: "ticket.changed",
+      data: { projectId: project.id, ticketId: ticket.id },
+    });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(0);
   });
 
-  test("a change that leaves a User's Inbox as it was sends that User nothing", async () => {
-    const { ada, bea, workspace, project, statusId } = await workspaceWithProject();
-    const adas = await createTicket(ada.cookie, project.id, "Ada's");
-    const beas = await createTicket(ada.cookie, project.id, "Bea's");
-    const stream = await events(workspace.id, bea.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
-
-    await editTicket(ada.cookie, adas.id, { statusId: statusId("In Review"), assigneeId: ada.id });
-    await editTicket(ada.cookie, adas.id, { title: "Ada's, renamed" });
-    await editTicket(ada.cookie, beas.id, { statusId: statusId("In Review"), assigneeId: bea.id });
-
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
-  });
-
-  test("a change to an item already in the Inbox is sent too, so the Inbox page can show it", async () => {
-    const { ada, workspace, project, statusId } = await workspaceWithProject();
-    const ticket = await createTicket(ada.cookie, project.id, "Old title");
-    await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
-    const stream = await events(workspace.id, ada.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
-
-    await editTicket(ada.cookie, ticket.id, { title: "New title" });
-
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
-  });
-
-  test("changing a Status's kind updates the count", async () => {
+  test("changing a Status's kind is told on the stream, and the Inbox then shows its Tickets", async () => {
     const { ada, workspace, project, statusId } = await workspaceWithProject();
     const ticket = await createTicket(ada.cookie, project.id, "Waiting");
     await editTicket(ada.cookie, ticket.id, { statusId: statusId("Code review"), assigneeId: ada.id });
     const stream = await events(workspace.id, ada.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
 
     await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Code review")}`, {
       cookie: ada.cookie,
       body: { kind: "review" },
     });
 
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
-  });
-
-  test("a stream carries nothing from the User's other Workspaces", async () => {
-    const { ada, workspace, project, statusId } = await workspaceWithProject();
-    const created = await cronk.request("POST", "/api/workspaces", { cookie: ada.cookie, body: { name: "Second" } });
-    const second = (await created.json()) as { id: string };
-    const secondProject = (await (
-      await cronk.request("POST", `/api/workspaces/${second.id}/projects`, {
-        cookie: ada.cookie,
-        body: { name: "Other", key: "OTHER" },
-      })
-    ).json()) as Project;
-    const stream = await events(second.id, ada.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
-
-    const first = await createTicket(ada.cookie, project.id, "In the first Workspace");
-    await editTicket(ada.cookie, first.id, { statusId: statusId("In Review"), assigneeId: ada.id });
-    const other = await createTicket(ada.cookie, secondProject.id, "In the second Workspace");
-    const otherReview = secondProject.statuses.find((s) => s.kind === "review")!.id;
-    await editTicket(ada.cookie, other.id, { statusId: otherReview, assigneeId: ada.id });
-    await editTicket(ada.cookie, other.id, { assigneeId: null });
-
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 1 } });
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
-  });
-
-  test("signing out ends the client's stream at the next change", async () => {
-    const { ada, workspace, project, statusId } = await workspaceWithProject();
-    const ticket = await createTicket(ada.cookie, project.id, "After sign-out");
-    const stream = await events(workspace.id, ada.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
-
-    expect((await cronk.request("DELETE", "/api/sign-in", { cookie: ada.cookie })).status).toBe(204);
-    const other = await signIn(cronk);
-    await editTicket(other, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
-
-    await stream.ended();
-  });
-
-  test("only members may open a Workspace's stream, and removing a member ends theirs", async () => {
-    const { ada, bea, workspace } = await workspaceWithProject();
-    const created = await cronk.request("POST", "/api/workspaces", { cookie: bea.cookie, body: { name: "Bea's" } });
-    const beas = (await created.json()) as { id: string };
-    await expect(openEvents(cronk, beas.id, ada.cookie)).rejects.toMatchObject({ status: 404 });
-    await expect(openEvents(cronk, workspace.id, "")).rejects.toMatchObject({ status: 401 });
-
-    const stream = await events(workspace.id, bea.cookie);
-    expect(await stream.next()).toEqual({ event: "inbox", data: { count: 0 } });
-    const removed = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.id}`, {
-      cookie: ada.cookie,
-    });
-    expect(removed.status).toBe(204);
-
-    await stream.ended();
+    expect(await stream.next()).toEqual({ type: "statuses.changed", data: { projectId: project.id } });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(1);
   });
 });

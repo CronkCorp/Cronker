@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import { transaction, type Db } from "../db.js";
 import type { Clock } from "../clock.js";
 import { isUuid } from "../http/ids.js";
+import { inView, type Viewer } from "../identity/viewers.js";
 
 export const Workspace = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
 export type Workspace = Static<typeof Workspace>;
@@ -26,14 +27,13 @@ export async function workspacesOf(db: Db, userId: string): Promise<Membership[]
   return rows;
 }
 
-/** A Workspace, if the User belongs to it; otherwise nothing, as if it didn't exist. */
-export async function findWorkspace(db: Db, userId: string, workspaceId: string): Promise<Workspace | undefined> {
+/** A Workspace in the Viewer's view; otherwise nothing, as if it didn't exist. */
+export async function findWorkspace(db: Db, viewer: Viewer, workspaceId: string): Promise<Workspace | undefined> {
   if (!isUuid(workspaceId)) return undefined;
+  const view = inView(viewer, "workspaces.id", "$2");
   const { rows } = await db.query<Workspace>(
-    `select workspaces.id, workspaces.name
-     from workspaces join memberships on memberships.workspace_id = workspaces.id
-     where workspaces.id = $1 and memberships.user_id = $2`,
-    [workspaceId, userId],
+    `select workspaces.id, workspaces.name from workspaces where workspaces.id = $1 and ${view.sql}`,
+    [workspaceId, view.value],
   );
   return rows[0];
 }

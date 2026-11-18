@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { authenticateAgent, ownerName } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { transaction } from "../db.js";
@@ -16,12 +17,12 @@ const decoyPasswordHash =
   "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 export async function signIn(
-  { db, clock, config }: Context,
+  context: Context,
   reply: FastifyReply,
   email: string,
   password: string,
 ): Promise<User> {
-  const { rows } = await db.query<User & { password_hash: string | null }>(
+  const { rows } = await context.db.query<User & { password_hash: string | null }>(
     `select ${userColumns}, users.password_hash from users where lower(email) = lower($1)`,
     [email],
   );
@@ -32,7 +33,7 @@ export async function signIn(
   }
 
   const { password_hash: _, ...signedIn } = user;
-  await startSignIn({ db, clock, config }, reply, user.id);
+  await startSignIn(context, reply, user.id);
   return signedIn;
 }
 
@@ -61,22 +62,50 @@ export async function startSignIn(
   });
 }
 
-export async function signOut({ db }: Context, request: FastifyRequest, reply: FastifyReply): Promise<void> {
+/** Ends the request's sign-in, and the event streams opened with it. */
+export async function signOut({ db, live }: Context, request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const token = request.cookies[signInCookie];
-  if (token) await db.query("delete from sign_ins where token_hash = $1", [hashSecret(token)]);
+  if (token) {
+    const hash = hashSecret(token);
+    await db.query("delete from sign_ins where token_hash = $1", [hash]);
+    live.end((stream) => stream.signIn === hash);
+  }
   reply.clearCookie(signInCookie, { path: "/" });
 }
 
-/** The User the request's sign-in cookie belongs to, or a 401 refusal. */
-export async function requireUser({ db, clock }: Context, request: FastifyRequest): Promise<User> {
+/**
+ * The User the request's sign-in cookie belongs to, or a 401 refusal. An Agent's token is
+ * refused here: what only Users may do names the rule and what the Agent may do instead.
+ */
+export async function requireUser(context: Context, request: FastifyRequest): Promise<User> {
+  const agent = await authenticateAgent(context, request);
+  if (agent) {
+    throw new ApiError(403, "agent_not_allowed", `${agent.name} is an Agent, and only a User can do that.`, {
+      rule: "Agents may read their Workspace and comment on its Tickets; everything else needs a User.",
+      advice: `Read the Ticket and its Comments, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, to do it.`,
+    });
+  }
+  return (await requireSignIn(context, request)).user;
+}
+
+/** The request's sign-in: its User, the hash of its token and when it expires; or a 401 refusal. */
+export async function requireSignIn(
+  { db, clock }: Context,
+  request: FastifyRequest,
+): Promise<{ user: User; hash: string; expiresAt: Date }> {
   const token = request.cookies[signInCookie];
   if (token) {
-    const { rows } = await db.query<User>(
-      `select ${userColumns} from sign_ins join users on users.id = sign_ins.user_id
+    const hash = hashSecret(token);
+    const { rows } = await db.query<User & { expiresAt: Date }>(
+      `select ${userColumns}, sign_ins.expires_at as "expiresAt"
+       from sign_ins join users on users.id = sign_ins.user_id
        where sign_ins.token_hash = $1 and sign_ins.expires_at > $2`,
-      [hashSecret(token), clock.now()],
+      [hash, clock.now()],
     );
-    if (rows[0]) return rows[0];
+    if (rows[0]) {
+      const { expiresAt, ...user } = rows[0];
+      return { user, hash, expiresAt };
+    }
   }
   throw new ApiError(401, "not_signed_in", "Sign in first.");
 }
@@ -105,6 +134,7 @@ export async function changePassword(
   await transaction(context.db, async (tx) => {
     await tx.query("update users set password_hash = $1 where id = $2", [newHash, user.id]);
     await tx.query("delete from sign_ins where user_id = $1 and token_hash <> $2", [user.id, thisSignIn]);
+    context.live.endAfterCommit(tx, (stream) => stream.userId === user.id && stream.signIn !== thisSignIn);
     await endResetLinks(tx, user.id);
   });
 }

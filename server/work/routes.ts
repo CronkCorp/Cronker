@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { requireCaller } from "../identity/callers.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
@@ -15,11 +16,12 @@ const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: Er
 const kindRule = "Refused if it would leave any Status kind without a Status.";
 
 export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, clock, live } = context;
+  const { db } = context;
 
-  async function requireWorkspace(request: FastifyRequest, workspaceId: string): Promise<Workspace> {
-    const user = await requireUser(context, request);
-    const workspace = await findWorkspace(db, user.id, workspaceId);
+  /** The Workspace, if in view; `agents` lets Agents ask, for what they may do as well as Users. */
+  async function requireWorkspace(request: FastifyRequest, workspaceId: string, { agents = false } = {}): Promise<Workspace> {
+    const viewer = agents ? await requireCaller(context, request) : { kind: "user" as const, ...(await requireUser(context, request)) };
+    const workspace = await findWorkspace(db, viewer, workspaceId);
     if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
     return workspace;
   }
@@ -36,7 +38,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const workspace = await requireWorkspace(request, request.params.workspaceId);
+        const workspace = await requireWorkspace(request, request.params.workspaceId, { agents: true });
         return projectsOf(db, workspace.id);
       },
     );
@@ -61,7 +63,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const workspace = await requireWorkspace(request, request.params.workspaceId);
-        return reply.code(201).send(await createProject(db, clock, workspace.id, request.body));
+        return reply.code(201).send(await createProject(context, workspace.id, request.body));
       },
     );
 
@@ -76,8 +78,8 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        const project = await findProject(db, user.id, request.params.projectId);
+        const caller = await requireCaller(context, request);
+        const project = await findProject(db, caller, request.params.projectId);
         if (!project) throw projectNotFound();
         return project;
       },
@@ -97,11 +99,10 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        const project = await changeStatuses(db, clock, user.id, request.params.projectId, {
+        const project = await changeStatuses(context, user.id, request.params.projectId, {
           type: "add",
           ...request.body,
         });
-        live.changed(project.workspaceId);
         return reply.code(201).send(project);
       },
     );
@@ -125,9 +126,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        const project = await changeStatuses(db, clock, user.id, projectId, { type: "edit", statusId, ...request.body });
-        live.changed(project.workspaceId);
-        return project;
+        return changeStatuses(context, user.id, projectId, { type: "edit", statusId, ...request.body });
       },
     );
 
@@ -145,9 +144,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        const project = await changeStatuses(db, clock, user.id, projectId, { type: "remove", statusId });
-        live.changed(project.workspaceId);
-        return project;
+        return changeStatuses(context, user.id, projectId, { type: "remove", statusId });
       },
     );
   };
