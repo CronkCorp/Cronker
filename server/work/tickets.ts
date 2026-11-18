@@ -558,6 +558,14 @@ export async function editTicket(
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
+      // A new Sub-Ticket takes its parent's Delegation, and so its Assignee, whose Agent the Delegate is.
+      const delegation = next.parentId !== ticket.parentId && next.parentId !== null && next.delegateId === null
+        ? await heldDelegationOf(tx, next.parentId)
+        : null;
+      if (delegation) {
+        await change("assigneeId", "assignee", delegation.assigneeId, userNamed);
+        await change("delegateId", "delegate", delegation.delegateId, agentNamed);
+      }
     }
     if (edit.autonomousDelegation !== undefined) {
       await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
@@ -864,6 +872,24 @@ async function checkDelegate(
     );
   }
   return agent;
+}
+
+/**
+ * The Ticket's Assignee and Delegate, if it is delegated to an Agent still in use. Like `checkDelegate`, it holds
+ * the Agent until the transaction ends, so removing it waits and then undelegates whoever inherits it too.
+ */
+async function heldDelegationOf(
+  tx: Tx,
+  ticketId: string,
+): Promise<{ assigneeId: string; delegateId: string } | null> {
+  const { rows } = await tx.query<{ assigneeId: string; delegateId: string }>(
+    `select tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId"
+     from tickets join agents on agents.id = tickets.delegate_id
+     where tickets.id = $1 and agents.removed_at is null
+     for share of agents`,
+    [ticketId],
+  );
+  return rows[0] ?? null;
 }
 
 async function ownerOf(tx: Tx, agentId: string): Promise<string | undefined> {

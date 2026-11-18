@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -323,6 +323,39 @@ describe("Sub-Tickets", () => {
       expect((await response.json()).error.code).toBe("parent_cycle");
     }
     expect((await relationsOf(cookie, relations.id)).parent).toBeNull();
+  });
+});
+
+describe("a Sub-Ticket's Delegation", () => {
+  async function createAgent(cookie: string, workspaceId: string, name: string) {
+    const response = await cronk.request("POST", `/api/workspaces/${workspaceId}/agents`, { cookie, body: { name } });
+    expect(response.status).toBe(201);
+    return (await response.json()) as { id: string; name: string };
+  }
+
+  const edit = async (cookie: string, ticketId: string, body: Record<string, unknown>) => {
+    const response = await cronk.request("PATCH", `/api/tickets/${ticketId}`, { cookie, body });
+    expect(response.status).toBe(200);
+    return response.json();
+  };
+
+  test("an undelegated Ticket put under a delegated parent takes the parent's Assignee and Delegate", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Relations", "Ticket view");
+    const [parent, view] = tickets as [TicketRef, TicketRef];
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const beasAgent = await createAgent(bea.cookie, workspace.id, "bea-bot");
+    await edit(bea.cookie, parent.id, { delegateId: beasAgent.id });
+
+    const subTicket = await edit(cookie, view.id, { parentId: parent.id });
+
+    expect(subTicket).toEqual(expect.objectContaining({ assigneeId: bea.user.id, delegateId: beasAgent.id }));
+    const changes = (await timelineOf(cookie, view.id)).map(({ field, from, to }) => ({ field, from, to }));
+    expect(changes).toEqual(
+      expect.arrayContaining([
+        { field: "assignee", from: null, to: { id: bea.user.id, name: "bea@example.com" } },
+        { field: "delegate", from: null, to: { id: beasAgent.id, name: "bea-bot" } },
+      ]),
+    );
   });
 });
 
