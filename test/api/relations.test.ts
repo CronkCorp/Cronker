@@ -349,6 +349,12 @@ describe("a Sub-Ticket's Delegation", () => {
     return response.json();
   }
 
+  /** The Project's Triage Status, whose Step starts a Run on a delegated Ticket. */
+  async function triageOf(cookie: string, projectId: string): Promise<string> {
+    const project = await (await cronk.request("GET", `/api/projects/${projectId}`, { cookie })).json();
+    return project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  }
+
   async function changesOf(cookie: string, ticketId: string) {
     return (await timelineOf(cookie, ticketId)).map(({ field, from, to }) => ({ field, from, to }));
   }
@@ -375,8 +381,7 @@ describe("a Sub-Ticket's Delegation", () => {
     const { user, cookie, workspace, project, tickets } = await withTickets("Relations", "Ticket view");
     const [parent, view] = tickets as [TicketRef, TicketRef];
     const adasAgent = await agentWithRunner(cookie, workspace.id, "claude-max");
-    const board = await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json();
-    const triage = board.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    const triage = await triageOf(cookie, project.id);
     await edit(cookie, view.id, { delegateId: adasAgent.id, statusId: triage });
     const runsOf = async () => (await cronk.request("GET", `/api/tickets/${view.id}/runs`, { cookie })).json();
     const [run] = await runsOf();
@@ -467,8 +472,7 @@ describe("a Sub-Ticket's Delegation", () => {
     const [parent, view] = tickets as [TicketRef, TicketRef];
     await edit(cookie, view.id, { parentId: parent.id });
     const adasAgent = await agentWithRunner(cookie, workspace.id, "claude-max");
-    const board = await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json();
-    const triage = board.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    const triage = await triageOf(cookie, project.id);
     await edit(cookie, view.id, { delegateId: adasAgent.id, statusId: triage });
     const runsOf = async () => (await cronk.request("GET", `/api/tickets/${view.id}/runs`, { cookie })).json();
     const [run] = await runsOf();
@@ -498,15 +502,14 @@ describe("a Sub-Ticket's Delegation", () => {
     );
   });
 
-  test("undelegating a parent undelegates the Sub-Tickets that held its Delegation, stopping their running Runs", async () => {
+  test("undelegating a parent undelegates the Sub-Tickets that held its Delegate, stopping their running Runs", async () => {
     const { user, cookie, workspace, project, tickets } = await withTickets("Relations", "Ticket view", "Board view");
     const [parent, view, boardView] = tickets as [TicketRef, TicketRef, TicketRef];
     await edit(cookie, view.id, { parentId: parent.id });
     await edit(cookie, boardView.id, { parentId: view.id });
     const agent = await agentWithRunner(cookie, workspace.id, "claude-max");
     await edit(cookie, parent.id, { delegateId: agent.id });
-    const board = await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json();
-    const triage = board.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    const triage = await triageOf(cookie, project.id);
     await edit(cookie, boardView.id, { statusId: triage });
     const runsOf = async () => (await cronk.request("GET", `/api/tickets/${boardView.id}/runs`, { cookie })).json();
     const [run] = await runsOf();
