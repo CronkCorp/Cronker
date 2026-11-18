@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
+import { api, type DiscoveredItem, type Inbox, type InboxItem, type RunItem, type Workspace } from "./api.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
 
@@ -63,7 +63,13 @@ function Item({ item }: { item: InboxItem }) {
       <Link to={`/tickets/${item.ticket.id}`}>
         <span className="muted">{item.ticket.key}</span> {item.ticket.title}
       </Link>
-      {item.kind === "review" ? <small>Waiting for your review in {item.status.name}</small> : <WentWrong item={item} />}
+      {item.kind === "review" ? (
+        <small>Waiting for your review in {item.status.name}</small>
+      ) : item.kind === "run" ? (
+        <WentWrong item={item} />
+      ) : (
+        <Discovered item={item} />
+      )}
     </li>
   );
 }
@@ -95,6 +101,42 @@ function WentWrong({ item }: { item: RunItem }) {
       {error && <p role="alert">{error}</p>}
       <button type="button" onClick={retry} disabled={busy} aria-label={`Retry ${item.ticket.key}`}>
         Retry
+      </button>
+    </>
+  );
+}
+
+/** A Discovered Ticket an Agent filed, and Dismiss; delegating or moving it from its page also takes it away. */
+function Discovered({ item }: { item: DiscoveredItem }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dismiss = () => {
+    setBusy(true);
+    setError(null);
+    // The Inbox reloads on the live event dismissing causes, which takes this item away.
+    api.dismiss(item.ticket.id).then(
+      () => setBusy(false),
+      (e: Error) => {
+        setBusy(false);
+        setError(e.message);
+      },
+    );
+  };
+  return (
+    <>
+      <small>
+        Discovered by {item.agent.name}
+        {item.sourceTicket && (
+          <>
+            {" "}
+            while on <Link to={`/tickets/${item.sourceTicket.id}`}>{item.sourceTicket.key}</Link>
+          </>
+        )}
+        : delegate, move or dismiss it
+      </small>
+      {error && <p role="alert">{error}</p>}
+      <button type="button" onClick={dismiss} disabled={busy} aria-label={`Dismiss ${item.ticket.key}`}>
+        Dismiss
       </button>
     </>
   );
