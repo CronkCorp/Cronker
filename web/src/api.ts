@@ -16,6 +16,23 @@ export interface Workspace {
   name: string;
 }
 
+export interface Member {
+  user: User;
+  isAdmin: boolean;
+}
+
+export interface Link {
+  url: string;
+  expiresAt: string;
+}
+
+export interface LinkDetails {
+  kind: "join" | "reset";
+  email: string;
+  workspace: Workspace | null;
+  needsPassword: boolean;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -49,5 +66,22 @@ export const api = {
   signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password }),
   signOut: () => call<void>("DELETE", "/api/sign-in"),
   me: () => call<{ user: User; workspaces: WorkspaceSummary[] }>("GET", "/api/me"),
-  workspace: (id: string) => call<Workspace>("GET", `/api/workspaces/${encodeURIComponent(id)}`),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
+  workspace: (id: string) => call<Workspace>("GET", ws(id)),
+  createWorkspace: (name: string) => call<WorkspaceSummary>("POST", "/api/workspaces", { name }),
+  renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
+  members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
+  addMember: (id: string, email: string) =>
+    call<{ user: User; link: Link | null }>("POST", `${ws(id)}/members`, { email }),
+  setAdmin: (id: string, userId: string, isAdmin: boolean) =>
+    call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
+  removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
+  resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
+  lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
+  useLink: (token: string, password?: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
 };
+
+function ws(id: string) {
+  return `/api/workspaces/${encodeURIComponent(id)}`;
+}
