@@ -2,6 +2,7 @@ import type { Writable } from "node:stream";
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
+import fastifyStatic from "@fastify/static";
 import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
@@ -50,6 +51,16 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(cookie);
   await app.register(identityRoutes(context));
   await app.register(workspaceRoutes(context));
+
+  const { webRoot } = context.config;
+  if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
+  app.setNotFoundHandler((request, reply) => {
+    // The web client routes its own paths, so any other page gets its index.
+    if (webRoot && request.method === "GET" && !request.url.startsWith("/api/")) {
+      return reply.sendFile("index.html");
+    }
+    return reply.code(404).send({ error: { code: "not_found", message: "Nothing is here." } });
+  });
 
   return app;
 }
