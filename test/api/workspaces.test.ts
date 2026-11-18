@@ -54,7 +54,7 @@ describe("adding Users by email", () => {
 
     expect(added.status).toBe(201);
     const { user, link } = await added.json();
-    expect(user).toEqual({ id: expect.any(String), email: "bea@example.com" });
+    expect(user).toEqual({ id: expect.any(String), email: "bea@example.com", githubLogin: null });
     expect(link.url).toMatch(new RegExp(`^${cronk.url}/link#cronk_join_[A-Za-z0-9_-]{20,}$`));
     expect(link.expiresAt).toBe("2026-01-08T09:00:00.000Z");
     const token = tokenOf(link.url);
@@ -70,6 +70,7 @@ describe("adding Users by email", () => {
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
       setsPassword: true,
+      signInWithGitHub: false,
     });
 
     const used = await cronk.request("POST", "/api/links/use", { body: { token, password: "bea's long password" } });
@@ -82,7 +83,7 @@ describe("adding Users by email", () => {
 
     const members = await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie: beaCookie });
     expect(await members.json()).toEqual([
-      { user: { id: expect.any(String), email: "ada@example.com" }, isAdmin: true },
+      { user: { id: expect.any(String), email: "ada@example.com", githubLogin: null }, isAdmin: true },
       { user, isAdmin: false },
     ]);
   });
@@ -145,6 +146,7 @@ describe("adding Users by email", () => {
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
       setsPassword: false,
+      signInWithGitHub: false,
     });
 
     const wrong = await cronk.request("POST", "/api/links/use", { body: { token, password: "not bea's password" } });
@@ -369,6 +371,7 @@ describe("passwords", () => {
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
       setsPassword: true,
+      signInWithGitHub: false,
     });
     // Issuing a link changes nothing until it is used.
     expect((await cronk.request("GET", "/api/me", { cookie: bea.cookie })).status).toBe(200);

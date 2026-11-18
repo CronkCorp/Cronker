@@ -5,7 +5,7 @@ import { transaction } from "../db.js";
 import { endResetLinks } from "./links.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { hashSecret, issueSecret } from "./secrets.js";
-import type { User } from "./user.js";
+import { userColumns, type User } from "./user.js";
 
 /** A sign-in lasts 30 days from when the User signed in. */
 export const signInLifetimeSeconds = 30 * 24 * 60 * 60;
@@ -16,13 +16,13 @@ const decoyPasswordHash =
   "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 export async function signIn(
-  { db, clock, config }: Context,
+  context: Context,
   reply: FastifyReply,
   email: string,
   password: string,
 ): Promise<User> {
-  const { rows } = await db.query<{ id: string; email: string; password_hash: string | null }>(
-    "select id, email, password_hash from users where lower(email) = lower($1)",
+  const { rows } = await context.db.query<User & { password_hash: string | null }>(
+    `select ${userColumns}, users.password_hash from users where lower(email) = lower($1)`,
     [email],
   );
   const user = rows[0];
@@ -31,12 +31,19 @@ export async function signIn(
     throw new ApiError(401, "invalid_credentials", "That email and password don't match a User.");
   }
 
+  const { password_hash: _, ...signedIn } = user;
+  await startSignIn(context, reply, user.id);
+  return signedIn;
+}
+
+/** Signs the User in: a new sign-in, lasting 30 days, in a `SameSite=Strict` cookie. */
+export async function startSignIn({ db, clock, config }: Context, reply: FastifyReply, userId: string): Promise<void> {
   const token = issueSecret("sign_in");
   const now = clock.now();
   // Expired sign-ins are no use to anyone; drop the User's while adding a new one.
-  await db.query("delete from sign_ins where user_id = $1 and expires_at <= $2", [user.id, now]);
+  await db.query("delete from sign_ins where user_id = $1 and expires_at <= $2", [userId, now]);
   await db.query("insert into sign_ins (user_id, token_hash, created_at, expires_at) values ($1, $2, $3, $4)", [
-    user.id,
+    userId,
     hashSecret(token),
     now,
     new Date(now.getTime() + signInLifetimeSeconds * 1000),
@@ -48,7 +55,6 @@ export async function signIn(
     secure: config.publicUrl.protocol === "https:",
     maxAge: signInLifetimeSeconds,
   });
-  return { id: user.id, email: user.email };
 }
 
 /** Ends the request's sign-in, and the event streams opened with it. */
@@ -76,7 +82,7 @@ export async function requireSignIn(
   if (token) {
     const hash = hashSecret(token);
     const { rows } = await db.query<User & { expiresAt: Date }>(
-      `select users.id, users.email, sign_ins.expires_at as "expiresAt"
+      `select ${userColumns}, sign_ins.expires_at as "expiresAt"
        from sign_ins join users on users.id = sign_ins.user_id
        where sign_ins.token_hash = $1 and sign_ins.expires_at > $2`,
       [hash, clock.now()],

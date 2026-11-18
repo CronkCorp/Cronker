@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createCronk, type Cronk } from "../../server/cronk.js";
 import { TestClock } from "./clock.js";
 import { createTestDatabase } from "./database.js";
+import { startStandInGitHub, type StandInGitHub } from "./github.js";
 
 /**
  * Starts Cronk in-process against its own disposable database, with the clock
@@ -27,6 +29,8 @@ export interface RequestOptions {
 export interface StartedCronk {
   /** Cronk's public address, which is also where it listens. */
   url: string;
+  /** The stand-in GitHub this Cronk talks to instead of the real one. */
+  github: StandInGitHub;
   clock: TestClock;
   logs: LogLine[];
   /** The setup code from the server log. */
@@ -47,6 +51,8 @@ export interface StartCronkOptions {
   clock?: TestClock;
   /** Directory of the built web client to serve, if any. */
   webRoot?: string;
+  /** Start without `CRONK_SECRET_KEY`, so nothing can be stored encrypted. */
+  noSecretKey?: boolean;
 }
 
 const commandScript = fileURLToPath(new URL("../../server/command.ts", import.meta.url));
@@ -67,6 +73,7 @@ async function freePort(): Promise<number> {
 
 export async function startCronk(options: StartCronkOptions = {}): Promise<StartedCronk> {
   const database = await createTestDatabase();
+  const github = await startStandInGitHub();
   const clock = options.clock ?? new TestClock();
   const logs: LogLine[] = [];
   const logStream = new Writable({
@@ -83,18 +90,27 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   let cronk: Cronk;
   try {
     cronk = await createCronk({
-      config: { publicUrl: new URL(url), databaseUrl: database.url, host: "127.0.0.1", port, webRoot: options.webRoot },
+      config: {
+        publicUrl: new URL(url),
+        databaseUrl: database.url,
+        host: "127.0.0.1",
+        port,
+        webRoot: options.webRoot,
+        secretKey: options.noSecretKey ? undefined : randomBytes(32).toString("base64"),
+        github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
+      },
       clock,
       logStream,
     });
     await cronk.listen();
   } catch (error) {
-    await database.drop();
+    await Promise.all([database.drop(), github.stop()]);
     throw error;
   }
 
   return {
     url,
+    github,
     clock,
     logs,
     setupCode() {
@@ -125,7 +141,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async stop() {
       await cronk.close();
-      await database.drop();
+      await Promise.all([database.drop(), github.stop()]);
     },
   };
 }

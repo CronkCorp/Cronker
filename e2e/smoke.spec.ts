@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures.js";
 
-test("set up a fresh installation, sign in, see the empty Workspace and sign out", async ({ page, cronk }) => {
+test("set up a fresh installation without GitHub, sign in, see the empty Workspace and sign out", async ({ page, cronk }) => {
   await page.goto(cronk.url);
 
   await expect(page.getByRole("heading", { name: "Set up Cronk" })).toBeVisible();
@@ -14,7 +14,13 @@ test("set up a fresh installation, sign in, see the empty Workspace and sign out
   await page.getByLabel("Setup code").fill(cronk.setupCode());
   await page.getByRole("button", { name: "Set up" }).click();
 
+  await expect(page.getByRole("heading", { name: "Connect GitHub" })).toBeVisible();
+  await page.getByRole("button", { name: "Skip for now" }).click();
+  await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in with GitHub" })).toHaveCount(0);
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();
