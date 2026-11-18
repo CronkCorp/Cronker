@@ -21,6 +21,10 @@ import { RunState } from "./states.js";
  * ended without finishing.
  */
 
+/** Who asked a Run's Question: its Agent, or Cronk itself. */
+const QuestionBy = Type.Union([Type.Literal("agent"), Type.Literal("cronk")]);
+type QuestionBy = Static<typeof QuestionBy>;
+
 export const Run = Type.Object({
   id: Type.String({ format: "uuid" }),
   ticketId: Type.String({ format: "uuid" }),
@@ -38,7 +42,7 @@ export const Run = Type.Object({
   question: Type.Union([Type.String(), Type.Null()], {
     description: "The Question it ended with, if any: its Agent's, or Cronk's own when its Step's round limit was reached.",
   }),
-  questionBy: Type.Union([Type.Literal("agent"), Type.Literal("cronk"), Type.Null()], {
+  questionBy: Type.Union([QuestionBy, Type.Null()], {
     description:
       "Who asked the Question: `agent`, its Agent, or `cronk`, when the Agent chose an Outcome counting as a round " +
       "once the Step's round limit was reached, so Cronk applied *needs you* instead.",
@@ -124,13 +128,12 @@ export async function briefOfRun(db: Db, viewer: Viewer, runId: string): Promise
  * Step's default Outcome, which counts as entering that Status in turn. A chain of skips that comes
  * back to a Status it already passed stops there, so the Ticket waits for a User.
  */
-export async function startRunIfNeeded(
-  context: Context,
-  tx: Tx,
-  ticketId: string,
-  now: Date,
-  skipped: Set<string> = new Set(),
-): Promise<void> {
+export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<void> {
+  await enterStatus(context, tx, ticketId, now, new Set());
+}
+
+/** Starts a Run on the Ticket as `startRunIfNeeded` says; `skipped` holds the Statuses this chain of skips passed. */
+async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date, skipped: Set<string>): Promise<void> {
   const { rows } = await tx.query<{
     workspaceId: string;
     projectId: string;
@@ -174,7 +177,7 @@ export async function startRunIfNeeded(
       { field: "status", from: named(status), to: named(target) },
     ]);
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
-    return startRunIfNeeded(context, tx, ticketId, now, skipped);
+    return enterStatus(context, tx, ticketId, now, skipped);
   }
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
   const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
@@ -312,7 +315,7 @@ export async function finishRun(
     // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
     let applied = outcome;
     let question = input.question ?? null;
-    let questionBy: "agent" | "cronk" | null = question === null ? null : "agent";
+    let questionBy: QuestionBy | null = question === null ? null : "agent";
     if (outcome.countsAsRound && step) {
       const { rows } = await tx.query<{ stepId: string; count: number | null }>(
         `select steps.id as "stepId", round_counts.count from steps
@@ -329,9 +332,9 @@ export async function finishRun(
         questionBy = "cronk";
       } else {
         await tx.query(
-          `insert into round_counts (ticket_id, step_id, count) values ($1, $2, 1)
+          `insert into round_counts (workspace_id, ticket_id, step_id, count) values ($1, $2, $3, 1)
            on conflict (ticket_id, step_id) do update set count = round_counts.count + 1`,
-          [ticket.id, stepId],
+          [ticket.workspaceId, ticket.id, stepId],
         );
       }
     }
