@@ -30,7 +30,7 @@ export interface LinkDetails {
   kind: "join" | "reset";
   email: string;
   workspace: Workspace | null;
-  needsPassword: boolean;
+  setsPassword: boolean;
 }
 
 export class ApiError extends Error {
@@ -73,13 +73,13 @@ export const api = {
   renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
   members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
   addMember: (id: string, email: string) =>
-    call<{ user: User; link: Link | null }>("POST", `${ws(id)}/members`, { email }),
+    call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email }),
   setAdmin: (id: string, userId: string, isAdmin: boolean) =>
     call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
   removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
-  useLink: (token: string, password?: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
+  useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
 };
 
 function ws(id: string) {

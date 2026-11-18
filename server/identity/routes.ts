@@ -138,9 +138,9 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Links"],
           summary: "Use a one-time link",
           description:
-            "A join link sets the User's password (if they have none yet) and makes them a member of its Workspace. A reset link sets a new password and ends all the User's sign-ins. Either works once.",
-          body: Type.Object({ token: Type.String(), password: Type.Optional(Password) }),
-          response: { 200: Type.Object({ user: User }), 400: ErrorBody, 404: ErrorBody },
+            "A join link makes the User a member of its Workspace: it sets their password if they have none yet, and otherwise needs their current one (`wrong_password` if not). A reset link sets a new password and ends all the User's sign-ins. Either works once.",
+          body: Type.Object({ token: Type.String(), password: Password }),
+          response: { 200: Type.Object({ user: User }), 400: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => ({ user: await useLink(context, request.body.token, request.body.password) }),

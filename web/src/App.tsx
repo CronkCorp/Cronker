@@ -209,7 +209,7 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
   }, [token]);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     if (details === null || details === "invalid") return;
-    await api.useLink(token, details.needsPassword ? field(form, "password") : undefined);
+    await api.useLink(token, field(form, "password"));
     onDone(
       details.kind === "join"
         ? `You've joined ${details.workspace?.name}. Sign in to continue.`
@@ -234,10 +234,15 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
       </p>
       <form onSubmit={onSubmit}>
         <input type="hidden" name="username" value={details.email} autoComplete="username" />
-        {details.needsPassword && (
+        {details.setsPassword ? (
           <label>
-            Password
+            Choose a password
             <input name="password" type="password" required minLength={8} autoComplete="new-password" />
+          </label>
+        ) : (
+          <label>
+            Your password
+            <input name="password" type="password" required autoComplete="current-password" />
           </label>
         )}
         {error && <p role="alert">{error}</p>}
@@ -299,8 +304,8 @@ function SignedIn({
         }}
       />
     );
-  } else if (path === "/account") {
-    page = <Account />;
+  } else if (path === "/password") {
+    page = <ChangePassword />;
   } else if (current && match?.[2]) {
     page = (
       <Members
@@ -350,7 +355,7 @@ function SignedIn({
           </NavLink>
         </nav>
         <span className="spacer" />
-        <NavLink to="/account" navigate={navigate}>
+        <NavLink to="/password" navigate={navigate}>
           {user.email}
         </NavLink>
         <form onSubmit={onSubmit}>
@@ -390,7 +395,7 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   return (
     <section className="narrow">
       <h1>New Workspace</h1>
-      <p>You'll be its Admin, and can add people to it.</p>
+      <p>You'll be its Admin, and can add Users to it.</p>
       <form onSubmit={onSubmit}>
         <label>
           Workspace name
@@ -405,7 +410,7 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   );
 }
 
-function Account() {
+function ChangePassword() {
   const [done, setDone] = useState(false);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     setDone(false);
@@ -415,8 +420,7 @@ function Account() {
   });
   return (
     <section className="narrow">
-      <h1>Your account</h1>
-      <h2>Change password</h2>
+      <h1>Change your password</h1>
       <form onSubmit={onSubmit}>
         <label>
           Current password
@@ -486,13 +490,7 @@ function Members({
     const email = field(form, "email");
     const { user: added, link } = await api.addMember(workspace.id, email);
     element.reset();
-    setNotice(
-      link ? (
-        <IssuedLink label={`Link for ${added.email}`} link={link} />
-      ) : (
-        <p role="status">{added.email} already had a sign-in, and has joined.</p>
-      ),
-    );
+    setNotice(<IssuedLink label={`Link for ${added.email}`} link={link} />);
     refresh();
   });
 

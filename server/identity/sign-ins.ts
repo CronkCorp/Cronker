@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { transaction } from "../db.js";
+import { endResetLinks } from "./links.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { hashSecret, issueSecret } from "./secrets.js";
 import type { User } from "./user.js";
@@ -72,7 +73,7 @@ export async function requireUser({ db, clock }: Context, request: FastifyReques
 
 /**
  * Changes the signed-in User's own password, given their current one, and ends every
- * other sign-in of theirs; the one making the change stays signed in.
+ * other sign-in and unused reset link of theirs; the one making the change stays signed in.
  */
 export async function changePassword(
   context: Context,
@@ -90,9 +91,10 @@ export async function changePassword(
   if (!current || !(await verifyPassword(currentPassword, current))) {
     throw new ApiError(403, "wrong_password", "That isn't your current password.");
   }
-  const keep = hashSecret(request.cookies[signInCookie] ?? "");
+  const thisSignIn = hashSecret(request.cookies[signInCookie] ?? "");
   await transaction(context.db, async (tx) => {
     await tx.query("update users set password_hash = $1 where id = $2", [newHash, user.id]);
-    await tx.query("delete from sign_ins where user_id = $1 and token_hash <> $2", [user.id, keep]);
+    await tx.query("delete from sign_ins where user_id = $1 and token_hash <> $2", [user.id, thisSignIn]);
+    await endResetLinks(tx, user.id);
   });
 }

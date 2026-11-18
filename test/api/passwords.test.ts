@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { firstUser, setUp, signIn } from "../harness/flows.js";
+import { addMember, firstUser, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -53,6 +53,34 @@ describe("changing one's own password", () => {
       body: { currentPassword: firstUser.password, newPassword: "a brand new password" },
     });
     expect(anonymous.status).toBe(401);
+  });
+});
+
+describe("unused reset links", () => {
+  test("end when the password changes, by hand or by another reset link", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const issue = async () =>
+      new URL(
+        (await (await cronk.request("POST", `/api/workspaces/${workspace.id}/members/${bea.user.id}/reset-link`, { cookie })).json()).url,
+      ).hash.slice(1);
+    const first = await issue();
+    const second = await issue();
+    const third = await issue();
+
+    await cronk.request("PUT", "/api/me/password", {
+      cookie: bea.cookie,
+      body: { currentPassword: bea.password, newPassword: "bea's second password" },
+    });
+    expect((await cronk.request("POST", "/api/links/use", { body: { token: first, password: "mallory's password" } })).status).toBe(404);
+
+    const fourth = await issue();
+    expect((await cronk.request("POST", "/api/links/use", { body: { token: fourth, password: "bea's third password" } })).status).toBe(200);
+    for (const token of [second, third]) {
+      expect((await cronk.request("POST", "/api/links/use", { body: { token, password: "mallory's password" } })).status).toBe(404);
+    }
+    await signIn(cronk, "bea@example.com", "bea's third password");
   });
 });
 

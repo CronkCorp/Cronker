@@ -42,7 +42,7 @@ describe("creating a Workspace", () => {
 /** The one-time secret in a link Cronk hands out, which the web client reads from the URL's fragment. */
 const tokenOf = (url: string) => new URL(url).hash.slice(1);
 
-describe("adding people by email", () => {
+describe("adding Users by email", () => {
   test("an Admin adds someone by email and gets a one-time link; using it sets a password and joins", async () => {
     const { workspace } = await setUp(cronk);
     const cookie = await signIn(cronk);
@@ -69,7 +69,7 @@ describe("adding people by email", () => {
       kind: "join",
       email: "bea@example.com",
       workspace: { id: workspace.id, name: "Ada's Workspace" },
-      needsPassword: true,
+      setsPassword: true,
     });
 
     const used = await cronk.request("POST", "/api/links/use", { body: { token, password: "bea's long password" } });
@@ -124,27 +124,38 @@ describe("adding people by email", () => {
     expect(await late.json()).toEqual({ error: { code: "invalid_link", message: expect.any(String) } });
   });
 
-  test("someone who can already sign in joins at once, without a link", async () => {
+  test("someone who can already sign in gets a link too, and joins by giving their own password", async () => {
     const { workspace } = await setUp(cronk);
     const cookie = await signIn(cronk);
-    const other = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
+    const friends = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
+    const bea = await addMember(cronk, cookie, friends.id, "bea@example.com");
 
-    const added = await cronk.request("POST", `/api/workspaces/${other.id}/members`, {
-      cookie,
-      body: { email: "bea@example.com" },
-    });
-    const { link } = await added.json();
-    await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(link.url), password: "bea's long password" } });
-    const beaCookie = await signIn(cronk, "bea@example.com", "bea's long password");
-
-    const again = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, {
+    const added = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, {
       cookie,
       body: { email: "BEA@example.com" },
     });
-    expect(again.status).toBe(201);
-    expect(await again.json()).toEqual({ user: { id: expect.any(String), email: "bea@example.com" }, link: null });
-    const me = await (await cronk.request("GET", "/api/me", { cookie: beaCookie })).json();
+    expect(added.status).toBe(201);
+    const { user, link } = await added.json();
+    expect(user).toEqual(bea.user);
+    const token = tokenOf(link.url);
+    // Nothing joins them until they use the link.
+    expect((await cronk.request("GET", `/api/workspaces/${workspace.id}`, { cookie: bea.cookie })).status).toBe(404);
+    expect(await (await cronk.request("POST", "/api/links/lookup", { body: { token } })).json()).toEqual({
+      kind: "join",
+      email: "bea@example.com",
+      workspace: { id: workspace.id, name: "Ada's Workspace" },
+      setsPassword: false,
+    });
+
+    const wrong = await cronk.request("POST", "/api/links/use", { body: { token, password: "not bea's password" } });
+    expect(wrong.status).toBe(403);
+    expect(await wrong.json()).toEqual({ error: { code: "wrong_password", message: expect.any(String) } });
+
+    const used = await cronk.request("POST", "/api/links/use", { body: { token, password: bea.password } });
+    expect(used.status).toBe(200);
+    const me = await (await cronk.request("GET", "/api/me", { cookie: bea.cookie })).json();
     expect(me.workspaces.map((w: { name: string }) => w.name)).toEqual(["Ada's Workspace", "Friends"]);
+    await signIn(cronk, "bea@example.com", bea.password);
 
     const twice = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, {
       cookie,
@@ -165,7 +176,6 @@ describe("adding people by email", () => {
     expect(short.status).toBe(400);
     const none = await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(link.url) } });
     expect(none.status).toBe(400);
-    expect(await none.json()).toEqual({ error: { code: "password_needed", message: expect.any(String) } });
   });
 });
 
@@ -220,7 +230,10 @@ describe("removing members", () => {
     const cookie = await signIn(cronk);
     const other = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
     const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
-    await cronk.request("POST", `/api/workspaces/${other.id}/members`, { cookie, body: { email: "bea@example.com" } });
+    const { link } = await (
+      await cronk.request("POST", `/api/workspaces/${other.id}/members`, { cookie, body: { email: "bea@example.com" } })
+    ).json();
+    await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(link.url), password: bea.password } });
 
     const removed = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
 
@@ -245,7 +258,9 @@ describe("removing members", () => {
     await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
 
     const again = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } });
-    expect(await again.json()).toEqual({ user: bea.user, link: null });
+    const { user, link } = await again.json();
+    expect(user).toEqual(bea.user);
+    await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(link.url), password: bea.password } });
     expect((await cronk.request("GET", `/api/workspaces/${workspace.id}`, { cookie: bea.cookie })).status).toBe(200);
   });
 
@@ -258,7 +273,9 @@ describe("removing members", () => {
     await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(first.link.url), password: "bea's long password" } });
     await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${first.user.id}`, { cookie });
 
-    const rejoin = await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(second.link.url) } });
+    const rejoin = await cronk.request("POST", "/api/links/use", {
+      body: { token: tokenOf(second.link.url), password: "bea's long password" },
+    });
     expect(rejoin.status).toBe(404);
   });
 });
@@ -350,8 +367,8 @@ describe("passwords", () => {
     expect(await (await cronk.request("POST", "/api/links/lookup", { body: { token } })).json()).toEqual({
       kind: "reset",
       email: "bea@example.com",
-      workspace: null,
-      needsPassword: true,
+      workspace: { id: workspace.id, name: "Ada's Workspace" },
+      setsPassword: true,
     });
     // Issuing a link changes nothing until it is used.
     expect((await cronk.request("GET", "/api/me", { cookie: bea.cookie })).status).toBe(200);
@@ -365,7 +382,7 @@ describe("passwords", () => {
     expect((await cronk.request("POST", "/api/links/use", { body: { token, password: "another password" } })).status).toBe(404);
   });
 
-  test("an Admin can't issue reset links for people outside the Workspace", async () => {
+  test("an Admin can't issue reset links for Users outside the Workspace", async () => {
     const { workspace } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const friends = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
@@ -373,5 +390,43 @@ describe("passwords", () => {
 
     const response = await cronk.request("POST", `/api/workspaces/${workspace.id}/members/${eve.user.id}/reset-link`, { cookie });
     expect(response.status).toBe(404);
+  });
+
+  test("an Admin can't issue reset links for a member who also belongs to Workspaces they aren't Admin of", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    await cronk.request("POST", "/api/workspaces", { cookie: bea.cookie, body: { name: "Bea's own" } });
+
+    const refused = await cronk.request("POST", `/api/workspaces/${workspace.id}/members/${bea.user.id}/reset-link`, { cookie });
+
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: { code: "member_elsewhere", message: expect.any(String) } });
+  });
+
+  test("an Admin's reset link ends once its member is out of the Admin's reach", async () => {
+    const { user: ada, workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const issue = async (userId: string) =>
+      tokenOf(
+        (await (await cronk.request("POST", `/api/workspaces/${workspace.id}/members/${userId}/reset-link`, { cookie })).json()).url,
+      );
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const cy = await addMember(cronk, cookie, workspace.id, "cy@example.com");
+    const dee = await addMember(cronk, cookie, workspace.id, "dee@example.com");
+    const forBea = await issue(bea.user.id);
+    const forCy = await issue(cy.user.id);
+    const forDee = await issue(dee.user.id);
+
+    // Bea starts a Workspace of her own; Cy is removed; Dee becomes Admin and takes Admin from Ada.
+    await cronk.request("POST", "/api/workspaces", { cookie: bea.cookie, body: { name: "Bea's own" } });
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${cy.user.id}`, { cookie });
+    await cronk.request("PATCH", `/api/workspaces/${workspace.id}/members/${dee.user.id}`, { cookie, body: { isAdmin: true } });
+    await cronk.request("PATCH", `/api/workspaces/${workspace.id}/members/${ada.id}`, { cookie: dee.cookie, body: { isAdmin: false } });
+
+    for (const token of [forBea, forCy, forDee]) {
+      const used = await cronk.request("POST", "/api/links/use", { body: { token, password: "taken over at last" } });
+      expect(used.status).toBe(404);
+    }
   });
 });

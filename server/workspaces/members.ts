@@ -2,14 +2,14 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { issueLink, Link } from "../identity/links.js";
+import { adminReaches, issueLink, Link } from "../identity/links.js";
 import { User, type User as UserRecord } from "../identity/user.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
 
-export const AddedMember = Type.Object({ user: User, link: Type.Union([Link, Type.Null()]) });
+export const AddedMember = Type.Object({ user: User, link: Link });
 export type AddedMember = Static<typeof AddedMember>;
 
 const notFound = () => new ApiError(404, "not_found", "No such Workspace.");
@@ -43,33 +43,23 @@ export async function membersOf(db: Db, workspaceId: string): Promise<Member[]> 
 }
 
 /**
- * Adds someone to the Workspace by email. Someone who can already sign in joins at once;
- * anyone else gets a User without a password and a one-time join link to pass on.
+ * Adds a User to the Workspace by email, creating them without a password if no User
+ * has it. They get a one-time join link either way, so nobody joins without their say.
  */
 export async function addMember(context: Context, workspaceId: string, email: string): Promise<AddedMember> {
   return transaction(context.db, async (tx) => {
-    const now = context.clock.now();
-    await tx.query("insert into users (email, created_at) values ($1, $2) on conflict do nothing", [email, now]);
-    const { rows } = await tx.query<{ id: string; email: string; password_hash: string | null }>(
-      "select id, email, password_hash from users where lower(email) = lower($1)",
-      [email],
-    );
+    await tx.query("insert into users (email, created_at) values ($1, $2) on conflict do nothing", [
+      email,
+      context.clock.now(),
+    ]);
+    const { rows } = await tx.query<UserRecord>("select id, email from users where lower(email) = lower($1)", [email]);
     const user = rows[0]!;
-    const already = await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [
+    const isMember = await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [
       workspaceId,
       user.id,
     ]);
-    if (already.rowCount) throw new ApiError(409, "already_member", `${user.email} already belongs to this Workspace.`);
-
-    const added = { id: user.id, email: user.email };
-    if (user.password_hash !== null) {
-      await tx.query(
-        "insert into memberships (workspace_id, user_id, is_admin, created_at) values ($1, $2, false, $3)",
-        [workspaceId, user.id, now],
-      );
-      return { user: added, link: null };
-    }
-    return { user: added, link: await issueLink(context, tx, "join", user.id, workspaceId) };
+    if (isMember.rowCount) throw new ApiError(409, "already_member", `${user.email} already belongs to this Workspace.`);
+    return { user, link: await issueLink(context, tx, "join", user.id, { workspaceId }) };
   });
 }
 
@@ -120,11 +110,21 @@ export async function removeMember(db: Db, workspaceId: string, userId: string):
   });
 }
 
-/** A one-time link for a member to set a new password, for an Admin to pass on. */
-export async function issueResetLink(context: Context, workspaceId: string, userId: string): Promise<Link> {
+/**
+ * A one-time link for a member to set a new password, for an Admin to pass on. Refused
+ * if the member also belongs to a Workspace the Admin isn't Admin of.
+ */
+export async function issueResetLink(context: Context, adminId: string, workspaceId: string, userId: string): Promise<Link> {
   return transaction(context.db, async (tx) => {
     const members = await lockMembers(tx, workspaceId);
     if (!members.some((m) => m.user_id === userId)) throw memberNotFound();
-    return issueLink(context, tx, "reset", userId);
+    if (!(await adminReaches(tx, adminId, userId, workspaceId))) {
+      throw new ApiError(
+        409,
+        "member_elsewhere",
+        "This member also belongs to a Workspace you aren't Admin of. They can change their password themselves, or whoever runs Cronk can issue a reset link with the server command.",
+      );
+    }
+    return issueLink(context, tx, "reset", userId, { workspaceId, issuedBy: adminId });
   });
 }

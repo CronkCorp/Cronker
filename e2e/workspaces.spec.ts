@@ -35,7 +35,7 @@ test("create a second Workspace and switch between them", async ({ page, cronk }
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
 });
 
-test("an Admin adds someone by email, who joins through the link", async ({ page, cronk, browser }) => {
+test("an Admin adds a User by email, who joins through the link", async ({ page, cronk, browser }) => {
   await setUpAndSignIn(page, cronk);
 
   await page.getByRole("link", { name: "Members" }).click();
@@ -48,7 +48,7 @@ test("an Admin adds someone by email, who joins through the link", async ({ page
   const bea = await (await browser.newContext()).newPage();
   await bea.goto(link);
   await expect(bea.getByRole("heading", { name: "Join Ada's Workspace" })).toBeVisible();
-  await bea.getByLabel("Password").fill("bea's long password");
+  await bea.getByLabel("Choose a password").fill("bea's long password");
   await bea.getByRole("button", { name: "Join" }).click();
   await expect(bea.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
   await bea.getByLabel("Email").fill("bea@example.com");

@@ -96,9 +96,9 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Workspaces"],
-          summary: "Add someone by email (Admins only)",
+          summary: "Add a User by email (Admins only)",
           description:
-            "Someone who can already sign in joins at once. Anyone else gets a one-time link, valid 7 days, for the Admin to pass on: using it sets their password and joins them.",
+            "Gives a one-time link, valid 7 days, for the Admin to pass on. Using it joins the User: a new User sets their password with it, and one who can already sign in gives theirs.",
           params: Type.Object({ workspaceId: Type.String() }),
           body: Type.Object({ email: Email }),
           response: { 201: AddedMember, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
@@ -159,15 +159,15 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Workspaces"],
           summary: "Issue a password reset link for a member (Admins only)",
           description:
-            "A one-time link, valid 7 days, for the Admin to pass on. Using it sets a new password and ends the member's sign-ins.",
+            "A one-time link, valid 7 days, for the Admin to pass on. Using it sets a new password and ends the member's sign-ins. Refused with `member_elsewhere` if the member also belongs to a Workspace the Admin isn't Admin of; the link also stops working if that becomes so before it is used.",
           params: MemberParams,
-          response: { 201: Link, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          response: { 201: Link, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
-        return reply.code(201).send(await issueResetLink(context, workspace.id, request.params.userId));
+        return reply.code(201).send(await issueResetLink(context, user.id, workspace.id, request.params.userId));
       },
     );
   };
