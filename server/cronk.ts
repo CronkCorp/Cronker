@@ -7,7 +7,7 @@ import { buildApp } from "./app.js";
 import { systemClock, type Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Context } from "./context.js";
-import { createPool, droppedConnection, migrate } from "./db.js";
+import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
@@ -37,8 +37,8 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
   // Until the app (and its logger) exists, which is while migrating, a dropped connection goes to stderr.
   let log: FastifyBaseLogger | undefined;
   const db = createPool(config.databaseUrl, (error) => {
-    if (log) log.error({ err: error }, droppedConnection);
-    else console.error(`${droppedConnection}: ${error.message}`);
+    if (log) log.error({ err: error }, droppedConnectionMessage);
+    else reportDroppedConnection(error);
   });
   try {
     await migrate(db);

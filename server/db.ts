@@ -16,14 +16,19 @@ export async function migrationsFingerprint(): Promise<string> {
 }
 
 /** What Cronk logs when Postgres drops an idle pooled connection. */
-export const droppedConnection = "Postgres dropped an idle database connection; a new one replaces it on next use";
+export const droppedConnectionMessage = "Postgres dropped an idle database connection; a new one replaces it on next use";
+
+/** Reports a dropped idle connection on stderr, for when there is no app logger. */
+export function reportDroppedConnection(error: Error): void {
+  console.error(`${droppedConnectionMessage}: ${error.message}`);
+}
 
 /**
  * A pool of connections to Cronk's database. When Postgres drops a connection while it sits idle in the pool (a
  * restart, a failover, `pg_terminate_backend`, a proxy's idle timeout), the pool lets it go and opens a new one on
  * next use; `onIdleError` hears of it. Without a listener the pool's `error` event would end the process.
  */
-export function createPool(connectionString: string, onIdleError: (error: Error) => void): pg.Pool {
+export function createPool(connectionString: string, onIdleError: (error: Error) => void = reportDroppedConnection): pg.Pool {
   const pool = new pg.Pool({ connectionString });
   pool.on("error", onIdleError);
   return pool;
