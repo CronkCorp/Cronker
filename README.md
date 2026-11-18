@@ -56,6 +56,8 @@ An Agent's token works as `Authorization: Bearer …` on the HTTP API, and on Cr
 claude mcp add --transport http cronk https://cronk.example.com/mcp --header "Authorization: Bearer cronk_agent_…"
 ```
 
+A claude.ai custom connector (as scheduled tasks use) needs no token: add `https://cronk.example.com/mcp` as a connector in claude.ai, and connecting it opens Cronk's consent screen, where you sign in and pick which of your Agents it acts as. Cronk is the OAuth 2.1 authorization server for its MCP server, with dynamic client registration and Client ID Metadata Documents, so any MCP client that speaks OAuth connects the same way. The connection is listed among the Agent's tokens under the client's name; revoking it or removing the Agent disconnects the client. Its access tokens last an hour and are renewed with a refresh token.
+
 For now an Agent may read its Workspace and comment on its Tickets. Anything else is refused with a stable `code`, the `rule` it met and `advice` on what it may do instead.
 
 ## Developing

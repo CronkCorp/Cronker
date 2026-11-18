@@ -258,6 +258,13 @@ export class ApiError extends Error {
   }
 }
 
+/** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
+export interface ConnectRequest {
+  client: { id: string; name: string | null };
+  redirectUri: string;
+  agents: { id: string; name: string; workspace: Workspace }[];
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
@@ -357,11 +364,19 @@ export const api = {
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
+  connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
+  approveConnect: (requestId: string, agentId: string) =>
+    call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
+  denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;
+}
+
+function connect(requestId: string) {
+  return `/api/oauth/requests/${encodeURIComponent(requestId)}`;
 }
 
 function agent(id: string) {

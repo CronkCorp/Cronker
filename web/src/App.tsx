@@ -11,7 +11,8 @@ import {
 } from "./api.js";
 import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
-import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
+import { ConnectError, ConnectScreen, returnAfterSignInKey } from "./connect.js";
+import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, safely, takeQueryParameter } from "./github.js";
 import { InboxLink, InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
@@ -35,11 +36,19 @@ export function App() {
   const path = usePath();
   // Links Cronk hands out open `/link`, with their secret in the fragment.
   const onLinkPage = path === "/link";
+  // An app asking to connect opens `/connect`, the consent screen of Cronk's OAuth server.
+  const connect = path === "/connect" ? new URLSearchParams(window.location.search) : null;
 
   const load = useCallback(async (notice?: string) => {
     try {
       if (await api.setupNeeded()) return setScreen({ kind: "setup" });
       const me = await api.me();
+      // Signing in with GitHub on the way somewhere, such as the consent screen, ends at `/`; carry on there.
+      const returnTo = safely(() => sessionStorage.getItem(returnAfterSignInKey));
+      if (returnTo) {
+        safely(() => sessionStorage.removeItem(returnAfterSignInKey));
+        if (window.location.pathname === "/" && returnTo.startsWith("/")) replace(returnTo);
+      }
       setScreen({ kind: "signedIn", user: me.user, workspaces: me.workspaces });
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -81,6 +90,8 @@ export function App() {
       />
     );
   }
+  const connectError = connect?.get("error");
+  if (connectError) return <ConnectError code={connectError} />;
   switch (screen.kind) {
     case "loading":
       return <Centered title="Cronk">Loading…</Centered>;
@@ -89,8 +100,15 @@ export function App() {
     case "connectGitHub":
       return <GitHubSetupStep onSkip={() => load()} />;
     case "signIn":
-      return <SignInScreen notice={screen.notice} onSignedIn={() => load()} />;
+      return (
+        <SignInScreen
+          notice={connect ? "Sign in to Cronk to connect an app as one of your Agents." : screen.notice}
+          returnTo={connect ? `${window.location.pathname}${window.location.search}` : undefined}
+          onSignedIn={() => load()}
+        />
+      );
     case "signedIn":
+      if (connect) return <ConnectScreen requestId={connect.get("request") ?? ""} />;
       return (
         <SignedIn
           user={screen.user}
@@ -155,7 +173,7 @@ function SetupScreen({ onDone }: { onDone: () => void }) {
   );
 }
 
-function SignInScreen({ notice, onSignedIn }: { notice?: string; onSignedIn: () => void }) {
+function SignInScreen({ notice, returnTo, onSignedIn }: { notice?: string; returnTo?: string; onSignedIn: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     await api.signIn(field(form, "email"), field(form, "password"));
     onSignedIn();
@@ -178,7 +196,7 @@ function SignInScreen({ notice, onSignedIn }: { notice?: string; onSignedIn: () 
         </button>
       </form>
       <p className="or">
-        <GitHubSignIn />
+        <GitHubSignIn returnTo={returnTo} />
       </p>
     </Centered>
   );
