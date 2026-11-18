@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import type { Clock } from "../clock.js";
+import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -123,8 +123,7 @@ export async function mentionsInEach(db: Db | Tx, workspaceId: string, texts: st
 }
 
 export async function createTicket(
-  db: Db,
-  clock: Clock,
+  { db, clock, live }: Context,
   userId: string,
   projectId: string,
   input: { title: string; description?: string },
@@ -146,6 +145,7 @@ export async function createTicket(
     );
     const ticket = (await findTicketRow(tx, userId, rows[0]!.id))!;
     await recordChanges(tx, ticket, userId, now, [{ field: "created", from: null, to: null }]);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.created", projectId: ticket.projectId, ticketId: ticket.id });
     return withMentions(tx, ticket);
   });
 }
@@ -210,8 +210,7 @@ export interface TicketEdit {
 
 /** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
 export async function editTicket(
-  db: Db,
-  clock: Clock,
+  { db, clock, live }: Context,
   userId: string,
   ticketId: string,
   edit: TicketEdit,
@@ -267,6 +266,7 @@ export async function editTicket(
       ],
     );
     await recordChanges(tx, ticket, userId, clock.now(), changes);
+    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     return withMentions(tx, next);
   });
 }

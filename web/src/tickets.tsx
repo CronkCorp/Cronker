@@ -12,6 +12,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
@@ -37,11 +38,18 @@ export function TicketScreen({
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
 
-  const loadTimeline = useCallback(() => api.timeline(ticketId).then(setTimeline), [ticketId]);
+  const latestTicket = useLatest();
+  const latestProject = useLatest();
+  const latestComments = useLatest();
+  const latestTimeline = useLatest();
+  const fail = (e: Error) => setFailure(e.message);
+  const loadTimeline = useCallback(() => latestTimeline(api.timeline(ticketId), setTimeline), [ticketId, latestTimeline]);
 
   useEffect(() => {
-    const fail = (e: Error) => setFailure(e.message);
-    api.ticket(ticketId).then(async (found) => {
+    const first = api.ticket(ticketId);
+    // Shown only until a later fetch of the Ticket answers; the screen waits for its Project too.
+    latestTicket(first, setTicket, fail);
+    first.then(async (found) => {
       const ticketProject = await api.project(found.projectId);
       // A Ticket of another of the User's Workspaces isn't shown under this one's name.
       if (ticketProject.workspaceId !== workspace.id) {
@@ -49,22 +57,41 @@ export function TicketScreen({
         return;
       }
       setProject(ticketProject);
-      setTicket(found);
     }, fail);
     api.members(workspace.id).then(setMembers, fail);
-    api.comments(ticketId).then(setComments, fail);
-    loadTimeline().catch(fail);
-  }, [ticketId, workspace.id, loadTimeline]);
+    latestComments(api.comments(ticketId), setComments, fail);
+    latestTimeline(api.timeline(ticketId), setTimeline, fail);
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline]);
+
+  // What others change shows up as it happens; what this screen saves comes back the same way.
+  useLiveEvents(workspace.id, (event) => {
+    const all = event.type === "reconnected";
+    const thisTicket = !all && "ticketId" in event && event.ticketId === ticketId;
+    if (all || (thisTicket && event.type === "ticket.changed")) {
+      latestTicket(api.ticket(ticketId), setTicket, fail);
+      loadTimeline();
+    }
+    if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
+    if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
+      latestProject(api.project(project.id), setProject, fail);
+    }
+  });
 
   const save = async (edit: TicketEdit) => {
     setError(null);
     try {
-      setTicket(await api.editTicket(ticketId, edit));
-      await loadTimeline();
+      const saved = api.editTicket(ticketId, edit);
+      latestTicket(saved, setTicket);
+      await saved;
+      loadTimeline();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  // The live refetch may have shown the new Comment already.
+  const addComment = (comment: Comment) =>
+    setComments((shown) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
 
   if (failure) return <p role="alert">{failure}</p>;
   if (!ticket || !project) return <p>Loading…</p>;
@@ -87,7 +114,7 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
-          <Comments ticket={ticket} comments={comments} onAdded={(c) => setComments([...comments, c])} />
+          <Comments ticket={ticket} comments={comments} onAdded={addComment} />
           <Timeline changes={timeline} />
         </div>
         <Fields ticket={ticket} project={project} members={members} onSave={save} />
@@ -99,9 +126,13 @@ export function TicketScreen({
 function TextFields({ ticket, onSave }: { ticket: Ticket; onSave: (edit: TicketEdit) => Promise<void> }) {
   const [title, setTitle] = useState(ticket.title);
   const [description, setDescription] = useState(ticket.description);
+  // A change saved elsewhere replaces what is shown, unless it is being edited here.
+  const saved = useRef({ title: ticket.title, description: ticket.description });
   useEffect(() => {
-    setTitle(ticket.title);
-    setDescription(ticket.description);
+    const before = saved.current;
+    setTitle((shown) => (shown === before.title ? ticket.title : shown));
+    setDescription((shown) => (shown === before.description ? ticket.description : shown));
+    saved.current = { title: ticket.title, description: ticket.description };
   }, [ticket.title, ticket.description]);
   const { busy, onSubmit } = useSubmit(() => onSave({ title, description }));
   return (

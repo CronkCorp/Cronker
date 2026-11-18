@@ -161,6 +161,7 @@ export async function useLink(context: Context, token: string, password: string)
     }
     if (link.kind === "reset") {
       await tx.query("delete from sign_ins where user_id = $1", [link.user_id]);
+      context.live.endAfterCommit(tx, (stream) => stream.userId === link.user_id);
       await endResetLinks(tx, link.user_id);
     } else {
       await tx.query(

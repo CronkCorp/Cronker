@@ -24,7 +24,7 @@ const Label = Type.String({ minLength: 1, maxLength: 50, pattern: "\\S" });
 const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(schema: T) => Type.Union([Type.Null(), schema]);
 
 export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, clock } = context;
+  const { db } = context;
   return async (app) => {
     app.post(
       "/api/projects/:projectId/tickets",
@@ -40,7 +40,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await createTicket(db, clock, user.id, request.params.projectId, request.body));
+        return reply.code(201).send(await createTicket(context, user.id, request.params.projectId, request.body));
       },
     );
 
@@ -114,7 +114,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return editTicket(db, clock, user.id, request.params.ticketId, request.body);
+        return editTicket(context, user.id, request.params.ticketId, request.body);
       },
     );
 
@@ -151,7 +151,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await addComment(db, clock, user.id, request.params.ticketId, request.body));
+        return reply.code(201).send(await addComment(context, user.id, request.params.ticketId, request.body));
       },
     );
 
