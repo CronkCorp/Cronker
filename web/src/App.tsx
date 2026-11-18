@@ -6,6 +6,7 @@ import {
   type LinkDetails,
   type Member,
   nameOf,
+  type PendingAdd,
   type User,
   type WorkspaceSummary,
 } from "./api.js";
@@ -487,11 +488,14 @@ function Members({
   onLeft: () => void;
 }) {
   const [members, setMembers] = useState<Member[] | null>(null);
+  const [pending, setPending] = useState<PendingAdd[]>([]);
   const [notice, setNotice] = useState<ReactNode>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => {
     api.members(workspace.id).then(setMembers, (e: Error) => setError(e.message));
-  }, [workspace.id]);
+    if (workspace.isAdmin) api.pendingAdds(workspace.id).then(setPending, (e: Error) => setError(e.message));
+    else setPending([]);
+  }, [workspace.id, workspace.isAdmin]);
   useEffect(refresh, [refresh]);
 
   const act = async (action: () => Promise<void>) => {
@@ -521,6 +525,7 @@ function Members({
     const { user: added } = await api.addMemberByGitHub(workspace.id, field(form, "login").trim().replace(/^@/, ""));
     element.reset();
     setNotice(<p role="status">{nameOf(added)} joins at their next sign-in with GitHub.</p>);
+    refresh();
   });
 
   return (
@@ -562,10 +567,43 @@ function Members({
       )}
       {notice}
       {error && <p role="alert">{error}</p>}
+      {pending.length > 0 && (
+        <>
+          <h2 id="pending-adds">Added, not joined yet</h2>
+          <table aria-labelledby="pending-adds">
+            <tbody>
+              {pending.map((add) => (
+                <tr key={`${add.user.id} ${add.addedVia}`}>
+                  <td>{nameOf(add.user)}</td>
+                  <td className="muted">
+                    {add.addedVia === "email"
+                      ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
+                      : "by GitHub login, joins at their next sign-in"}
+                  </td>
+                  <td className="actions">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        act(async () => {
+                          await api.cancelPendingAdd(workspace.id, add.user.id);
+                          refresh();
+                        })
+                      }
+                    >
+                      Cancel add
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <h2>Members</h2>
+        </>
+      )}
       {members === null ? (
         <p>Loading…</p>
       ) : (
-        <table>
+        <table aria-label="Members">
           <tbody>
             {members.map((member) => (
               <tr key={member.user.id}>
