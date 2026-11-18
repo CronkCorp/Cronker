@@ -353,6 +353,19 @@ ul.inbox li {
 ul.inbox small {
   color: var(--muted);
 }
+blockquote.question {
+  margin: 0.25rem 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--accent);
+}
+.comment-meta .badge {
+  margin-left: 0.35rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.8rem;
+}
 .narrow {
   max-width: 24rem;
 }

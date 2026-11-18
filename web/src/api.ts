@@ -220,6 +220,8 @@ export interface Comment {
   actor: Actor;
   createdAt: string;
   mentions: Mention[];
+  /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
+  questionId: string | null;
 }
 
 export interface Change {
@@ -270,7 +272,30 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
-export type InboxItem = ReviewItem;
+/** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
+export interface QuestionItem {
+  kind: "question";
+  ticket: TicketSummary;
+  question: {
+    id: string;
+    commentId: string;
+    body: string;
+    agent: { id: string; name: string };
+    step: { statusId: string | null; name: string };
+    askedAt: string;
+  };
+}
+
+/** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
+export interface NeedsYouItem {
+  kind: "needsYou";
+  ticket: TicketSummary;
+  status: { id: string; name: string };
+  outcome: string;
+  step: { statusId: string | null; name: string };
+}
+
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem;
 
 export interface Inbox {
   count: number;
@@ -383,6 +408,7 @@ export const api = {
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
+  dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),

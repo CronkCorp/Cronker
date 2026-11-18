@@ -17,7 +17,8 @@ export function inboxRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "The signed-in User's Inbox in a Workspace",
           description:
             "Everything in the Workspace waiting on the signed-in User, worked out from current state: " +
-            "for now, Tickets in a Review Status whose Assignee they are.",
+            "Questions Runs asked on Tickets assigned to them, until answered or dismissed; Tickets a *needs you* Outcome moved, " +
+            "until they move again; and Tickets in a Review Status. The Assignee is the User the items wait on.",
           params: Type.Object({ workspaceId: Type.String() }),
           response: { 200: Inbox, 401: ErrorBody, 404: ErrorBody },
         },
