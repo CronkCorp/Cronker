@@ -8,6 +8,9 @@ import { buildMcpServer, type Api } from "./tools.js";
 /** Where Cronk's MCP server answers, on its public address. */
 export const mcpPath = "/mcp";
 
+/** Where an MCP client learns which authorization server guards the MCP server (RFC 9728). */
+export const protectedResourcePath = `/.well-known/oauth-protected-resource${mcpPath}`;
+
 /**
  * Cronk's MCP server over streamable HTTP, without sessions: every request carries an
  * Agent's bearer token and is checked afresh, so a revoked token is refused at once.
@@ -27,7 +30,10 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
         await agentOfToken(context, authorization);
       } catch (error) {
         if (!(error instanceof ApiError) || error.statusCode !== 401) throw error;
-        reply.header("www-authenticate", `Bearer realm="Cronk", error="invalid_token"`);
+        const metadata = `${context.config.publicUrl.origin}${protectedResourcePath}`;
+        // A request with no token at all is told only where to get one (RFC 6750 §3.1, RFC 9728 §5.1).
+        const invalid = offersBearer(authorization) ? `, error="invalid_token"` : "";
+        reply.header("www-authenticate", `Bearer realm="Cronk"${invalid}, resource_metadata="${metadata}"`);
         return sendError(reply, 401, error.code, error.message, error.guidance);
       }
 

@@ -115,7 +115,7 @@ export async function authenticateAgent(context: Context, request: FastifyReques
 }
 
 /** The Agent an `Authorization` header's bearer token belongs to, or a 401 `invalid_token` refusal. */
-export async function agentOfToken({ db }: Context, header: string): Promise<AgentCaller> {
+export async function agentOfToken({ db, clock }: Context, header: string): Promise<AgentCaller> {
   const secret = /^Bearer\s+(\S+)\s*$/i.exec(header)?.[1];
   const { rows } = secret
     ? await db.query<AgentCaller>(
@@ -127,13 +127,13 @@ export async function agentOfToken({ db }: Context, header: string): Promise<Age
          join memberships on memberships.workspace_id = agents.workspace_id and memberships.user_id = agents.owner_id
          join workspaces on workspaces.id = agents.workspace_id
          join users owners on owners.id = agents.owner_id
-         where agent_tokens.token_hash = $1`,
-        [hashSecret(secret)],
+         where agent_tokens.token_hash = $1 and (agent_tokens.expires_at is null or agent_tokens.expires_at > $2)`,
+        [hashSecret(secret), clock.now()],
       )
     : { rows: [] };
   const agent = rows[0];
   if (!agent) {
-    throw new ApiError(401, "invalid_token", "That token was revoked, its Agent removed, or it never existed.", {
+    throw new ApiError(401, "invalid_token", "That token was revoked or has expired, its Agent removed, or it never existed.", {
       rule: "Only a current token of an Agent still in use, whose Owner still belongs to its Workspace, is accepted.",
       advice: "Ask the Agent's Owner to issue a new token.",
     });

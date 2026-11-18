@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type GitHubApp, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { returnAfterSignIn } from "./storage.js";
 
 /** What the codes Cronk sends the browser back with mean, for whoever is signing in or creating the App. */
 const githubErrors: Record<string, string> = {
@@ -47,14 +48,21 @@ async function createApp(githubOrganization?: string): Promise<void> {
 }
 
 /** "Sign in with GitHub", shown once the installation has its GitHub App. */
-export function GitHubSignIn({ label = "Sign in with GitHub" }: { label?: string }) {
+export function GitHubSignIn({ label = "Sign in with GitHub", returnTo }: { label?: string; returnTo?: string }) {
   const [app, setApp] = useState<GitHubApp | null>(null);
   useEffect(() => {
     api.githubApp().then(setApp, () => setApp(null));
   }, []);
   if (!app) return null;
   return (
-    <a className="button" href="/api/github/sign-in">
+    <a
+      className="button"
+      href="/api/github/sign-in"
+      onClick={() => {
+        // GitHub sends the browser back to `/`; carry on from here once signed in.
+        if (returnTo) returnAfterSignIn(returnTo);
+      }}
+    >
       {label}
     </a>
   );
