@@ -18,9 +18,13 @@ test("OpenAPI documentation is generated from the routes and served", async () =
   expect(document.servers).toEqual([{ url: cronk.url }]);
   expect(Object.keys(document.paths).sort()).toEqual([
     "/api/me",
+    "/api/projects/{projectId}",
+    "/api/projects/{projectId}/statuses",
+    "/api/projects/{projectId}/statuses/{statusId}",
     "/api/setup",
     "/api/sign-in",
     "/api/workspaces/{workspaceId}",
+    "/api/workspaces/{workspaceId}/projects",
   ]);
   expect(Object.keys(document.paths["/api/sign-in"]).sort()).toEqual(["delete", "post"]);
   expect(document.paths["/api/setup"].post.requestBody.content["application/json"].schema.required).toEqual(
