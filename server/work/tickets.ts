@@ -49,7 +49,8 @@ export const Ticket = Type.Object({
 });
 export type Ticket = Static<typeof Ticket>;
 
-const columns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
+/** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
+export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
   tickets.assignee_id as "assigneeId", to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt"`;
@@ -58,7 +59,7 @@ const columns = `tickets.id, tickets.project_id as "projectId", projects.key || 
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
 type Row = TicketRow;
 
-const summary = ({ workspaceId: _, createdAt, ...row }: Row): TicketSummary => ({
+export const ticketSummary = ({ workspaceId: _, createdAt, ...row }: Row): TicketSummary => ({
   ...row,
   createdAt: createdAt.toISOString(),
 });
@@ -76,7 +77,7 @@ export async function findTicketRow(
 ): Promise<TicketRow | undefined> {
   if (!isUuid(ticketId)) return undefined;
   const { rows } = await db.query<Row>(
-    `select ${columns}, tickets.workspace_id as "workspaceId"
+    `select ${ticketColumns}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
      join memberships on memberships.workspace_id = tickets.workspace_id and memberships.user_id = $2
      where tickets.id = $1 ${lock ? "for update of tickets" : ""}`,
@@ -91,7 +92,7 @@ export async function findTicket(db: Db, userId: string, ticketId: string): Prom
 }
 
 async function withMentions(db: Db | Tx, row: Row): Promise<Ticket> {
-  return { ...summary(row), mentions: await mentionsIn(db, row.workspaceId, row.description) };
+  return { ...ticketSummary(row), mentions: await mentionsIn(db, row.workspaceId, row.description) };
 }
 
 const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;
@@ -187,14 +188,14 @@ export async function listTickets(
     match((p) => `exists (select 1 from unnest(tickets.labels) as l where lower(l) = lower(${p}))`, label.trim());
   }
   const { rows } = await db.query<Row>(
-    `select ${columns}, tickets.workspace_id as "workspaceId"
+    `select ${ticketColumns}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
      order by statuses.position, tickets.number`,
     params,
   );
-  return rows.map(summary);
+  return rows.map(ticketSummary);
 }
 
 export interface TicketEdit {

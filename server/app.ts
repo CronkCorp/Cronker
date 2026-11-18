@@ -9,6 +9,7 @@ import type { Context } from "./context.js";
 import { ApiError, sendError } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { identityRoutes } from "./identity/routes.js";
+import { inboxRoutes } from "./inbox/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
@@ -48,6 +49,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(inboxRoutes(context));
 
   const { webRoot } = context.config;
   if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
