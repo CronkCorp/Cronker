@@ -133,3 +133,44 @@ test("a failed Run waits in the Inbox, and Retry starts a fresh one", async ({ p
   await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
   expect(cronk.runner.starts).toHaveLength(2);
 });
+
+test("a Discovered Ticket an Agent filed waits in the Inbox until dismissed", async ({ page, cronk }) => {
+  const credentials = { email: "ada@example.com", password: "correct horse battery" };
+  const setup = await cronk.request("POST", "/api/setup", {
+    body: { ...credentials, setupCode: cronk.setupCode(), workspaceName: "Ada's Workspace" },
+  });
+  const { workspace } = await setup.json();
+  const signedIn = await cronk.request("POST", "/api/sign-in", { body: credentials });
+  const cookie = signedIn.headers.get("set-cookie")!.split(";")[0]!;
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: status("Triage") });
+  const [run] = await call("GET", `/api/tickets/${ticket.id}/runs`);
+
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill(credentials.email);
+  await page.getByLabel("Password").fill(credentials.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const inboxLink = page.getByRole("navigation").getByRole("link", { name: /^Inbox/ });
+  await inboxLink.click();
+  await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
+
+  await cronk.request("POST", `/api/projects/${project.id}/tickets`, {
+    headers: { authorization: `Bearer ${secret}` },
+    body: { title: "Flaky parser", runId: run.id },
+  });
+  const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
+  await expect(items).toHaveCount(1);
+  await expect(items.first()).toContainText("Discovered by claude-max while on CRONK-1");
+  await expect(items.first().getByRole("link", { name: "CRONK-2 Flaky parser" })).toBeVisible();
+
+  await items.first().getByRole("button", { name: "Dismiss CRONK-2" }).click();
+  await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
+  await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
+});

@@ -63,7 +63,14 @@ export const UnverifiedItem = Type.Object({
   }),
 });
 
-export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem]);
+/** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
+export const DiscoveredItem = Type.Object({
+  kind: Type.Literal("discovered"),
+  ticket: TicketSummary,
+  agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Agent that filed it." }),
+});
+
+export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem]);
 export type InboxItem = Static<typeof InboxItem>;
 
 export const Inbox = Type.Object({
@@ -135,6 +142,16 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
     [workspaceId, userId, wentWrongStates],
   );
   for (const { run, ...row } of wentWrong) items.push({ kind: "run", ticket: ticketSummary(row), run });
+  const { rows: discovered } = await db.query<TicketRow & { agent: { id: string; name: string } }>(
+    `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
+       json_build_object('id', agents.id, 'name', agents.name) as agent
+     from tickets join projects on projects.id = tickets.project_id
+     join agents on agents.id = tickets.discovered_by_agent_id
+     where tickets.workspace_id = $1 and tickets.assignee_id = $2 and tickets.discovery_waits
+     order by projects.key, tickets.number`,
+    [workspaceId, userId],
+  );
+  for (const { agent, ...row } of discovered) items.push({ kind: "discovered", ticket: ticketSummary(row), agent });
   return { count: items.length, items };
 }
 
