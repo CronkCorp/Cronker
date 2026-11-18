@@ -8,9 +8,11 @@ import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
 import { Report, reportsOn, writeReport } from "./reports.js";
+import { acceptTicket, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
+  dismissTicket,
   editTicket,
   findTicket,
   findTicketByKey,
@@ -37,15 +39,34 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "Create a Ticket",
-          description: "Creates a Ticket with the Project's next key, in the Project's first Backlog Status.",
+          description:
+            "Creates a Ticket with the Project's next key, in the Project's first Backlog Status. A Sub-Ticket, given " +
+            "its `parentId`, starts with its parent's Assignee and Delegation. Agents create Tickets too: during its " +
+            "running Run an Agent may split its Run's Ticket into Sub-Tickets (`no_running_run` for any other " +
+            "parent). Any other Ticket an Agent files is a Discovered Ticket: undelegated, assigned to the Assignee of " +
+            "the Ticket of the Run it names in `runId` (or, naming none, to the Agent's Owner), and waiting in their " +
+            "Inbox until a User delegates, moves or dismisses it.",
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({ title: Title, description: Type.Optional(Description) }),
-          response: { 201: Ticket, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          body: Type.Object({
+            title: Title,
+            description: Type.Optional(Description),
+            parentId: Type.Optional(
+              Type.String({ format: "uuid", description: "Makes it a Sub-Ticket of this Ticket of the same Project." }),
+            ),
+            runId: Type.Optional(
+              Type.String({
+                format: "uuid",
+                description:
+                  "For an Agent filing a Discovered Ticket: its running Run, whose Ticket it records as the source.",
+              }),
+            ),
+          }),
+          response: { 201: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        return reply.code(201).send(await createTicket(context, user.id, request.params.projectId, request.body));
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await createTicket(context, caller, request.params.projectId, request.body));
       },
     );
 
@@ -140,6 +161,13 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
                 }),
               ),
             ),
+            autonomousDelegation: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Lets a Step complete the Ticket itself, as Unverified, or stops that. Only Users set it; " +
+                  "its Sub-Tickets take it too.",
+              }),
+            ),
             dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
             estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
             statusId: Type.Optional(
@@ -170,6 +198,73 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           });
         }
         return editTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId, request.body);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/dismiss",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Dismiss a Discovered Ticket",
+          description:
+            "Takes a Discovered Ticket waiting for a User out of its Assignee's Inbox, and out of the hands of the " +
+            "Agent that filed it, leaving it where it is. Delegating or moving it does the same. Refused for any " +
+            "other Ticket (`not_waiting`).",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return dismissTicket(context, user.id, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/accept",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Accept an Unverified Ticket",
+          description:
+            "Marks a Ticket a Run completed as Verified, leaving it in its Done Status. Only Users Accept; " +
+            "a Ticket that isn't Unverified is refused with `not_unverified`.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return acceptTicket(context, user, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/reopen",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Reopen an Unverified Ticket",
+          description:
+            "Sends a Ticket a Run completed back to the Status of the Step that completed it, with a Comment saying why, " +
+            "so a new Run picks it up there; it blocks again the Tickets it blocks. Only Users Reopen; a Ticket that " +
+            "isn't Unverified is refused with `not_unverified`.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            comment: Type.String({
+              minLength: 1,
+              maxLength: 100_000,
+              pattern: "\\S",
+              description: "Why it is reopened, in Markdown; added to the Ticket's Comments.",
+            }),
+          }),
+          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return reopenTicket(context, user, request.params.ticketId, request.body.comment);
       },
     );
 
@@ -274,7 +369,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Relate a Ticket to another",
           description:
             "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace, " +
-            "named by its id or its key.",
+            "named by its id or its key. An Agent adds only blocks (`agent_adds_only_blocks`), and only from a " +
+            "Discovered Ticket it filed that still waits for a User (`not_your_discovered_ticket`).",
           params: Type.Object({ ticketId: Type.String() }),
           body: Type.Union([
             Type.Object({ kind: RelationKind, ticketId: Type.String({ description: "The other Ticket." }) }),
@@ -285,12 +381,12 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               }),
             }),
           ]),
-          response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        return reply.code(201).send(await addRelation(context, user.id, request.params.ticketId, request.body));
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await addRelation(context, caller, request.params.ticketId, request.body));
       },
     );
 

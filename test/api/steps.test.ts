@@ -274,7 +274,7 @@ describe("Agents and Steps", () => {
         code: "agent_not_allowed",
         message: expect.any(String),
         rule:
-          "Agents may read their Workspace and comment on its Tickets; during their running Run on a Ticket they may also edit it, write Reports on it and finish the Run. Everything else needs a User.",
+          "Agents may read their Workspace, comment on its Tickets and file Tickets; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
@@ -615,7 +615,9 @@ describe("the Brief preview", () => {
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
         "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
-          "and write Reports on it; leave everything else to its Users.",
+          "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
+        "- File anything you find that isn't part of CRONK-1's work with `file_ticket`, giving your Run id: it waits " +
+          "for CRONK-1's Assignee as a Discovered Ticket.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );

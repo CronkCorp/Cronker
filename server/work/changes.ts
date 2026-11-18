@@ -11,7 +11,8 @@ export const ChangedBy = Type.Union([
 /**
  * What a Change changed. `created` marks the Ticket's creation. `parent` is this Ticket's parent; `subTicket`,
  * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null). `stepSkipped`
- * marks Cronk passing the Ticket on past a Step it didn't pass, before the `status` Change moving it.
+ * marks Cronk passing the Ticket on past a Step it didn't pass, before the `status` Change moving it. `dismissed` marks a
+ * User dismissing a Discovered Ticket from their Inbox.
  */
 export const changeFields = [
   "created",
@@ -30,6 +31,9 @@ export const changeFields = [
   "relatesTo",
   "delegate",
   "stepSkipped",
+  "autonomousDelegation",
+  "verification",
+  "dismissed",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 
@@ -40,7 +44,7 @@ export const Change = Type.Object({
   field: Type.Union(changeFields.map((f) => Type.Literal(f))),
   from: Type.Unknown({
     description:
-      "The value before: a string, number, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
+      "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
       "and the default Outcome the Ticket moved on by.",
@@ -58,8 +62,8 @@ export interface NewChange {
   to: unknown;
 }
 
-/** Who makes a Change: a User, by id, an Agent during one of its Runs, or Cronk itself. */
-export type ChangeActor = string | { kind: "agent"; id: string; runId: string } | { kind: "cronk" };
+/** Who makes a Change: a User, by id, an Agent (during one of its Runs, or outside any), or Cronk itself. */
+export type ChangeActor = string | { kind: "agent"; id: string; runId: string | null } | { kind: "cronk" };
 
 export async function recordChanges(
   tx: Tx,

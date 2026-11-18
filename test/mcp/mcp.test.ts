@@ -75,8 +75,11 @@ describe("MCP with an Agent token", () => {
     const { tools } = await client.listTools();
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "add_block",
       "comment",
+      "create_sub_ticket",
       "edit_ticket",
+      "file_ticket",
       "finish",
       "list_tickets",
       "read_ticket",
@@ -211,6 +214,41 @@ describe("MCP with an Agent token", () => {
     expect(later.json.reports).toEqual([
       expect.objectContaining({ runId: read.runs[0].id, title: "Findings", body: "In the parser." }),
     ]);
+  });
+
+  test("during its Run an Agent splits its Ticket and files a Discovered Ticket that blocks it", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Investigate") },
+    });
+    const client = await connect(secret);
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    const runId = read.runs[0].id;
+
+    const sub = await call(client, "create_sub_ticket", { ticket: "CRONK-1", title: "First half", description: "Half." });
+    expect(sub.isError).toBe(false);
+    expect(sub.json).toEqual(expect.objectContaining({ key: "CRONK-3", parentId: ticket.id, delegateId: agent.id }));
+
+    const found = await call(client, "file_ticket", { project: "cronk", title: "Flaky parser", run: runId });
+    expect(found.isError).toBe(false);
+    expect(found.json).toEqual(
+      expect.objectContaining({ key: "CRONK-4", delegateId: null, discovered: expect.objectContaining({ runId, waiting: true }) }),
+    );
+    const retitled = await call(client, "edit_ticket", { ticket: "CRONK-4", title: "Flaky parser on comments" });
+    expect(retitled.json.title).toBe("Flaky parser on comments");
+
+    const blocked = await call(client, "add_block", { ticket: "CRONK-4", blocks: "CRONK-1" });
+    expect(blocked.isError).toBe(false);
+    expect(blocked.json).toEqual(expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-1" }) }));
+    const refused = await call(client, "add_block", { ticket: "CRONK-2", blocks: "CRONK-1" });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "not_your_discovered_ticket" }) });
+    const noProject = await call(client, "file_ticket", { project: "NOPE", title: "Lost" });
+    expect(noProject).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project", advice: expect.stringContaining("CRONK") }) });
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

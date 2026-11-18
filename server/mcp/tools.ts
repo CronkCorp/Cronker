@@ -52,9 +52,11 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace and comment on its Tickets. During your running Run on a Ticket you may also " +
-  "edit its description, Priority, Labels, due date and estimate, write Reports on it and finish the Run. " +
-  "Anything else is refused with the rule and what to do instead.";
+  "Agents may read their Workspace, comment on its Tickets and file Tickets. During your running Run on a Ticket " +
+  "you may also edit its description, Priority, Labels, due date and estimate, split it into Sub-Tickets, write " +
+  "Reports on it and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, " +
+  "waiting for its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add " +
+  "blocks from it. Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -76,9 +78,27 @@ export function buildMcpServer(api: Api): McpServer {
   const ownWorkspace = () => (workspace ??= get<{ workspace: Workspace }>("/api/agent").then((me) => me.workspace));
 
   async function ticketByKeyOrId(ticket: string) {
-    if (isUuid(ticket)) return get<{ id: string; key: string }>(`/api/tickets/${ticket}`);
+    if (isUuid(ticket)) return get<{ id: string; key: string; projectId: string }>(`/api/tickets/${ticket}`);
     const { id } = await ownWorkspace();
-    return get<{ id: string; key: string }>(`/api/workspaces/${id}/tickets/${encodeURIComponent(ticket)}`);
+    return get<{ id: string; key: string; projectId: string }>(`/api/workspaces/${id}/tickets/${encodeURIComponent(ticket)}`);
+  }
+
+  async function projects() {
+    const { id } = await ownWorkspace();
+    return get<ProjectSummary[]>(`/api/workspaces/${id}/projects`);
+  }
+
+  /** The Project of your Workspace with that key, ignoring case; refused naming the keys there are. */
+  async function projectByKey(key: string, orElse = "") {
+    const all = await projects();
+    const project = all.find((p) => p.key.toLowerCase() === key.trim().toLowerCase());
+    if (project) return project;
+    throw new Refused({
+      code: "unknown_project",
+      message: `Your Workspace has no Project with the key ${key}.`,
+      rule: "A Project is named by its key, among the Projects of your Workspace.",
+      advice: `Use one of these keys${orElse}: ${all.map((p) => p.key).join(", ") || "(none yet)"}.`,
+    });
   }
 
   server.registerTool(
@@ -123,19 +143,7 @@ export function buildMcpServer(api: Api): McpServer {
     },
     (filter) =>
       answer(async () => {
-        const { id } = await ownWorkspace();
-        const projects = await get<ProjectSummary[]>(`/api/workspaces/${id}/projects`);
-        const chosen = filter.project
-          ? projects.filter((p) => p.key.toLowerCase() === filter.project!.trim().toLowerCase())
-          : projects;
-        if (chosen.length === 0 && filter.project) {
-          throw new Refused({
-            code: "unknown_project",
-            message: `Your Workspace has no Project with the key ${filter.project}.`,
-            rule: "A Project is named by its key, among the Projects of your Workspace.",
-            advice: `Use one of these keys, or leave the Project out: ${projects.map((p) => p.key).join(", ") || "(none yet)"}.`,
-          });
-        }
+        const chosen = filter.project ? [await projectByKey(filter.project, ", or leave the Project out")] : await projects();
         const tickets = [];
         for (const summary of chosen) {
           const project = await get<Project>(`/api/projects/${summary.id}`);
@@ -205,10 +213,12 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "During your running Run on a Ticket, changes whichever of its description, Priority, Labels, due date and " +
         "estimate are given; `null` clears a due date or estimate, and Labels replace the Ticket's Labels. Each Change " +
-        "records your Run. Refused for any other Ticket, outside a running Run, and for any other field: its title, " +
-        "Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`.",
+        "records your Run. A Discovered Ticket you filed you may also edit outside a Run, its title included, until a " +
+        "User delegates, moves or dismisses it. Refused for any other Ticket, outside a running Run, and for any other " +
+        "field: a Ticket's Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`.",
       inputSchema: {
         ticket: ticketArgument,
+        title: z.string().min(1).optional().describe("A new title; only for a Discovered Ticket you filed."),
         description: z.string().optional().describe("The whole new description, in Markdown."),
         priority: z.enum(["urgent", "high", "medium", "low", "none"]).optional(),
         labels: z.array(z.string().min(1)).optional().describe("The Ticket's Labels, all of them."),
@@ -220,6 +230,72 @@ export function buildMcpServer(api: Api): McpServer {
       answer(async () => {
         const found = await ticketByKeyOrId(ticket);
         return send("PATCH", `/api/tickets/${found.id}`, edit);
+      }),
+  );
+
+  server.registerTool(
+    "create_sub_ticket",
+    {
+      title: "Split your Run's Ticket into a Sub-Ticket",
+      description:
+        "During your running Run on a Ticket, creates a Sub-Ticket of it in the same Project's first Backlog Status, " +
+        "with its Assignee and Delegation. The Ticket gets no Runs while a Sub-Ticket is unfinished. Refused for any " +
+        "other Ticket and outside a running Run.",
+      inputSchema: {
+        ticket: ticketArgument.describe("Your Run's Ticket, the parent: its key, such as `CRONK-12`, or its id."),
+        title: z.string().min(1),
+        description: z.string().optional().describe("Markdown."),
+      },
+    },
+    ({ ticket, title, description }) =>
+      answer(async () => {
+        const parent = await ticketByKeyOrId(ticket);
+        return send("POST", `/api/projects/${parent.projectId}/tickets`, { title, description, parentId: parent.id });
+      }),
+  );
+
+  server.registerTool(
+    "file_ticket",
+    {
+      title: "File a Discovered Ticket",
+      description:
+        "Files a Ticket you found that isn't part of your Ticket's work, such as a bug noticed on the way, as a " +
+        "Discovered Ticket: in the Project's first Backlog Status, undelegated, assigned to the Assignee of your Run's " +
+        "Ticket (or, without a Run, to your Owner) and waiting in their Inbox. Until a User delegates, moves or " +
+        "dismisses it you may edit it with `edit_ticket` and add blocks from it with `add_block`. To split your own " +
+        "Ticket's work, use `create_sub_ticket` instead.",
+      inputSchema: {
+        project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
+        title: z.string().min(1),
+        description: z.string().optional().describe("Markdown."),
+        run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it, recorded as the source."),
+      },
+    },
+    ({ project, title, description, run }) =>
+      answer(async () => {
+        const { id } = await projectByKey(project);
+        return send("POST", `/api/projects/${id}/tickets`, { title, description, runId: run });
+      }),
+  );
+
+  server.registerTool(
+    "add_block",
+    {
+      title: "Block a Ticket by your Discovered Ticket",
+      description:
+        "Marks that a Discovered Ticket you filed blocks another Ticket of your Workspace, which then gets no Runs " +
+        "until it is finished. Refused for any other Ticket, once a User has delegated, moved or dismissed it, and for " +
+        "a block that would form a cycle.",
+      inputSchema: {
+        ticket: ticketArgument.describe("Your Discovered Ticket: its key, such as `CRONK-12`, or its id."),
+        blocks: ticketArgument.describe("The Ticket it blocks: its key, such as `CRONK-12`, or its id."),
+      },
+    },
+    ({ ticket, blocks }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        const other = isUuid(blocks) ? { ticketId: blocks } : { ticketKey: blocks };
+        return send("POST", `/api/tickets/${found.id}/relations`, { kind: "blocks", ...other });
       }),
   );
 

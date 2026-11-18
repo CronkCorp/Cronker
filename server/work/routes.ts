@@ -128,6 +128,12 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
             newTicketsDelegated: Type.Optional(
               Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
             ),
+            autonomousDelegationDefault: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it on the Ticket already.",
+              }),
+            ),
           }),
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },
