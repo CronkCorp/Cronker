@@ -16,11 +16,24 @@ export const Outcome = Type.Object({
 });
 export type Outcome = Static<typeof Outcome>;
 
-/** The agent work a Status asks for: a Brief, the model it wants, a round limit and its Outcomes. */
+/** Which Tickets a Step lets through: only those with the Label, or only those without it. */
+export const LabelRule = Type.Object(
+  {
+    kind: Type.Union([Type.Literal("requires"), Type.Literal("skippedBy")], {
+      description: "`requires`: only Tickets with the Label pass. `skippedBy`: Tickets with the Label don't.",
+    }),
+    label: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "Matched ignoring case." }),
+  },
+  { description: "A Ticket that doesn't pass gets no Run and moves on by the Step's default Outcome." },
+);
+export type LabelRule = Static<typeof LabelRule>;
+
+/** The agent work a Status asks for: a Brief, the model it wants, a round limit, a Label rule and its Outcomes. */
 export const Step = Type.Object({
   brief: Type.String({ description: "Markdown; the middle of the Brief a Run starts from." }),
   model: Type.String({ description: "The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`." }),
   roundLimit: Type.Integer({ minimum: 0 }),
+  labelRule: Type.Union([LabelRule, Type.Null()]),
   outcomes: Type.Array(Outcome),
 });
 export type Step = Static<typeof Step>;
@@ -29,6 +42,10 @@ export type Step = Static<typeof Step>;
 export async function stepsOf(db: Db | Tx, projectId: string): Promise<Map<string, Step>> {
   const { rows } = await db.query<Omit<Step, "outcomes"> & { statusId: string; outcomes: Outcome[] }>(
     `select steps.status_id as "statusId", steps.brief, steps.model, steps.round_limit as "roundLimit",
+       case when steps.label_rule_kind is null then null else json_build_object(
+         'kind', case steps.label_rule_kind when 'skipped_by' then 'skippedBy' else steps.label_rule_kind end,
+         'label', steps.label_rule_label
+       ) end as "labelRule",
        coalesce(json_agg(json_build_object(
          'name', outcomes.name, 'statusId', outcomes.status_id, 'default', outcomes.is_default,
          'needsYou', outcomes.needs_you, 'countsAsRound', outcomes.counts_as_round
@@ -109,11 +126,23 @@ export async function writeStep(
   now: Date,
 ): Promise<void> {
   const { rows } = await tx.query<{ id: string }>(
-    `insert into steps (workspace_id, project_id, status_id, brief, model, round_limit, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7)
-     on conflict (status_id) do update set brief = excluded.brief, model = excluded.model, round_limit = excluded.round_limit
+    `insert into steps (workspace_id, project_id, status_id, brief, model, round_limit, label_rule_kind, label_rule_label,
+       created_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     on conflict (status_id) do update set brief = excluded.brief, model = excluded.model, round_limit = excluded.round_limit,
+       label_rule_kind = excluded.label_rule_kind, label_rule_label = excluded.label_rule_label
      returning id`,
-    [project.workspaceId, project.id, statusId, step.brief, step.model, step.roundLimit, now],
+    [
+      project.workspaceId,
+      project.id,
+      statusId,
+      step.brief,
+      step.model,
+      step.roundLimit,
+      step.labelRule && (step.labelRule.kind === "skippedBy" ? "skipped_by" : "requires"),
+      step.labelRule?.label.trim() ?? null,
+      now,
+    ],
   );
   const stepId = rows[0]!.id;
   await tx.query("delete from outcomes where step_id = $1", [stepId]);

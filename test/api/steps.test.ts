@@ -14,7 +14,11 @@ interface Status {
   id: string;
   name: string;
   kind: string;
-  step: { brief: string; model: string; roundLimit: number; outcomes: Outcome[] } | null;
+  step: { brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; outcomes: Outcome[] } | null;
+}
+interface LabelRule {
+  kind: "requires" | "skippedBy";
+  label: string;
 }
 interface Outcome {
   name: string;
@@ -58,29 +62,36 @@ describe("the default board's Steps", () => {
     const { project, id } = await projectOnDefaultBoard();
 
     const steps = Object.fromEntries(
-      project.statuses.map((s) => [s.name, s.step && { model: s.step.model, roundLimit: s.step.roundLimit, outcomes: s.step.outcomes }]),
+      project.statuses.map((s) => [
+        s.name,
+        s.step && { model: s.step.model, roundLimit: s.step.roundLimit, labelRule: s.step.labelRule, outcomes: s.step.outcomes },
+      ]),
     );
     expect(steps).toEqual({
       Backlog: null,
       Triage: {
         model: "haiku",
         roundLimit: 2,
+        labelRule: null,
         outcomes: [outcome("ready", id("Ready"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Ready: null,
       Investigate: {
         model: "sonnet",
         roundLimit: 2,
+        labelRule: null,
         outcomes: [outcome("done", id("Implement"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Implement: {
         model: "opus",
         roundLimit: 2,
+        labelRule: null,
         outcomes: [outcome("done", id("Code review"), { default: true }), outcome("needs you", id("Ready"), { needsYou: true })],
       },
       "Code review": {
         model: "sonnet",
         roundLimit: 2,
+        labelRule: { kind: "skippedBy", label: "no-review" },
         outcomes: [
           outcome("approve", id("In Review"), { default: true }),
           outcome("changes", id("Implement"), { countsAsRound: true }),
@@ -110,6 +121,7 @@ function readyStep(id: (name: string) => string) {
     brief: "Plan the work.",
     model: "sonnet",
     roundLimit: 3,
+    labelRule: null,
     outcomes: [
       outcome("planned", id("Investigate"), { default: true }),
       outcome("unclear", id("Triage"), { countsAsRound: true }),
@@ -147,12 +159,13 @@ describe("attaching, editing and removing a Step", () => {
     expect(((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step!.roundLimit).toBe(2);
   });
 
-  test("editing a Step replaces its Brief, model, round limit and Outcomes", async () => {
+  test("editing a Step replaces its Brief, model, round limit, Label rule and Outcomes", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const edited = {
       brief: "Triage, briefly.",
       model: "opus",
       roundLimit: 1,
+      labelRule: { kind: "requires", label: "ready-to-go" },
       outcomes: [outcome("go", id("Investigate"), { default: true }), outcome("ask", id("Backlog"), { needsYou: true })],
     };
 
@@ -164,6 +177,25 @@ describe("attaching, editing and removing a Step", () => {
     expect(response.status).toBe(200);
     const changed = (await response.json()) as Project;
     expect(changed.statuses.find((s) => s.name === "Triage")!.step).toEqual(edited);
+  });
+
+  test("a Step has no Label rule unless given, and its Label is kept trimmed", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const { labelRule: _, ...step } = readyStep(id);
+    const put = async (body: unknown) => {
+      const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, { cookie, body });
+      return { status: response.status, json: await response.json() };
+    };
+    const ready = (p: Project) => p.statuses.find((s) => s.name === "Ready")!.step!.labelRule;
+
+    expect(ready((await put(step)).json)).toBeNull();
+    expect(ready((await put({ ...step, labelRule: { kind: "skippedBy", label: "  wip " } })).json)).toEqual({
+      kind: "skippedBy",
+      label: "wip",
+    });
+    for (const labelRule of [{ kind: "skippedBy", label: " " }, { kind: "ignores", label: "wip" }, { kind: "requires" }]) {
+      expect((await put({ ...step, labelRule })).status, JSON.stringify(labelRule)).toBe(400);
+    }
   });
 
   test("removing a Step leaves its Status as one where Tickets wait for a User", async () => {
