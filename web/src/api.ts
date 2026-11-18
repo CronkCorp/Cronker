@@ -70,11 +70,22 @@ export interface Outcome {
   countsAsRound: boolean;
 }
 
+/** Which Tickets a Step lets through: only those with the Label, or only those without it. */
+export interface LabelRule {
+  kind: "requires" | "skippedBy";
+  label: string;
+}
+
+/** How a Label rule reads, such as `skipped by no-review`. */
+export const labelRuleShown = ({ kind, label }: LabelRule) =>
+  kind === "requires" ? `requires ${label}` : `skipped by ${label}`;
+
 /** The agent work a Status asks for. */
 export interface Step {
   brief: string;
   model: string;
   roundLimit: number;
+  labelRule: LabelRule | null;
   outcomes: Outcome[];
 }
 
@@ -222,9 +233,12 @@ export interface Comment {
   mentions: Mention[];
 }
 
+/** Who made a Change: a User, an Agent, or Cronk itself. */
+export type ChangeActor = Actor | { kind: "cronk"; name: "Cronk" };
+
 export interface Change {
   id: string;
-  actor: Actor;
+  actor: ChangeActor;
   at: string;
   field:
     | "created"
@@ -239,6 +253,7 @@ export interface Change {
     | "parent"
     | "subTicket"
     | "delegate"
+    | "stepSkipped"
     | RelationKind;
   from: unknown;
   to: unknown;
@@ -256,6 +271,7 @@ export interface Run {
   state: RunState;
   outcome: string | null;
   question: string | null;
+  questionBy: "agent" | "cronk" | null;
   report: string | null;
   endReason: string | null;
   sessionUrl: string | null;

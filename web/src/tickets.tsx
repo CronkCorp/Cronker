@@ -6,6 +6,8 @@ import {
   type Agent,
   type Change,
   type Comment,
+  labelRuleShown,
+  type LabelRule,
   type Member,
   type Priority,
   type Project,
@@ -579,7 +581,7 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | RelationKind>, string> = {
+const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | RelationKind>, string> = {
   delegate: "Delegate",
   title: "Title",
   description: "Description",
@@ -602,8 +604,19 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
   relatesTo: { added: "related this to", removed: "removed the relation to" },
 };
 
+/** What a `stepSkipped` Change records: the Status whose Step was skipped, its Label rule and the default Outcome. */
+interface StepSkipped {
+  status: { id: string; name: string };
+  labelRule: LabelRule;
+  outcome: string;
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
+  if (change.field === "stepSkipped") {
+    const { status, labelRule, outcome } = change.to as StepSkipped;
+    return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;
+  }
   if (change.field === "description") return "changed the Description";
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
@@ -640,7 +653,12 @@ function RunEntry({ run }: { run: Run }) {
       {run.agent.name} ran the {run.step.name} Step on {run.model}:{" "}
       <span className={`run-state ${run.state}`}>{runStateShown[run.state]}</span>
       {run.outcome && <> with {run.outcome}</>}
-      {run.endReason && <>: {run.endReason}</>}{" "}
+      {run.endReason && <>: {run.endReason}</>}
+      {run.question && (
+        <>
+          , {run.questionBy === "cronk" ? "Cronk" : run.agent.name} asking: <q>{run.question}</q>
+        </>
+      )}{" "}
       <span className="muted">
         <When at={run.startedAt} />
         {run.endedAt && (
