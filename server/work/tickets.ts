@@ -4,7 +4,9 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
-import { recordChanges, type NewChange } from "./changes.js";
+import type { AgentCaller, Caller } from "../identity/callers.js";
+import { ownerName } from "../agents/tokens.js";
+import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
 import { startRunIfNeeded } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
@@ -322,17 +324,29 @@ export interface TicketEdit {
   parentId?: string | null;
 }
 
-/** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
+/** The fields of a Ticket an Agent may edit, during its running Run on it. */
+const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate"]);
+
+/**
+ * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
+ * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
+ * each of its Changes names.
+ */
 export async function editTicket(
   context: Context,
-  userId: string,
+  editor: Caller,
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
+  if (editor.kind === "agent") checkAgentFields(editor, edit);
   return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    const actor: ChangeActor =
+      editor.kind === "user" ? editor.id : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+    // Only Users get this far with fields that name a User.
+    const userId = editor.id;
     const next = { ...ticket };
     const changes: NewChange[] = [];
     /** Sets a field and records the Change, if the value differs; `shown` gives how the Change shows a value. */
@@ -401,14 +415,14 @@ export async function editTicket(
       ],
     );
     const now = clock.now();
-    await recordChanges(tx, ticket, userId, now, changes);
+    await recordChanges(tx, ticket, actor, now, changes);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     if (next.parentId !== ticket.parentId) {
       // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
       const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
       const subTicketChange = async (parentId: string | null, change: NewChange) => {
         if (parentId === null) return;
-        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
+        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, actor, now, [change]);
         live.publish(tx, ticket.workspaceId, {
           type: "ticket.changed",
           projectId: ticket.projectId,
@@ -423,6 +437,40 @@ export async function editTicket(
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
     if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, next);
+  });
+}
+
+/** Refuses an Agent's edit of a field only Users edit. */
+function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
+  const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
+    (field) => edit[field] !== undefined && !agentEditable.has(field),
+  );
+  if (refused.length === 0) return;
+  throw new ApiError(
+    403,
+    "agent_field_not_allowed",
+    `${agent.name} is an Agent, and Agents don't edit a Ticket's ${refused.join(", ")}.`,
+    {
+      rule:
+        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate; " +
+        "its title, Assignee, Delegation, parent and Status are for Users to change.",
+      advice:
+        `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
+        "to change the rest; a Run moves its Ticket with `finish`.",
+    },
+  );
+}
+
+/** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
+export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
+    [ticket.id, agent.id],
+  );
+  if (rows[0]) return rows[0].id;
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
+    rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
+    advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
   });
 }
 

@@ -274,7 +274,7 @@ export async function finishRun(
     if (outcome.statusId !== ticket.statusId) {
       await tx.query("update tickets set status_id = $2 where id = $1", [ticket.id, outcome.statusId]);
       const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
-      await recordChanges(tx, ticket, { kind: "agent", id: caller.id }, now, [
+      await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [
         { field: "status", from: named(ticket.statusId), to: named(outcome.statusId) },
       ]);
     }

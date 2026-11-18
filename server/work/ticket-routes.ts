@@ -168,8 +168,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               "the Outcome moves the Ticket.",
           });
         }
-        const user = await requireUser(context, request);
-        return editTicket(context, user.id, request.params.ticketId, request.body);
+        return editTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId, request.body);
       },
     );
 

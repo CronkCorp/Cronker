@@ -52,7 +52,9 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace, comment on its Tickets and finish their own Runs; anything else is refused with the rule and what to do instead.";
+  "Agents may read their Workspace and comment on its Tickets. During your running Run on a Ticket you may also " +
+  "edit its description, Priority, Labels, due date and estimate, write Reports on it and finish the Run. " +
+  "Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
