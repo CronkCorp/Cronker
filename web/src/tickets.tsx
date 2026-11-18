@@ -119,10 +119,10 @@ export function TicketScreen({
     }
   });
 
-  const save = async (edit: TicketEdit) => {
+  /** Shows the Ticket a change returns, and what else it changed; or why it was refused. */
+  const apply = async (saved: Promise<Ticket>) => {
     setError(null);
     try {
-      const saved = api.editTicket(ticketId, edit);
       latestTicket(saved, setTicket);
       await saved;
       loadTimeline();
@@ -131,6 +131,7 @@ export function TicketScreen({
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+  const save = (edit: TicketEdit) => apply(api.editTicket(ticketId, edit));
 
   // The live refetch may have shown the new Comment already.
   const addComment = (comment: Comment) =>
@@ -147,6 +148,19 @@ export function TicketScreen({
         <span className="muted">{ticket.key}</span> {ticket.title}
       </h1>
       {error && <p role="alert">{error}</p>}
+      {ticket.verification && (
+        <Verification
+          ticket={ticket}
+          runs={runs}
+          onAccept={() => apply(api.acceptTicket(ticket.id))}
+          onReopen={async (comment) => {
+            const reopened = api.reopenTicket(ticket.id, comment);
+            await apply(reopened);
+            await reopened;
+            latestComments(api.comments(ticketId), setComments, fail);
+          }}
+        />
+      )}
       <div className="ticket-layout">
         <div>
           <TextFields ticket={ticket} onSave={save} />
@@ -253,7 +267,12 @@ function Fields({
     <aside className="fields" aria-label="Fields">
       <label>
         Status
-        <select value={ticket.statusId} onChange={(e) => void onSave({ statusId: e.target.value })}>
+        <select
+          value={ticket.statusId}
+          // An Unverified Ticket leaves its Done Status only by Accept or Reopen.
+          disabled={ticket.verification === "unverified"}
+          onChange={(e) => void onSave({ statusId: e.target.value })}
+        >
           {project.statuses.map((status) => (
             <option key={status.id} value={status.id}>
               {status.name}
@@ -388,7 +407,84 @@ function Delegation({
         <p className="muted">You have no Agent in this Workspace to delegate to.</p>
       )}
       {delegate && delegate.owner.id !== user.id && <p className="muted">{nameOf(delegate.owner)}'s Agent.</p>}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={ticket.autonomousDelegation === true}
+          onChange={(e) => void onSave({ autonomousDelegation: e.target.checked })}
+        />
+        Autonomous Delegation: a Step may complete it, as Unverified
+      </label>
+      {ticket.autonomousDelegation === null && (
+        <p className="muted">Until set, it takes the Project's setting when first delegated.</p>
+      )}
     </fieldset>
+  );
+}
+
+/**
+ * A Ticket a Run completed: Unverified until the User Accepts it, or Reopens it with a Comment saying why,
+ * sending it back to the Step that completed it.
+ */
+function Verification({
+  ticket,
+  runs,
+  onAccept,
+  onReopen,
+}: {
+  ticket: Ticket;
+  runs: Run[];
+  onAccept: () => Promise<void>;
+  onReopen: (comment: string) => Promise<void>;
+}) {
+  const [reopening, setReopening] = useState(false);
+  const { error, busy, onSubmit } = useSubmit(async (form) => {
+    await onReopen(field(form, "comment"));
+    setReopening(false);
+  });
+  const completing = runs.filter((r) => r.state === "finished").at(-1);
+  const by = completing ? `${completing.agent.name}'s Run of the ${completing.step.name} Step` : "A Run";
+  return (
+    <section aria-label="Verification" className={`verification ${ticket.verification}`}>
+      {ticket.verification === "verified" ? (
+        <p>
+          <strong>Verified.</strong> A Run completed this and a User Accepted it.
+        </p>
+      ) : (
+        <>
+          <p>
+            <strong>{by} completed this. It is Unverified</strong> until you Accept it, or Reopen it to send it back to
+            that Step.
+          </p>
+          {reopening ? (
+            <form onSubmit={onSubmit}>
+              <label>
+                Why reopen it?
+                <textarea name="comment" required rows={3} autoFocus />
+              </label>
+              {error && <p role="alert">{error}</p>}
+              <div className="actions">
+                <button type="submit" disabled={busy}>
+                  Reopen
+                </button>
+                <button type="button" className="link" onClick={() => setReopening(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="actions">
+              <button type="button" onClick={() => void onAccept()}>
+                Accept
+              </button>
+              <button type="button" className="secondary" onClick={() => setReopening(true)}>
+                Reopen
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -565,6 +661,7 @@ function Comments({
               <strong>{comment.actor.name}</strong>
               {comment.actor.kind === "agent" && <span className="muted"> (Agent)</span>} <When at={comment.createdAt} />
               {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
+              {comment.questionId && <span className="badge">Question</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
             {replyingTo === comment.id ? (
@@ -617,6 +714,8 @@ const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "ste
   dueDate: "Due date",
   estimate: "Estimate",
   parent: "Parent",
+  autonomousDelegation: "Autonomous Delegation",
+  verification: "Verification",
 };
 
 const ticketShown = (ref: TicketRef) => `${ref.key} ${ref.title}`;
@@ -660,6 +759,8 @@ function shown(change: Change, value: unknown): string {
     return (value as { name: string }).name;
   }
   if (change.field === "parent") return ticketShown(value as TicketRef);
+  if (change.field === "autonomousDelegation") return value ? "on" : "off";
+  if (change.field === "verification") return value === "verified" ? "Verified" : "Unverified";
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 }

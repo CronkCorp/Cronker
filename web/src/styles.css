@@ -359,6 +359,19 @@ ul.inbox li {
 ul.inbox small {
   color: var(--muted);
 }
+blockquote.question {
+  margin: 0.25rem 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--accent);
+}
+.comment-meta .badge {
+  margin-left: 0.35rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-size: 0.8rem;
+}
 ul.inbox li button {
   justify-self: start;
 }
@@ -445,4 +458,19 @@ td.actions {
 .run-state.lost,
 .run-state.refused {
   color: var(--warn);
+}
+.verification {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+  padding: 0.5rem 1rem 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.verification.verified {
+  border-left-color: var(--muted);
+}
+.verification .actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }
