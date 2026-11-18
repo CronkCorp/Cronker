@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, type Viewer } from "../identity/viewers.js";
@@ -131,12 +131,6 @@ export async function insertStatus(
      values ($1, $2, $3, $4, $5, $6)`,
     [project.workspaceId, project.id, status.name, status.kind, position, now],
   );
-}
-
-/** Whether a query failed on the named unique index. */
-function violates(error: unknown, constraint: string): boolean {
-  const { code, constraint: violated } = error as { code?: string; constraint?: string };
-  return code === "23505" && violated === constraint;
 }
 
 export function projectNotFound(): ApiError {

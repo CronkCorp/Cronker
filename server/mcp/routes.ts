@@ -38,7 +38,7 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
           headers: { authorization },
           ...(body === undefined ? {} : { payload: body as object }),
         });
-        return { status: response.statusCode, json: response.json() };
+        return { status: response.statusCode, json: response.body ? response.json() : null };
       };
       const server = buildMcpServer(asAgent);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -58,8 +58,9 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
         url: mcpPath,
         schema: { hide: true },
         handler: async (_request, reply) =>
-          reply.header("allow", "POST").code(405).send({
-            error: { code: "method_not_allowed", message: "Cronk's MCP server takes POST requests only." },
+          sendError(reply.header("allow", "POST"), 405, "method_not_allowed", "Cronk's MCP server takes POST requests only.", {
+            rule: "Cronk's MCP server keeps no sessions, so it has no stream to open or session to end.",
+            advice: "Send each MCP request as a POST with your Agent's token.",
           }),
       });
     }

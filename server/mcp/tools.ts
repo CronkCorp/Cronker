@@ -83,7 +83,9 @@ export function buildMcpServer(api: Api): McpServer {
     "read_ticket",
     {
       title: "Read a Ticket",
-      description: "A Ticket of your Workspace with its fields and its Comments, oldest first.",
+      description:
+        "A Ticket of your Workspace with its fields and its Comments, oldest first. " +
+        "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
       annotations: { readOnlyHint: true },
     },
@@ -120,6 +122,7 @@ export function buildMcpServer(api: Api): McpServer {
           throw new Refused({
             code: "unknown_project",
             message: `Your Workspace has no Project with the key ${filter.project}.`,
+            rule: "A Project is named by its key, among the Projects of your Workspace.",
             advice: `Use one of these keys, or leave the Project out: ${projects.map((p) => p.key).join(", ") || "(none yet)"}.`,
           });
         }
@@ -134,6 +137,7 @@ export function buildMcpServer(api: Api): McpServer {
               throw new Refused({
                 code: "unknown_status",
                 message: `${project.key} has no Status named ${filter.status}.`,
+                rule: "A Status is named as it is on its Project's board, ignoring case.",
                 advice: `Use one of its Statuses: ${project.statuses.map((s) => s.name).join(", ")}.`,
               });
             }
@@ -169,7 +173,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Comment on a Ticket",
       description:
         "Adds a Markdown Comment to a Ticket of your Workspace, as your Agent, or a reply to one of its Comments. " +
-        "Refused for a read-only token.",
+        "Refused for a read-only token; a Ticket outside your Workspace answers as not found, and a reply only goes " +
+        "to a Comment on the same Ticket.",
       inputSchema: {
         ticket: ticketArgument,
         body: z.string().min(1).describe("Markdown."),

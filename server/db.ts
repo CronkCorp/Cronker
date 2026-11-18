@@ -43,6 +43,12 @@ export async function migrate(pool: pg.Pool): Promise<void> {
   }
 }
 
+/** Whether a query failed on the named unique index or constraint. */
+export function violates(error: unknown, constraint: string): boolean {
+  const { code, constraint: violated } = error as { code?: string; constraint?: string };
+  return code === "23505" && violated === constraint;
+}
+
 export type Db = pg.Pool;
 export type Tx = pg.PoolClient;
 

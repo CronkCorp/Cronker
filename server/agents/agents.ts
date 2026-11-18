@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
-import type { Db } from "../db.js";
+import { violates, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { User } from "../identity/user.js";
@@ -57,7 +57,7 @@ export async function createAgent(
     );
     return (await findAgent(db, rows[0]!.id))!;
   } catch (error) {
-    if (isUniqueViolation(error)) throw nameTaken(name.trim());
+    if (violates(error, "agents_workspace_name_key")) throw nameTaken(name.trim());
     throw error;
   }
 }
@@ -93,7 +93,7 @@ export async function renameAgent(db: Db, agent: Agent, name: string): Promise<A
   try {
     await db.query("update agents set name = $2 where id = $1", [agent.id, name.trim()]);
   } catch (error) {
-    if (isUniqueViolation(error)) throw nameTaken(name.trim());
+    if (violates(error, "agents_workspace_name_key")) throw nameTaken(name.trim());
     throw error;
   }
   return { ...agent, name: name.trim() };
@@ -102,8 +102,4 @@ export async function renameAgent(db: Db, agent: Agent, name: string): Promise<A
 /** Removes an Agent: it no longer lists and its tokens are refused at once; what it did still names it. */
 export async function removeAgent(db: Db, clock: Clock, agent: Agent): Promise<void> {
   await db.query("update agents set removed_at = $2 where id = $1 and removed_at is null", [agent.id, clock.now()]);
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (error as { code?: string }).code === "23505";
 }
