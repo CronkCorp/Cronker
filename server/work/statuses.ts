@@ -12,6 +12,7 @@ import {
   type Project,
   type StatusKind,
 } from "./projects.js";
+import { outcomesOf, targetRefusal } from "./steps.js";
 
 /**
  * Changes to a Project's Statuses. Each change is worked out on the whole board in
@@ -76,6 +77,7 @@ export async function changeStatuses(
 
     checkNames(board);
     checkKinds(board, statuses);
+    await checkOutcomeTargets(tx, project, board);
     await write(tx, clock, project, board);
     live.publish(tx, project.workspaceId, { type: "statuses.changed", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };
@@ -119,6 +121,38 @@ function checkKinds(board: Draft[], before: Draft[]): void {
   }
 }
 
+/**
+ * Outcomes keep a Status to move Tickets to, of a kind they may move them to: a Status an
+ * Outcome of another Status's Step targets can't go, nor become a kind that Outcome may not target.
+ */
+async function checkOutcomeTargets(tx: Tx, project: Project, board: Draft[]): Promise<void> {
+  const named = (id: string) => project.statuses.find((s) => s.id === id)!.name;
+  for (const outcome of await outcomesOf(tx, project.id)) {
+    // A removed Status's Step goes with it.
+    if (!board.some((s) => s.id === outcome.stepStatusId)) continue;
+    const stepOn = named(outcome.stepStatusId);
+    const target = board.find((s) => s.id === outcome.statusId);
+    if (!target) {
+      const name = named(outcome.statusId);
+      throw new ApiError(
+        409,
+        "status_is_outcome_target",
+        `${stepOn}'s Outcome ${outcome.name} moves Tickets to ${name}. ` +
+          `Change that Outcome or remove ${stepOn}'s Step before removing ${name}.`,
+      );
+    }
+    const refusal = targetRefusal(outcome, target.kind);
+    if (refusal) {
+      throw new ApiError(
+        409,
+        "outcome_target_not_allowed",
+        `${stepOn}'s ${refusal.role} ${outcome.name} moves Tickets to ${target.name}, ` +
+          `so ${target.name} can't be a ${refusal.kind} Status: ${refusal.why}.`,
+      );
+    }
+  }
+}
+
 async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Promise<void> {
   const kept = board.flatMap((s) => (s.id ? [s.id] : []));
   const { rows: occupied } = await tx.query<{ name: string; ticketCount: number }>(
@@ -138,6 +172,8 @@ async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Pr
         : `${name} holds ${ticketCount} Tickets. Move them to another Status before removing ${name}.`,
     );
   }
+  // Steps go with their Statuses; removed first, so no Outcome of theirs is left targeting a removed Status.
+  await tx.query("delete from steps where project_id = $1 and not (status_id = any($2::uuid[]))", [project.id, kept]);
   await tx.query("delete from statuses where project_id = $1 and not (id = any($2::uuid[]))", [project.id, kept]);
   for (const [position, status] of board.entries()) {
     if (status.id) {

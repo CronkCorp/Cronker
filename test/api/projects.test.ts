@@ -39,7 +39,7 @@ describe("creating a Project", () => {
       workspaceId: workspace.id,
       name: "Cronker",
       key: "CRONK",
-      statuses: defaultBoard.map((status) => ({ id: expect.any(String), ...status })),
+      statuses: defaultBoard.map((status) => ({ id: expect.any(String), ...status, step: expect.toBeOneOf([null, expect.any(Object)]) })),
     });
 
     const shown = await cronk.request("GET", `/api/projects/${project.id}`, { cookie });
@@ -178,7 +178,7 @@ describe("editing a Project's Statuses", () => {
 
     expect(response.status).toBe(200);
     const changed = await response.json();
-    expect(changed.statuses[2]).toEqual({ id: statusId("Ready"), name: "Todo", kind: "backlog" });
+    expect(changed.statuses[2]).toEqual({ id: statusId("Ready"), name: "Todo", kind: "backlog", step: null });
     expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(changed);
   });
 
@@ -220,13 +220,18 @@ describe("editing a Project's Statuses", () => {
     });
 
     expect(response.status).toBe(200);
-    expect((await response.json()).statuses[5]).toEqual({ id: statusId("Code review"), name: "Code review", kind: "review" });
+    expect((await response.json()).statuses[5]).toEqual({
+      id: statusId("Code review"),
+      name: "Code review",
+      kind: "review",
+      step: expect.objectContaining({ model: "sonnet" }),
+    });
   });
 
   test("a Status is removed while another Status keeps its kind", async () => {
     const { cookie, project, statusId } = await newProject();
 
-    const response = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
+    const response = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId("Investigate")}`, {
       cookie,
     });
 
@@ -235,7 +240,7 @@ describe("editing a Project's Statuses", () => {
     expect(changed.statuses.map((s: { name: string }) => s.name)).toEqual([
       "Backlog",
       "Triage",
-      "Investigate",
+      "Ready",
       "Implement",
       "Code review",
       "In Review",
@@ -309,6 +314,11 @@ describe("every Status kind keeps a Status", () => {
     const { cookie, project, statusId } = await newProject();
     const remove = (name: string) =>
       cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId(name)}`, { cookie });
+
+    // Outcomes of Triage's and Implement's Steps move Tickets to Ready.
+    for (const name of ["Triage", "Implement"]) {
+      await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${statusId(name)}/step`, { cookie });
+    }
 
     expect((await remove("Ready")).status).toBe(200);
     const last = await remove("Backlog");

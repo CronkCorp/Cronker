@@ -242,42 +242,42 @@ describe("removing a Status that holds Tickets", () => {
     const { cookie, project, statusId } = await newProject();
     for (const title of ["First", "Second"]) {
       const ticket = await createTicket(cookie, project.id, { title });
-      expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+      expect((await edit(cookie, ticket.id, { statusId: statusId("Investigate") })).status).toBe(200);
     }
 
-    const refused = await removeStatus(cookie, project.id, statusId("Ready"));
+    const refused = await removeStatus(cookie, project.id, statusId("Investigate"));
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({
       error: {
         code: "status_has_tickets",
-        message: "Ready holds 2 Tickets. Move them to another Status before removing Ready.",
+        message: "Investigate holds 2 Tickets. Move them to another Status before removing Investigate.",
       },
     });
 
     const after = await cronk.request("GET", `/api/projects/${project.id}`, { cookie });
-    expect((await after.json()).statuses.map((s: { name: string }) => s.name)).toContain("Ready");
-    expect(await ticketsIn(cookie, project.id, statusId("Ready"))).toEqual(["First", "Second"]);
+    expect((await after.json()).statuses.map((s: { name: string }) => s.name)).toContain("Investigate");
+    expect(await ticketsIn(cookie, project.id, statusId("Investigate"))).toEqual(["First", "Second"]);
   });
 
   test("names a single Ticket in the singular", async () => {
     const { cookie, project, statusId } = await newProject();
     const ticket = await createTicket(cookie, project.id, { title: "Alone" });
-    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Investigate") })).status).toBe(200);
 
-    const refused = await removeStatus(cookie, project.id, statusId("Ready"));
+    const refused = await removeStatus(cookie, project.id, statusId("Investigate"));
     expect(refused.status).toBe(409);
     expect((await refused.json()).error.message).toBe(
-      "Ready holds 1 Ticket. Move it to another Status before removing Ready.",
+      "Investigate holds 1 Ticket. Move it to another Status before removing Investigate.",
     );
   });
 
   test("once its Tickets move out it is removed, and they stay where they moved", async () => {
     const { cookie, project, statusId } = await newProject();
     const ticket = await createTicket(cookie, project.id, { title: "Moving on" });
-    expect((await edit(cookie, ticket.id, { statusId: statusId("Ready") })).status).toBe(200);
+    expect((await edit(cookie, ticket.id, { statusId: statusId("Investigate") })).status).toBe(200);
     expect((await edit(cookie, ticket.id, { statusId: statusId("Triage") })).status).toBe(200);
 
-    expect((await removeStatus(cookie, project.id, statusId("Ready"))).status).toBe(200);
+    expect((await removeStatus(cookie, project.id, statusId("Investigate"))).status).toBe(200);
     expect(await ticketsIn(cookie, project.id, statusId("Triage"))).toEqual(["Moving on"]);
   });
 
