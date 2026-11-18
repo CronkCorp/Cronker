@@ -16,7 +16,8 @@ import { RunState } from "./states.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
- * A delegated Ticket entering a Status with a Step gets a Run, unless it has a running one;
+ * A delegated Ticket entering a Status with a Step gets a Run, unless it has a running one or
+ * an unfinished Ticket blocks it;
  * the Run ends when its Agent calls `finish` with an Outcome, or when its Runner reports it
  * ended without finishing.
  */
@@ -108,8 +109,8 @@ export async function briefOfRun(db: Db, viewer: Viewer, runId: string): Promise
 }
 
 /**
- * Starts a Run on the Ticket if it needs one: it is delegated, sits in a Status with a Step and
- * has no running Run. Call it, in the transaction that locked the Ticket, after the Ticket entered
+ * Starts a Run on the Ticket if it needs one: it is delegated, sits in a Status with a Step, isn't
+ * blocked by an unfinished Ticket and has no running Run. Call it, in the transaction that locked the Ticket, after the Ticket entered
  * its Status or was delegated. The Run is recorded as running at once, and the Runner is asked to
  * start it once the transaction commits. A Delegate using no Runner gets a Run refused at once.
  */
@@ -144,6 +145,14 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
   const statuses = await statusesOf(tx, ticket.projectId);
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   if (!status.step) return;
+  // A Ticket blocked by an unfinished one waits; finishing that one, or removing the block, starts it.
+  const { rowCount: blocked } = await tx.query(
+    `select 1 from relations join tickets blockers on blockers.id = relations.ticket_id
+     join statuses on statuses.id = blockers.status_id
+     where relations.kind = 'blocks' and relations.other_ticket_id = $1 and statuses.kind not in ('done', 'canceled')`,
+    [ticketId],
+  );
+  if (blocked) return;
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
   const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
   if (running) return;
@@ -220,6 +229,23 @@ export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: strin
     });
   });
 }
+
+/**
+ * Starts Runs on the Tickets the Ticket blocks that need one, now that it is finished: in a Done or Canceled
+ * Status, which includes an Unverified completion. Call it in the transaction that finished the Ticket.
+ */
+export async function startRunsBlockedBy(context: Context, tx: Tx, ticketId: string, now: Date): Promise<void> {
+  const { rows } = await tx.query<{ id: string }>(
+    `select tickets.id from relations join tickets on tickets.id = relations.other_ticket_id
+     where relations.kind = 'blocks' and relations.ticket_id = $1
+     order by tickets.id for update of tickets`,
+    [ticketId],
+  );
+  for (const { id } of rows) await startRunIfNeeded(context, tx, id, now);
+}
+
+/** Whether a Ticket in a Status of this kind is finished, as what it blocks and its parent see it. */
+export const finishedKind = (kind: string) => kind === "done" || kind === "canceled";
 
 /**
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
@@ -299,6 +325,10 @@ export async function finishRun(
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     // Moving into a Status by an Outcome counts as entering it.
     await startRunIfNeeded(context, tx, ticket.id, now);
+    const target = statuses.find((s) => s.id === outcome.statusId)!;
+    if (outcome.statusId !== ticket.statusId && finishedKind(target.kind)) {
+      await startRunsBlockedBy(context, tx, ticket.id, now);
+    }
     return present((await findRunRow(tx, caller, run.id))!);
   });
 }

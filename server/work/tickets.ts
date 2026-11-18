@@ -6,7 +6,7 @@ import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded } from "../runs/runs.js";
+import { finishedKind, startRunIfNeeded, startRunsBlockedBy } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
 
 /** How urgent a Ticket is. */
@@ -477,6 +477,10 @@ export async function editTicket(
     const entered = next.statusId !== ticket.statusId;
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
     if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
+    if (entered) {
+      const { rows } = await tx.query<{ kind: string }>("select kind from statuses where id = $1", [next.statusId]);
+      if (finishedKind(rows[0]!.kind)) await startRunsBlockedBy(context, tx, ticket.id, now);
+    }
     return withMentions(tx, next);
   });
 }

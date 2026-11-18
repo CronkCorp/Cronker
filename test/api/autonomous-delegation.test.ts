@@ -266,3 +266,52 @@ describe("Verification", () => {
     expect((await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { title: "Made it so" })).title).toBe("Made it so");
   });
 });
+
+describe("blocking", () => {
+  test("Tickets blocked by an Unverified Ticket start their Runs; Reopen blocks them again", async () => {
+    const { ada, project, ticket: blocker, agent, asAgent, run, status } = await inCodeReview();
+    const blocked = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Waits for CRONK-1" });
+    await ok("POST", `/api/tickets/${blocked.id}/relations`, ada, { kind: "blockedBy", ticketId: blocker.id });
+    await ok("PATCH", `/api/tickets/${blocked.id}`, ada, { delegateId: agent.id, statusId: status("Investigate") });
+    const runsOf = (ticketId: string) => ok("GET", `/api/tickets/${ticketId}/runs`, ada);
+    expect(await runsOf(blocked.id)).toEqual([]);
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "complete" });
+
+    const [started] = await runsOf(blocked.id);
+    expect(started).toEqual(expect.objectContaining({ step: expect.objectContaining({ name: "Investigate" }), state: "running" }));
+
+    await ok("POST", `/api/tickets/${blocker.id}/reopen`, ada, { comment: "Not done yet." });
+    await ok("POST", `/api/runs/${started.id}/finish`, asAgent, { outcome: "done" });
+
+    // Blocked again, it waits in Implement without a Run until its blocker is finished once more.
+    expect((await ticketOf(blocked.id, ada)).statusId).toBe(status("Implement"));
+    expect((await runsOf(blocked.id)).map((r: { state: string }) => r.state)).toEqual(["finished"]);
+    const [, again] = await runsOf(blocker.id);
+    await ok("POST", `/api/runs/${again.id}/finish`, asAgent, { outcome: "complete" });
+    expect((await runsOf(blocked.id)).map((r: { step: { name: string }; state: string }) => [r.step.name, r.state])).toEqual([
+      ["Investigate", "finished"],
+      ["Implement", "running"],
+    ]);
+  });
+
+  test("a Ticket blocked by an unfinished one gets no Run until a User completes its blocker or removes the block", async () => {
+    const { ada, project, ticket: blocker, agent, status } = await adaWithAgent();
+    const first = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "First" });
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
+    await ok("POST", `/api/tickets/${blocker.id}/relations`, ada, { kind: "blocks", ticketId: first.id });
+    const relation = await ok("POST", `/api/tickets/${blocker.id}/relations`, ada, { kind: "blocks", ticketId: second.id });
+    for (const ticket of [first, second]) {
+      await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    }
+    const runsOf = (ticketId: string) => ok("GET", `/api/tickets/${ticketId}/runs`, ada);
+    expect([await runsOf(first.id), await runsOf(second.id)]).toEqual([[], []]);
+
+    await ok("DELETE", `/api/tickets/${blocker.id}/relations/${relation.id}`, ada);
+    expect(await runsOf(first.id)).toEqual([]);
+    expect((await runsOf(second.id)).map((r: { state: string }) => r.state)).toEqual(["running"]);
+
+    await ok("PATCH", `/api/tickets/${blocker.id}`, ada, { statusId: status("Canceled") });
+    expect((await runsOf(first.id)).map((r: { state: string }) => r.state)).toEqual(["running"]);
+  });
+});
