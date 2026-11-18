@@ -36,14 +36,19 @@ async function projectSettings(page: Page, cronk: StartedCronk) {
 test("attach, edit and remove Steps in Project settings, and preview a Ticket's Brief", async ({ page, cronk }) => {
   await projectSettings(page, cronk);
   const steps = page.getByRole("region", { name: "Steps" });
-  const open = (status: string) => steps.locator("summary strong", { hasText: new RegExp(`^${status}$`) }).click();
+  // The summary line of one Status's Step. Several Statuses can share a summary (Implement starts as
+  // "opus, 2 Outcomes"), so each check names its Status.
+  const summary = (status: string) =>
+    steps.locator("summary").filter({ has: page.locator("strong", { hasText: new RegExp(`^${status}$`) }) });
+  const open = (status: string) => summary(status).locator("strong").click();
 
-  await expect(steps.getByText("haiku, 2 Outcomes")).toBeVisible();
+  await expect(summary("Triage")).toContainText("haiku, 2 Outcomes");
   await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
 
   // An unsaved draft on one Step outlives saving another.
   await open("Investigate");
   await steps.getByLabel("Model for Investigate").fill("opus");
+  await expect(summary("Investigate")).toContainText("sonnet, 2 Outcomes");
 
   await open("Ready");
   await steps.getByRole("button", { name: "Add a Step to Ready" }).click();
@@ -55,12 +60,13 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
 
   await steps.getByLabel("Status needs you of Ready moves to").selectOption("Backlog");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
-  await expect(steps.getByText("opus, 2 Outcomes")).toBeVisible();
+  await expect(summary("Ready")).toContainText("opus, 2 Outcomes");
 
   await expect(steps.getByLabel("Model for Investigate")).toHaveValue("opus");
   await steps.getByRole("button", { name: "Save the Step on Investigate" }).click();
-  await expect(steps.getByText("opus, 2 Outcomes")).toHaveCount(2);
+  await expect(summary("Investigate")).toContainText("opus, 2 Outcomes");
   await steps.getByRole("button", { name: "Remove the Step from Investigate" }).click();
+  await expect(summary("Investigate")).toContainText("No Step: Tickets here wait for a User");
   await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
 
   const preview = page.getByRole("region", { name: "Brief preview" });
