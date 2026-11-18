@@ -45,6 +45,62 @@ export async function membersOf(db: Db, workspaceId: string): Promise<Member[]> 
   return rows.map(({ is_admin, ...user }) => ({ user, isAdmin: is_admin }));
 }
 
+export const PendingAdd = Type.Object({
+  user: User,
+  addedBy: Type.Union([Type.Literal("email"), Type.Literal("github")], {
+    description: "`email`: they join through a one-time link. `github`: they join at their next sign-in with GitHub.",
+  }),
+  addedAt: Type.String({ format: "date-time" }),
+  expiresAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description: "When the last of their join links expires; null for an add by GitHub login, which doesn't.",
+  }),
+});
+export type PendingAdd = Static<typeof PendingAdd>;
+
+/** Everyone an Admin added to the Workspace who hasn't joined it yet, oldest add first. */
+export async function pendingAddsOf({ db, clock }: Context, workspaceId: string): Promise<PendingAdd[]> {
+  const { rows } = await db.query<UserRecord & { added_by: "email" | "github"; added_at: Date; expires_at: Date | null }>(
+    `select ${userColumns}, pending.added_by, pending.added_at, pending.expires_at
+     from (
+       select user_id, 'email' as added_by, min(created_at) as added_at, max(expires_at) as expires_at
+       from links where kind = 'join' and workspace_id = $1 and used_at is null and expires_at > $2
+       group by user_id
+       union all
+       select user_id, 'github', created_at, null from github_joins where workspace_id = $1
+     ) pending
+     join users on users.id = pending.user_id
+     where not exists (select 1 from memberships where workspace_id = $1 and user_id = pending.user_id)
+     order by pending.added_at, users.id`,
+    [workspaceId, clock.now()],
+  );
+  return rows.map(({ added_by, added_at, expires_at, ...user }) => ({
+    user,
+    addedBy: added_by,
+    addedAt: added_at.toISOString(),
+    expiresAt: expires_at?.toISOString() ?? null,
+  }));
+}
+
+/**
+ * Cancels an add the person hasn't joined by yet: their unused links to join the Workspace
+ * end, and so does their add by GitHub login, so they can join by neither. 404 if there is
+ * no such add.
+ */
+export async function cancelPendingAdd({ db, clock }: Context, workspaceId: string, userId: string): Promise<void> {
+  await transaction(db, async (tx) => {
+    const isMember = await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [workspaceId, userId]);
+    if (isMember.rowCount) throw pendingAddNotFound();
+    const links = await tx.query<{ live: boolean }>(
+      "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null returning expires_at > $3 as live",
+      [workspaceId, userId, clock.now()],
+    );
+    const joins = await tx.query("delete from github_joins where workspace_id = $1 and user_id = $2", [workspaceId, userId]);
+    if (!links.rows.some((row) => row.live) && !joins.rowCount) throw pendingAddNotFound();
+  });
+}
+
+const pendingAddNotFound = () => new ApiError(404, "not_found", "No such pending add to this Workspace.");
+
 /**
  * Adds a User to the Workspace by email, creating them without a password if no User
  * has it. They get a one-time join link either way, so nobody joins without their say.

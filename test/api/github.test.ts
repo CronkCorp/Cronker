@@ -255,6 +255,63 @@ describe("adding Users by GitHub login: more", () => {
   });
 });
 
+describe("pending adds by GitHub login", () => {
+  test("an Admin sees who they added by GitHub login until their sign-in joins them", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const bea = cronk.github.account("bea", "bea@example.com");
+    const { user } = await (
+      await cronk.request("POST", `/api/workspaces/${workspace.id}/members/github`, { cookie, body: { login: "bea" } })
+    ).json();
+
+    const pending = await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie });
+
+    expect(await pending.json()).toEqual([
+      { user: { id: user.id, email: null, githubLogin: "bea" }, addedBy: "github", addedAt: "2026-01-01T09:00:00.000Z", expiresAt: null },
+    ]);
+    await signInWithGitHub(cronk, bea);
+    expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie })).json()).toEqual([]);
+  });
+
+  test("an Admin cancels an add by GitHub login; signing in with GitHub then joins nothing", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const bea = cronk.github.account("bea", "bea@example.com");
+    const { user } = await (
+      await cronk.request("POST", `/api/workspaces/${workspace.id}/members/github`, { cookie, body: { login: "bea" } })
+    ).json();
+
+    const cancelled = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${user.id}`, { cookie });
+
+    expect(cancelled.status).toBe(204);
+    expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie })).json()).toEqual([]);
+    const signedIn = await signInWithGitHub(cronk, bea);
+    const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
+    expect(me.workspaces).toEqual([]);
+    const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(members.map((m: { user: { id: string } }) => m.user.id)).not.toContain(user.id);
+  });
+
+  test("cancelling one Workspace's add by GitHub login leaves the others", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const other = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Other" } })).json();
+    const bea = cronk.github.account("bea", "bea@example.com");
+    const add = async (workspaceId: string) =>
+      (await (await cronk.request("POST", `/api/workspaces/${workspaceId}/members/github`, { cookie, body: { login: "bea" } })).json()).user;
+    const user = await add(workspace.id);
+    await add(other.id);
+
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${user.id}`, { cookie });
+
+    const me = await (await cronk.request("GET", "/api/me", { cookie: (await signInWithGitHub(cronk, bea)).cookie })).json();
+    expect(me.workspaces).toEqual([{ id: other.id, name: "Other", isAdmin: false }]);
+  });
+});
+
 describe("adding Users by GitHub login: refusals", () => {
   test("a login GitHub doesn't know is refused", async () => {
     const { workspace } = await setUp(cronk);

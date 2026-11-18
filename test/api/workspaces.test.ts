@@ -282,6 +282,91 @@ describe("removing members", () => {
   });
 });
 
+describe("pending adds", () => {
+  test("an Admin sees who they added by email but who hasn't joined yet, apart from the members", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const add = async (email: string) =>
+      (await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email } })).json();
+    const bea = await add("bea@example.com");
+    cronk.clock.advance(1000);
+    const cy = await add("cy@example.com");
+    await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(cy.link.url), password: "cy's long password" } });
+
+    const pending = await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie });
+
+    expect(pending.status).toBe(200);
+    expect(await pending.json()).toEqual([
+      { user: bea.user, addedBy: "email", addedAt: "2026-01-01T09:00:00.000Z", expiresAt: "2026-01-08T09:00:00.000Z" },
+    ]);
+    const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(members.map((m: { user: { email: string } }) => m.user.email)).toEqual(["ada@example.com", "cy@example.com"]);
+  });
+
+  test("an add by email stops being pending once its link expires", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } });
+
+    cronk.clock.advance(days(7));
+
+    expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie })).json()).toEqual([]);
+  });
+
+  test("an Admin cancels an add by email; its links stop working and nobody joins", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const add = async () =>
+      (await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } })).json();
+    const first = await add();
+    const second = await add();
+
+    const cancelled = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${first.user.id}`, { cookie });
+
+    expect(cancelled.status).toBe(204);
+    expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie })).json()).toEqual([]);
+    for (const { link } of [first, second]) {
+      const used = await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(link.url), password: "bea's long password" } });
+      expect(used.status).toBe(404);
+      expect(await used.json()).toEqual({ error: { code: "invalid_link", message: expect.any(String) } });
+    }
+    expect((await cronk.request("POST", "/api/sign-in", { body: { email: "bea@example.com", password: "bea's long password" } })).status).toBe(401);
+    const again = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${first.user.id}`, { cookie });
+    expect(again.status).toBe(404);
+    expect(await again.json()).toEqual({ error: { code: "not_found", message: expect.any(String) } });
+  });
+
+  test("cancelling an add leaves the person's other Workspaces alone, and they can be added again", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const friends = await (await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Friends" } })).json();
+    const add = async (workspaceId: string) =>
+      (await cronk.request("POST", `/api/workspaces/${workspaceId}/members`, { cookie, body: { email: "bea@example.com" } })).json();
+    const here = await add(workspace.id);
+    const there = await add(friends.id);
+
+    await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${here.user.id}`, { cookie });
+
+    const used = await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(there.link.url), password: "bea's long password" } });
+    expect(used.status).toBe(200);
+    const again = await add(workspace.id);
+    expect((await cronk.request("POST", "/api/links/use", { body: { token: tokenOf(again.link.url), password: "bea's long password" } })).status).toBe(200);
+    const beaCookie = await signIn(cronk, "bea@example.com", "bea's long password");
+    const me = await (await cronk.request("GET", "/api/me", { cookie: beaCookie })).json();
+    expect(me.workspaces.map((w: { name: string }) => w.name).sort()).toEqual(["Ada's Workspace", "Friends"]);
+  });
+
+  test("a member is not a pending add, so cancelling refuses them", async () => {
+    const { user: ada, workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+
+    const response = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${ada.id}`, { cookie });
+
+    expect(response.status).toBe(404);
+    expect((await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).status).toBe(200);
+  });
+});
+
 describe("renaming", () => {
   test("an Admin renames the Workspace", async () => {
     const { workspace } = await setUp(cronk);
@@ -303,6 +388,7 @@ describe("who may do what", () => {
     const cookie = await signIn(cronk);
     const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
     const base = `/api/workspaces/${workspace.id}`;
+    const cy = await (await cronk.request("POST", `${base}/members`, { cookie, body: { email: "cy@example.com" } })).json();
 
     for (const [method, path, body] of [
       ["PATCH", base, { name: "Bea's now" }],
@@ -311,6 +397,8 @@ describe("who may do what", () => {
       ["PATCH", `${base}/members/${ada.id}`, { isAdmin: false }],
       ["DELETE", `${base}/members/${ada.id}`, undefined],
       ["POST", `${base}/members/${ada.id}/reset-link`, undefined],
+      ["GET", `${base}/pending-adds`, undefined],
+      ["DELETE", `${base}/pending-adds/${cy.user.id}`, undefined],
     ] as const) {
       const response = await cronk.request(method, path, { cookie: bea.cookie, body });
       expect(response.status, `${method} ${path}`).toBe(403);
@@ -322,6 +410,8 @@ describe("who may do what", () => {
       { user: bea.user, isAdmin: false },
     ]);
     expect(await (await cronk.request("GET", base, { cookie })).json()).toEqual({ id: workspace.id, name: "Ada's Workspace" });
+    const pending = await (await cronk.request("GET", `${base}/pending-adds`, { cookie })).json();
+    expect(pending.map((p: { user: { id: string } }) => p.user.id)).toEqual([cy.user.id]);
   });
 
   test("anything in a Workspace the caller doesn't belong to answers 404", async () => {
@@ -341,7 +431,10 @@ describe("who may do what", () => {
       ["PATCH", `${base}/members/${ada.id}`, { isAdmin: false }],
       ["DELETE", `${base}/members/${ada.id}`, undefined],
       ["POST", `${base}/members/${ada.id}/reset-link`, undefined],
+      ["GET", `${base}/pending-adds`, undefined],
+      ["DELETE", `${base}/pending-adds/${ada.id}`, undefined],
       ["GET", "/api/workspaces/not-a-uuid/members", undefined],
+      ["DELETE", `${base}/pending-adds/not-a-uuid`, undefined],
       ["DELETE", `${base}/members/not-a-uuid`, undefined],
     ] as const) {
       const response = await cronk.request(method, path, { cookie: outsider.cookie, body });
