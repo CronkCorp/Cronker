@@ -33,6 +33,16 @@ test("create a second Workspace and switch between them", async ({ page, cronk }
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
+
+  // A Project of the second Workspace shows under that Workspace, even after a reload.
+  await page.getByLabel("Project name").fill("Party");
+  await page.getByLabel("Key").fill("PARTY");
+  await page.getByRole("button", { name: "Create Project" }).click();
+  await expect(page.getByRole("heading", { name: "Party" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Party" })).toBeVisible();
+  await expect(page.getByLabel("Workspace", { exact: true })).toHaveValue(/.+/);
+  await expect(page.getByRole("banner").getByRole("link", { name: "Friends" })).toBeVisible();
 });
 
 test("an Admin adds a User by email, who joins through the link", async ({ page, cronk, browser }) => {

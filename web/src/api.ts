@@ -33,6 +33,33 @@ export interface LinkDetails {
   setsPassword: boolean;
 }
 
+export type StatusKind = "backlog" | "active" | "review" | "done" | "canceled";
+
+export const statusKinds: { kind: StatusKind; label: string }[] = [
+  { kind: "backlog", label: "Backlog" },
+  { kind: "active", label: "Active" },
+  { kind: "review", label: "Review" },
+  { kind: "done", label: "Done" },
+  { kind: "canceled", label: "Canceled" },
+];
+
+export interface Status {
+  id: string;
+  name: string;
+  kind: StatusKind;
+}
+
+export interface ProjectSummary {
+  id: string;
+  workspaceId: string;
+  name: string;
+  key: string;
+}
+
+export interface Project extends ProjectSummary {
+  statuses: Status[];
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -80,6 +107,21 @@ export const api = {
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
   useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
+  projects: (workspaceId: string) =>
+    call<ProjectSummary[]>("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`),
+  createProject: (workspaceId: string, input: { name: string; key: string }) =>
+    call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
+  project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
+  addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
+    call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
+  editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>
+    call<Project>(
+      "PATCH",
+      `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`,
+      input,
+    ),
+  removeStatus: (projectId: string, statusId: string) =>
+    call<Project>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`),
 };
 
 function ws(id: string) {

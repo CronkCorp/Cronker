@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { transaction, type Db } from "../db.js";
 import type { Clock } from "../clock.js";
+import { isUuid } from "../http/ids.js";
 
 export const Workspace = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
 export type Workspace = Static<typeof Workspace>;
@@ -13,8 +14,6 @@ export const Membership = Type.Object({
   isAdmin: Type.Boolean(),
 });
 export type Membership = Static<typeof Membership>;
-
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The Workspaces a User belongs to. */
 export async function workspacesOf(db: Db, userId: string): Promise<Membership[]> {
@@ -29,7 +28,7 @@ export async function workspacesOf(db: Db, userId: string): Promise<Membership[]
 
 /** A Workspace, if the User belongs to it; otherwise nothing, as if it didn't exist. */
 export async function findWorkspace(db: Db, userId: string, workspaceId: string): Promise<Workspace | undefined> {
-  if (!uuid.test(workspaceId)) return undefined;
+  if (!isUuid(workspaceId)) return undefined;
   const { rows } = await db.query<Workspace>(
     `select workspaces.id, workspaces.name
      from workspaces join memberships on memberships.workspace_id = workspaces.id

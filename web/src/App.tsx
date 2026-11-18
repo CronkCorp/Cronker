@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   api,
   ApiError,
@@ -6,9 +6,11 @@ import {
   type LinkDetails,
   type Member,
   type User,
-  type Workspace,
   type WorkspaceSummary,
 } from "./api.js";
+import { field, useSubmit } from "./forms.js";
+import { ProjectScreen, WorkspaceHome } from "./projects.js";
+import { Link, navigate, replace, usePath } from "./router.js";
 
 type Screen =
   | { kind: "loading" }
@@ -16,29 +18,11 @@ type Screen =
   | { kind: "signIn"; notice?: string }
   | { kind: "signedIn"; user: User; workspaces: WorkspaceSummary[] };
 
-/** The web client's own paths. Links Cronk hands out open `/link`, with their secret in the fragment. */
-function usePath(): [string, (path: string) => void, (path: string) => void] {
-  const [path, setPath] = useState(window.location.pathname);
-  useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-  const navigate = useCallback((to: string) => {
-    window.history.pushState(null, "", to);
-    setPath(to);
-  }, []);
-  const replace = useCallback((to: string) => {
-    window.history.replaceState(null, "", to);
-    setPath(to);
-  }, []);
-  return [path, navigate, replace];
-}
-
 export function App() {
   const [screen, setScreen] = useState<Screen>({ kind: "loading" });
   const [failure, setFailure] = useState<string | null>(null);
-  const [path, navigate, replace] = usePath();
+  const path = usePath();
+  // Links Cronk hands out open `/link`, with their secret in the fragment.
   const onLinkPage = path === "/link";
 
   const load = useCallback(async (notice?: string) => {
@@ -97,7 +81,6 @@ export function App() {
           user={screen.user}
           workspaces={screen.workspaces}
           path={path}
-          navigate={navigate}
           reload={() => load()}
           onSignedOut={() => setScreen({ kind: "signIn", notice: "You're signed out." })}
         />
@@ -113,27 +96,6 @@ function Centered({ title, children }: { title: string; children: ReactNode }) {
     </main>
   );
 }
-
-function useSubmit(action: (form: FormData, element: HTMLFormElement) => Promise<void>) {
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const element = event.currentTarget;
-    setBusy(true);
-    setError(null);
-    try {
-      await action(new FormData(element), element);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return { error, busy, onSubmit };
-}
-
-const field = (form: FormData, name: string) => String(form.get(name) ?? "");
 
 function SetupScreen({ onDone }: { onDone: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
@@ -254,31 +216,16 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
   );
 }
 
-function NavLink({ to, navigate, children }: { to: string; navigate: (path: string) => void; children: ReactNode }) {
-  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-    event.preventDefault();
-    navigate(to);
-  };
-  return (
-    <a href={to} onClick={onClick}>
-      {children}
-    </a>
-  );
-}
-
 function SignedIn({
   user,
   workspaces,
   path,
-  navigate,
   reload,
   onSignedOut,
 }: {
   user: User;
   workspaces: WorkspaceSummary[];
   path: string;
-  navigate: (path: string) => void;
   reload: () => void;
   onSignedOut: () => void;
 }) {
@@ -286,12 +233,22 @@ function SignedIn({
     await api.signOut();
     onSignedOut();
   });
-  const match = /^\/workspaces\/([^/]+)(\/members)?$/.exec(path);
-  const routedId = match && match[1] !== "new" ? decodeURIComponent(match[1]!) : null;
-  const current = workspaces.find((w) => w.id === routedId) ?? (path === "/" ? workspaces[0] : undefined);
+  const workspacePath = /^\/workspaces\/([^/]+)(\/members)?\/?$/.exec(path);
+  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings))?\/?$/.exec(path);
+  const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
+
+  // The Workspace on screen: the one in the path, else the last one shown (pages such as a
+  // Project's carry none in their path), else the first.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (routedId) setSelectedId(routedId);
+  }, [routedId]);
+  const current = routedId
+    ? workspaces.find((w) => w.id === routedId)
+    : (workspaces.find((w) => w.id === selectedId) ?? workspaces[0]);
 
   useEffect(() => {
-    if (path === "/" && workspaces[0]) window.history.replaceState(null, "", `/workspaces/${workspaces[0].id}`);
+    if (path === "/" && workspaces[0]) replace(`/workspaces/${workspaces[0].id}`);
   }, [path, workspaces]);
 
   let page: ReactNode;
@@ -306,7 +263,21 @@ function SignedIn({
     );
   } else if (path === "/password") {
     page = <ChangePassword />;
-  } else if (current && match?.[2]) {
+  } else if (current && projectPath) {
+    page = (
+      <ProjectScreen
+        key={`${current.id} ${projectPath[1]}`}
+        workspace={current}
+        projectId={projectPath[1]!}
+        view={(projectPath[2] as "list" | "settings" | undefined) ?? "board"}
+        onOtherWorkspace={(workspaceId) => {
+          if (!workspaces.some((w) => w.id === workspaceId)) return false;
+          setSelectedId(workspaceId);
+          return true;
+        }}
+      />
+    );
+  } else if (current && workspacePath?.[2]) {
     page = (
       <Members
         key={current.id}
@@ -319,8 +290,8 @@ function SignedIn({
         }}
       />
     );
-  } else if (current) {
-    page = <WorkspaceHome key={current.id} id={current.id} />;
+  } else if (current && (routedId || path === "/")) {
+    page = <WorkspaceHome key={current.id} workspace={current} />;
   } else if (workspaces.length === 0 && path === "/") {
     page = <p>You don't belong to any Workspace yet.</p>;
   } else {
@@ -330,34 +301,27 @@ function SignedIn({
   return (
     <div className="shell">
       <header>
-        {workspaces.length > 0 && (
+        <strong>{current ? <Link to={`/workspaces/${current.id}`}>{current.name}</Link> : "Cronk"}</strong>
+        {workspaces.length > 1 && (
           <select
-              aria-label="Workspace"
-              value={current?.id ?? ""}
-              onChange={(event) => navigate(`/workspaces/${event.target.value}`)}
-            >
-              {!current && <option value="">Choose a Workspace</option>}
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
+            aria-label="Workspace"
+            value={current?.id ?? ""}
+            onChange={(event) => navigate(`/workspaces/${event.target.value}`)}
+          >
+            {!current && <option value="">Choose a Workspace</option>}
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
           </select>
         )}
         <nav>
-          {current && (
-            <NavLink to={`/workspaces/${current.id}/members`} navigate={navigate}>
-              Members
-            </NavLink>
-          )}
-          <NavLink to="/workspaces/new" navigate={navigate}>
-            New Workspace
-          </NavLink>
+          {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}
+          <Link to="/workspaces/new">New Workspace</Link>
         </nav>
         <span className="spacer" />
-        <NavLink to="/password" navigate={navigate}>
-          {user.email}
-        </NavLink>
+        <Link to="/password">{user.email}</Link>
         <form onSubmit={onSubmit}>
           <button type="submit" disabled={busy}>
             Sign out
@@ -369,22 +333,6 @@ function SignedIn({
         {page}
       </main>
     </div>
-  );
-}
-
-function WorkspaceHome({ id }: { id: string }) {
-  const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    api.workspace(id).then(setWorkspace, (e: Error) => setError(e.message));
-  }, [id]);
-  if (error) return <p role="alert">{error}</p>;
-  if (!workspace) return <p>Loading…</p>;
-  return (
-    <>
-      <h1>{workspace.name}</h1>
-      <p>No Projects yet.</p>
-    </>
   );
 }
 

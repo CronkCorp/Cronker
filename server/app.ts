@@ -9,6 +9,7 @@ import type { Context } from "./context.js";
 import { ApiError, sendError } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { identityRoutes } from "./identity/routes.js";
+import { workRoutes } from "./work/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
 
 export interface AppOptions {
@@ -44,6 +45,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(cookie);
   await app.register(identityRoutes(context));
   await app.register(workspaceRoutes(context));
+  await app.register(workRoutes(context));
 
   const { webRoot } = context.config;
   if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
