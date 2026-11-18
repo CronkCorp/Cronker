@@ -431,6 +431,10 @@ td.actions {
 .run-state.running {
   color: var(--accent);
 }
+.run-marker.runnerSlot,
+.run-marker.blocked {
+  color: var(--muted);
+}
 .run-marker.failed,
 .run-marker.refused,
 .run-state.failed,

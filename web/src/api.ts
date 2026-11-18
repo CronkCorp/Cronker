@@ -139,6 +139,8 @@ export interface TicketSummary {
   createdBy: string;
   createdAt: string;
   lastRun: { id: string; state: RunState } | null;
+  /** What it waits for before it gets the Run it needs, if it needs one. */
+  waiting: "runnerSlot" | "blocked" | null;
 }
 
 export interface Ticket extends TicketSummary {

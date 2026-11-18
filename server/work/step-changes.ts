@@ -1,6 +1,7 @@
 import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject, projectNotFound, statusesOf, type Project } from "./projects.js";
 import { checkOutcomes, mayHaveStep, removeStep, stepOnDoneOrCanceled, writeStep, type Step } from "./steps.js";
@@ -12,12 +13,13 @@ import { checkOutcomes, mayHaveStep, removeStep, stepOnDoneOrCanceled, writeStep
 export type StepChange = { type: "put"; step: Step } | { type: "remove" };
 
 export async function changeStep(
-  { db, clock, live }: Context,
+  context: Context,
   userId: string,
   projectId: string,
   statusId: string,
   change: StepChange,
 ): Promise<Project> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
@@ -29,6 +31,8 @@ export async function changeStep(
       await writeStep(tx, project, statusId, change.step, clock.now());
     } else {
       await removeStep(tx, statusId);
+      // Tickets there waiting for a Run need none now.
+      recheckWaiting(context, tx, await waitingTickets(tx, "tickets.status_id = $1", [statusId]));
     }
     live.publish(tx, project.workspaceId, { type: "statuses.changed", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };
