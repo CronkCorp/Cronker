@@ -82,7 +82,14 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           body: Type.Object({
             outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
             question: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000, description: "For the Assignee, in Markdown." })),
-            report: Type.Optional(Type.String({ minLength: 1, maxLength: 500_000, description: "Markdown." })),
+            report: Type.Optional(
+              Type.String({
+                minLength: 1,
+                maxLength: 500_000,
+                pattern: "\\S",
+                description: "Markdown, added to the Ticket's Reports titled after the Run's Step, such as `Triage report`.",
+              }),
+            ),
           }),
           response: { 200: Run, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },

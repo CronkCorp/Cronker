@@ -79,6 +79,8 @@ export function buildBrief(
     "",
     "- Call `finish` exactly once, as the last thing you do.",
     "- *needs you* takes a Question.",
+    `- While this Run is running you may edit ${ticketKey}'s description, Priority, Labels, due date and estimate, ` +
+      "and write Reports on it; leave everything else to its Users.",
     "- Don't merge pull requests on GitHub directly.",
   ].join("\n");
 

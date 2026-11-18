@@ -11,6 +11,7 @@ import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/err
 import { refuseOtherOrigins } from "./http/origin.js";
 import { agentRoutes } from "./agents/routes.js";
 import { runRoutes } from "./runs/routes.js";
+import { noteRunCall } from "./runs/runs.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
@@ -57,6 +58,26 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
 
   refuseOtherOrigins(app, context.config.publicUrl);
 
+  // An Agent's call naming one of its running Runs, or that Run's Ticket, shows the Run is still alive,
+  // even a call refused before its route looked at the token, such as a malformed one.
+  app.addHook("onSend", async (request, _reply, payload) => {
+    const header = request.headers.authorization;
+    const params = (request.params ?? {}) as Record<string, string | undefined>;
+    if (!params.runId && !params.ticketId && !params.key) return payload;
+    try {
+      const agent =
+        agentOfRequest(request) ??
+        (offersBearer(header) ? await agentOfToken(context, header).catch(() => undefined) : undefined);
+      if (agent) {
+        await noteRunCall(context, agent, { runId: params.runId, ticketId: params.ticketId, ticketKey: params.key });
+      }
+    } catch (error) {
+      // The call itself is answered as it was; only the Run's last call goes unrecorded.
+      request.log.error(error);
+    }
+    return payload;
+  });
+
   await app.register(swagger, {
     openapi: {
       info: { title: "Cronk API", version: "0.0.0" },
@@ -68,7 +89,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             type: "http",
             scheme: "bearer",
             description:
-              "An Agent's token. Agents may read their Workspace, comment on its Tickets and finish their own Runs; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+              "An Agent's token. Agents may read their Workspace and comment on its Tickets; during their running Run on a Ticket they may also edit some of its fields, write Reports on it and finish the Run; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
           },
         },
       },
