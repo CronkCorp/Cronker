@@ -279,3 +279,30 @@ describe("parents", () => {
     expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-1"]);
   });
 });
+
+describe("limits per Runner", () => {
+  test("two Users' Runners don't share slots", async () => {
+    const { workspace, ada, project, runner, ticket, delegateToTriage } = await adaWithAgent();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    const bob = await addMember(cronk, ada.cookie!, workspace.id, "bob@example.com");
+    const asBob = { cookie: bob.cookie };
+    const bobsRunner = await ok("POST", "/api/runners", asBob, { name: "Bob's", kind: "fake" });
+    await ok("PATCH", `/api/runners/${bobsRunner.id}`, asBob, { limit: 1 });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, asBob, { name: "bob-bot" });
+    const bobsAgent = await ok("PATCH", `/api/agents/${created.id}`, asBob, { runnerId: bobsRunner.id });
+
+    await delegateToTriage((await ticket("Ada's first")).id);
+    await delegateToTriage((await ticket("Ada's second")).id);
+    await delegateToTriage((await ticket("Bob's")).id, asBob, bobsAgent.id);
+
+    expect(cronk.runner.starts.map((s) => [s.ticket.key, s.runner.name])).toEqual([
+      ["CRONK-1", "Fake"],
+      ["CRONK-3", "Bob's"],
+    ]);
+    expect(await board(project.id, ada)).toEqual({
+      "CRONK-1": { run: "running", waiting: null },
+      "CRONK-2": { run: null, waiting: "runnerSlot" },
+      "CRONK-3": { run: "running", waiting: null },
+    });
+  });
+});
