@@ -430,7 +430,7 @@ export async function editTicket(
     if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
-    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? ticket.id : null, leftParent);
+    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
     return withMentions(tx, next);
   });
 }

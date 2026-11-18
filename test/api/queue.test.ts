@@ -325,6 +325,59 @@ describe("an Agent changing Runners", () => {
   });
 });
 
+describe("waits that end other ways", () => {
+  test("a Ticket whose Delegate uses no Runner, once unblocked, gets its refused Run and stops waiting", async () => {
+    const { ada, agent, project, status, ticket, delegateToTriage } = await adaWithAgent();
+    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
+    const blocker = await ticket("Blocker");
+    const blocked = await ticket("Blocked");
+    await ok("POST", `/api/tickets/${blocked.id}/relations`, ada, { kind: "blockedBy", ticketId: blocker.id });
+    await delegateToTriage(blocked.id);
+    expect((await board(project.id, ada))["CRONK-2"]).toEqual({ run: null, waiting: "blocked" });
+
+    await ok("PATCH", `/api/tickets/${blocker.id}`, ada, { statusId: status("Done") });
+
+    expect((await board(project.id, ada))["CRONK-2"]).toEqual({ run: "refused", waiting: null });
+  });
+
+  test("a Status whose kind becomes Done finishes the Tickets in it, starting what they blocked", async () => {
+    const { ada, project, ticket, delegateToTriage } = await adaWithAgent();
+    const blocker = await ticket("Blocker");
+    const blocked = await ticket("Blocked");
+    const withParked = await ok("POST", `/api/projects/${project.id}/statuses`, ada, { name: "Parked", kind: "backlog" });
+    const parked = withParked.statuses.find((s: { name: string }) => s.name === "Parked").id;
+    await ok("PATCH", `/api/tickets/${blocker.id}`, ada, { statusId: parked });
+    await ok("POST", `/api/tickets/${blocked.id}/relations`, ada, { kind: "blockedBy", ticketId: blocker.id });
+    await delegateToTriage(blocked.id);
+
+    await ok("PATCH", `/api/projects/${project.id}/statuses/${parked}`, ada, { kind: "done" });
+
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-2"]);
+  });
+
+  test("removing the Step from a waiting Ticket's Status ends its wait, and its place in the queue", async () => {
+    const { ada, project, runner, status, ticket, delegateToTriage } = await adaWithAgent();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    await delegateToTriage((await ticket("Running")).id);
+    await delegateToTriage((await ticket("Waiting")).id);
+
+    await ok("DELETE", `/api/projects/${project.id}/statuses/${status("Triage")}/step`, ada);
+
+    expect((await board(project.id, ada))["CRONK-2"]).toEqual({ run: null, waiting: null });
+  });
+
+  test("an Agent pointed at no Runner gets its waiting Tickets their refused Runs", async () => {
+    const { ada, agent, project, runner, ticket, delegateToTriage } = await adaWithAgent();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    await delegateToTriage((await ticket("Running")).id);
+    await delegateToTriage((await ticket("Waiting")).id);
+
+    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
+
+    expect((await board(project.id, ada))["CRONK-2"]).toEqual({ run: "refused", waiting: null });
+  });
+});
+
 describe("waiting live", () => {
   /** The Tickets the stream says changed, until it goes quiet. */
   async function changedTickets(stream: OpenStream) {

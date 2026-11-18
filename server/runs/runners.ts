@@ -1,7 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import type { Db } from "../db.js";
-import { afterCommit, transaction } from "../db.js";
+import { afterCommit, transaction, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { startWaitingRuns } from "./runs.js";

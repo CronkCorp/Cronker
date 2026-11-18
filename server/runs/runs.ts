@@ -13,7 +13,7 @@ import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { RunState } from "./states.js";
-import { isBlocked } from "./waiting.js";
+import { isBlocked, queueOrder } from "./waiting.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -274,34 +274,69 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
           where agents.runner_id = $1 and waiting.waits_for_run and waiting.id <> $2 and not ${isBlocked("waiting")}
-            and (waiting.priority, waiting.status_entered_at, waiting.id)
-              < (select priority, status_entered_at, id from tickets where id = $2)) as taken`,
+            and (${queueOrder("waiting")}) < (select ${queueOrder("tickets")} from tickets where id = $2)) as taken`,
     [runnerId, ticketId],
   );
   return Number(rows[0]!.taken) < limit;
 }
 
 /**
- * Call after something may have unblocked waiting Tickets: the Ticket moved, so what it blocks and its parent
- * may now have only finished blockers and Sub-Tickets, or the Tickets named in `also` lost a blocker or a
- * Sub-Ticket. Their cards change, and once the transaction commits their Runners' free slots go to them.
+ * Call after something may have unblocked waiting Tickets: the `moved` Tickets entered a Status, or their
+ * Status changed kind, so what they block and their parents may now have only finished blockers and
+ * Sub-Tickets; or the Tickets named in `also` lost a blocker or a Sub-Ticket. Their cards change, and once
+ * the transaction commits they are rechecked.
  */
-export async function startUnblocked(context: Context, tx: Tx, ticketId: string | null, also: string[] = []): Promise<void> {
-  const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string; runnerId: string | null }>(
+export async function startUnblocked(context: Context, tx: Tx, moved: string[], also: string[] = []): Promise<void> {
+  const { rows } = await tx.query<WaitingTicket & { workspaceId: string; projectId: string }>(
     `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
        agents.runner_id as "runnerId"
      from tickets left join agents on agents.id = tickets.delegate_id
      where tickets.waits_for_run and (tickets.id = any($2::uuid[])
-       or tickets.id in (select other_ticket_id from relations where kind = 'blocks' and ticket_id = $1)
-       or tickets.id = (select parent_id from tickets where id = $1))`,
-    [ticketId, also],
+       or tickets.id in (select other_ticket_id from relations where kind = 'blocks' and ticket_id = any($1::uuid[]))
+       or tickets.id in (select parent_id from tickets where id = any($1::uuid[])))`,
+    [moved, also],
   );
   for (const { id, workspaceId, projectId } of rows) {
     context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId: id });
   }
-  for (const runnerId of new Set(rows.flatMap((row) => row.runnerId ?? []))) {
-    afterCommit(tx, () => startWaitingRuns(context, runnerId));
-  }
+  recheckWaiting(context, tx, rows);
+}
+
+/** A waiting Ticket, with the Runner its Delegate uses, if any. */
+export interface WaitingTicket {
+  id: string;
+  runnerId: string | null;
+}
+
+/** The Tickets waiting for a Run that match the SQL condition on `tickets`, with their Runners. */
+export async function waitingTickets(tx: Tx, where: string, params: unknown[]): Promise<WaitingTicket[]> {
+  const { rows } = await tx.query<WaitingTicket>(
+    `select tickets.id, agents.runner_id as "runnerId"
+     from tickets left join agents on agents.id = tickets.delegate_id
+     where tickets.waits_for_run and ${where}`,
+    params,
+  );
+  return rows;
+}
+
+/**
+ * Once the transaction commits, rechecks each of the waiting Tickets, which starts it, keeps it waiting or ends
+ * its wait, and then gives their Runners' free slots out in queue order.
+ */
+export function recheckWaiting(context: Context, tx: Tx, tickets: WaitingTicket[]): void {
+  if (tickets.length === 0) return;
+  afterCommit(tx, async () => {
+    for (const { id } of tickets) await recheck(context, id);
+    for (const runnerId of new Set(tickets.flatMap((t) => t.runnerId ?? []))) await startWaitingRuns(context, runnerId);
+  });
+}
+
+/** Rechecks whether the Ticket needs a Run, in a transaction of its own. */
+async function recheck(context: Context, ticketId: string): Promise<RunNeed> {
+  return transaction(context.db, async (tx) => {
+    await tx.query("select 1 from tickets where id = $1 for update", [ticketId]);
+    return startRunIfNeeded(context, tx, ticketId, context.clock.now());
+  });
 }
 
 /**
@@ -314,16 +349,12 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
     const { rows } = await context.db.query<{ id: string }>(
       `select tickets.id from tickets join agents on agents.id = tickets.delegate_id
        where agents.runner_id = $1 and tickets.waits_for_run and not ${isBlocked("tickets")}
-       order by tickets.priority, tickets.status_entered_at, tickets.id limit 1`,
+       order by ${queueOrder("tickets")} limit 1`,
       [runnerId],
     );
     const next = rows[0];
     if (!next) return;
-    const need = await transaction(context.db, async (tx) => {
-      await tx.query("select 1 from tickets where id = $1 for update", [next.id]);
-      return startRunIfNeeded(context, tx, next.id, context.clock.now());
-    });
-    if (need === "waiting") return;
+    if ((await recheck(context, next.id)) === "waiting") return;
   }
 }
 
@@ -396,7 +427,7 @@ export async function finishRun(
       await recordChanges(tx, ticket, { kind: "agent", id: caller.id }, now, [
         { field: "status", from: named(ticket.statusId), to: named(outcome.statusId) },
       ]);
-      await startUnblocked(context, tx, ticket.id);
+      await startUnblocked(context, tx, [ticket.id]);
     }
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     // Moving into a Status by an Outcome counts as entering it.

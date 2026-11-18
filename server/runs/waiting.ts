@@ -26,3 +26,9 @@ export const isBlocked = (alias: string) =>
 /** SQL for what the Ticket `alias` waits for, as `Waiting`. */
 export const waitingColumn = (alias: string) =>
   `case when not ${alias}.waits_for_run then null when ${isBlocked(alias)} then 'blocked' else 'runnerSlot' end`;
+
+/**
+ * SQL for where the Ticket `alias` stands in its Runner's queue, earliest first: highest Priority, then the
+ * one that entered its Status first, then by id so the order is total.
+ */
+export const queueOrder = (alias: string) => `${alias}.priority, ${alias}.status_entered_at, ${alias}.id`;

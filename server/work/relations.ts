@@ -102,7 +102,7 @@ export async function removeRelation(
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
     await recordRelationChanges(context, tx, ticket.workspaceId, userId, kind, from, to, "removed");
-    if (removed.kind === "blocks") await startUnblocked(context, tx, null, [removed.otherTicketId]);
+    if (removed.kind === "blocks") await startUnblocked(context, tx, [], [removed.otherTicketId]);
   });
 }
 
