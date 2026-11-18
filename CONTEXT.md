@@ -45,7 +45,7 @@ A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backl
 _Avoid_: Follow-up, spin-off, finding
 
 **Step**:
-The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User.
+The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User. Done and Canceled Statuses never have one, so finished or canceled work gets no Runs.
 _Avoid_: Stage, phase, pipeline step, job
 
 **Outcome**:

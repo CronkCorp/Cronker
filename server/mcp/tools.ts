@@ -52,7 +52,9 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace, comment on its Tickets and finish their own Runs; anything else is refused with the rule and what to do instead.";
+  "Agents may read their Workspace and comment on its Tickets. During your running Run on a Ticket you may also " +
+  "edit its description, Priority, Labels, due date and estimate, write Reports on it and finish the Run. " +
+  "Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -85,7 +87,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read a Ticket",
       description:
         "A Ticket of your Workspace with its fields, its Comments (oldest first), its Relations: " +
-        "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; and its Runs, oldest first. " +
+        "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
+        "and the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on. " +
         "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
       annotations: { readOnlyHint: true },
@@ -98,6 +101,7 @@ export function buildMcpServer(api: Api): McpServer {
           comments: await get(`/api/tickets/${found.id}/comments`),
           relations: await get(`/api/tickets/${found.id}/relations`),
           runs: await get(`/api/tickets/${found.id}/runs`),
+          reports: await get(`/api/tickets/${found.id}/reports`),
         };
       }),
   );
@@ -195,6 +199,52 @@ export function buildMcpServer(api: Api): McpServer {
   );
 
   server.registerTool(
+    "edit_ticket",
+    {
+      title: "Edit your Run's Ticket",
+      description:
+        "During your running Run on a Ticket, changes whichever of its description, Priority, Labels, due date and " +
+        "estimate are given; `null` clears a due date or estimate, and Labels replace the Ticket's Labels. Each Change " +
+        "records your Run. Refused for any other Ticket, outside a running Run, and for any other field: its title, " +
+        "Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`.",
+      inputSchema: {
+        ticket: ticketArgument,
+        description: z.string().optional().describe("The whole new description, in Markdown."),
+        priority: z.enum(["urgent", "high", "medium", "low", "none"]).optional(),
+        labels: z.array(z.string().min(1)).optional().describe("The Ticket's Labels, all of them."),
+        dueDate: z.string().nullable().optional().describe("A date such as `2026-02-01`, or null to clear it."),
+        estimate: z.number().min(0).nullable().optional().describe("A number, or null to clear it."),
+      },
+    },
+    ({ ticket, ...edit }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        return send("PATCH", `/api/tickets/${found.id}`, edit);
+      }),
+  );
+
+  server.registerTool(
+    "write_report",
+    {
+      title: "Write a Report on your Run's Ticket",
+      description:
+        "During your running Run on a Ticket, adds a Report to it: Markdown such as an investigation's findings, " +
+        "listed with the Ticket for its Users and read by later Runs on it. Refused for any other Ticket and outside " +
+        "a running Run. A Report can also be given to `finish`.",
+      inputSchema: {
+        ticket: ticketArgument,
+        title: z.string().min(1).describe("A short title, such as `Findings`."),
+        body: z.string().min(1).describe("Markdown."),
+      },
+    },
+    ({ ticket, title, body }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        return send("POST", `/api/tickets/${found.id}/reports`, { title, body });
+      }),
+  );
+
+  server.registerTool(
     "finish",
     {
       title: "Finish your Run",
@@ -209,7 +259,11 @@ export function buildMcpServer(api: Api): McpServer {
         run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
         outcome: z.string().min(1).describe("The Outcome's name, such as `ready`, ignoring case."),
         question: z.string().min(1).optional().describe("For *needs you*: what you need from the Ticket's Assignee."),
-        report: z.string().min(1).optional().describe("What you found or did, in Markdown."),
+        report: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("What you found or did, in Markdown; added to the Ticket's Reports, titled after your Run's Step."),
       },
     },
     ({ run, outcome, question, report }) =>

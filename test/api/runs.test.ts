@@ -64,11 +64,11 @@ describe("starting Runs", () => {
         state: "running",
         outcome: null,
         question: null,
-        report: null,
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
         startedAt: "2026-01-01T09:00:00.000Z",
         endedAt: null,
+        lastCallAt: null,
       },
     ]);
     const [run] = runs;
@@ -104,6 +104,8 @@ describe("starting Runs", () => {
         "",
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
+        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
+          "and write Reports on it; leave everything else to its Users.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );
@@ -121,6 +123,27 @@ describe("starting Runs", () => {
     expect(await runsOf(ticket.id, ada)).toEqual([]);
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready"), delegateId: agent.id });
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+    expect(cronk.runner.starts).toEqual([]);
+  });
+
+  test("no Run starts for a Ticket in a Done or Canceled Status, which can never have a Step", async () => {
+    const { ada, ticket, agent, project, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    const step = {
+      brief: "Wrap up.",
+      model: "haiku",
+      outcomes: [
+        { name: "again", statusId: status("In Review"), default: true, needsYou: false, countsAsRound: false },
+        { name: "needs you", statusId: status("Backlog"), default: false, needsYou: true, countsAsRound: false },
+      ],
+    };
+    for (const name of ["Done", "Canceled"]) {
+      expect((await call("PUT", `/api/projects/${project.id}/statuses/${status(name)}/step`, ada, step)).status).toBe(409);
+      await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status(name) });
+    }
+    expect((await call("PATCH", `/api/projects/${project.id}/statuses/${status("Investigate")}`, ada, { kind: "done" })).status).toBe(409);
+
     expect(await runsOf(ticket.id, ada)).toEqual([]);
     expect(cronk.runner.starts).toEqual([]);
   });
@@ -151,7 +174,7 @@ describe("finishing Runs", () => {
 
     const triaged = await finish(ticket.id, asAgent, ada, { outcome: "ready", report: "Clear enough." });
     expect(triaged).toEqual(
-      expect.objectContaining({ state: "finished", outcome: "ready", report: "Clear enough.", endedAt: expect.any(String) }),
+      expect.objectContaining({ state: "finished", outcome: "ready", endedAt: expect.any(String) }),
     );
     // Ready has no Step: the Ticket waits there for a User.
     let current = await ok("GET", `/api/tickets/${ticket.id}`, ada);
@@ -367,7 +390,7 @@ describe("Runners and Agents", () => {
     expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
-      { id: agent.runnerId, name: "Fake", kind: "fake", createdAt: expect.any(String) },
+      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, createdAt: expect.any(String) },
     ]);
     const notOwn = await call("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: "00000000-0000-0000-0000-000000000000" });
     expect(notOwn.json.error.code).toBe("unknown_runner");

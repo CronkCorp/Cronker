@@ -4,10 +4,13 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
-import { recordChanges, type NewChange } from "./changes.js";
+import type { AgentCaller, Caller } from "../identity/callers.js";
+import { ownerName } from "../agents/tokens.js";
+import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded, stopRunningRun } from "../runs/runs.js";
+import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
+import { Waiting, waitingColumn } from "../runs/waiting.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -58,6 +61,7 @@ export const TicketSummary = Type.Object({
     ],
     { description: "The Ticket's latest Run, for marking the board's card; its Runs list them all." },
   ),
+  waiting: Waiting,
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
@@ -75,7 +79,8 @@ export const ticketColumns = `tickets.id, tickets.project_id as "projectId", pro
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
-   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun"`;
+   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
+  ${waitingColumn("tickets")} as waiting`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -161,7 +166,7 @@ export async function findTicketRow(
   return rows[0];
 }
 
-export async function findTicket(db: Db, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
+export async function findTicket(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
   const row = await findTicketRow(db, viewer, ticketId);
   return row && withMentions(db, row);
 }
@@ -229,8 +234,8 @@ export async function createTicket(
          returning next_ticket_number - 1 as number
        )
        insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
-         assignee_id, delegate_id)
-       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9 from numbered
+         assignee_id, delegate_id, status_entered_at)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $7 from numbered
        returning id`,
       [
         project.workspaceId,
@@ -322,17 +327,29 @@ export interface TicketEdit {
   parentId?: string | null;
 }
 
-/** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
+/** The fields of a Ticket an Agent may edit, during its running Run on it. */
+const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate"]);
+
+/**
+ * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
+ * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
+ * each of its Changes names.
+ */
 export async function editTicket(
   context: Context,
-  userId: string,
+  editor: Caller,
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
+  if (editor.kind === "agent") checkAgentFields(editor, edit);
   return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    const actor: ChangeActor =
+      editor.kind === "user" ? editor.id : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+    // Only Users get this far with fields that name a User.
+    const userId = editor.id;
     const next = { ...ticket };
     const changes: NewChange[] = [];
     /** Sets a field and records the Change, if the value differs; `shown` gives how the Change shows a value. */
@@ -383,9 +400,11 @@ export async function editTicket(
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
     if (changes.length === 0) return withMentions(tx, ticket);
 
+    const now = clock.now();
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11 where id = $1`,
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
+       status_entered_at = case when status_id = $9 then status_entered_at else $12 end where id = $1`,
       [
         ticket.id,
         next.title,
@@ -398,17 +417,17 @@ export async function editTicket(
         next.statusId,
         next.parentId,
         next.delegateId,
+        now,
       ],
     );
-    const now = clock.now();
-    await recordChanges(tx, ticket, userId, now, changes);
+    await recordChanges(tx, ticket, actor, now, changes);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     if (next.parentId !== ticket.parentId) {
       // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
       const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
       const subTicketChange = async (parentId: string | null, change: NewChange) => {
         if (parentId === null) return;
-        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, userId, now, [change]);
+        await recordChanges(tx, { id: parentId, workspaceId: ticket.workspaceId }, actor, now, [change]);
         live.publish(tx, ticket.workspaceId, {
           type: "ticket.changed",
           projectId: ticket.projectId,
@@ -419,9 +438,10 @@ export async function editTicket(
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
     // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
+    // Only Users get here with either change: Agents set neither a Status nor a Delegate.
     const entered = next.statusId !== ticket.statusId;
-    const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
-    if (entered || next.delegateId !== ticket.delegateId) {
+    const delegateChanged = next.delegateId !== ticket.delegateId;
+    if (entered || delegateChanged) {
       const { rows } = await tx.query<{ name: string }>(
         "select coalesce(email, '@' || github_login) as name from users where id = $1",
         [userId],
@@ -436,9 +456,47 @@ export async function editTicket(
           : `${who} undelegated ${ticket.key}.`;
       await stopRunningRun(context, tx, ticket.id, reason, now);
     }
-    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
-    if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
+    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
+    // leaving it, or losing its Delegate, ends its wait for one.
+    if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
+    // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
+    const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
+    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
     return withMentions(tx, next);
+  });
+}
+
+/** Refuses an Agent's edit of a field only Users edit. */
+function checkAgentFields(agent: AgentCaller, edit: TicketEdit): void {
+  const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
+    (field) => edit[field] !== undefined && !agentEditable.has(field),
+  );
+  if (refused.length === 0) return;
+  throw new ApiError(
+    403,
+    "agent_field_not_allowed",
+    `${agent.name} is an Agent, and Agents don't edit a Ticket's ${refused.join(", ")}.`,
+    {
+      rule:
+        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate; " +
+        "its title, Assignee, Delegation, parent and Status are for Users to change.",
+      advice:
+        `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
+        "to change the rest; a Run moves its Ticket with `finish`.",
+    },
+  );
+}
+
+/** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
+export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
+    [ticket.id, agent.id],
+  );
+  if (rows[0]) return rows[0].id;
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
+    rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
+    advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
   });
 }
 

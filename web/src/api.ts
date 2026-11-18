@@ -139,6 +139,8 @@ export interface TicketSummary {
   createdBy: string;
   createdAt: string;
   lastRun: { id: string; state: RunState } | null;
+  /** What it waits for before it gets the Run it needs, if it needs one. */
+  waiting: "runnerSlot" | "blocked" | null;
 }
 
 export interface Ticket extends TicketSummary {
@@ -222,6 +224,17 @@ export interface Comment {
   mentions: Mention[];
 }
 
+/** Markdown a Run wrote on its Ticket. */
+export interface Report {
+  id: string;
+  ticketId: string;
+  runId: string;
+  agent: { id: string; name: string };
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
 export interface Change {
   id: string;
   actor: Actor;
@@ -242,6 +255,8 @@ export interface Change {
     | RelationKind;
   from: unknown;
   to: unknown;
+  /** The Run an Agent made the Change in; null for a User's. */
+  runId: string | null;
 }
 
 export type RunState = "running" | "finished" | "failed" | "lost" | "stopped" | "refused";
@@ -256,7 +271,6 @@ export interface Run {
   state: RunState;
   outcome: string | null;
   question: string | null;
-  report: string | null;
   endReason: string | null;
   sessionUrl: string | null;
   startedAt: string;
@@ -397,6 +411,7 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
@@ -414,7 +429,7 @@ export const api = {
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
-  retry: (ticketId: string) => call<Run>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
+  retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),

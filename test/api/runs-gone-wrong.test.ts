@@ -124,8 +124,27 @@ describe("rate limits", () => {
 
     expect(cronk.runner.starts).toHaveLength(1);
     expect(await runsOf(ticket.id, ada)).toEqual([]);
-    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).lastRun).toBeNull();
+    expect(await ok("GET", `/api/tickets/${ticket.id}`, ada)).toEqual(
+      expect.objectContaining({ lastRun: null, waiting: "runnerSlot" }),
+    );
     expect(await inbox()).toEqual({ count: 0, items: [] });
+  });
+
+  test("the rate-limited Ticket gets a Run once another Run of its Runner ends, not before", async () => {
+    const { ada, project, agent, asAgent, status } = await adaWithAgent();
+    const first = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "First" });
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    cronk.runner.refuseNext({ kind: "rate_limited", message: "Too many fires.", retryAt: new Date("2026-01-01T10:00:00Z") });
+    await ok("PATCH", `/api/tickets/${second.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-2", "CRONK-3"]);
+
+    const [firstRun] = await runsOf(first.id, ada);
+    await ok("POST", `/api/runs/${firstRun.id}/finish`, asAgent, { outcome: "ready" });
+
+    expect(cronk.runner.starts.map((s) => s.ticket.key)).toEqual(["CRONK-2", "CRONK-3", "CRONK-3"]);
+    expect(await states(second.id, ada)).toEqual([["Triage", "running"]]);
+    expect((await ok("GET", `/api/tickets/${second.id}`, ada)).waiting).toBeNull();
   });
 });
 
@@ -136,17 +155,40 @@ describe("Retry", () => {
 
     const retried = await call("POST", `/api/tickets/${ticket.id}/retry`, ada);
 
-    expect(retried.status).toBe(201);
-    expect(retried.json).toEqual(
+    expect(retried.status).toBe(200);
+    const [, fresh] = await runsOf(ticket.id, ada);
+    expect(fresh).toEqual(
       expect.objectContaining({ step: { statusId: status("Triage"), name: "Triage" }, model: "haiku", state: "running" }),
     );
-    expect(retried.json.id).not.toBe(run.id);
+    expect(retried.json).toEqual(
+      expect.objectContaining({ id: ticket.id, lastRun: { id: fresh.id, state: "running" }, waiting: null }),
+    );
     expect(await states(ticket.id, ada)).toEqual([
       ["Triage", "failed"],
       ["Triage", "running"],
     ]);
-    expect(cronk.runner.starts.map((s) => s.runId)).toEqual([run.id, retried.json.id]);
+    expect(cronk.runner.starts.map((s) => s.runId)).toEqual([run.id, fresh.id]);
     expect(await inbox()).toEqual({ count: 0, items: [] });
+  });
+
+  test("waits like any Ticket while its Runner is full, out of the Inbox, and starts when a slot frees", async () => {
+    const { ada, project, ticket, run, runner, agent, asAgent, status, inbox } = await runningRun();
+    await cronk.runner.endWithoutFinishing(run.id);
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Holds the slot" });
+    await ok("PATCH", `/api/tickets/${other.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+
+    const retried = await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
+
+    expect(retried).toEqual(expect.objectContaining({ lastRun: { id: run.id, state: "failed" }, waiting: "runnerSlot" }));
+    expect(await inbox()).toEqual({ count: 0, items: [] });
+
+    const [otherRun] = await runsOf(other.id, ada);
+    await ok("POST", `/api/runs/${otherRun.id}/finish`, asAgent, { outcome: "ready" });
+    expect(await states(ticket.id, ada)).toEqual([
+      ["Triage", "failed"],
+      ["Triage", "running"],
+    ]);
   });
 
   test("works for a Run that couldn't start", async () => {

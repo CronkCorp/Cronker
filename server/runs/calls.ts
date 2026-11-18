@@ -3,28 +3,17 @@ import { authenticateAgent, offersBearer, type AgentCaller } from "../agents/tok
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { findTicketRefByKey } from "../work/tickets.js";
 
 /**
- * What a Run's Agent's calls do to the Run, whichever route they reach, the API's own or through MCP:
- * every call naming a running Run of the Agent, or its Ticket, keeps that Run from being lost, and
- * every call naming one of its Runs that a User stopped is refused.
+ * Refuses every call an Agent makes naming one of its Runs that a User stopped, whichever route it reaches,
+ * the API's own or through MCP. (Calls naming a running Run or its Ticket are noted by `noteRunCall`.)
  */
-export function watchRunCalls(app: FastifyInstance, context: Context): void {
+export function refuseStoppedRunCalls(app: FastifyInstance, context: Context): void {
   app.addHook("preHandler", async (request) => {
-    const agent = await agentOf(context, request);
-    if (!agent) return;
     const params = (request.params ?? {}) as Record<string, string | undefined>;
-    const runId = params.runId !== undefined && isUuid(params.runId) ? params.runId : null;
-    let ticketId = params.ticketId !== undefined && isUuid(params.ticketId) ? params.ticketId : null;
-    if (params.key !== undefined) ticketId = (await findTicketRefByKey(context.db, agent.workspace.id, params.key))?.id ?? null;
-    if (runId) await refuseStoppedRun(context, agent, runId);
-    if (!runId && !ticketId) return;
-    await context.db.query(
-      `update runs set last_call_at = $1
-       where state = 'running' and agent_id = $2 and (id = $3 or ticket_id = $4)`,
-      [context.clock.now(), agent.id, runId, ticketId],
-    );
+    if (params.runId === undefined || !isUuid(params.runId)) return;
+    const agent = await agentOf(context, request);
+    if (agent) await refuseStoppedRun(context, agent, params.runId);
   });
 }
 

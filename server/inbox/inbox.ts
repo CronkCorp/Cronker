@@ -52,7 +52,8 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
     ticket: ticketSummary(row),
     status: { id: row.statusId, name: statusName },
   }));
-  // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents.
+  // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents,
+  // unless it already waits for its next Run (after a Retry, while its Runner is full).
   const { rows: wentWrong } = await db.query<TicketRow & { run: Static<typeof RunItem>["run"] }>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
        json_build_object('id', runs.id, 'state', runs.state,
@@ -60,7 +61,7 @@ export async function inboxOf(db: Db, userId: string, workspaceId: string): Prom
      from tickets join projects on projects.id = tickets.project_id
      join agents on agents.id = tickets.delegate_id
      join lateral (select * from runs where runs.ticket_id = tickets.id order by runs.seq desc limit 1) runs on true
-     where tickets.workspace_id = $1 and agents.owner_id = $2
+     where tickets.workspace_id = $1 and agents.owner_id = $2 and not tickets.waits_for_run
        and runs.state = any($3::run_state[]) and runs.status_id = tickets.status_id
      order by projects.key, tickets.number`,
     [workspaceId, userId, wentWrongStates],

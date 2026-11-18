@@ -2,6 +2,7 @@ import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import { startUnblocked } from "../runs/runs.js";
 import { userViewer } from "../identity/viewers.js";
 import {
   findProject,
@@ -12,7 +13,7 @@ import {
   type Project,
   type StatusKind,
 } from "./projects.js";
-import { outcomesOf, targetRefusal } from "./steps.js";
+import { mayHaveStep, noStepWhy, outcomesOf, targetRefusal } from "./steps.js";
 
 /**
  * Changes to a Project's Statuses. Each change is worked out on the whole board in
@@ -40,11 +41,12 @@ const kindNames: Record<StatusKind, string> = {
 };
 
 export async function changeStatuses(
-  { db, clock, live }: Context,
+  context: Context,
   userId: string,
   projectId: string,
   change: StatusChange,
 ): Promise<Project> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
@@ -79,7 +81,13 @@ export async function changeStatuses(
     checkKinds(board, statuses);
     await checkNoTicketsIn(tx, project, board);
     await checkOutcomeTargets(tx, project, board);
+    checkSteps(board, statuses);
     await write(tx, clock, project, board);
+    if (change.type === "edit" && change.kind !== undefined) {
+      // A Status's kind says whether its Tickets are finished, for what they block and for their parents.
+      const { rows } = await tx.query<{ id: string }>("select id from tickets where status_id = $1", [change.statusId]);
+      await startUnblocked(context, tx, rows.map((row) => row.id));
+    }
     live.publish(tx, project.workspaceId, { type: "statuses.changed", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };
   });
@@ -118,6 +126,19 @@ function checkKinds(board: Draft[], before: Draft[]): void {
       "status_kind_needed",
       `Every Project needs at least one ${kindNames[kind]} Status, and ${last.name} is this Project's only one. ` +
         `Add another ${kindNames[kind]} Status first.`,
+    );
+  }
+}
+
+/** A Status keeping its Step can't become Done or Canceled: Tickets there get no Runs. */
+function checkSteps(board: Draft[], before: Project["statuses"]): void {
+  for (const status of board) {
+    if (mayHaveStep(status.kind) || !before.find((s) => s.id === status.id)?.step) continue;
+    throw new ApiError(
+      409,
+      "step_on_done_or_canceled_status",
+      `${status.name} has a Step, so it can't be a ${kindNames[status.kind]} Status: ${noStepWhy}. ` +
+        `Remove ${status.name}'s Step first.`,
     );
   }
 }

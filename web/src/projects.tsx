@@ -298,8 +298,13 @@ function TicketItem({
     >
       <span className="muted">{ticket.key}</span> <span>{ticket.title}</span>
       {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
-      {ticket.lastRun && ticket.lastRun.state in runMarkers && (
-        <small className={`run-marker ${ticket.lastRun.state}`}> {runMarkers[ticket.lastRun.state as keyof typeof runMarkers]}</small>
+      {ticket.waiting ? (
+        <small className={`run-marker ${ticket.waiting}`}> {waitingMarkers[ticket.waiting]}</small>
+      ) : (
+        ticket.lastRun &&
+        ticket.lastRun.state in runMarkers && (
+          <small className={`run-marker ${ticket.lastRun.state}`}> {runMarkers[ticket.lastRun.state as keyof typeof runMarkers]}</small>
+        )
       )}
     </Link>
   );
@@ -312,6 +317,9 @@ const runMarkers = {
   lost: "Run lost",
   refused: "Run couldn't start",
 } as const;
+
+/** How a card marks a Ticket that needs a Run but waits for one; this replaces its latest Run's marker. */
+const waitingMarkers = { runnerSlot: "Waiting for a Runner slot", blocked: "Blocked" } as const;
 
 const ticketDrag = "application/x-cronk-ticket";
 

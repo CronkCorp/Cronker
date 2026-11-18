@@ -5,8 +5,9 @@ import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
-import { createRunner, RunnerRecord, runnersOf } from "./runners.js";
+import { createRunner, RunnerRecord, runnersOf, setRunnerLimit } from "./runners.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
+import { Ticket } from "../work/tickets.js";
 
 export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
   return async (app) => {
@@ -82,7 +83,14 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           body: Type.Object({
             outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
             question: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000, description: "For the Assignee, in Markdown." })),
-            report: Type.Optional(Type.String({ minLength: 1, maxLength: 500_000, description: "Markdown." })),
+            report: Type.Optional(
+              Type.String({
+                minLength: 1,
+                maxLength: 500_000,
+                pattern: "\\S",
+                description: "Markdown, added to the Ticket's Reports titled after the Run's Step, such as `Triage report`.",
+              }),
+            ),
           }),
           response: { 200: Run, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
@@ -99,17 +107,14 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Starts a fresh Run of the same Step on a delegated Ticket whose latest Run failed, was lost or couldn't " +
             "start, while the Ticket is still in that Run's Status; refused with `nothing_to_retry` otherwise. Only the " +
-            "Delegate's Owner retries, since the Run spends their credentials. Nothing retries by itself. Returns the " +
-            "new Run as recorded; if its Runner then refuses to start it, a later read shows that, and a rate-limited " +
-            "Runner leaves the Ticket waiting with no Run.",
+            "Delegate's Owner retries, since the Run spends their credentials. Nothing retries by itself. Like any " +
+            "Ticket needing a Run, it waits while its Runner is full or it is blocked. Returns the Ticket: its " +
+            "`lastRun` is the new Run, or its `waiting` says what it waits for.",
           params: Type.Object({ ticketId: Type.String() }),
-          response: { 201: Run, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
-      async (request, reply) => {
-        const user = await requireUser(context, request);
-        return reply.code(201).send(await retryRun(context, user.id, request.params.ticketId));
-      },
+      async (request) => retryRun(context, (await requireUser(context, request)).id, request.params.ticketId),
     );
 
     app.get(
@@ -141,6 +146,26 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         return reply.code(201).send(await createRunner(context, user.id, request.body));
+      },
+    );
+
+    app.patch(
+      "/api/runners/:runnerId",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Set your Runner's limit on Runs at once",
+          description:
+            "Tickets needing a Run beyond the limit wait for a slot, highest Priority first, then the one that entered " +
+            "its Status first. Raising the limit starts waiting Tickets at once; lowering it stops no running Run.",
+          params: Type.Object({ runnerId: Type.String() }),
+          body: Type.Object({ limit: Type.Integer({ minimum: 1, maximum: 100 }) }),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return setRunnerLimit(context, user.id, request.params.runnerId, request.body.limit);
       },
     );
   };
