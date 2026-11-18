@@ -151,13 +151,15 @@ export interface TicketSummary {
   /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
   verification: "unverified" | "verified" | null;
   parentId: string | null;
+  /** For a Discovered Ticket: the Agent that filed it, from which Ticket and Run, and whether it waits for a User. */
+  discovered: { agentId: string; sourceTicket: TicketRef | null; runId: string | null; waiting: boolean } | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
   createdAt: string;
   lastRun: { id: string; state: RunState } | null;
   /** What it waits for before it gets the Run it needs, if it needs one. */
-  waiting: "runnerSlot" | "blocked" | null;
+  waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
 }
 
 export interface Ticket extends TicketSummary {
@@ -214,6 +216,28 @@ export interface Agent {
   name: string;
   owner: User;
   runnerId: string | null;
+  createdAt: string;
+}
+
+/** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
+export interface Trigger {
+  id: string;
+  model: string;
+  /** The Project it overrides the Runner's own trigger on; null for all Projects. */
+  projectId: string | null;
+  triggerId: string;
+  createdAt: string;
+}
+
+/** A way for Cronk to start Runs of the User's Agents with their own credentials. */
+export interface Runner {
+  id: string;
+  name: string;
+  kind: string;
+  limit: number;
+  /** Until when a rate limit pauses its queue. */
+  pausedUntil: string | null;
+  triggers: Trigger[];
   createdAt: string;
 }
 
@@ -278,10 +302,11 @@ export interface Change {
     | "stepSkipped"
     | "autonomousDelegation"
     | "verification"
+    | "dismissed"
     | RelationKind;
   from: unknown;
   to: unknown;
-  /** The Run an Agent made the Change in; null for a User's. */
+  /** The Run an Agent made the Change in; null for a User's, or an Agent's outside a Run. */
   runId: string | null;
 }
 
@@ -350,6 +375,13 @@ export interface RunItem {
   run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
 }
 
+/** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
+export interface DiscoveredItem {
+  kind: "discovered";
+  ticket: TicketSummary;
+  agent: { id: string; name: string };
+}
+
 /** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
 export interface ReassignItem {
   kind: "reassign";
@@ -357,7 +389,7 @@ export interface ReassignItem {
   formerAssignee: User;
 }
 
-export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | ReassignItem;
+export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem | ReassignItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
@@ -486,6 +518,14 @@ export const api = {
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
+  setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId }),
+  runners: () => call<Runner[]>("GET", "/api/runners"),
+  createRunner: (input: { name: string; kind: string }) => call<Runner>("POST", "/api/runners", input),
+  setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
+  saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
+    call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
+  removeTrigger: (runnerId: string, triggerId: string) =>
+    call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),
   tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
   issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
@@ -500,12 +540,17 @@ export const api = {
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
+  dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
+
+function runner(id: string) {
+  return `/api/runners/${encodeURIComponent(id)}`;
+}
 
 function ws(id: string) {
   return `/api/workspaces/${encodeURIComponent(id)}`;
