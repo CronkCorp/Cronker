@@ -16,7 +16,7 @@ const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: Er
 const kindRule = "Refused if it would leave any Status kind without a Status.";
 
 export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
-  const { db, clock } = context;
+  const { db } = context;
 
   /** The Workspace, if in view; `agents` lets Agents ask, for what they may do as well as Users. */
   async function requireWorkspace(request: FastifyRequest, workspaceId: string, { agents = false } = {}): Promise<Workspace> {
@@ -63,7 +63,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const workspace = await requireWorkspace(request, request.params.workspaceId);
-        return reply.code(201).send(await createProject(db, clock, workspace.id, request.body));
+        return reply.code(201).send(await createProject(context, workspace.id, request.body));
       },
     );
 
@@ -99,7 +99,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        const project = await changeStatuses(db, clock, user.id, request.params.projectId, {
+        const project = await changeStatuses(context, user.id, request.params.projectId, {
           type: "add",
           ...request.body,
         });
@@ -126,7 +126,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        return changeStatuses(db, clock, user.id, projectId, { type: "edit", statusId, ...request.body });
+        return changeStatuses(context, user.id, projectId, { type: "edit", statusId, ...request.body });
       },
     );
 
@@ -144,7 +144,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        return changeStatuses(db, clock, user.id, projectId, { type: "remove", statusId });
+        return changeStatuses(context, user.id, projectId, { type: "remove", statusId });
       },
     );
   };

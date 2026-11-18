@@ -25,7 +25,7 @@ export const AgentName = Type.String({
 type Row = Omit<Agent, "createdAt"> & { createdAt: Date };
 
 const columns = `agents.id, agents.workspace_id as "workspaceId", agents.name,
-  json_build_object('id', owners.id, 'email', owners.email) as owner, agents.created_at as "createdAt"`;
+  json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner, agents.created_at as "createdAt"`;
 
 const present = (row: Row): Agent => ({ ...row, createdAt: row.createdAt.toISOString() });
 
@@ -84,7 +84,7 @@ export async function requireOwnAgent(db: Db, userId: string, agentId: string): 
     : { rowCount: 0 };
   if (!agent || rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
   if (agent.owner.id !== userId) {
-    throw new ApiError(403, "not_owner", `Only ${agent.name}'s Owner, ${agent.owner.email}, can change it.`);
+    throw new ApiError(403, "not_owner", `Only ${agent.name}'s Owner, ${agent.owner.email ?? `@${agent.owner.githubLogin}`}, can change it.`);
   }
   return agent;
 }

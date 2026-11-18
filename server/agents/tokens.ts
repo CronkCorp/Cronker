@@ -81,6 +81,9 @@ export async function revokeToken(db: Db, agent: Agent, tokenId: string): Promis
 
 const safeMethods = new Set(["GET", "HEAD"]);
 
+/** How an Agent's refusals name its Owner: by email, or by GitHub login until their email is known. */
+export const ownerName = (agent: { owner: User }): string => agent.owner.email ?? `@${agent.owner.githubLogin}`;
+
 const agentsOfRequests = new WeakMap<FastifyRequest, AgentCaller>();
 
 /** The Agent a request was authenticated as, if any, for wording its refusals. */
@@ -105,7 +108,7 @@ export async function authenticateAgent(context: Context, request: FastifyReques
   if (agent.access === "read" && !safeMethods.has(request.method)) {
     throw new ApiError(403, "read_only_token", `This token of ${agent.name} is read-only.`, {
       rule: "A read-only token may only read.",
-      advice: `Read instead, or ask ${agent.owner.email}, ${agent.name}'s Owner, for a full token.`,
+      advice: `Read instead, or ask ${ownerName(agent)}, ${agent.name}'s Owner, for a full token.`,
     });
   }
   return agent;
@@ -118,7 +121,7 @@ export async function agentOfToken({ db }: Context, header: string): Promise<Age
     ? await db.query<AgentCaller>(
         `select 'agent' as kind, agents.id, agents.name, agent_tokens.access,
            json_build_object('id', workspaces.id, 'name', workspaces.name) as workspace,
-           json_build_object('id', owners.id, 'email', owners.email) as owner
+           json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner
          from agent_tokens
          join agents on agents.id = agent_tokens.agent_id and agents.removed_at is null
          join memberships on memberships.workspace_id = agents.workspace_id and memberships.user_id = agents.owner_id

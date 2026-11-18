@@ -53,6 +53,22 @@ button {
   color: white;
   cursor: pointer;
 }
+a.button {
+  display: inline-block;
+  padding: 0.5rem 0.9rem;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+}
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+}
+.or {
+  text-align: center;
+}
 button:disabled {
   opacity: 0.6;
 }
@@ -295,4 +311,26 @@ td.actions {
   .shell header {
     flex-wrap: wrap;
   }
+}
+
+.relations {
+  margin-top: 1.25rem;
+}
+.relations h2 {
+  font-size: 1rem;
+}
+.relations h3 {
+  font-size: 0.9rem;
+  margin: 0.75rem 0 0.25rem;
+}
+.relations ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.relation-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+  margin-top: 0.75rem;
 }

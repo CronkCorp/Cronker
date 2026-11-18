@@ -2,7 +2,20 @@
 
 export interface User {
   id: string;
-  email: string;
+  /** Unknown for a User added by GitHub login until they first sign in. */
+  email: string | null;
+  githubLogin: string | null;
+}
+
+/** How to show a User: their email, else their GitHub login. */
+export function nameOf(user: User): string {
+  return user.email ?? `@${user.githubLogin}`;
+}
+
+export interface GitHubApp {
+  name: string;
+  githubAccount: string;
+  htmlUrl: string;
 }
 
 export interface WorkspaceSummary {
@@ -28,9 +41,10 @@ export interface Link {
 
 export interface LinkDetails {
   kind: "join" | "reset";
-  email: string;
+  email: string | null;
   workspace: Workspace | null;
   setsPassword: boolean;
+  signInWithGitHub: boolean;
 }
 
 export type StatusKind = "backlog" | "active" | "review" | "done" | "canceled";
@@ -87,6 +101,7 @@ export interface TicketSummary {
   priority: Priority;
   labels: string[];
   assigneeId: string | null;
+  parentId: string | null;
   dueDate: string | null;
   estimate: number | null;
   createdBy: string;
@@ -106,6 +121,30 @@ export interface TicketEdit {
   assigneeId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
+  parentId?: string | null;
+}
+
+/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
+export interface TicketRef {
+  id: string;
+  projectId: string;
+  key: string;
+  title: string;
+}
+
+/** A Relation as seen from one of its Tickets. */
+export type RelationKind = "blocks" | "blockedBy" | "relatesTo";
+
+export interface Relation {
+  id: string;
+  kind: RelationKind;
+  ticket: TicketRef;
+}
+
+export interface TicketRelations {
+  parent: TicketRef | null;
+  subTickets: TicketRef[];
+  relations: Relation[];
 }
 
 export interface TicketFilter {
@@ -152,7 +191,19 @@ export interface Change {
   id: string;
   actor: Actor;
   at: string;
-  field: "created" | "title" | "description" | "status" | "priority" | "labels" | "assignee" | "dueDate" | "estimate";
+  field:
+    | "created"
+    | "title"
+    | "description"
+    | "status"
+    | "priority"
+    | "labels"
+    | "assignee"
+    | "dueDate"
+    | "estimate"
+    | "parent"
+    | "subTicket"
+    | RelationKind;
   from: unknown;
   to: unknown;
 }
@@ -202,6 +253,11 @@ export const api = {
     call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
   removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
+  addMemberByGitHub: (id: string, login: string) =>
+    call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
+  githubApp: () => call<{ app: GitHubApp | null }>("GET", "/api/github/app").then((r) => r.app),
+  startGitHubApp: (githubOrganization?: string) =>
+    call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization }),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
   useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
   projects: (workspaceId: string) =>
@@ -240,6 +296,12 @@ export const api = {
     call<{ token: AgentToken; secret: string }>("POST", `${agent(agentId)}/tokens`, input),
   revokeToken: (agentId: string, tokenId: string) =>
     call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
+  relations: (ticketId: string) =>
+    call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
+  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
+    call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
+  removeRelation: (ticketId: string, relationId: string) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 

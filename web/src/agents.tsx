@@ -53,7 +53,7 @@ export function Agents({ user, workspace }: { user: User; workspace: WorkspaceSu
                     agent.name
                   )}
                 </td>
-                <td>{agent.owner.id === user.id ? "yours" : `of ${agent.owner.email}`}</td>
+                <td>{agent.owner.id === user.id ? "yours" : `of ${agent.owner.email ?? `@${agent.owner.githubLogin}`}`}</td>
               </tr>
             ))}
           </tbody>

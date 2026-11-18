@@ -2,10 +2,11 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
-import { Email } from "../identity/user.js";
+import { Email, User } from "../identity/user.js";
 import {
   AddedMember,
   addMember,
+  addMemberByGitHub,
   issueResetLink,
   Member,
   membersOf,
@@ -113,6 +114,34 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
     );
 
+    app.post(
+      "/api/workspaces/:workspaceId/members/github",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Add a User by GitHub login (Admins only)",
+          description:
+            "Creates a User for that GitHub account if no User has it yet. They join the Workspace at their next sign-in with GitHub. Refused with `github_not_set_up` while the installation has no GitHub App, and `unknown_github_login` if GitHub has no such account.",
+          params: Type.Object({ workspaceId: Type.String() }),
+          body: Type.Object({ login: Type.String({ minLength: 1, maxLength: 39, pattern: "^[A-Za-z0-9-]+$" }) }),
+          response: {
+            201: Type.Object({ user: User }),
+            401: ErrorBody,
+            403: ErrorBody,
+            404: ErrorBody,
+            409: ErrorBody,
+            502: ErrorBody,
+          },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        const added = await addMemberByGitHub(context, user.id, workspace.id, request.body.login);
+        return reply.code(201).send({ user: added });
+      },
+    );
+
     const MemberParams = Type.Object({ workspaceId: Type.String(), userId: Type.String() });
 
     app.patch(
@@ -149,7 +178,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
-        await removeMember(db, workspace.id, request.params.userId);
+        await removeMember(context, workspace.id, request.params.userId);
         return reply.code(204).send(null);
       },
     );

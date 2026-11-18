@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import type { Clock } from "../clock.js";
+import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -49,8 +49,7 @@ export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Prom
 }
 
 export async function addComment(
-  db: Db,
-  clock: Clock,
+  { db, clock, live }: Context,
   actor: Caller,
   ticketId: string,
   input: { body: string; replyToId?: string },
@@ -78,6 +77,12 @@ export async function addComment(
       ],
     );
     const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, rows[0]!.id));
+    live.publish(tx, ticket.workspaceId, {
+      type: "comment.added",
+      projectId: ticket.projectId,
+      ticketId: ticket.id,
+      commentId: comment!.id,
+    });
     return comment!;
   });
 }

@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox";
-import type { Clock } from "../clock.js";
+import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -85,8 +85,7 @@ export async function findProject(
 }
 
 export async function createProject(
-  db: Db,
-  clock: Clock,
+  { db, clock, live }: Context,
   workspaceId: string,
   input: { name: string; key: string },
 ): Promise<Project> {
@@ -115,6 +114,7 @@ export async function createProject(
     for (const [position, status] of defaultStatuses.entries()) {
       await insertStatus(tx, project, status, position, now);
     }
+    live.publish(tx, workspaceId, { type: "project.created", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };
   });
 }

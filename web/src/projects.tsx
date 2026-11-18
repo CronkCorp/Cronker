@@ -14,6 +14,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
@@ -23,9 +24,15 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.projects(workspace.id).then(setProjects, (e: Error) => setFailure(e.message));
-  }, [workspace.id]);
+  const latest = useLatest();
+  const load = useCallback(
+    () => latest(api.projects(workspace.id), setProjects, (e) => setFailure(e.message)),
+    [workspace.id, latest],
+  );
+  useEffect(load, [load]);
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "project.created" || event.type === "reconnected") load();
+  });
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const project = await api.createProject(workspace.id, { name: field(form, "name"), key: field(form, "key") });
@@ -110,17 +117,27 @@ export function ProjectScreen({
     api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
   }, [projectId, workspace.id]);
 
-  const loadTickets = useCallback(() => {
-    let current = true;
-    api.tickets(projectId, filter).then(
-      (found) => current && setTickets(found),
-      (e: Error) => current && setFailure(e.message),
-    );
-    return () => {
-      current = false;
-    };
-  }, [projectId, filter]);
+  const latestTickets = useLatest();
+  const loadTickets = useCallback(
+    () => latestTickets(api.tickets(projectId, filter), setTickets, (e) => setFailure(e.message)),
+    [projectId, filter, latestTickets],
+  );
   useEffect(loadTickets, [loadTickets]);
+
+  const latestProject = useLatest();
+  const loadProject = () => latestProject(api.project(projectId), setProject, (e) => setFailure(e.message));
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected") {
+      loadProject();
+      loadTickets();
+    } else if (event.projectId !== projectId) {
+      return;
+    } else if (event.type === "statuses.changed") {
+      loadProject();
+    } else if (event.type === "ticket.created" || event.type === "ticket.changed") {
+      loadTickets();
+    }
+  });
 
   if (failure) return <p role="alert">{failure}</p>;
   if (!project || !tickets) return <p>Loading…</p>;

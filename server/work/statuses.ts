@@ -1,5 +1,6 @@
 import type { Clock } from "../clock.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import type { Context } from "../context.js";
+import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { userViewer } from "../identity/viewers.js";
 import {
@@ -38,8 +39,7 @@ const kindNames: Record<StatusKind, string> = {
 };
 
 export async function changeStatuses(
-  db: Db,
-  clock: Clock,
+  { db, clock, live }: Context,
   userId: string,
   projectId: string,
   change: StatusChange,
@@ -77,6 +77,7 @@ export async function changeStatuses(
     checkNames(board);
     checkKinds(board, statuses);
     await write(tx, clock, project, board);
+    live.publish(tx, project.workspaceId, { type: "statuses.changed", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };
   });
 }
