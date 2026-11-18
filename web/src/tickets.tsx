@@ -7,16 +7,21 @@ import {
   type Member,
   type Priority,
   type Project,
+  type RelationKind,
   type Ticket,
   type TicketEdit,
+  type TicketRef,
+  type TicketRelations,
+  type TicketSummary,
   type Workspace,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 
-/** A Ticket: its fields, its description, its Comments and its timeline of Changes. */
+/** A Ticket: its fields, its description, its Relations, its Comments and its timeline of Changes. */
 export function TicketScreen({
   workspace,
   ticketId,
@@ -32,16 +37,31 @@ export function TicketScreen({
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
+  const [relations, setRelations] = useState<TicketRelations | null>(null);
+  const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
 
-  const loadTimeline = useCallback(() => api.timeline(ticketId).then(setTimeline), [ticketId]);
+  const latestTicket = useLatest();
+  const latestProject = useLatest();
+  const latestComments = useLatest();
+  const latestTimeline = useLatest();
+  const latestRelations = useLatest();
+  const latestProjectTickets = useLatest();
+  const fail = (e: Error) => setFailure(e.message);
+  const loadTimeline = useCallback(() => latestTimeline(api.timeline(ticketId), setTimeline), [ticketId, latestTimeline]);
+  const loadRelations = useCallback(
+    () => latestRelations(api.relations(ticketId), setRelations, fail),
+    [ticketId, latestRelations],
+  );
 
   useEffect(() => {
-    const fail = (e: Error) => setFailure(e.message);
-    api.ticket(ticketId).then(async (found) => {
+    const first = api.ticket(ticketId);
+    // Shown only until a later fetch of the Ticket answers; the screen waits for its Project too.
+    latestTicket(first, setTicket, fail);
+    first.then(async (found) => {
       const ticketProject = await api.project(found.projectId);
       // A Ticket of another of the User's Workspaces isn't shown under this one's name.
       if (ticketProject.workspaceId !== workspace.id) {
@@ -49,25 +69,53 @@ export function TicketScreen({
         return;
       }
       setProject(ticketProject);
-      setTicket(found);
+      latestProjectTickets(api.tickets(ticketProject.id), setProjectTickets, fail);
     }, fail);
     api.members(workspace.id).then(setMembers, fail);
-    api.comments(ticketId).then(setComments, fail);
-    loadTimeline().catch(fail);
-  }, [ticketId, workspace.id, loadTimeline]);
+    latestComments(api.comments(ticketId), setComments, fail);
+    latestTimeline(api.timeline(ticketId), setTimeline, fail);
+    loadRelations();
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline, latestProjectTickets, loadRelations]);
+
+  // What others change shows up as it happens; what this screen saves comes back the same way.
+  useLiveEvents(workspace.id, (event) => {
+    const all = event.type === "reconnected";
+    const thisTicket = !all && "ticketId" in event && event.ticketId === ticketId;
+    if (all || (thisTicket && event.type === "ticket.changed")) {
+      latestTicket(api.ticket(ticketId), setTicket, fail);
+      loadTimeline();
+      loadRelations();
+    }
+    if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
+    if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
+      latestProject(api.project(project.id), setProject, fail);
+    }
+    // The Project's Tickets are offered as parents and Relations; keys and titles may have changed.
+    const projectTicket = (event.type === "ticket.created" || event.type === "ticket.changed") && event;
+    if (project && (all || (projectTicket && projectTicket.projectId === project.id))) {
+      latestProjectTickets(api.tickets(project.id), setProjectTickets, fail);
+    }
+  });
 
   const save = async (edit: TicketEdit) => {
     setError(null);
     try {
-      setTicket(await api.editTicket(ticketId, edit));
-      await loadTimeline();
+      const saved = api.editTicket(ticketId, edit);
+      latestTicket(saved, setTicket);
+      await saved;
+      loadTimeline();
+      loadRelations();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
+  // The live refetch may have shown the new Comment already.
+  const addComment = (comment: Comment) =>
+    setComments((shown) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
+
   if (failure) return <p role="alert">{failure}</p>;
-  if (!ticket || !project) return <p>Loading…</p>;
+  if (!ticket || !project || !relations) return <p>Loading…</p>;
   return (
     <article className="ticket">
       <p>
@@ -87,10 +135,25 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
-          <Comments ticket={ticket} comments={comments} onAdded={(c) => setComments([...comments, c])} />
+          <Relations
+            ticket={ticket}
+            relations={relations}
+            suggestions={projectTickets.filter((t) => t.id !== ticket.id)}
+            onChanged={() => {
+              loadRelations();
+              loadTimeline();
+            }}
+          />
+          <Comments ticket={ticket} comments={comments} onAdded={addComment} />
           <Timeline changes={timeline} />
         </div>
-        <Fields ticket={ticket} project={project} members={members} onSave={save} />
+        <Fields
+          ticket={ticket}
+          project={project}
+          members={members}
+          projectTickets={projectTickets.filter((t) => t.id !== ticket.id)}
+          onSave={save}
+        />
       </div>
     </article>
   );
@@ -99,9 +162,13 @@ export function TicketScreen({
 function TextFields({ ticket, onSave }: { ticket: Ticket; onSave: (edit: TicketEdit) => Promise<void> }) {
   const [title, setTitle] = useState(ticket.title);
   const [description, setDescription] = useState(ticket.description);
+  // A change saved elsewhere replaces what is shown, unless it is being edited here.
+  const saved = useRef({ title: ticket.title, description: ticket.description });
   useEffect(() => {
-    setTitle(ticket.title);
-    setDescription(ticket.description);
+    const before = saved.current;
+    setTitle((shown) => (shown === before.title ? ticket.title : shown));
+    setDescription((shown) => (shown === before.description ? ticket.description : shown));
+    saved.current = { title: ticket.title, description: ticket.description };
   }, [ticket.title, ticket.description]);
   const { busy, onSubmit } = useSubmit(() => onSave({ title, description }));
   return (
@@ -142,11 +209,14 @@ function Fields({
   ticket,
   project,
   members,
+  projectTickets,
   onSave,
 }: {
   ticket: Ticket;
   project: Project;
   members: Member[];
+  /** The other Tickets of the Project, any of which may become the parent. */
+  projectTickets: TicketSummary[];
   onSave: (edit: TicketEdit) => Promise<void>;
 }) {
   const labels = ticket.labels.join(", ");
@@ -182,6 +252,17 @@ function Fields({
           {members.map(({ user }) => (
             <option key={user.id} value={user.id}>
               {user.email}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Parent
+        <select value={ticket.parentId ?? ""} onChange={(e) => void onSave({ parentId: e.target.value || null })}>
+          <option value="">None</option>
+          {projectTickets.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.key} {t.title}
             </option>
           ))}
         </select>
@@ -230,6 +311,122 @@ function Fields({
   );
 }
 
+const relationGroups: { kind: RelationKind; label: string }[] = [
+  { kind: "blockedBy", label: "Blocked by" },
+  { kind: "blocks", label: "Blocks" },
+  { kind: "relatesTo", label: "Relates to" },
+];
+
+function TicketLink({ ticket }: { ticket: TicketRef }) {
+  return (
+    <Link to={`/tickets/${ticket.id}`}>
+      {ticket.key} {ticket.title}
+    </Link>
+  );
+}
+
+/** The Ticket's parent, Sub-Tickets, blockers, what it blocks and what it relates to, with a form to add a Relation. */
+function Relations({
+  ticket,
+  relations,
+  suggestions,
+  onChanged,
+}: {
+  ticket: Ticket;
+  relations: TicketRelations;
+  /** Tickets to offer while typing a key; any Ticket of the Workspace may be named. */
+  suggestions: TicketSummary[];
+  onChanged: () => void;
+}) {
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
+    const ticketKey = field(form, "ticket").trim();
+    await api.relate(ticket.id, { kind: field(form, "kind") as RelationKind, ticketKey });
+    // Keeps the kind chosen, for adding several of one kind in a row.
+    (element.elements.namedItem("ticket") as HTMLInputElement).value = "";
+    onChanged();
+  });
+  const remove = async (relationId: string) => {
+    setRemoveError(null);
+    try {
+      await api.removeRelation(ticket.id, relationId);
+      onChanged();
+    } catch (e) {
+      setRemoveError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const { parent, subTickets } = relations;
+  return (
+    <section aria-label="Relations" className="relations">
+      <h2>Relations</h2>
+      {parent && (
+        <p>
+          Sub-Ticket of <TicketLink ticket={parent} />
+        </p>
+      )}
+      {subTickets.length > 0 && (
+        <>
+          <h3 id="sub-tickets">Sub-Tickets</h3>
+          <ul aria-labelledby="sub-tickets">
+            {subTickets.map((sub) => (
+              <li key={sub.id}>
+                <TicketLink ticket={sub} />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {relationGroups.map(({ kind, label }) => {
+        const inGroup = relations.relations.filter((r) => r.kind === kind);
+        if (inGroup.length === 0) return null;
+        return (
+          <div key={kind}>
+            <h3 id={`relations-${kind}`}>{label}</h3>
+            <ul aria-labelledby={`relations-${kind}`}>
+              {inGroup.map((relation) => (
+                <li key={relation.id}>
+                  <TicketLink ticket={relation.ticket} />{" "}
+                  <button type="button" className="link" onClick={() => void remove(relation.id)}>
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+      {removeError && <p role="alert">{removeError}</p>}
+      <form onSubmit={onSubmit} className="relation-form">
+        <label>
+          Relation
+          <select name="kind" defaultValue="blockedBy">
+            {relationGroups.map(({ kind, label }) => (
+              <option key={kind} value={kind}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Ticket
+          <input name="ticket" required list="relation-tickets" placeholder="Key, such as CRONK-12" />
+        </label>
+        <datalist id="relation-tickets">
+          {suggestions.map((t) => (
+            <option key={t.id} value={t.key}>
+              {t.title}
+            </option>
+          ))}
+        </datalist>
+        <button type="submit" disabled={busy}>
+          Add
+        </button>
+      </form>
+      {error && <p role="alert">{error}</p>}
+    </section>
+  );
+}
+
 function When({ at }: { at: string }) {
   return <time dateTime={at}>{new Date(at).toLocaleString()}</time>;
 }
@@ -265,7 +462,8 @@ function Comments({
         return (
           <article key={comment.id} className="comment" style={{ marginLeft: `${Math.min(depth, 4) * 1.5}rem` }}>
             <div className="comment-meta">
-              <strong>{comment.actor.name}</strong> <When at={comment.createdAt} />
+              <strong>{comment.actor.name}</strong>
+              {comment.actor.kind === "agent" && <span className="muted"> (Agent)</span>} <When at={comment.createdAt} />
               {parent && <span className="muted"> in reply to {parent.actor.name}</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
@@ -308,7 +506,7 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created">, string> = {
+const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | RelationKind>, string> = {
   title: "Title",
   description: "Description",
   status: "Status",
@@ -317,12 +515,37 @@ const fieldNames: Record<Exclude<Change["field"], "created">, string> = {
   assignee: "Assignee",
   dueDate: "Due date",
   estimate: "Estimate",
+  parent: "Parent",
 };
+
+const ticketShown = (ref: TicketRef) => `${ref.key} ${ref.title}`;
+
+/** How the timeline tells of a Sub-Ticket or Relation added (`to` set) or removed (`from` set). */
+const relationChanges: Record<"subTicket" | RelationKind, { added: string; removed: string }> = {
+  subTicket: { added: "added Sub-Ticket", removed: "removed Sub-Ticket" },
+  blocks: { added: "marked this as blocking", removed: "removed that this blocks" },
+  blockedBy: { added: "marked this blocked by", removed: "removed the blocker" },
+  relatesTo: { added: "related this to", removed: "removed the relation to" },
+};
+
+function described(change: Change): string {
+  if (change.field === "created") return "created the Ticket";
+  if (change.field === "description") return "changed the Description";
+  if (change.field in relationChanges) {
+    const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
+    return change.to
+      ? `${added} ${ticketShown(change.to as TicketRef)}`
+      : `${removed} ${ticketShown(change.from as TicketRef)}`;
+  }
+  const field = change.field as keyof typeof fieldNames;
+  return `changed ${fieldNames[field]} from ${shown(change, change.from)} to ${shown(change, change.to)}`;
+}
 
 function shown(change: Change, value: unknown): string {
   if (value === null || (Array.isArray(value) && value.length === 0)) return "none";
   if (change.field === "priority") return priorityLabel(value as Priority);
   if (change.field === "status" || change.field === "assignee") return (value as { name: string }).name;
+  if (change.field === "parent") return ticketShown(value as TicketRef);
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 }
@@ -334,12 +557,7 @@ function Timeline({ changes }: { changes: Change[] }) {
       <ol>
         {changes.map((change) => (
           <li key={change.id}>
-            {change.actor.name}{" "}
-            {change.field === "created"
-              ? "created the Ticket"
-              : change.field === "description"
-                ? "changed the Description"
-                : `changed ${fieldNames[change.field]} from ${shown(change, change.from)} to ${shown(change, change.to)}`}{" "}
+            {change.actor.name} {described(change)}{" "}
             <span className="muted">
               <When at={change.at} />
             </span>

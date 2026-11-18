@@ -1,15 +1,20 @@
 import type { Writable } from "node:stream";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cookie from "@fastify/cookie";
 import swagger from "@fastify/swagger";
 import fastifyStatic from "@fastify/static";
 import swaggerUi from "@fastify/swagger-ui";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { Context } from "./context.js";
-import { ApiError, sendError } from "./http/errors.js";
+import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
+import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
+import { agentRoutes } from "./agents/routes.js";
+import { mcpRoutes } from "./mcp/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
+import { inboxRoutes } from "./inbox/routes.js";
+import { liveRoutes } from "./live/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
@@ -24,11 +29,26 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     logger: logStream ? { stream: logStream } : true,
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  app.setErrorHandler((error, request, reply) => {
-    if (error instanceof ApiError) return sendError(reply, error.statusCode, error.code, error.message);
+  // Every refusal an Agent meets names the rule and what it may do instead, including
+  // refusals made before a route looked at the token, such as of a malformed request.
+  const byAgent = async (request: FastifyRequest) => {
+    const header = request.headers.authorization;
+    return (
+      agentOfRequest(request) !== undefined ||
+      (offersBearer(header) && (await agentOfToken(context, header).then(() => true, () => false)))
+    );
+  };
+
+  app.setErrorHandler(async (error, request, reply) => {
+    const isAgent = await byAgent(request);
+    const guide = (statusCode: number, guidance?: Guidance) =>
+      guidance ?? (isAgent ? guidanceForAgent(statusCode) : undefined);
+    if (error instanceof ApiError) {
+      return sendError(reply, error.statusCode, error.code, error.message, guide(error.statusCode, error.guidance));
+    }
     const { validation, statusCode, message } = error as { validation?: unknown; statusCode?: number; message: string };
-    if (validation) return sendError(reply, 400, "invalid_request", message);
-    if (statusCode && statusCode < 500) return sendError(reply, statusCode, "invalid_request", message);
+    if (validation) return sendError(reply, 400, "invalid_request", message, guide(400));
+    if (statusCode && statusCode < 500) return sendError(reply, statusCode, "invalid_request", message, guide(statusCode));
     request.log.error(error);
     return sendError(reply, 500, "internal", "Something went wrong inside Cronk.");
   });
@@ -39,6 +59,18 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     openapi: {
       info: { title: "Cronk API", version: "0.0.0" },
       servers: [{ url: context.config.publicUrl.origin }],
+      components: {
+        securitySchemes: {
+          signIn: { type: "apiKey", in: "cookie", name: "cronk_sign_in", description: "A User's sign-in." },
+          agentToken: {
+            type: "http",
+            scheme: "bearer",
+            description:
+              "An Agent's token. Agents may read their Workspace and comment on its Tickets; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+          },
+        },
+      },
+      security: [{ signIn: [] }, { agentToken: [] }],
     },
   });
   await app.register(swaggerUi, { routePrefix: "/api/docs" });
@@ -50,15 +82,19 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(inboxRoutes(context));
+  await app.register(agentRoutes(context));
+  await app.register(mcpRoutes(context, app));
+  await app.register(liveRoutes(context));
 
   const { webRoot } = context.config;
   if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
-  app.setNotFoundHandler((request, reply) => {
+  app.setNotFoundHandler(async (request, reply) => {
     // The web client routes its own paths, so any other page gets its index.
     if (webRoot && request.method === "GET" && !request.url.startsWith("/api/")) {
       return reply.sendFile("index.html");
     }
-    return sendError(reply, 404, "not_found", "Nothing is here.");
+    return sendError(reply, 404, "not_found", "Nothing is here.", (await byAgent(request)) ? guidanceForAgent(404) : undefined);
   });
 
   return app;

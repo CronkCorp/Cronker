@@ -271,6 +271,28 @@ button.link {
   display: flex;
   gap: 1rem;
 }
+.shell header nav .count {
+  margin-left: 0.35rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.8rem;
+}
+ul.inbox {
+  list-style: none;
+  padding: 0;
+  max-width: 48rem;
+}
+ul.inbox li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--line);
+}
+ul.inbox small {
+  color: var(--muted);
+}
 .narrow {
   max-width: 24rem;
 }
@@ -311,4 +333,26 @@ td.actions {
   .shell header {
     flex-wrap: wrap;
   }
+}
+
+.relations {
+  margin-top: 1.25rem;
+}
+.relations h2 {
+  font-size: 1rem;
+}
+.relations h3 {
+  font-size: 0.9rem;
+  margin: 0.75rem 0 0.25rem;
+}
+.relations ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.relation-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: end;
+  margin-top: 0.75rem;
 }

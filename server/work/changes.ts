@@ -2,7 +2,10 @@ import { Type, type Static } from "typebox";
 import type { Db, Tx } from "../db.js";
 import { Actor, actorColumn } from "./actors.js";
 
-/** What a Change changed. `created` marks the Ticket's creation. */
+/**
+ * What a Change changed. `created` marks the Ticket's creation. `parent` is this Ticket's parent; `subTicket`,
+ * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null).
+ */
 export const changeFields = [
   "created",
   "title",
@@ -13,6 +16,11 @@ export const changeFields = [
   "assignee",
   "dueDate",
   "estimate",
+  "parent",
+  "subTicket",
+  "blocks",
+  "blockedBy",
+  "relatesTo",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 
@@ -23,7 +31,8 @@ export const Change = Type.Object({
   field: Type.Union(changeFields.map((f) => Type.Literal(f))),
   from: Type.Unknown({
     description:
-      "The value before: a string, number, list of Labels, or for a Status or Assignee `{ id, name }` as named then; null when empty.",
+      "The value before: a string, number, list of Labels, for a Status or Assignee `{ id, name }` as named then, " +
+      "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
 });

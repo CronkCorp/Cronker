@@ -16,6 +16,7 @@ import {
   setAdmin,
 } from "./members.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { requireCaller } from "../identity/callers.js";
 import { createWorkspace, findWorkspace, Membership, renameWorkspace, Workspace, WorkspaceName } from "./workspaces.js";
 import { Link } from "../identity/links.js";
 
@@ -44,14 +45,14 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Workspaces"],
-          summary: "A Workspace the signed-in User belongs to",
+          summary: "A Workspace the signed-in User belongs to, or an Agent's own",
           params: Type.Object({ workspaceId: Type.String() }),
           response: { 200: Workspace, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        const workspace = await findWorkspace(db, user.id, request.params.workspaceId);
+        const caller = await requireCaller(context, request);
+        const workspace = await findWorkspace(db, caller, request.params.workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
         return workspace;
       },
@@ -86,8 +87,9 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        const workspace = await requireMember(db, user.id, request.params.workspaceId);
+        const caller = await requireCaller(context, request);
+        const workspace = await findWorkspace(db, caller, request.params.workspaceId);
+        if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
         return membersOf(db, workspace.id);
       },
     );
@@ -176,7 +178,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
-        await removeMember(db, workspace.id, request.params.userId);
+        await removeMember(context, workspace.id, request.params.userId);
         return reply.code(204).send(null);
       },
     );

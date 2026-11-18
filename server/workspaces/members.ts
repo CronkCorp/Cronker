@@ -4,6 +4,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
 import { User, userColumns, type User as UserRecord } from "../identity/user.js";
+import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
@@ -18,7 +19,7 @@ const notFound = () => new ApiError(404, "not_found", "No such Workspace.");
 
 /** The Workspace and whether the User is its Admin; 404 if they don't belong to it. */
 export async function requireMember(db: Db, userId: string, workspaceId: string): Promise<Workspace & { isAdmin: boolean }> {
-  const workspace = await findWorkspace(db, userId, workspaceId);
+  const workspace = await findWorkspace(db, userViewer(userId), workspaceId);
   if (!workspace) throw notFound();
   const { rows } = await db.query<{ is_admin: boolean }>(
     "select is_admin from memberships where workspace_id = $1 and user_id = $2",
@@ -134,9 +135,9 @@ export async function setAdmin(db: Db, workspaceId: string, userId: string, isAd
 
 /**
  * Removes a member, who then sees nothing of the Workspace. Their unused links to join
- * it end too. Refused if it would leave the Workspace without an Admin.
+ * it end too, and so do their streams of its events. Refused if it would leave the Workspace without an Admin.
  */
-export async function removeMember(db: Db, workspaceId: string, userId: string): Promise<void> {
+export async function removeMember({ db, live }: Context, workspaceId: string, userId: string): Promise<void> {
   await transaction(db, async (tx) => {
     const members = await lockMembers(tx, workspaceId);
     const member = members.find((m) => m.user_id === userId);
@@ -147,6 +148,7 @@ export async function removeMember(db: Db, workspaceId: string, userId: string):
       "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null",
       [workspaceId, userId],
     );
+    live.endAfterCommit(tx, (stream) => stream.workspaceId === workspaceId && stream.userId === userId);
   });
 }
 
