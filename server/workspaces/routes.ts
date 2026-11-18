@@ -6,6 +6,7 @@ import { Email } from "../identity/user.js";
 import {
   AddedMember,
   addMember,
+  issueResetLink,
   Member,
   membersOf,
   removeMember,
@@ -14,7 +15,8 @@ import {
   setAdmin,
 } from "./members.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { createWorkspace, findWorkspace, Membership, Workspace, WorkspaceName } from "./workspaces.js";
+import { createWorkspace, findWorkspace, Membership, renameWorkspace, Workspace, WorkspaceName } from "./workspaces.js";
+import { Link } from "../identity/links.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -51,6 +53,24 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const workspace = await findWorkspace(db, user.id, request.params.workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
         return workspace;
+      },
+    );
+
+    app.patch(
+      "/api/workspaces/:workspaceId",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Rename a Workspace (Admins only)",
+          params: Type.Object({ workspaceId: Type.String() }),
+          body: Type.Object({ name: WorkspaceName }),
+          response: { 200: Workspace, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        return renameWorkspace(db, workspace.id, request.body.name);
       },
     );
 
@@ -129,6 +149,25 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
         await removeMember(db, workspace.id, request.params.userId);
         return reply.code(204).send(null);
+      },
+    );
+
+    app.post(
+      "/api/workspaces/:workspaceId/members/:userId/reset-link",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Issue a password reset link for a member (Admins only)",
+          description:
+            "A one-time link, valid 7 days, for the Admin to pass on. Using it sets a new password and ends the member's sign-ins.",
+          params: MemberParams,
+          response: { 201: Link, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        return reply.code(201).send(await issueResetLink(context, workspace.id, request.params.userId));
       },
     );
   };

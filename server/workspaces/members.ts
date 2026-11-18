@@ -119,3 +119,12 @@ export async function removeMember(db: Db, workspaceId: string, userId: string):
     );
   });
 }
+
+/** A one-time link for a member to set a new password, for an Admin to pass on. */
+export async function issueResetLink(context: Context, workspaceId: string, userId: string): Promise<Link> {
+  return transaction(context.db, async (tx) => {
+    const members = await lockMembers(tx, workspaceId);
+    if (!members.some((m) => m.user_id === userId)) throw memberNotFound();
+    return issueLink(context, tx, "reset", userId);
+  });
+}

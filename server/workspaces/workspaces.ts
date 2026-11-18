@@ -55,3 +55,11 @@ export async function createWorkspace(db: Db, clock: Clock, userId: string, name
     return { ...workspace, isAdmin: true };
   });
 }
+
+export async function renameWorkspace(db: Db, workspaceId: string, name: string): Promise<Workspace> {
+  const { rows } = await db.query<Workspace>("update workspaces set name = $1 where id = $2 returning id, name", [
+    name.trim(),
+    workspaceId,
+  ]);
+  return rows[0]!;
+}
