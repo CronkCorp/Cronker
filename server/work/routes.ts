@@ -9,7 +9,7 @@ import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { defaultRoundLimit, Outcome } from "./steps.js";
+import { defaultRoundLimit, LabelRule, Outcome } from "./steps.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
@@ -33,6 +33,14 @@ const StepBody = Type.Object({
       maximum: 100,
       default: defaultRoundLimit,
       description: "How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*.",
+    }),
+  ),
+  labelRule: Type.Optional(
+    Type.Union([LabelRule, Type.Null()], {
+      default: null,
+      description:
+        "Which Tickets the Step lets through; none by default, letting every Ticket through. A Ticket that doesn't pass " +
+        "gets no Run and moves on by the default Outcome.",
     }),
   ),
   outcomes: Type.Array(Outcome, { minItems: 2, maxItems: 20 }),
@@ -214,8 +222,8 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        const { roundLimit = defaultRoundLimit, ...step } = request.body;
-        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit } });
+        const { roundLimit = defaultRoundLimit, labelRule = null, ...step } = request.body;
+        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit, labelRule } });
       },
     );
 

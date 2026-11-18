@@ -458,6 +458,8 @@ export async function editTicket(
     }
     // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step;
     // leaving it, or losing its Delegate, ends its wait for one.
+    // A User moving the Ticket by hand starts its rounds afresh at every Step.
+    if (entered) await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];

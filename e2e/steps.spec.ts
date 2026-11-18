@@ -39,6 +39,7 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   const open = (status: string) => steps.locator("summary strong", { hasText: new RegExp(`^${status}$`) }).click();
 
   await expect(steps.getByText("haiku, 2 Outcomes")).toBeVisible();
+  await expect(steps.getByText("sonnet, 4 Outcomes, skipped by no-review")).toBeVisible();
   await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
 
   // Done and Canceled Statuses never have a Step: the refusal shows on the Status.
@@ -65,8 +66,10 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   await expect(steps.getByRole("alert")).toContainText("asking a User must never complete work");
 
   await steps.getByLabel("Status needs you of Ready moves to").selectOption("Backlog");
+  await steps.getByLabel("Label rule for Ready").selectOption("Requires a Label");
+  await steps.getByLabel("Label for the rule of Ready").fill("planned");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
-  await expect(steps.getByText("opus, 2 Outcomes")).toBeVisible();
+  await expect(steps.getByText("opus, 2 Outcomes, requires planned")).toBeVisible();
 
   await expect(steps.getByLabel("Model for Investigate")).toHaveValue("opus");
   await steps.getByRole("button", { name: "Save the Step on Investigate" }).click();

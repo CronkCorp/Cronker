@@ -81,7 +81,7 @@ A Markdown message an Actor writes on a Ticket, possibly as a reply to another C
 _Avoid_: Note, message, post
 
 **Change**:
-One recorded edit to a Ticket: which field, its value before and after, the Actor who made it and when. A Ticket's Changes make up its timeline.
+One recorded edit to a Ticket: which field, its value before and after, the Actor who made it (or Cronk itself, such as when it moves a Ticket on past a skipped Step) and when. A Ticket's Changes make up its timeline.
 _Avoid_: Event, activity, history entry, audit log
 
 **Inbox**:
