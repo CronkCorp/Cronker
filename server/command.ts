@@ -35,7 +35,7 @@ async function main(args: string[]): Promise<number> {
   const db = new pg.Pool({ connectionString: config.databaseUrl });
   try {
     await migrate(db);
-    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live() }, email);
+    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live(), runners: {} }, email);
     console.log(`Pass this link to ${user.email}. It sets a new password, works once and expires ${link.expiresAt}:`);
     console.log(link.url);
     return 0;

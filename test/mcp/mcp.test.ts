@@ -74,7 +74,7 @@ describe("MCP with an Agent token", () => {
 
     const { tools } = await client.listTools();
 
-    expect(tools.map((tool) => tool.name).sort()).toEqual(["comment", "list_tickets", "read_ticket"]);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(["comment", "finish", "list_tickets", "read_ticket"]);
   });
 
   test("an Agent reads a Ticket by key with its Comments and Relations", async () => {
@@ -133,6 +133,33 @@ describe("MCP with an Agent token", () => {
       rule: "A read-only token may only read.",
       advice: expect.stringContaining("ada@example.com"),
     });
+  });
+
+  test("an Agent finishes its Run with an Outcome, which moves its Ticket, and reads its Runs", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Triage") },
+    });
+    const client = await connect(secret);
+    const read = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(read.json.runs).toEqual([expect.objectContaining({ state: "running", step: { statusId: status("Triage"), name: "Triage" } })]);
+    const runId = read.json.runs[0].id;
+
+    const refused = await call(client, "finish", { run: runId, outcome: "approve" });
+    expect(refused.isError).toBe(true);
+    expect(refused.json).toEqual(expect.objectContaining({ code: "outcome_not_offered", advice: expect.stringContaining("ready") }));
+
+    const { isError, json } = await call(client, "finish", { run: runId, outcome: "ready", report: "Clear." });
+
+    expect(isError).toBe(false);
+    expect(json).toEqual(expect.objectContaining({ id: runId, state: "finished", outcome: "ready", report: "Clear." }));
+    const moved = await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json();
+    expect(moved.statusId).toBe(status("Ready"));
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

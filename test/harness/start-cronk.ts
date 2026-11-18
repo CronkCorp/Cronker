@@ -7,6 +7,7 @@ import { createCronk, type Cronk } from "../../server/cronk.js";
 import { TestClock } from "./clock.js";
 import { createTestDatabase } from "./database.js";
 import { startStandInGitHub, type StandInGitHub } from "./github.js";
+import { FakeRunner } from "./runner.js";
 
 /**
  * Starts Cronk in-process against its own disposable database, with the clock
@@ -31,6 +32,8 @@ export interface StartedCronk {
   url: string;
   /** The stand-in GitHub this Cronk talks to instead of the real one. */
   github: StandInGitHub;
+  /** The fake Runner, installed as the Runner kind `fake`: what it was asked to start, and what to do next. */
+  runner: FakeRunner;
   clock: TestClock;
   logs: LogLine[];
   /** The setup code from the server log. */
@@ -75,6 +78,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   const database = await createTestDatabase();
   const github = await startStandInGitHub();
   const clock = options.clock ?? new TestClock();
+  const runner = new FakeRunner();
   const logs: LogLine[] = [];
   const logStream = new Writable({
     write(chunk, _encoding, callback) {
@@ -101,6 +105,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       },
       clock,
       logStream,
+      runnerKinds: { fake: runner.kind },
     });
     await cronk.listen();
   } catch (error) {
@@ -111,6 +116,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   return {
     url,
     github,
+    runner,
     clock,
     logs,
     setupCode() {

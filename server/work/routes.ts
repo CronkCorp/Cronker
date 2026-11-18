@@ -6,7 +6,7 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
-import { createProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
+import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
 import { defaultRoundLimit, Outcome } from "./steps.js";
@@ -105,6 +105,27 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         const project = await findProject(db, caller, request.params.projectId);
         if (!project) throw projectNotFound();
         return project;
+      },
+    );
+
+    app.patch(
+      "/api/projects/:projectId",
+      {
+        schema: {
+          tags: ["Projects"],
+          summary: "Change a Project's settings",
+          params: Type.Object({ projectId: Type.String() }),
+          body: Type.Object({
+            newTicketsDelegated: Type.Optional(
+              Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
+            ),
+          }),
+          response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return editProject(context, { kind: "user", id: user.id }, request.params.projectId, request.body);
       },
     );
 

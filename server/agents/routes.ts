@@ -6,7 +6,17 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireMember } from "../workspaces/members.js";
 import { findWorkspace, Workspace } from "../workspaces/workspaces.js";
-import { Agent, AgentName, agentsOf, createAgent, findAgent, removeAgent, renameAgent, requireOwnAgent } from "./agents.js";
+import {
+  Agent,
+  AgentName,
+  agentsOf,
+  createAgent,
+  findAgent,
+  removeAgent,
+  renameAgent,
+  requireOwnAgent,
+  setAgentRunner,
+} from "./agents.js";
 import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, tokensOf } from "./tokens.js";
 
 export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -57,17 +67,25 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Agents"],
-          summary: "Rename one's own Agent",
-          description: "Only the Agent's Owner can rename it (`not_owner` otherwise).",
+          summary: "Rename one's own Agent, or choose its Runner",
+          description:
+            "Changes whichever of name and Runner are given. Only the Agent's Owner can change it (`not_owner` otherwise), " +
+            "and only to one of their own Runners (`unknown_runner` otherwise).",
           params: AgentParams,
-          body: Type.Object({ name: AgentName }),
+          body: Type.Object({
+            name: Type.Optional(AgentName),
+            runnerId: Type.Optional(Type.Union([Type.Null(), Type.String({ format: "uuid" })])),
+          }),
           response: { 200: Agent, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
         const user = await requireUser(context, request);
-        const agent = await requireOwnAgent(db, user.id, request.params.agentId);
-        return renameAgent(db, agent, request.body.name);
+        let agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        const { name, runnerId } = request.body;
+        if (name !== undefined) agent = await renameAgent(db, agent, name);
+        if (runnerId !== undefined) agent = await setAgentRunner(db, agent, runnerId);
+        return agent;
       },
     );
 

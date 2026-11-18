@@ -52,7 +52,7 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace and comment on its Tickets; anything else is refused with the rule and what to do instead.";
+  "Agents may read their Workspace, comment on its Tickets and finish their own Runs; anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -84,8 +84,8 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields, its Comments (oldest first), and its Relations: " +
-        "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets. " +
+        "A Ticket of your Workspace with its fields, its Comments (oldest first), its Relations: " +
+        "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; and its Runs, oldest first. " +
         "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
       annotations: { readOnlyHint: true },
@@ -97,6 +97,7 @@ export function buildMcpServer(api: Api): McpServer {
           ticket: found,
           comments: await get(`/api/tickets/${found.id}/comments`),
           relations: await get(`/api/tickets/${found.id}/relations`),
+          runs: await get(`/api/tickets/${found.id}/runs`),
         };
       }),
   );
@@ -191,6 +192,27 @@ export function buildMcpServer(api: Api): McpServer {
         const found = await ticketByKeyOrId(ticket);
         return send("POST", `/api/tickets/${found.id}/comments`, { body, replyToId });
       }),
+  );
+
+  server.registerTool(
+    "finish",
+    {
+      title: "Finish your Run",
+      description:
+        "Ends your running Run with one of the Outcomes its Brief offers, which moves its Ticket to the Outcome's " +
+        "Status; a Status with a Step starts the next Run. Call it exactly once, as the last thing you do. " +
+        "Refused for another Agent's Run, a Run that isn't running, a Run whose Ticket a User moved meanwhile, " +
+        "and an Outcome the Run isn't offered. " +
+        "This is the only way an Agent moves a Ticket: Agents never set a Status.",
+      inputSchema: {
+        run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
+        outcome: z.string().min(1).describe("The Outcome's name, such as `ready`, ignoring case."),
+        question: z.string().min(1).optional().describe("For *needs you*: what you need from the Ticket's Assignee."),
+        report: z.string().min(1).optional().describe("What you found or did, in Markdown."),
+      },
+    },
+    ({ run, outcome, question, report }) =>
+      answer(() => send("POST", `/api/runs/${encodeURIComponent(run)}/finish`, { outcome, question, report })),
   );
 
   return server;

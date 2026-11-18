@@ -6,6 +6,7 @@ import { afterCommit, type Tx } from "../db.js";
  */
 export type LiveEvent =
   | { type: "project.created"; projectId: string }
+  | { type: "project.changed"; projectId: string }
   | { type: "statuses.changed"; projectId: string }
   | { type: "ticket.created"; projectId: string; ticketId: string }
   | { type: "ticket.changed"; projectId: string; ticketId: string }
@@ -13,9 +14,10 @@ export type LiveEvent =
 
 export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.created": "A Project was created, with its Statuses.",
+  "project.changed": "A Project's settings changed.",
   "statuses.changed": "A Project's Statuses were added, renamed, moved, given another kind or removed, or a Status's Step changed.",
   "ticket.created": "A Ticket was created.",
-  "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets.",
+  "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
   "comment.added": "A Comment was added to a Ticket.",
 };
 

@@ -7,13 +7,13 @@ import { useCallback, useEffect, useRef } from "react";
 
 export type LiveEvent =
   | { type: "project.created"; projectId: string }
-  | { type: "statuses.changed"; projectId: string }
+  | { type: "project.changed" | "statuses.changed"; projectId: string }
   | { type: "ticket.created" | "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
   /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
   | { type: "reconnected" };
 
-const eventTypes = ["project.created", "statuses.changed", "ticket.created", "ticket.changed", "comment.added"];
+const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added"];
 
 type Listener = (event: LiveEvent) => void;
 

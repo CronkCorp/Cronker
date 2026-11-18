@@ -1,10 +1,11 @@
 import { Type, type Static } from "typebox";
+import type { Config } from "../config.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import type { Viewer } from "../identity/viewers.js";
 import { mcpPath } from "../mcp/routes.js";
-import { statusesOf } from "../work/projects.js";
-import type { Outcome } from "../work/steps.js";
+import { statusesOf, type Status } from "../work/projects.js";
+import type { Outcome, Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 
 /** The instructions a Run starts from, in its three parts and as the one text the Run is sent. */
@@ -34,13 +35,27 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
       `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a User, and get no Run.`,
     );
   }
+  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step });
+}
+
+/** The Outcomes a Run of the Step may choose: those completing work need Autonomous Delegation, which no Ticket has yet. */
+export function offeredOutcomes(step: Step, statuses: Status[]): Outcome[] {
+  const kindOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.kind;
+  return step.outcomes.filter((o) => kindOf(o.statusId) !== "done");
+}
+
+/** The Brief of a Run of the Status's Step on the Ticket; without a Run id, as a preview. */
+export function buildBrief(
+  config: Config,
+  ticketKey: string,
+  statuses: Status[],
+  status: Status & { step: Step },
+  runId?: string,
+): Brief {
   const step = status.step;
   const nameOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.name;
-  const kindOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.kind;
-  // Outcomes completing work are offered only under Autonomous Delegation, which no Ticket has yet.
-  const offered = step.outcomes.filter((o) => kindOf(o.statusId) !== "done");
   const outcomeLine = (o: Outcome) => {
-    const moves = `- **${o.name}**: moves ${ticket.key} to ${nameOf(o.statusId)}`;
+    const moves = `- **${o.name}**: moves ${ticketKey} to ${nameOf(o.statusId)}`;
     if (o.needsYou) return `${moves} and hands it back to its Assignee. Give a Question saying what you need.`;
     if (o.countsAsRound) {
       return `${moves}. It counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
@@ -49,16 +64,16 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
   };
 
   const preamble = [
-    `You are an agent working on the Ticket ${ticket.key} in Cronk, as one Run of its ${status.name} Step.`,
+    `You are an agent working on the Ticket ${ticketKey} in Cronk, as one Run of its ${status.name} Step.`,
     "",
     `Reach Cronk through its MCP server at ${new URL(mcpPath, config.publicUrl).href}. ` +
       "Read the Ticket there, with its Comments, Relations and the Reports of earlier Runs: this Brief doesn't repeat them.",
     "",
-    "Your Run id is given when the Run starts.",
+    runId ? `Your Run id is ${runId}.` : "Your Run id is given when the Run starts.",
     "",
     "End the Run by calling `finish` with your Run id and one of these Outcomes:",
     "",
-    ...offered.map(outcomeLine),
+    ...offeredOutcomes(step, statuses).map(outcomeLine),
     "",
     "Rules:",
     "",
@@ -70,7 +85,7 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
   return {
     preamble,
     brief: step.brief,
-    ticketKey: ticket.key,
-    text: [preamble, step.brief, ticket.key].join("\n\n"),
+    ticketKey,
+    text: [preamble, step.brief, ticketKey].join("\n\n"),
   };
 }

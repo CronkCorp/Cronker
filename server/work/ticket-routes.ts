@@ -1,7 +1,8 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ErrorBody } from "../http/errors.js";
+import { authenticateAgent } from "../agents/tokens.js";
+import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
@@ -117,7 +118,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Edit a Ticket",
           description:
             "Changes whichever fields are given; `null` clears a field. Labels that differ only in case are kept once, " +
-            "as first written. An Assignee must be a member of the Ticket's Workspace.",
+            "as first written. An Assignee must be a member of the Ticket's Workspace. A delegated Ticket entering a Status " +
+            "with a Step, or delegated where it is, gets a Run. Agents never set a Status (`agent_sets_no_status`): " +
+            "their Runs move Tickets with `finish`.",
           params: Type.Object({ ticketId: Type.String() }),
           body: Type.Object({
             title: Type.Optional(Title),
@@ -125,6 +128,17 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             priority: Type.Optional(Priority),
             labels: Type.Optional(Type.Array(Label, { maxItems: 50 })),
             assigneeId: Type.Optional(nullable(Type.String({ format: "uuid" }))),
+            delegateId: Type.Optional(
+              nullable(
+                Type.String({
+                  format: "uuid",
+                  description:
+                    "Delegates the Ticket to one of your own Agents, or `null` undelegates it. Only the Assignee " +
+                    "delegates a Ticket; delegating an unassigned Ticket assigns you. A new Assignee who doesn't " +
+                    "own the Delegate removes it.",
+                }),
+              ),
+            ),
             dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
             estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
             statusId: Type.Optional(
@@ -141,10 +155,19 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               ),
             ),
           }),
-          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
+        const agent = await authenticateAgent(context, request);
+        if (agent && request.body.statusId !== undefined) {
+          throw new ApiError(403, "agent_sets_no_status", `${agent.name} is an Agent, and Agents never set a Status.`, {
+            rule: "An Agent never sets a Status: a Run moves its Ticket only by finishing with one of its Outcomes.",
+            advice:
+              "End your Run with `finish`, giving your Run id and one of the Outcomes your Brief offers; " +
+              "the Outcome moves the Ticket.",
+          });
+        }
         const user = await requireUser(context, request);
         return editTicket(context, user.id, request.params.ticketId, request.body);
       },

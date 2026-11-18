@@ -60,11 +60,13 @@ describe("creating a Ticket", () => {
       priority: "none",
       labels: [],
       assigneeId: null,
+      delegateId: null,
       parentId: null,
       dueDate: null,
       estimate: null,
       createdBy: user.id,
       createdAt: "2026-01-01T09:00:00.000Z",
+      lastRun: null,
       mentions: [],
     });
 

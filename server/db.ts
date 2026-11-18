@@ -52,11 +52,12 @@ export function violates(error: unknown, constraint: string): boolean {
 export type Db = pg.Pool;
 export type Tx = pg.PoolClient;
 
-const committed = new WeakMap<Tx, (() => void)[]>();
+type OnCommit = () => void | Promise<void>;
+const committed = new WeakMap<Tx, OnCommit[]>();
 
 export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   const client = await db.connect();
-  const onCommit: (() => void)[] = [];
+  const onCommit: OnCommit[] = [];
   committed.set(client, onCommit);
   let result: T;
   try {
@@ -70,12 +71,24 @@ export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promis
     committed.delete(client);
     client.release();
   }
-  for (const callback of onCommit) callback();
+  // Every callback runs, even after one fails, since the change has committed regardless.
+  const failures: unknown[] = [];
+  for (const callback of onCommit) {
+    try {
+      await callback();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
   return result;
 }
 
-/** Runs `callback` once the transaction commits; never if it rolls back. */
-export function afterCommit(tx: Tx, callback: () => void): void {
+/**
+ * Runs `callback` once the transaction commits, and never if it rolls back. The transaction
+ * resolves once every such callback has, in the order they were added.
+ */
+export function afterCommit(tx: Tx, callback: OnCommit): void {
   const onCommit = committed.get(tx);
   if (!onCommit) throw new Error("afterCommit called outside a transaction");
   onCommit.push(callback);

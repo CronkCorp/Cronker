@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   api,
+  nameOf,
   priorities,
+  type Agent,
   type Change,
   type Comment,
   type Member,
   type Priority,
   type Project,
   type RelationKind,
+  type Run,
   type Ticket,
   type TicketEdit,
   type TicketRef,
   type TicketRelations,
   type TicketSummary,
+  type User,
   type Workspace,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
@@ -24,10 +28,13 @@ import { Link } from "./router.js";
 /** A Ticket: its fields, its description, its Relations, its Comments and its timeline of Changes. */
 export function TicketScreen({
   workspace,
+  user,
   ticketId,
   onOtherWorkspace,
 }: {
   workspace: Workspace;
+  /** The signed-in User, who delegates only to their own Agents. */
+  user: User;
   ticketId: string;
   /** Offered a Ticket of another Workspace; returns whether the screen switches to that Workspace. */
   onOtherWorkspace?: (workspaceId: string) => boolean;
@@ -37,6 +44,8 @@ export function TicketScreen({
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
@@ -48,10 +57,14 @@ export function TicketScreen({
   const latestProject = useLatest();
   const latestComments = useLatest();
   const latestTimeline = useLatest();
+  const latestRuns = useLatest();
   const latestRelations = useLatest();
   const latestProjectTickets = useLatest();
   const fail = (e: Error) => setFailure(e.message);
-  const loadTimeline = useCallback(() => latestTimeline(api.timeline(ticketId), setTimeline), [ticketId, latestTimeline]);
+  const loadTimeline = useCallback(() => {
+    latestTimeline(api.timeline(ticketId), setTimeline);
+    latestRuns(api.runs(ticketId), setRuns);
+  }, [ticketId, latestTimeline, latestRuns]);
   const loadRelations = useCallback(
     () => latestRelations(api.relations(ticketId), setRelations, fail),
     [ticketId, latestRelations],
@@ -72,10 +85,12 @@ export function TicketScreen({
       latestProjectTickets(api.tickets(ticketProject.id), setProjectTickets, fail);
     }, fail);
     api.members(workspace.id).then(setMembers, fail);
+    api.agents(workspace.id).then(setAgents, fail);
     latestComments(api.comments(ticketId), setComments, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
+    latestRuns(api.runs(ticketId), setRuns, fail);
     loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline, latestProjectTickets, loadRelations]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -145,12 +160,14 @@ export function TicketScreen({
             }}
           />
           <Comments ticket={ticket} comments={comments} onAdded={addComment} />
-          <Timeline changes={timeline} />
+          <Timeline changes={timeline} runs={runs} />
         </div>
         <Fields
           ticket={ticket}
           project={project}
           members={members}
+          agents={agents}
+          user={user}
           projectTickets={projectTickets.filter((t) => t.id !== ticket.id)}
           onSave={save}
         />
@@ -209,12 +226,16 @@ function Fields({
   ticket,
   project,
   members,
+  agents,
+  user,
   projectTickets,
   onSave,
 }: {
   ticket: Ticket;
   project: Project;
   members: Member[];
+  agents: Agent[];
+  user: User;
   /** The other Tickets of the Project, any of which may become the parent. */
   projectTickets: TicketSummary[];
   onSave: (edit: TicketEdit) => Promise<void>;
@@ -256,6 +277,7 @@ function Fields({
           ))}
         </select>
       </label>
+      <Delegation ticket={ticket} agents={agents} user={user} onSave={onSave} />
       <label>
         Parent
         <select value={ticket.parentId ?? ""} onChange={(e) => void onSave({ parentId: e.target.value || null })}>
@@ -308,6 +330,57 @@ function Fields({
         </label>
       </FieldForm>
     </aside>
+  );
+}
+
+/**
+ * The Delegation toggle: hands the Ticket to one of the signed-in User's own Agents, so it gets
+ * Runs, or takes it back. Cronk refuses what isn't allowed, such as delegating someone else's Ticket.
+ */
+function Delegation({
+  ticket,
+  agents,
+  user,
+  onSave,
+}: {
+  ticket: Ticket;
+  agents: Agent[];
+  user: User;
+  onSave: (edit: TicketEdit) => Promise<void>;
+}) {
+  const own = agents.filter((a) => a.owner.id === user.id);
+  const delegate = agents.find((a) => a.id === ticket.delegateId);
+  const [chosen, setChosen] = useState<string>("");
+  const pick = chosen || own[0]?.id || "";
+  return (
+    <fieldset className="delegation">
+      <legend>Delegation</legend>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={ticket.delegateId !== null}
+          disabled={ticket.delegateId === null && !pick}
+          onChange={(e) => void onSave({ delegateId: e.target.checked ? pick : null })}
+        />
+        {delegate ? `Delegated to ${delegate.name}` : "Delegate to an Agent"}
+      </label>
+      {ticket.delegateId === null && own.length > 1 && (
+        <label>
+          Agent
+          <select value={pick} onChange={(e) => setChosen(e.target.value)}>
+            {own.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {ticket.delegateId === null && own.length === 0 && (
+        <p className="muted">You have no Agent in this Workspace to delegate to.</p>
+      )}
+      {delegate && delegate.owner.id !== user.id && <p className="muted">{nameOf(delegate.owner)}'s Agent.</p>}
+    </fieldset>
   );
 }
 
@@ -507,6 +580,7 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
 }
 
 const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | RelationKind>, string> = {
+  delegate: "Delegate",
   title: "Title",
   description: "Description",
   status: "Status",
@@ -544,25 +618,72 @@ function described(change: Change): string {
 function shown(change: Change, value: unknown): string {
   if (value === null || (Array.isArray(value) && value.length === 0)) return "none";
   if (change.field === "priority") return priorityLabel(value as Priority);
-  if (change.field === "status" || change.field === "assignee") return (value as { name: string }).name;
+  if (change.field === "status" || change.field === "assignee" || change.field === "delegate") {
+    return (value as { name: string }).name;
+  }
   if (change.field === "parent") return ticketShown(value as TicketRef);
   if (Array.isArray(value)) return value.join(", ");
   return String(value);
 }
 
-function Timeline({ changes }: { changes: Change[] }) {
+const runStateShown: Record<Run["state"], string> = {
+  running: "running",
+  finished: "finished",
+  failed: "failed",
+  refused: "couldn't start",
+};
+
+/** A Run on the timeline: its Step, Agent and model, where it stands, its times and its session. */
+function RunEntry({ run }: { run: Run }) {
+  return (
+    <li className="run-entry">
+      {run.agent.name} ran the {run.step.name} Step on {run.model}:{" "}
+      <span className={`run-state ${run.state}`}>{runStateShown[run.state]}</span>
+      {run.outcome && <> with {run.outcome}</>}
+      {run.endReason && <>: {run.endReason}</>}{" "}
+      <span className="muted">
+        <When at={run.startedAt} />
+        {run.endedAt && (
+          <>
+            {" to "}
+            <When at={run.endedAt} />
+          </>
+        )}
+      </span>
+      {run.sessionUrl && (
+        <>
+          {" "}
+          <a href={run.sessionUrl} target="_blank" rel="noreferrer">
+            Session
+          </a>
+        </>
+      )}
+    </li>
+  );
+}
+
+/** The Ticket's Changes and Runs, oldest first. */
+function Timeline({ changes, runs }: { changes: Change[]; runs: Run[] }) {
+  const entries = [
+    ...changes.map((change) => ({ at: change.at, key: `change:${change.id}`, change })),
+    ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, run })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
   return (
     <section aria-label="Timeline" className="timeline">
       <h2>Timeline</h2>
       <ol>
-        {changes.map((change) => (
-          <li key={change.id}>
-            {change.actor.name} {described(change)}{" "}
-            <span className="muted">
-              <When at={change.at} />
-            </span>
-          </li>
-        ))}
+        {entries.map((entry) =>
+          "run" in entry ? (
+            <RunEntry key={entry.key} run={entry.run} />
+          ) : (
+            <li key={entry.key}>
+              {entry.change.actor.name} {described(entry.change)}{" "}
+              <span className="muted">
+                <When at={entry.change.at} />
+              </span>
+            </li>
+          ),
+        )}
       </ol>
     </section>
   );

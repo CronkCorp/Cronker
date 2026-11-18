@@ -81,7 +81,7 @@ export async function requireUser(context: Context, request: FastifyRequest): Pr
   const agent = await authenticateAgent(context, request);
   if (agent) {
     throw new ApiError(403, "agent_not_allowed", `${agent.name} is an Agent, and only a User can do that.`, {
-      rule: "Agents may read their Workspace and comment on its Tickets; everything else needs a User.",
+      rule: "Agents may read their Workspace, comment on its Tickets and finish their own Runs; everything else needs a User.",
       advice: `Read the Ticket and its Comments, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, to do it.`,
     });
   }

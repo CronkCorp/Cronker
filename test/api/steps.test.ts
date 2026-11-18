@@ -241,7 +241,7 @@ describe("Agents and Steps", () => {
       expect((await response.json()).error, `${method} ${path}`).toEqual({
         code: "agent_not_allowed",
         message: expect.any(String),
-        rule: "Agents may read their Workspace and comment on its Tickets; everything else needs a User.",
+        rule: "Agents may read their Workspace, comment on its Tickets and finish their own Runs; everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }

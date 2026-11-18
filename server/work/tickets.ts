@@ -6,6 +6,8 @@ import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
+import { startRunIfNeeded } from "../runs/runs.js";
+import { RunState } from "../runs/states.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -36,6 +38,9 @@ export const TicketSummary = Type.Object({
   priority: Priority,
   labels: Type.Array(Type.String()),
   assigneeId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
+  delegateId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Assignee's Agent the Ticket is delegated to; only a delegated Ticket gets Runs.",
+  }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Ticket this is a Sub-Ticket of, in the same Project.",
   }),
@@ -43,6 +48,16 @@ export const TicketSummary = Type.Object({
   estimate: Type.Union([Type.Number(), Type.Null()]),
   createdBy: Type.String({ format: "uuid" }),
   createdAt: Type.String({ format: "date-time" }),
+  lastRun: Type.Union(
+    [
+      Type.Object({
+        id: Type.String({ format: "uuid" }),
+        state: RunState,
+      }),
+      Type.Null(),
+    ],
+    { description: "The Ticket's latest Run, for marking the board's card; its Runs list them all." },
+  ),
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
@@ -56,9 +71,11 @@ export type Ticket = Static<typeof Ticket>;
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
-  tickets.assignee_id as "assigneeId", tickets.parent_id as "parentId",
+  tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId", tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
-  tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt"`;
+  tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
+  (select json_build_object('id', runs.id, 'state', runs.state) from runs
+   where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun"`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -193,31 +210,56 @@ export async function mentionsInEach(db: Db | Tx, workspaceId: string, texts: st
 }
 
 export async function createTicket(
-  { db, clock, live }: Context,
+  context: Context,
   userId: string,
   projectId: string,
   input: { title: string; description?: string },
 ): Promise<Ticket> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
     const backlog = project.statuses.find((s) => s.kind === "backlog")!;
     const now = clock.now();
+    // In a Project whose new Tickets start delegated, the creator's first Agent takes it, assigning them.
+    const delegate = project.newTicketsDelegated ? await firstAgentOf(tx, userId, project.workspaceId) : null;
     const { rows } = await tx.query<{ id: string }>(
       `with numbered as (
          update projects set next_ticket_number = next_ticket_number + 1 where id = $2
          returning next_ticket_number - 1 as number
        )
-       insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at)
-       select $1, $2, number, $3, $4, $5, $6, $7 from numbered
+       insert into tickets (workspace_id, project_id, number, title, description, status_id, created_by, created_at,
+         assignee_id, delegate_id)
+       select $1, $2, number, $3, $4, $5, $6, $7, $8, $9 from numbered
        returning id`,
-      [project.workspaceId, project.id, input.title.trim(), input.description ?? "", backlog.id, userId, now],
+      [
+        project.workspaceId,
+        project.id,
+        input.title.trim(),
+        input.description ?? "",
+        backlog.id,
+        userId,
+        now,
+        delegate ? userId : null,
+        delegate,
+      ],
     );
     const ticket = (await findTicketRow(tx, userViewer(userId), rows[0]!.id))!;
     await recordChanges(tx, ticket, userId, now, [{ field: "created", from: null, to: null }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.created", projectId: ticket.projectId, ticketId: ticket.id });
+    await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, ticket);
   });
+}
+
+/** The User's first Agent still in use in the Workspace, by when it was created, if they have one. */
+async function firstAgentOf(tx: Tx, userId: string, workspaceId: string): Promise<string | null> {
+  const { rows } = await tx.query<{ id: string }>(
+    `select id from agents where owner_id = $1 and workspace_id = $2 and removed_at is null
+     order by created_at, id limit 1`,
+    [userId, workspaceId],
+  );
+  return rows[0]?.id ?? null;
 }
 
 /** Narrows a list of Tickets; every filter given must match. */
@@ -273,6 +315,7 @@ export interface TicketEdit {
   priority?: Priority;
   labels?: string[];
   assigneeId?: string | null;
+  delegateId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
   statusId?: string;
@@ -281,11 +324,12 @@ export interface TicketEdit {
 
 /** Changes whichever of a Ticket's fields are given, recording a Change for each that differs. */
 export async function editTicket(
-  { db, clock, live }: Context,
+  context: Context,
   userId: string,
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
@@ -304,6 +348,7 @@ export async function editTicket(
     };
     const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
     const userNamed = (id: string | null) => named(tx, "select id, email as name from users where id = $1", id);
+    const agentNamed = (id: string | null) => named(tx, "select id, name from agents where id = $1", id);
     const ticketRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
 
     if (edit.title !== undefined) await change("title", "title", edit.title.trim());
@@ -318,6 +363,18 @@ export async function editTicket(
       if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
       await change("assigneeId", "assignee", edit.assigneeId, userNamed);
     }
+    if (edit.delegateId !== undefined && edit.delegateId !== null) {
+      const delegate = await checkDelegate(tx, ticket, userId, edit.delegateId, next.assigneeId);
+      // Delegating an unassigned Ticket assigns the delegating User.
+      if (next.assigneeId === null) await change("assigneeId", "assignee", userId, userNamed);
+      await change("delegateId", "delegate", delegate.id, agentNamed);
+    } else if (edit.delegateId === null) {
+      await change("delegateId", "delegate", null, agentNamed);
+    } else if (next.delegateId !== null && next.assigneeId !== ticket.assigneeId) {
+      // A new Assignee who doesn't own the Delegate removes it.
+      const owner = await ownerOf(tx, next.delegateId);
+      if (owner !== next.assigneeId) await change("delegateId", "delegate", null, agentNamed);
+    }
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
       await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
@@ -328,7 +385,7 @@ export async function editTicket(
 
     await tx.query(
       `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10 where id = $1`,
+       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11 where id = $1`,
       [
         ticket.id,
         next.title,
@@ -340,6 +397,7 @@ export async function editTicket(
         next.estimate,
         next.statusId,
         next.parentId,
+        next.delegateId,
       ],
     );
     const now = clock.now();
@@ -360,6 +418,10 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
+    // Entering a Status, or being delegated where it is, gets a delegated Ticket a Run if the Status has a Step.
+    const entered = next.statusId !== ticket.statusId;
+    const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
+    if (entered || delegated) await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, next);
   });
 }
@@ -379,6 +441,49 @@ function distinctLabels(labels: string[]): string[] {
     if (!seen.has(trimmed.toLowerCase())) seen.set(trimmed.toLowerCase(), trimmed);
   }
   return [...seen.values()];
+}
+
+/**
+ * Checks a User may delegate the Ticket to the Agent: only to one of their own Agents still in use in the
+ * Ticket's Workspace, and only a Ticket that is theirs or unassigned, so a Delegate is always the Assignee's.
+ */
+async function checkDelegate(
+  tx: Tx,
+  ticket: TicketRow,
+  userId: string,
+  agentId: string,
+  assigneeId: string | null,
+): Promise<{ id: string }> {
+  const { rows } = await tx.query<{ id: string; name: string; ownerId: string; owner: string }>(
+    `select agents.id, agents.name, agents.owner_id as "ownerId", coalesce(owners.email, '@' || owners.github_login) as owner
+     from agents join users owners on owners.id = agents.owner_id
+     where agents.id = $1 and agents.workspace_id = $2 and agents.removed_at is null`,
+    [agentId, ticket.workspaceId],
+  );
+  const agent = rows[0];
+  if (!agent) throw new ApiError(400, "unknown_agent", "That Agent isn't in use in this Workspace.");
+  if (agent.ownerId !== userId) {
+    throw new ApiError(
+      403,
+      "not_your_agent",
+      `You can delegate only to your own Agents, and ${agent.name} is ${agent.owner}'s.`,
+    );
+  }
+  if (assigneeId !== null && assigneeId !== userId) {
+    const assignee = await named(tx, "select id, coalesce(email, '@' || github_login) as name from users where id = $1", assigneeId);
+    throw new ApiError(
+      409,
+      "delegate_not_assignees",
+      `${ticket.key} is assigned to ${assignee?.name}: only its Assignee delegates it, to one of their own Agents. ` +
+        "Assign it to yourself to delegate it.",
+    );
+  }
+  return agent;
+}
+
+async function ownerOf(tx: Tx, agentId: string): Promise<string | undefined> {
+  const { rows } = await tx.query<{ ownerId: string }>(`select owner_id as "ownerId" from agents where id = $1`, [agentId]);
+  return rows[0]?.ownerId;
 }
 
 async function checkMember(tx: Tx, workspaceId: string, userId: string): Promise<void> {

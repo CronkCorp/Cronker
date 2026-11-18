@@ -11,6 +11,9 @@ export const Agent = Type.Object({
   workspaceId: Type.String({ format: "uuid" }),
   name: Type.String(),
   owner: User,
+  runnerId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Owner's Runner the Agent's Runs start through; none yet means its Runs are refused.",
+  }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Agent = Static<typeof Agent>;
@@ -25,7 +28,8 @@ export const AgentName = Type.String({
 type Row = Omit<Agent, "createdAt"> & { createdAt: Date };
 
 const columns = `agents.id, agents.workspace_id as "workspaceId", agents.name,
-  json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner, agents.created_at as "createdAt"`;
+  json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner,
+  agents.runner_id as "runnerId", agents.created_at as "createdAt"`;
 
 const present = (row: Row): Agent => ({ ...row, createdAt: row.createdAt.toISOString() });
 
@@ -97,6 +101,16 @@ export async function renameAgent(db: Db, agent: Agent, name: string): Promise<A
     throw error;
   }
   return { ...agent, name: name.trim() };
+}
+
+/** Points the Agent at one of its Owner's Runners, or at none. */
+export async function setAgentRunner(db: Db, agent: Agent, runnerId: string | null): Promise<Agent> {
+  if (runnerId !== null) {
+    const { rowCount } = await db.query("select 1 from runners where id = $1 and owner_id = $2", [runnerId, agent.owner.id]);
+    if (rowCount === 0) throw new ApiError(400, "unknown_runner", "An Agent uses only one of its Owner's own Runners.");
+  }
+  await db.query("update agents set runner_id = $2 where id = $1", [agent.id, runnerId]);
+  return { ...agent, runnerId };
 }
 
 /** Removes an Agent: it no longer lists and its tokens are refused at once; what it did still names it. */

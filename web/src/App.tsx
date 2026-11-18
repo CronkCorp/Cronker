@@ -334,6 +334,7 @@ function SignedIn({
       <TicketScreen
         key={`${current.id} ${ticketPath[1]}`}
         workspace={current}
+        user={user}
         ticketId={ticketPath[1]!}
         onOtherWorkspace={(workspaceId) => {
           if (!workspaces.some((w) => w.id === workspaceId)) return false;
