@@ -82,7 +82,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
          json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee"
        from tickets join projects on projects.id = tickets.project_id
        join users on users.id = tickets.former_assignee_id
-       where tickets.workspace_id = $1
+       where tickets.workspace_id = $1 and tickets.assignee_id is null
        order by projects.key, tickets.number`,
       [workspaceId],
     );
