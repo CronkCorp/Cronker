@@ -223,6 +223,16 @@ describe("Reports", () => {
     ]);
   });
 
+  test("a Report of only whitespace given to finish is refused", async () => {
+    const { ada, ticket, run, asAgent } = await runningRun();
+
+    const refused = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready", report: "  \n " });
+
+    expect(refused.status).toBe(400);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([]);
+  });
+
   test("a refused finish adds no Report", async () => {
     const { ada, ticket, run, asAgent } = await runningRun();
 
@@ -259,6 +269,7 @@ describe("a Run's last call", () => {
       ["POST", `/api/tickets/${ticket.id}/comments`, { body: "Starting." }],
       ["GET", `/api/runs/${run.id}/brief`],
       ["PATCH", `/api/tickets/${ticket.id}`, { title: "Refused" }],
+      ["PATCH", `/api/tickets/${ticket.id}`, { priority: "whenever" }],
     ];
     for (const [i, [method, path, body]] of calls.entries()) {
       cronk.clock.advance(60_000);
