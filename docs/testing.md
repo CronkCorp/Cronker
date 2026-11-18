@@ -9,7 +9,7 @@ These are the seams from the milestone 1 spec (#1). Tests live only at them.
 1. **HTTP API against a real, disposable Postgres** (primary). Cronk runs in-process with the clock under the test's control. Nearly every rule is tested here. Lives in `test/api/`.
 2. **The Runner interface with a fake Runner.** API tests start Cronk with a fake Runner that records each start and can be told to refuse, rate-limit or report a Run ended without finishing. *(Not built yet.)*
 3. **The subscription Runner against a stand-in HTTP server** for the scheduled-task fire endpoint. The real service is never called. *(Not built yet.)*
-4. **MCP** (thin): a real MCP client against the running server, for bearer tokens, OAuth and the mapping of tools onto the API. *(Not built yet.)*
+4. **MCP** (thin): a real MCP client (the MCP SDK's) against the running server, for bearer tokens, OAuth and the mapping of tools onto the API. Bearer tokens and the tools so far are built; OAuth is not yet. Lives in `test/mcp/`.
 5. **Sign in with GitHub against a stand-in OAuth server.** *(Not built yet.)*
 6. **Web UI smoke tests** (Playwright): a few walk the main path in a real browser. The web client holds no rules, so it gets no further tests. Lives in `e2e/`.
 
@@ -64,6 +64,7 @@ Then:
 | `npm run typecheck` | The type checker over the server, web client and tests |
 | `npm test` | The API tests (Vitest) |
 | `npx vitest run test/api/sign-in.test.ts` | One test file |
+| `npx vitest run test/mcp` | The MCP tests |
 | `npm run test:e2e` | Builds the web client, then the Playwright smoke tests. The first time, install a browser with `npx playwright install chromium` |
 
 Test databases are dropped when each test stops; templates (`cronk_template_*`) are kept for the next run and can be dropped at any time.
