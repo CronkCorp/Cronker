@@ -32,8 +32,8 @@ export function takeQueryParameter(name: string): string | null {
 }
 
 /** Posts the manifest to GitHub from the browser, as GitHub's manifest flow needs. GitHub sends the browser back to Cronk. */
-async function createApp(organization?: string): Promise<void> {
-  const { url, manifest } = await api.startGitHubApp(organization || undefined);
+async function createApp(githubOrganization?: string): Promise<void> {
+  const { url, manifest } = await api.startGitHubApp(githubOrganization || undefined);
   const form = document.createElement("form");
   form.method = "post";
   form.action = url;
@@ -119,7 +119,7 @@ export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
         <p>Loading…</p>
       ) : app ? (
         <p>
-          This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, owned by {app.owner}. People sign in
+          This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, under the GitHub account {app.githubAccount}. People sign in
           with GitHub through it.
         </p>
       ) : (

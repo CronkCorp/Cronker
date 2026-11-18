@@ -1,11 +1,12 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import { issueSecret } from "../identity/secrets.js";
 import { startSignIn } from "../identity/sign-ins.js";
-import { appCredentials, callbackPath } from "./app.js";
-import { exchangeCode, userOf, type GitHubUser } from "./client.js";
+import { appCredentials, callbackPath, githubNotSetUp } from "./app.js";
+import { exchangeCode, under, userOf, type GitHubUser } from "./client.js";
 
 /**
  * Signing in with GitHub: Cronk sends the browser to GitHub to authorize the App, GitHub
@@ -22,8 +23,6 @@ import { exchangeCode, userOf, type GitHubUser } from "./client.js";
 const stateCookie = "cronk_github_state";
 const stateLifetimeSeconds = 10 * 60;
 
-const notSetUp = () =>
-  new ApiError(404, "github_not_set_up", "This installation has no GitHub App, so nobody can sign in with GitHub yet.");
 
 function callbackUrl({ config }: Context): string {
   return `${config.publicUrl.origin}${callbackPath}`;
@@ -32,8 +31,8 @@ function callbackUrl({ config }: Context): string {
 /** Where to send the browser to authorize the App, having set the state cookie. */
 export async function beginSignIn(context: Context, reply: FastifyReply): Promise<string> {
   const app = await appCredentials(context);
-  if (!app) throw notSetUp();
-  const state = randomBytes(32).toString("base64url");
+  if (!app) throw githubNotSetUp();
+  const state = issueSecret("github_sign_in");
   reply.setCookie(stateCookie, state, {
     path: callbackPath,
     httpOnly: true,
@@ -42,7 +41,7 @@ export async function beginSignIn(context: Context, reply: FastifyReply): Promis
     secure: context.config.publicUrl.protocol === "https:",
     maxAge: stateLifetimeSeconds,
   });
-  const url = new URL(`${context.config.github.url.href.replace(/\/$/, "")}/login/oauth/authorize`);
+  const url = under(context.config.github.url, "/login/oauth/authorize");
   url.searchParams.set("client_id", app.clientId);
   url.searchParams.set("redirect_uri", callbackUrl(context));
   url.searchParams.set("state", state);
@@ -76,7 +75,7 @@ export async function finishSignIn(
   if (error || !code) throw new ApiError(403, "github_denied", "GitHub didn't sign you in.");
 
   const app = await appCredentials(context);
-  if (!app) throw notSetUp();
+  if (!app) throw githubNotSetUp();
   const token = await exchangeCode(context.config, app, code, callbackUrl(context));
   if (!token) throw new ApiError(403, "github_denied", "GitHub didn't accept the sign-in. Try again.");
   const account = await userOf(context.config, token);

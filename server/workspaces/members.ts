@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
 import { User, userColumns, type User as UserRecord } from "../identity/user.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
-import { findApp } from "../github/app.js";
+import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
@@ -75,9 +75,7 @@ export async function addMemberByGitHub(
   workspaceId: string,
   login: string,
 ): Promise<UserRecord> {
-  if (!(await findApp(context.db))) {
-    throw new ApiError(409, "github_not_set_up", "Create the installation's GitHub App first, so people can sign in with GitHub.");
-  }
+  if (!(await findApp(context.db))) throw githubNotSetUp();
   const account = await accountByLogin(context.config, login);
   if (!account) throw new ApiError(404, "unknown_github_login", `GitHub has no account with the login ${login}.`);
   return transaction(context.db, async (tx) => {

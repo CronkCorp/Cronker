@@ -13,7 +13,7 @@ Open the public address, enter the setup code from the log, and create the first
 
 ### Signing in with GitHub
 
-Right after setup, Cronk offers to create the installation's GitHub App through GitHub's manifest flow: GitHub asks you to confirm the App (under your account or an organization you name), then sends you back to Cronk, which stores the App's credentials encrypted with `CRONK_SECRET_KEY`. You can skip it and have any Admin create it later from the **GitHub** page. An installation has one App; it is used only for signing in for now.
+Right after setup, Cronk offers to create the installation's GitHub App through GitHub's manifest flow: GitHub asks you to confirm the App (under your GitHub account or a GitHub organization you name), then sends you back to Cronk, which stores the App's credentials encrypted with `CRONK_SECRET_KEY`. You can skip it and have any Admin create it later from the **GitHub** page. An installation has one App; it is used only for signing in for now.
 
 Once it exists, Users can sign in with GitHub. A GitHub account is linked to its User at the first sign-in: the User an Admin added by that GitHub login, or else the User whose email is the account's verified primary email. Admins add people by GitHub login on the Members page; they join at their next sign-in with GitHub. GitHub accounts no User has are refused. A User may sign in both ways.
 

@@ -35,7 +35,7 @@ describe("creating the GitHub App", () => {
 
     const [created] = cronk.github.apps;
     expect(await (await cronk.request("GET", "/api/github/app")).json()).toEqual({
-      app: { name: created!.name, owner: "ada", htmlUrl: `${cronk.github.url}/apps/${created!.slug}` },
+      app: { name: created!.name, githubAccount: "ada", htmlUrl: `${cronk.github.url}/apps/${created!.slug}` },
     });
   });
 });

@@ -1,5 +1,6 @@
 import type { Config } from "../config.js";
 import { ApiError } from "../http/errors.js";
+import type { AppCredentials } from "./app.js";
 
 /**
  * The calls Cronk makes to GitHub, at the addresses in its configuration, so tests and
@@ -10,7 +11,8 @@ import { ApiError } from "../http/errors.js";
 const unavailable = (detail: string) =>
   new ApiError(502, "github_unavailable", `GitHub couldn't be reached or refused Cronk's request: ${detail}`);
 
-function under(base: URL, path: string): URL {
+/** The path under a base address that may itself have a path, such as GitHub Enterprise Server's `/api/v3`. */
+export function under(base: URL, path: string): URL {
   return new URL(`${base.href.replace(/\/$/, "")}${path}`);
 }
 
@@ -62,7 +64,7 @@ export async function convertManifest({ github }: Config, code: string): Promise
 /** Exchanges an OAuth authorization code for a user access token, or nothing if GitHub refuses the code. */
 export async function exchangeCode(
   { github }: Config,
-  app: { clientId: string; clientSecret: string },
+  app: AppCredentials,
   code: string,
   redirectUri: string,
 ): Promise<string | undefined> {

@@ -14,7 +14,7 @@ export function nameOf(user: User): string {
 
 export interface GitHubApp {
   name: string;
-  owner: string;
+  githubAccount: string;
   htmlUrl: string;
 }
 
@@ -122,8 +122,8 @@ export const api = {
   addMemberByGitHub: (id: string, login: string) =>
     call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
   githubApp: () => call<{ app: GitHubApp | null }>("GET", "/api/github/app").then((r) => r.app),
-  startGitHubApp: (organization?: string) =>
-    call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { organization }),
+  startGitHubApp: (githubOrganization?: string) =>
+    call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization }),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
   useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
   projects: (workspaceId: string) =>

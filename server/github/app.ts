@@ -1,10 +1,10 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import type { Db } from "../db.js";
-import { requireSecretBox, secretBox } from "../encryption.js";
+import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
-import { convertManifest } from "./client.js";
+import { convertManifest, under } from "./client.js";
 
 /**
  * The installation's one GitHub App, created through GitHub's manifest flow: Cronk hands
@@ -19,7 +19,8 @@ import { convertManifest } from "./client.js";
 
 export const GitHubApp = Type.Object({
   name: Type.String(),
-  owner: Type.String(),
+  /** The GitHub account or organization the App belongs to on GitHub. */
+  githubAccount: Type.String(),
   htmlUrl: Type.String({ format: "uri" }),
 });
 export type GitHubApp = Static<typeof GitHubApp>;
@@ -38,20 +39,28 @@ export const createdPath = "/api/github/app/created";
 
 export async function findApp(db: Db): Promise<GitHubApp | null> {
   const { rows } = await db.query<GitHubApp>(
-    `select name, owner_login as owner, html_url as "htmlUrl" from github_app`,
+    `select name, owner_login as "githubAccount", html_url as "htmlUrl" from github_app`,
   );
   return rows[0] ?? null;
 }
 
+export interface AppCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+/** The refusal for anything that needs the GitHub App while the installation has none. */
+export const githubNotSetUp = () =>
+  new ApiError(409, "github_not_set_up", "This installation has no GitHub App yet. An Admin can create it on the GitHub page.");
+
 /** The App's OAuth credentials, decrypted, or nothing if there is no App. */
-export async function appCredentials({ db, config }: Context): Promise<{ clientId: string; clientSecret: string } | undefined> {
+export async function appCredentials({ db, config }: Context): Promise<AppCredentials | undefined> {
   const { rows } = await db.query<{ client_id: string; client_secret: string }>(
     "select client_id, client_secret from github_app",
   );
   const row = rows[0];
   if (!row) return undefined;
-  if (!config.secretKey) throw new ApiError(500, "no_secret_key", "Cronk has lost its CRONK_SECRET_KEY.");
-  return { clientId: row.client_id, clientSecret: secretBox(config.secretKey).open(row.client_secret) };
+  return { clientId: row.client_id, clientSecret: requireSecretBox(config).open(row.client_secret) };
 }
 
 const appExists = () =>
@@ -66,7 +75,7 @@ async function isAnyAdmin(db: Db, userId: string): Promise<boolean> {
 export async function startManifestFlow(
   { db, config, clock }: Context,
   userId: string,
-  organization?: string,
+  githubOrganization?: string,
 ): Promise<ManifestStart> {
   if (!(await isAnyAdmin(db, userId))) {
     throw new ApiError(403, "not_admin", "Only an Admin can create the installation's GitHub App.");
@@ -84,10 +93,10 @@ export async function startManifestFlow(
   ]);
 
   const origin = config.publicUrl.origin;
-  const where = organization
-    ? `/organizations/${encodeURIComponent(organization.trim())}/settings/apps/new`
+  const where = githubOrganization
+    ? `/organizations/${encodeURIComponent(githubOrganization.trim())}/settings/apps/new`
     : "/settings/apps/new";
-  const url = new URL(`${config.github.url.href.replace(/\/$/, "")}${where}`);
+  const url = under(config.github.url, where);
   url.searchParams.set("state", state);
   return {
     url: url.toString(),
@@ -97,7 +106,6 @@ export async function startManifestFlow(
       url: origin,
       redirect_url: `${origin}${createdPath}`,
       callback_urls: [`${origin}${callbackPath}`],
-      hook_attributes: { url: `${origin}/api/github/webhook`, active: false },
       public: false,
       request_oauth_on_install: false,
       default_permissions: { emails: "read" },
@@ -144,5 +152,5 @@ export async function finishManifestFlow(context: Context, code: string, state: 
   );
   // Another Admin's flow may have finished first.
   if (rowCount === 0) throw appExists();
-  return { name: app.name, owner: app.owner.login, htmlUrl: app.html_url };
+  return { name: app.name, githubAccount: app.owner.login, htmlUrl: app.html_url };
 }

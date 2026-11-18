@@ -83,14 +83,14 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["GitHub"],
           summary: "Start creating the installation's GitHub App (Admins only)",
           description:
-            "Returns a manifest and the GitHub address to post it to as the form field `manifest`, from the browser. GitHub creates the App under the Admin's account (or the `organization`) and sends the browser back to Cronk, which stores the App's credentials encrypted. Refused with `github_app_exists` once the installation has its App, and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
-          body: Type.Object({ organization: Type.Optional(Type.String({ minLength: 1, maxLength: 100, pattern: "^[A-Za-z0-9-]+$" })) }),
+            "Returns a manifest and the GitHub address to post it to as the form field `manifest`, from the browser. GitHub creates the App under the Admin's GitHub account (or the `githubOrganization`) and sends the browser back to Cronk, which stores the App's credentials encrypted. Refused with `github_app_exists` once the installation has its App, and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+          body: Type.Object({ githubOrganization: Type.Optional(Type.String({ minLength: 1, maxLength: 100, pattern: "^[A-Za-z0-9-]+$" })) }),
           response: { 201: ManifestStart, 401: ErrorBody, 403: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await startManifestFlow(context, user.id, request.body.organization));
+        return reply.code(201).send(await startManifestFlow(context, user.id, request.body.githubOrganization));
       },
     );
 
