@@ -67,6 +67,54 @@ describe("Tickets waiting for review", () => {
     expect(await inbox(ada.cookie, workspace.id)).toEqual({ count: 0, items: [] });
   });
 
+  test("moving the Ticket out of its Review Status removes it from the Inbox at once", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "Reviewed");
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(1);
+
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("Done") });
+
+    expect(await inbox(ada.cookie, workspace.id)).toEqual({ count: 0, items: [] });
+  });
+
+  test("changing the Assignee moves the Ticket to the new Assignee's Inbox at once", async () => {
+    const { ada, bea, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "Handed over");
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+
+    await editTicket(ada.cookie, ticket.id, { assigneeId: bea.id });
+
+    expect(await inbox(ada.cookie, workspace.id)).toEqual({ count: 0, items: [] });
+    expect((await inbox(bea.cookie, workspace.id)).items).toEqual([
+      expect.objectContaining({ kind: "review", ticket: expect.objectContaining({ id: ticket.id }) }),
+    ]);
+
+    await editTicket(ada.cookie, ticket.id, { assigneeId: null });
+
+    expect(await inbox(bea.cookie, workspace.id)).toEqual({ count: 0, items: [] });
+  });
+
+  test("changing a Status's kind away from Review removes its Tickets from the Inbox", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "Waiting");
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("Code review"), assigneeId: ada.id });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(0);
+
+    const edited = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Code review")}`, {
+      cookie: ada.cookie,
+      body: { kind: "review" },
+    });
+    expect(edited.status).toBe(200);
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(1);
+
+    await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Code review")}`, {
+      cookie: ada.cookie,
+      body: { kind: "active" },
+    });
+    expect((await inbox(ada.cookie, workspace.id)).count).toBe(0);
+  });
+
   test("a Ticket assigned to the User but not in a Review Status is not in their Inbox", async () => {
     const { ada, workspace, project, statusId } = await workspaceWithProject();
     const ticket = await createTicket(ada.cookie, project.id, "Being worked on");
