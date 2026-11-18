@@ -64,11 +64,11 @@ describe("starting Runs", () => {
         state: "running",
         outcome: null,
         question: null,
-        report: null,
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
         startedAt: "2026-01-01T09:00:00.000Z",
         endedAt: null,
+        lastCallAt: null,
       },
     ]);
     const [run] = runs;
@@ -104,6 +104,8 @@ describe("starting Runs", () => {
         "",
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
+        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
+          "and write Reports on it; leave everything else to its Users.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );
@@ -172,7 +174,7 @@ describe("finishing Runs", () => {
 
     const triaged = await finish(ticket.id, asAgent, ada, { outcome: "ready", report: "Clear enough." });
     expect(triaged).toEqual(
-      expect.objectContaining({ state: "finished", outcome: "ready", report: "Clear enough.", endedAt: expect.any(String) }),
+      expect.objectContaining({ state: "finished", outcome: "ready", endedAt: expect.any(String) }),
     );
     // Ready has no Step: the Ticket waits there for a User.
     let current = await ok("GET", `/api/tickets/${ticket.id}`, ada);

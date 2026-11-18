@@ -241,7 +241,8 @@ describe("Agents and Steps", () => {
       expect((await response.json()).error, `${method} ${path}`).toEqual({
         code: "agent_not_allowed",
         message: expect.any(String),
-        rule: "Agents may read their Workspace, comment on its Tickets and finish their own Runs; everything else needs a User.",
+        rule:
+          "Agents may read their Workspace and comment on its Tickets; during their running Run on a Ticket they may also edit it, write Reports on it and finish the Run. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
@@ -547,6 +548,8 @@ describe("the Brief preview", () => {
         "",
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
+        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
+          "and write Reports on it; leave everything else to its Users.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );
