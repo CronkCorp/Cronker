@@ -39,7 +39,11 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   const open = (status: string) => steps.locator("summary strong", { hasText: new RegExp(`^${status}$`) }).click();
 
   await expect(steps.getByText("haiku, 2 Outcomes")).toBeVisible();
-  await expect(steps.getByText("No Step: Tickets here wait for a person")).toHaveCount(5);
+  await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
+
+  // An unsaved draft on one Step outlives saving another.
+  await open("Investigate");
+  await steps.getByLabel("Model for Investigate").fill("opus");
 
   await open("Ready");
   await steps.getByRole("button", { name: "Add a Step to Ready" }).click();
@@ -47,18 +51,17 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   await steps.getByLabel("Model for Ready").fill("opus");
   await steps.getByLabel("Status needs you of Ready moves to").selectOption("Done");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
-  await expect(steps.getByRole("alert")).toContainText("asking a person must never complete work");
+  await expect(steps.getByRole("alert")).toContainText("asking a User must never complete work");
 
   await steps.getByLabel("Status needs you of Ready moves to").selectOption("Backlog");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
   await expect(steps.getByText("opus, 2 Outcomes")).toBeVisible();
 
-  await open("Investigate");
-  await steps.getByLabel("Model for Investigate").fill("opus");
+  await expect(steps.getByLabel("Model for Investigate")).toHaveValue("opus");
   await steps.getByRole("button", { name: "Save the Step on Investigate" }).click();
   await expect(steps.getByText("opus, 2 Outcomes")).toHaveCount(2);
   await steps.getByRole("button", { name: "Remove the Step from Investigate" }).click();
-  await expect(steps.getByText("No Step: Tickets here wait for a person")).toHaveCount(5);
+  await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
 
   const preview = page.getByRole("region", { name: "Brief preview" });
   await preview.getByLabel("Ticket key").fill("cronk-1");

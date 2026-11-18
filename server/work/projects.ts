@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { defaultSteps } from "./default-steps.js";
-import { Step, stepsOf, writeStep } from "./steps.js";
+import { defaultRoundLimit, Step, stepsOf, writeStep } from "./steps.js";
 
 /** What a Status means, whatever its name. Every Project keeps at least one Status of each kind. */
 export const statusKinds = ["backlog", "active", "review", "done", "canceled"] as const;
@@ -17,7 +17,7 @@ export const Status = Type.Object({
   name: Type.String(),
   kind: StatusKind,
   step: Type.Union([Step, Type.Null()], {
-    description: "The agent work the Status asks for; without one, Tickets in it wait for a person.",
+    description: "The agent work the Status asks for; without one, Tickets in it wait for a User.",
   }),
 });
 export type Status = Static<typeof Status>;
@@ -126,7 +126,7 @@ export async function createProject(
       const step: Step = {
         brief,
         model,
-        roundLimit: 2,
+        roundLimit: defaultRoundLimit,
         outcomes: outcomes.map(({ name, status, ...flags }) => ({
           name,
           statusId: idOf(status),

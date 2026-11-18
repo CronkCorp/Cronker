@@ -9,7 +9,7 @@ import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { Outcome } from "./steps.js";
+import { defaultRoundLimit, Outcome } from "./steps.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
@@ -31,7 +31,7 @@ const StepBody = Type.Object({
     Type.Integer({
       minimum: 0,
       maximum: 100,
-      default: 2,
+      default: defaultRoundLimit,
       description: "How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*.",
     }),
   ),
@@ -190,7 +190,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        const { roundLimit = 2, ...step } = request.body;
+        const { roundLimit = defaultRoundLimit, ...step } = request.body;
         return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit } });
       },
     );
@@ -201,7 +201,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Remove a Status's Step",
-          description: "Takes the Step off the Status, so Tickets in it wait for a person. Returns the Project.",
+          description: "Takes the Step off the Status, so Tickets in it wait for a User. Returns the Project.",
           params: StatusParams,
           response: { 200: Project, ...statusRefusals },
         },

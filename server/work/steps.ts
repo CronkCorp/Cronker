@@ -1,13 +1,17 @@
 import { Type, type Static } from "typebox";
 import type { Db, Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import type { StatusKind } from "./projects.js";
+
+/** How many rounds a Step allows unless told otherwise. */
+export const defaultRoundLimit = 2;
 
 /** One of the named ways a Step's Run may end, moving the Ticket to a Status. */
 export const Outcome = Type.Object({
   name: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "Unique within the Step, ignoring case." }),
   statusId: Type.String({ format: "uuid", description: "The Status of the same Project the Outcome moves the Ticket to." }),
   default: Type.Boolean({ description: "Where a skipped Step sends the Ticket. Exactly one Outcome is the default." }),
-  needsYou: Type.Boolean({ description: "Hands the Ticket back to a person with a Question. Exactly one Outcome is *needs you*." }),
+  needsYou: Type.Boolean({ description: "Hands the Ticket back to its Assignee with a Question. Exactly one Outcome is *needs you*." }),
   countsAsRound: Type.Boolean({ description: "Sends work back, counting toward the Step's round limit." }),
 });
 export type Outcome = Static<typeof Outcome>;
@@ -38,7 +42,7 @@ export async function stepsOf(db: Db | Tx, projectId: string): Promise<Map<strin
 }
 
 /** The rules a Step's Outcomes keep, checked against the Statuses of its Project. */
-export function checkOutcomes(outcomes: Outcome[], statuses: { id: string; name: string; kind: string }[]): void {
+export function checkOutcomes(outcomes: Outcome[], statuses: { id: string; name: string; kind: StatusKind }[]): void {
   const names = new Set<string>();
   for (const { name } of outcomes) {
     if (names.has(name.toLowerCase())) {
@@ -82,16 +86,16 @@ function exactlyOne(found: Outcome[], role: string, code: string): void {
 
 /**
  * Why an Outcome may not move Tickets to a Status of the given kind, if it may not:
- * skipping a Step or asking a person must never complete or cancel work, and agents never cancel it.
+ * skipping a Step or asking a User must never complete or cancel work, and agents never cancel it.
  */
 export function targetRefusal(
   outcome: Pick<Outcome, "default" | "needsYou">,
-  targetKind: string,
+  targetKind: StatusKind,
 ): { role: string; kind: string; why: string } | undefined {
   const kind = targetKind === "done" ? "Done" : targetKind === "canceled" ? "Canceled" : undefined;
   if (!kind) return undefined;
   if (outcome.default) return { role: "default Outcome", kind, why: "skipping a Step must never complete work" };
-  if (outcome.needsYou) return { role: "needs you Outcome", kind, why: "asking a person must never complete work" };
+  if (outcome.needsYou) return { role: "needs you Outcome", kind, why: "asking a User must never complete work" };
   if (kind === "Canceled") return { role: "Outcome", kind, why: "agents never cancel work" };
   return undefined;
 }
@@ -138,7 +142,7 @@ export async function outcomesOf(
   return rows;
 }
 
-/** Takes the Step off a Status, which then waits for a person. */
+/** Takes the Step off a Status, which then waits for a User. */
 export async function removeStep(tx: Tx, statusId: string): Promise<void> {
   await tx.query("delete from steps where status_id = $1", [statusId]);
 }

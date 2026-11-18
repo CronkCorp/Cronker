@@ -22,6 +22,9 @@ const defaultBoard = [
   { name: "Canceled", kind: "canceled" },
 ];
 
+/** The default board's Steps, by the Status they're on, and the model each wants. */
+const stepModels: Record<string, string> = { Triage: "haiku", Investigate: "sonnet", Implement: "opus", "Code review": "sonnet" };
+
 describe("creating a Project", () => {
   test("a new Project has a name, a key and the default board's Statuses with their kinds", async () => {
     const { workspace } = await setUp(cronk);
@@ -39,7 +42,11 @@ describe("creating a Project", () => {
       workspaceId: workspace.id,
       name: "Cronker",
       key: "CRONK",
-      statuses: defaultBoard.map((status) => ({ id: expect.any(String), ...status, step: expect.toBeOneOf([null, expect.any(Object)]) })),
+      statuses: defaultBoard.map((status) => ({
+        id: expect.any(String),
+        ...status,
+        step: stepModels[status.name] ? expect.objectContaining({ model: stepModels[status.name] }) : null,
+      })),
     });
 
     const shown = await cronk.request("GET", `/api/projects/${project.id}`, { cookie });

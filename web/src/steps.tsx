@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, type Brief, type Outcome, type Project, type Status, type Step } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 
-/** A new Step's starting point: sends Tickets on to the next Status, or back to the first one for a person. */
+/** A new Step's starting point: sends Tickets on to the next Status, or back to the first one for a User. */
 function newStep(project: Project, status: Status): Step {
   const at = project.statuses.findIndex((s) => s.id === status.id);
   const next = project.statuses[at + 1] ?? project.statuses[0]!;
@@ -24,7 +24,7 @@ export function StepsSettings({ project, onChange }: { project: Project; onChang
       <h2 id="steps-heading">Steps</h2>
       <p className="muted">
         A delegated Ticket entering a Status with a Step gets a Run, which ends by choosing one of the Step's Outcomes.
-        Tickets in a Status without a Step wait for a person.
+        Tickets in a Status without a Step wait for a User.
       </p>
       <ul className="steps">
         {project.statuses.map((status) => (
@@ -47,8 +47,10 @@ function StepItem({
   const [draft, setDraft] = useState<Step | null>(status.step);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Show the Step as Cronk has it whenever it changes there, here or elsewhere.
-  useEffect(() => setDraft(status.step), [status.step]);
+  // Show the Step as Cronk has it whenever it changes there, here or elsewhere. Compared by
+  // value: reloading the Project for a change elsewhere mustn't throw away an unsaved draft.
+  const saved = JSON.stringify(status.step);
+  useEffect(() => setDraft(JSON.parse(saved) as Step | null), [saved]);
 
   const run = async (change: () => Promise<Project>) => {
     setBusy(true);
@@ -64,7 +66,7 @@ function StepItem({
 
   const summary = status.step
     ? `${status.step.model}, ${status.step.outcomes.length} Outcomes`
-    : "No Step: Tickets here wait for a person";
+    : "No Step: Tickets here wait for a User";
 
   return (
     <li>
@@ -268,7 +270,9 @@ export function BriefPreview({ project }: { project: Project }) {
   const [brief, setBrief] = useState<Brief | null>(null);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     setBrief(null);
-    const ticket = await api.ticketByKey(project.workspaceId, field(form, "key").trim());
+    const key = field(form, "key").trim();
+    const ticket = await api.ticketByKey(project.workspaceId, key);
+    if (ticket.projectId !== project.id) throw new Error(`${ticket.key} is a Ticket of another Project.`);
     setBrief(await api.brief(ticket.id));
   });
 
