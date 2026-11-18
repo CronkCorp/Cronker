@@ -215,6 +215,9 @@ fieldset {
   border: 1px solid var(--line);
   border-radius: 6px;
 }
+fieldset > button {
+  justify-self: start;
+}
 legend {
   color: var(--muted);
   font-size: 0.9rem;
