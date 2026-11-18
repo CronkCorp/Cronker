@@ -21,9 +21,14 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/projects/{projectId}",
     "/api/projects/{projectId}/statuses",
     "/api/projects/{projectId}/statuses/{statusId}",
+    "/api/projects/{projectId}/tickets",
     "/api/setup",
     "/api/sign-in",
+    "/api/tickets/{ticketId}",
+    "/api/tickets/{ticketId}/comments",
+    "/api/tickets/{ticketId}/timeline",
     "/api/workspaces/{workspaceId}",
+    "/api/workspaces/{workspaceId}/members",
     "/api/workspaces/{workspaceId}/projects",
   ]);
   expect(Object.keys(document.paths["/api/sign-in"]).sort()).toEqual(["delete", "post"]);

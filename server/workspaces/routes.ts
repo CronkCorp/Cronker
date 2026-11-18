@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { findWorkspace, Workspace } from "./workspaces.js";
+import { findWorkspace, Member, membersOf, Workspace } from "./workspaces.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
@@ -23,6 +23,24 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const workspace = await findWorkspace(db, user.id, request.params.workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
         return workspace;
+      },
+    );
+
+    app.get(
+      "/api/workspaces/:workspaceId/members",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "The Users who belong to the Workspace",
+          params: Type.Object({ workspaceId: Type.String() }),
+          response: { 200: Type.Array(Member), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const workspace = await findWorkspace(db, user.id, request.params.workspaceId);
+        if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
+        return membersOf(db, workspace.id);
       },
     );
   };

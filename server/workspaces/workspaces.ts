@@ -34,3 +34,21 @@ export async function findWorkspace(db: Db, userId: string, workspaceId: string)
   );
   return rows[0];
 }
+
+export const Member = Type.Object({
+  id: Type.String({ format: "uuid" }),
+  name: Type.String({ description: "How to show the User: their email." }),
+  isAdmin: Type.Boolean(),
+});
+export type Member = Static<typeof Member>;
+
+/** The Users who belong to a Workspace. */
+export async function membersOf(db: Db, workspaceId: string): Promise<Member[]> {
+  const { rows } = await db.query<Member>(
+    `select users.id, users.email as name, memberships.is_admin as "isAdmin"
+     from memberships join users on users.id = memberships.user_id
+     where memberships.workspace_id = $1 order by lower(users.email), users.id`,
+    [workspaceId],
+  );
+  return rows;
+}
