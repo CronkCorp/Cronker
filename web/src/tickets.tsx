@@ -46,7 +46,10 @@ export function TicketScreen({
   const loadTimeline = useCallback(() => latestTimeline(api.timeline(ticketId), setTimeline), [ticketId, latestTimeline]);
 
   useEffect(() => {
-    api.ticket(ticketId).then(async (found) => {
+    const first = api.ticket(ticketId);
+    // Shown only until a later fetch of the Ticket answers; the screen waits for its Project too.
+    latestTicket(first, setTicket, fail);
+    first.then(async (found) => {
       const ticketProject = await api.project(found.projectId);
       // A Ticket of another of the User's Workspaces isn't shown under this one's name.
       if (ticketProject.workspaceId !== workspace.id) {
@@ -54,12 +57,11 @@ export function TicketScreen({
         return;
       }
       setProject(ticketProject);
-      setTicket(found);
     }, fail);
     api.members(workspace.id).then(setMembers, fail);
     latestComments(api.comments(ticketId), setComments, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
-  }, [ticketId, workspace.id, latestComments, latestTimeline]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestTimeline]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -87,6 +89,10 @@ export function TicketScreen({
     }
   };
 
+  // The live refetch may have shown the new Comment already.
+  const addComment = (comment: Comment) =>
+    setComments((shown) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
+
   if (failure) return <p role="alert">{failure}</p>;
   if (!ticket || !project) return <p>Loading…</p>;
   return (
@@ -108,7 +114,7 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
-          <Comments ticket={ticket} comments={comments} onAdded={(c) => setComments((shown) => (shown.some((s) => s.id === c.id) ? shown : [...shown, c]))} />
+          <Comments ticket={ticket} comments={comments} onAdded={addComment} />
           <Timeline changes={timeline} />
         </div>
         <Fields ticket={ticket} project={project} members={members} onSave={save} />
