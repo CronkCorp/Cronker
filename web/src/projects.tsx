@@ -1,5 +1,18 @@
-import { useEffect, useRef, useState, type ComponentProps, type FormEvent } from "react";
-import { api, statusKinds, type Project, type ProjectSummary, type Status, type StatusKind, type Workspace } from "./api.js";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent } from "react";
+import {
+  api,
+  priorities,
+  statusKinds,
+  type Member,
+  type Priority,
+  type Project,
+  type ProjectSummary,
+  type Status,
+  type StatusKind,
+  type TicketFilter,
+  type TicketSummary,
+  type Workspace,
+} from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Link, navigate } from "./router.js";
 
@@ -62,6 +75,8 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
 type View = "board" | "list" | "settings";
 
+export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
+
 /** A Project of the Workspace on screen, as a board, as a list, or its settings. */
 export function ProjectScreen({
   workspace,
@@ -76,6 +91,9 @@ export function ProjectScreen({
   onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
   const [project, setProject] = useState<Project | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
+  const [filter, setFilter] = useState<TicketFilter>({});
   const [failure, setFailure] = useState<string | null>(null);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
@@ -89,10 +107,23 @@ export function ProjectScreen({
       },
       (e: Error) => setFailure(e.message),
     );
+    api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
   }, [projectId, workspace.id]);
 
+  const loadTickets = useCallback(() => {
+    let current = true;
+    api.tickets(projectId, filter).then(
+      (found) => current && setTickets(found),
+      (e: Error) => current && setFailure(e.message),
+    );
+    return () => {
+      current = false;
+    };
+  }, [projectId, filter]);
+  useEffect(loadTickets, [loadTickets]);
+
   if (failure) return <p role="alert">{failure}</p>;
-  if (!project) return <p>Loading…</p>;
+  if (!project || !tickets) return <p>Loading…</p>;
   const base = `/projects/${project.id}`;
   return (
     <>
@@ -110,36 +141,231 @@ export function ProjectScreen({
           Settings
         </Link>
       </nav>
-      {view === "board" && <Board project={project} />}
-      {view === "list" && <List project={project} />}
+      {view !== "settings" && (
+        <>
+          <NewTicket project={project} onCreated={loadTickets} />
+          <Filters project={project} members={members} filter={filter} onChange={setFilter} />
+        </>
+      )}
+      {view === "board" && <Board project={project} members={members} tickets={tickets} onMoved={loadTickets} />}
+      {view === "list" && (
+        <List
+          project={project}
+          members={members}
+          tickets={tickets}
+          filtered={Object.values(filter).some((value) => value !== undefined)}
+        />
+      )}
       {view === "settings" && <Settings project={project} onChange={setProject} />}
     </>
   );
 }
 
-function Board({ project }: { project: Project }) {
+function NewTicket({ project, onCreated }: { project: Project; onCreated: () => void }) {
+  const { error, busy, onSubmit } = useSubmit(async (form) => {
+    await api.createTicket(project.id, { title: field(form, "title") });
+    onCreated();
+  });
   return (
-    <section aria-label="Board" className="board">
-      {project.statuses.map((status) => (
-        <section key={status.id} aria-label={status.name} className="lane">
-          <h2>{status.name}</h2>
-          <p className="muted">{kindLabel(status.kind)}</p>
-        </section>
-      ))}
-    </section>
+    <form
+      className="inline"
+      onSubmit={async (event) => {
+        const form = event.currentTarget;
+        await onSubmit(event);
+        form.reset();
+      }}
+    >
+      <label>
+        New Ticket title
+        <input name="title" required maxLength={300} />
+      </label>
+      <button type="submit" disabled={busy}>
+        Create Ticket
+      </button>
+      {error && <p role="alert">{error}</p>}
+    </form>
   );
 }
 
-function List({ project }: { project: Project }) {
+function Filters({
+  project,
+  members,
+  filter,
+  onChange,
+}: {
+  project: Project;
+  members: Member[];
+  filter: TicketFilter;
+  onChange: (filter: TicketFilter) => void;
+}) {
+  const set = (change: TicketFilter) => onChange({ ...filter, ...change });
+  return (
+    <div className="filters" role="group" aria-label="Filters">
+      <label>
+        Filter by Status
+        <select value={filter.statusId ?? ""} onChange={(e) => set({ statusId: e.target.value || undefined })}>
+          <option value="">Any</option>
+          {project.statuses.map((status) => (
+            <option key={status.id} value={status.id}>
+              {status.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Filter by Assignee
+        <select value={filter.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || undefined })}>
+          <option value="">Anyone</option>
+          <option value="none">Nobody</option>
+          {members.map(({ user }) => (
+            <option key={user.id} value={user.id}>
+              {user.email}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Filter by Priority
+        <select
+          value={filter.priority ?? ""}
+          onChange={(e) => set({ priority: (e.target.value || undefined) as Priority | undefined })}
+        >
+          <option value="">Any</option>
+          {priorities.map(({ priority, label }) => (
+            <option key={priority} value={priority}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Filter by Label
+        <input value={filter.label ?? ""} onChange={(e) => set({ label: e.target.value.trim() || undefined })} />
+      </label>
+    </div>
+  );
+}
+
+function TicketItem({
+  ticket,
+  members,
+  draggable,
+}: {
+  ticket: TicketSummary;
+  members: Member[];
+  draggable?: boolean;
+}) {
+  const assignee = members.find((m) => m.user.id === ticket.assigneeId)?.user;
+  const details = [
+    ticket.priority === "none" ? null : priorityLabel(ticket.priority),
+    ...ticket.labels,
+    assignee?.email,
+  ].filter(Boolean);
+  return (
+    <Link
+      to={`/tickets/${ticket.id}`}
+      className="ticket-item"
+      draggable={draggable}
+      onDragStart={(event: DragEvent<HTMLAnchorElement>) => {
+        event.dataTransfer.setData(ticketDrag, ticket.id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+    >
+      <span className="muted">{ticket.key}</span> <span>{ticket.title}</span>
+      {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
+    </Link>
+  );
+}
+
+const ticketDrag = "application/x-cronk-ticket";
+
+function Board({
+  project,
+  members,
+  tickets,
+  onMoved,
+}: {
+  project: Project;
+  members: Member[];
+  tickets: TicketSummary[];
+  onMoved: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [target, setTarget] = useState<string | null>(null);
+
+  const drop = async (event: DragEvent<HTMLElement>, status: Status) => {
+    event.preventDefault();
+    setTarget(null);
+    const ticketId = event.dataTransfer.getData(ticketDrag);
+    if (!ticketId || tickets.find((t) => t.id === ticketId)?.statusId === status.id) return;
+    setError(null);
+    try {
+      await api.editTicket(ticketId, { statusId: status.id });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+    onMoved();
+  };
+
+  return (
+    <>
+      {error && <p role="alert">{error}</p>}
+      <section aria-label="Board" className="board">
+        {project.statuses.map((status) => (
+          <section
+            key={status.id}
+            aria-label={status.name}
+            className={target === status.id ? "lane target" : "lane"}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes(ticketDrag)) return;
+              event.preventDefault();
+              setTarget(status.id);
+            }}
+            onDragLeave={() => setTarget(null)}
+            onDrop={(event) => void drop(event, status)}
+          >
+            <h2>{status.name}</h2>
+            <p className="muted">{kindLabel(status.kind)}</p>
+            {tickets
+              .filter((ticket) => ticket.statusId === status.id)
+              .map((ticket) => (
+                <TicketItem key={ticket.id} ticket={ticket} members={members} draggable />
+              ))}
+          </section>
+        ))}
+      </section>
+    </>
+  );
+}
+
+function List({
+  project,
+  members,
+  tickets,
+  filtered,
+}: {
+  project: Project;
+  members: Member[];
+  tickets: TicketSummary[];
+  filtered: boolean;
+}) {
   return (
     <section aria-label="List" className="list">
-      <p>No Tickets yet.</p>
-      {project.statuses.map((status) => (
-        <section key={status.id} aria-label={status.name}>
-          <h2>{status.name}</h2>
-          <span className="muted">0</span>
-        </section>
-      ))}
+      {tickets.length === 0 && <p>{filtered ? "No Tickets match these filters." : "No Tickets yet."}</p>}
+      {project.statuses.map((status) => {
+        const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
+        return (
+          <section key={status.id} aria-label={status.name}>
+            <div className="list-heading">
+              <h2>{status.name}</h2>
+              <span className="muted">{inStatus.length}</span>
+            </div>
+            {inStatus.map((ticket) => (
+              <TicketItem key={ticket.id} ticket={ticket} members={members} />
+            ))}
+          </section>
+        );
+      })}
     </section>
   );
 }

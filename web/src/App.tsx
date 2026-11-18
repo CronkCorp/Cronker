@@ -13,6 +13,7 @@ import { field, useSubmit } from "./forms.js";
 import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { Link, navigate, replace, usePath } from "./router.js";
+import { TicketScreen } from "./tickets.js";
 
 type Screen =
   | { kind: "loading" }
@@ -264,6 +265,7 @@ function SignedIn({
   });
   const workspacePath = /^\/workspaces\/([^/]+)(\/members)?\/?$/.exec(path);
   const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings))?\/?$/.exec(path);
+  const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
 
   // The Workspace on screen: the one in the path, else the last one shown (pages such as a
@@ -301,6 +303,19 @@ function SignedIn({
         workspace={current}
         projectId={projectPath[1]!}
         view={(projectPath[2] as "list" | "settings" | undefined) ?? "board"}
+        onOtherWorkspace={(workspaceId) => {
+          if (!workspaces.some((w) => w.id === workspaceId)) return false;
+          setSelectedId(workspaceId);
+          return true;
+        }}
+      />
+    );
+  } else if (current && ticketPath) {
+    page = (
+      <TicketScreen
+        key={`${current.id} ${ticketPath[1]}`}
+        workspace={current}
+        ticketId={ticketPath[1]!}
         onOtherWorkspace={(workspaceId) => {
           if (!workspaces.some((w) => w.id === workspaceId)) return false;
           setSelectedId(workspaceId);

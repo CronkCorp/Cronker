@@ -119,6 +119,18 @@ function checkKinds(board: Draft[], before: Draft[]): void {
 
 async function write(tx: Tx, clock: Clock, project: Project, board: Draft[]): Promise<void> {
   const kept = board.flatMap((s) => (s.id ? [s.id] : []));
+  const { rows: holding } = await tx.query<{ name: string }>(
+    `select name from statuses where project_id = $1 and not (id = any($2::uuid[]))
+     and exists (select 1 from tickets where tickets.status_id = statuses.id)`,
+    [project.id, kept],
+  );
+  if (holding[0]) {
+    throw new ApiError(
+      409,
+      "status_has_tickets",
+      `${holding[0].name} still holds Tickets. Move them to another Status first.`,
+    );
+  }
   await tx.query("delete from statuses where project_id = $1 and not (id = any($2::uuid[]))", [project.id, kept]);
   for (const [position, status] of board.entries()) {
     if (status.id) {

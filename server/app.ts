@@ -10,6 +10,7 @@ import { ApiError, sendError } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
+import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
 
@@ -48,6 +49,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(githubRoutes(context));
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
+  await app.register(ticketRoutes(context));
 
   const { webRoot } = context.config;
   if (webRoot) await app.register(fastifyStatic, { root: webRoot, wildcard: false });
