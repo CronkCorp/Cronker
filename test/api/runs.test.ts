@@ -65,11 +65,11 @@ describe("starting Runs", () => {
         outcome: null,
         question: null,
         questionBy: null,
-        report: null,
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
         startedAt: "2026-01-01T09:00:00.000Z",
         endedAt: null,
+        lastCallAt: null,
       },
     ]);
     const [run] = runs;
@@ -105,6 +105,8 @@ describe("starting Runs", () => {
         "",
         "- Call `finish` exactly once, as the last thing you do.",
         "- *needs you* takes a Question.",
+        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
+          "and write Reports on it; leave everything else to its Users.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );
@@ -173,7 +175,7 @@ describe("finishing Runs", () => {
 
     const triaged = await finish(ticket.id, asAgent, ada, { outcome: "ready", report: "Clear enough." });
     expect(triaged).toEqual(
-      expect.objectContaining({ state: "finished", outcome: "ready", report: "Clear enough.", endedAt: expect.any(String) }),
+      expect.objectContaining({ state: "finished", outcome: "ready", endedAt: expect.any(String) }),
     );
     // Ready has no Step: the Ticket waits there for a User.
     let current = await ok("GET", `/api/tickets/${ticket.id}`, ada);
@@ -286,7 +288,7 @@ describe("what finish refuses", () => {
 });
 
 describe("a Run whose Ticket a User moved meanwhile", () => {
-  test("finishing it is refused, leaving the Ticket where the User put it", async () => {
+  test("finishing it is refused, since the move stopped it, leaving the Ticket where the User put it", async () => {
     const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
     const [run] = await runsOf(ticket.id, ada);
@@ -295,19 +297,8 @@ describe("a Run whose Ticket a User moved meanwhile", () => {
     const response = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question: "?" });
 
     expect(response.status).toBe(409);
-    expect(response.json.error).toEqual(expect.objectContaining({ code: "ticket_moved", advice: expect.any(String) }));
+    expect(response.json.error).toEqual(expect.objectContaining({ code: "run_stopped", advice: expect.any(String) }));
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Ready"));
-  });
-
-  test("moving it into another Step's Status records no Run beside the running one, even a refused one", async () => {
-    const { ada, ticket, agent, status } = await adaWithAgent();
-    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
-    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
-
-    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Investigate") });
-
-    const runs = await runsOf(ticket.id, ada);
-    expect(runs.map((r: { step: { name: string }; state: string }) => [r.step.name, r.state])).toEqual([["Triage", "running"]]);
   });
 });
 
@@ -342,10 +333,13 @@ describe("at most one running Run per Ticket", () => {
     ]);
 
     expect(responses.map((r) => r.status)).toEqual([200, 200, 200, 200]);
+    // Each move stops the running Run before starting the next, so only the latest is running.
     const runs = await runsOf(ticket.id, ada);
     expect(runs.filter((r: { state: string }) => r.state === "running")).toHaveLength(1);
-    expect(runs).toHaveLength(1);
-    expect(cronk.runner.starts).toHaveLength(1);
+    expect(runs.at(-1).state).toBe("running");
+    expect(runs.slice(0, -1).every((r: { state: string }) => r.state === "stopped")).toBe(true);
+    // Every Run recorded was asked of the Runner, and only those.
+    expect(cronk.runner.starts.map((s) => s.runId).sort()).toEqual(runs.map((r: { id: string }) => r.id).sort());
   });
 });
 
@@ -397,7 +391,7 @@ describe("Runners and Agents", () => {
     expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
-      { id: agent.runnerId, name: "Fake", kind: "fake", createdAt: expect.any(String) },
+      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, createdAt: expect.any(String) },
     ]);
     const notOwn = await call("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: "00000000-0000-0000-0000-000000000000" });
     expect(notOwn.json.error.code).toBe("unknown_runner");
@@ -546,13 +540,12 @@ describe("rounds", () => {
       expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Implement"));
       await finishWith(setup, "done");
     }
-    const third = await finishWith(setup, "changes", { report: "Still broken." });
+    const third = await finishWith(setup, "changes");
 
     expect(third).toEqual(
       expect.objectContaining({
         state: "finished",
         outcome: "needs you",
-        report: "Still broken.",
         question:
           "Code review sent CRONK-1 back by changes 2 times, its round limit, so it comes to you instead. " +
           "Read the latest Reports, then move it on yourself.",

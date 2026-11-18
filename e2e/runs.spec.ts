@@ -35,6 +35,19 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
   await expect(timeline).toContainText("claude-max ran the Triage Step on haiku: running");
   await expect(timeline.getByRole("link", { name: "Session" })).toHaveAttribute("href", "https://claude.ai/code/session_1");
 
+  // During its Run the Agent edits the Ticket and writes a Report; both show up live.
+  const asAgent = { authorization: `Bearer ${secret}` };
+  const edited = await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { headers: asAgent, body: { priority: "high" } });
+  expect(edited.status).toBe(200);
+  await expect(timeline).toContainText("claude-max changed Priority from None to High in its Triage Run");
+  const reported = await cronk.request("POST", `/api/tickets/${ticket.id}/reports`, {
+    headers: asAgent,
+    body: { title: "Findings", body: "The bug is in **parsing**." },
+  });
+  expect(reported.status).toBe(201);
+  const reports = page.getByRole("region", { name: "Reports" });
+  await expect(reports.getByRole("article", { name: "Findings" })).toContainText("The bug is in parsing.");
+
   await page.goto(`${cronk.url}/projects/${project.id}`);
   const board = page.getByRole("region", { name: "Board" });
   await expect(board.getByRole("region", { name: "Triage" })).toContainText("Run running");

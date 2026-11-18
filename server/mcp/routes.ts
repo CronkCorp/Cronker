@@ -39,7 +39,7 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
 
       const asAgent: Api = async (method, path, body) => {
         const response = await api.inject({
-          method: method as "GET" | "POST",
+          method: method as "GET" | "POST" | "PATCH",
           url: path,
           headers: { authorization },
           ...(body === undefined ? {} : { payload: body as object }),

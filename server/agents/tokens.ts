@@ -103,7 +103,8 @@ export const offersBearer = (header: string | undefined): header is string => /^
 export async function authenticateAgent(context: Context, request: FastifyRequest): Promise<AgentCaller | undefined> {
   const header = request.headers.authorization;
   if (!offersBearer(header)) return undefined;
-  const agent = await agentOfToken(context, header);
+  // Once a request's token is accepted, later checks of the same request reuse the Agent.
+  const agent = agentsOfRequests.get(request) ?? (await agentOfToken(context, header));
   agentsOfRequests.set(request, agent);
   if (agent.access === "read" && !safeMethods.has(request.method)) {
     throw new ApiError(403, "read_only_token", `This token of ${agent.name} is read-only.`, {

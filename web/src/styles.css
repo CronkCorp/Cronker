@@ -299,13 +299,19 @@ textarea {
   gap: 0.75rem;
 }
 .description,
+.reports,
 .comments,
 .timeline {
   margin-top: 1.25rem;
 }
+.reports h2,
 .comments h2,
 .timeline h2 {
   font-size: 1rem;
+}
+.reports h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.25rem;
 }
 .comment {
   padding: 0.5rem 0.75rem;
@@ -352,6 +358,9 @@ ul.inbox li {
 }
 ul.inbox small {
   color: var(--muted);
+}
+ul.inbox li button {
+  justify-self: start;
 }
 .narrow {
   max-width: 24rem;
@@ -425,9 +434,15 @@ td.actions {
 .run-state.running {
   color: var(--accent);
 }
+.run-marker.runnerSlot,
+.run-marker.blocked {
+  color: var(--muted);
+}
 .run-marker.failed,
+.run-marker.lost,
 .run-marker.refused,
 .run-state.failed,
+.run-state.lost,
 .run-state.refused {
   color: var(--warn);
 }

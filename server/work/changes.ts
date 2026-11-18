@@ -46,6 +46,9 @@ export const Change = Type.Object({
       "and the default Outcome the Ticket moved on by.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
+  runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Run an Agent made the Change in; null for a User's Change or Cronk's.",
+  }),
 });
 export type Change = Static<typeof Change>;
 
@@ -55,8 +58,8 @@ export interface NewChange {
   to: unknown;
 }
 
-/** Who makes a Change: a User, by id, an Agent, or Cronk itself. */
-export type ChangeActor = string | { kind: "agent"; id: string } | { kind: "cronk" };
+/** Who makes a Change: a User, by id, an Agent during one of its Runs, or Cronk itself. */
+export type ChangeActor = string | { kind: "agent"; id: string; runId: string } | { kind: "cronk" };
 
 export async function recordChanges(
   tx: Tx,
@@ -65,12 +68,13 @@ export async function recordChanges(
   at: Date,
   changes: NewChange[],
 ): Promise<void> {
-  const [userId, agentId] = typeof actor === "string" ? [actor, null] : actor.kind === "agent" ? [null, actor.id] : [null, null];
+  const [userId, agentId, runId] =
+    typeof actor === "string" ? [actor, null, null] : actor.kind === "agent" ? [null, actor.id, actor.runId] : [null, null, null];
   for (const change of changes) {
     await tx.query(
-      `insert into changes (workspace_id, ticket_id, actor_user_id, actor_agent_id, at, field, from_value, to_value)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [ticket.workspaceId, ticket.id, userId, agentId, at, change.field, json(change.from), json(change.to)],
+      `insert into changes (workspace_id, ticket_id, actor_user_id, actor_agent_id, run_id, at, field, from_value, to_value)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [ticket.workspaceId, ticket.id, userId, agentId, runId, at, change.field, json(change.from), json(change.to)],
     );
   }
 }
@@ -85,7 +89,7 @@ export async function changesOf(db: Db, ticketId: string): Promise<Change[]> {
        case when users.id is null and agents.id is null then json_build_object('kind', 'cronk', 'name', 'Cronk')
          else ${actorColumn("users", "agents")} end as actor,
        changes.at, changes.field,
-       changes.from_value as from, changes.to_value as to
+       changes.from_value as from, changes.to_value as to, changes.run_id as "runId"
      from changes left join users on users.id = changes.actor_user_id
      left join agents on agents.id = changes.actor_agent_id
      where changes.ticket_id = $1 order by changes.seq`,

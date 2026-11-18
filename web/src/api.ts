@@ -150,6 +150,8 @@ export interface TicketSummary {
   createdBy: string;
   createdAt: string;
   lastRun: { id: string; state: RunState } | null;
+  /** What it waits for before it gets the Run it needs, if it needs one. */
+  waiting: "runnerSlot" | "blocked" | null;
 }
 
 export interface Ticket extends TicketSummary {
@@ -233,6 +235,17 @@ export interface Comment {
   mentions: Mention[];
 }
 
+/** Markdown a Run wrote on its Ticket. */
+export interface Report {
+  id: string;
+  ticketId: string;
+  runId: string;
+  agent: { id: string; name: string };
+  title: string;
+  body: string;
+  createdAt: string;
+}
+
 /** Who made a Change: a User, an Agent, or Cronk itself. */
 export type ChangeActor = Actor | { kind: "cronk"; name: "Cronk" };
 
@@ -257,9 +270,11 @@ export interface Change {
     | RelationKind;
   from: unknown;
   to: unknown;
+  /** The Run an Agent made the Change in; null for a User's. */
+  runId: string | null;
 }
 
-export type RunState = "running" | "finished" | "failed" | "refused";
+export type RunState = "running" | "finished" | "failed" | "lost" | "stopped" | "refused";
 
 /** One agent execution Cronk started for a Ticket. */
 export interface Run {
@@ -272,7 +287,6 @@ export interface Run {
   outcome: string | null;
   question: string | null;
   questionBy: "agent" | "cronk" | null;
-  report: string | null;
   endReason: string | null;
   sessionUrl: string | null;
   startedAt: string;
@@ -286,7 +300,19 @@ export interface ReviewItem {
   status: { id: string; name: string };
 }
 
-export type InboxItem = ReviewItem;
+/** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */
+export interface RunItem {
+  kind: "run";
+  ticket: TicketSummary;
+  run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
+}
+
+export type InboxItem = ReviewItem | RunItem;
+
+/** A Workspace's settings beyond its name, set by its Admins. */
+export interface WorkspaceSettings {
+  lostRunMinutes: number;
+}
 
 export interface Inbox {
   count: number;
@@ -338,6 +364,9 @@ export const api = {
   workspace: (id: string) => call<Workspace>("GET", ws(id)),
   createWorkspace: (name: string) => call<WorkspaceSummary>("POST", "/api/workspaces", { name }),
   renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
+  workspaceSettings: (id: string) => call<WorkspaceSettings>("GET", `${ws(id)}/settings`),
+  changeWorkspaceSettings: (id: string, change: Partial<WorkspaceSettings>) =>
+    call<WorkspaceSettings>("PATCH", `${ws(id)}/settings`, change),
   members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
   addMember: (id: string, email: string) =>
     call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email }),
@@ -398,6 +427,7 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
@@ -415,6 +445,7 @@ export const api = {
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
+  retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),

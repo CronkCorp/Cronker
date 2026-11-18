@@ -39,6 +39,7 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/projects/{projectId}/statuses/{statusId}/step",
     "/api/projects/{projectId}/tickets",
     "/api/runners",
+    "/api/runners/{runnerId}",
     "/api/runs/{runId}",
     "/api/runs/{runId}/brief",
     "/api/runs/{runId}/finish",
@@ -49,6 +50,8 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/tickets/{ticketId}/comments",
     "/api/tickets/{ticketId}/relations",
     "/api/tickets/{ticketId}/relations/{relationId}",
+    "/api/tickets/{ticketId}/reports",
+    "/api/tickets/{ticketId}/retry",
     "/api/tickets/{ticketId}/runs",
     "/api/tickets/{ticketId}/timeline",
     "/api/workspaces",
@@ -63,6 +66,7 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/workspaces/{workspaceId}/pending-adds",
     "/api/workspaces/{workspaceId}/pending-adds/{userId}",
     "/api/workspaces/{workspaceId}/projects",
+    "/api/workspaces/{workspaceId}/settings",
     "/api/workspaces/{workspaceId}/tickets/{key}",
   ]);
   expect(document.components.securitySchemes.agentToken).toEqual(expect.objectContaining({ type: "http", scheme: "bearer" }));
