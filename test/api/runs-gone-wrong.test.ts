@@ -501,6 +501,24 @@ describe("removing an Agent", () => {
     }
   });
 
+  test("a Sub-Ticket created while it is being removed doesn't inherit it", async () => {
+    const { ada, project, ticket, agent } = await adaWithAgent();
+    // With no Runner its Runs are refused at once, so nothing runs on after the test ends.
+    await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: null });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+
+    const create = (i: number) => call("POST", `/api/projects/${project.id}/tickets`, ada, { title: `Part ${i}`, parentId: ticket.id });
+    const created = await Promise.all([
+      ...Array.from({ length: 10 }, (_, i) => create(i)),
+      ok("DELETE", `/api/agents/${agent.id}`, ada).then(() => null),
+      ...Array.from({ length: 10 }, (_, i) => create(10 + i)),
+    ]);
+
+    for (const { json } of created.filter((c) => c !== null)) {
+      expect((await ok("GET", `/api/tickets/${json.id}`, ada)).delegateId).toBeNull();
+    }
+  });
+
   test("a Ticket waiting for its Runner's slot stops waiting, and the slot goes to the next Agent's Ticket", async () => {
     const { workspace, ada, project, ticket, agent, runner, status } = await runningRun();
     await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: 1 });

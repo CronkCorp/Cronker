@@ -306,7 +306,9 @@ export async function createTicket(
       // A Sub-Ticket inherits its parent's Delegation and Autonomous Delegation, and so its Assignee, whose Agent the
       // Delegate is.
       assigneeId = parent.assigneeId;
-      delegateId = parent.delegateId;
+      // Held like any Delegation, so removing the Agent waits and then undelegates the Sub-Ticket too, or, removed
+      // first, the Agent is no Delegate to inherit.
+      delegateId = parent.delegateId !== null && (await holdAgentInUse(tx, parent.delegateId)) ? parent.delegateId : null;
       autonomousDelegation = parent.autonomousDelegation;
     } else if (creator.kind === "agent") {
       const run = input.runId === undefined ? null : await runningRunOf(tx, creator, input.runId);
@@ -362,6 +364,12 @@ export async function createTicket(
     await startRunIfNeeded(context, tx, ticket.id, now);
     return withMentions(tx, ticket);
   });
+}
+
+/** Whether the Agent is still in use, holding it until the transaction ends so it isn't removed meanwhile. */
+async function holdAgentInUse(tx: Tx, agentId: string): Promise<boolean> {
+  const { rowCount } = await tx.query("select 1 from agents where id = $1 and removed_at is null for share", [agentId]);
+  return rowCount !== 0;
 }
 
 /** The Agent's running Run of that id, with its Ticket and the Ticket's Assignee; refused if it has none. */
