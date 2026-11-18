@@ -419,3 +419,39 @@ describe("the Ticket's timeline", () => {
     expect(response.status).toBe(404);
   });
 });
+
+describe("Ticket keys in Markdown", () => {
+  test("keys of Tickets in the Workspace are mentions, whatever the case they're written in", async () => {
+    const { workspace, cookie, project } = await newProject();
+    const ops = await createProject(cookie, workspace.id, "Operations", "OPS");
+    const one = await createTicket(cookie, project.id, { title: "One" });
+    const opsOne = await createTicket(cookie, ops.id, { title: "Ops one" });
+
+    const ticket = await createTicket(cookie, project.id, {
+      title: "Mentions",
+      description: "After CRONK-1 and ops-1, again CRONK-1; not CRONK-9, NOPE-1, XCRONK-1 or CRONK-1x.",
+    });
+
+    expect(ticket.mentions).toEqual([
+      { text: "CRONK-1", key: "CRONK-1", ticketId: one.id },
+      { text: "ops-1", key: "OPS-1", ticketId: opsOne.id },
+    ]);
+    expect((await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json()).mentions).toEqual(
+      ticket.mentions,
+    );
+    const edited = await (await edit(cookie, ticket.id, { description: "Only CRONK-2 now" })).json();
+    expect(edited.mentions).toEqual([{ text: "CRONK-2", key: "CRONK-2", ticketId: ticket.id }]);
+  });
+
+  test("keys in a Comment are mentions", async () => {
+    const { cookie, project } = await newProject();
+    const one = await createTicket(cookie, project.id, { title: "One" });
+
+    const response = await cronk.request("POST", `/api/tickets/${one.id}/comments`, {
+      cookie,
+      body: { body: "Same as CRONK-1, unlike CRONK-2." },
+    });
+
+    expect((await response.json()).mentions).toEqual([{ text: "CRONK-1", key: "CRONK-1", ticketId: one.id }]);
+  });
+});
