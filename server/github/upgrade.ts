@@ -3,8 +3,8 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
-import { githubNotSetUp, isAnyAdmin, requiredEvents, requiredPermissions, webhooksPath } from "./app.js";
-import { appInstallations, appJwt, appOnGitHub, appWebhook, under, type AppKey } from "./client.js";
+import { appToken, isAnyAdmin, requiredEvents, requiredPermissions, webhookSecret, webhooksPath } from "./app.js";
+import { appInstallations, appOnGitHub, appWebhook, under } from "./client.js";
 
 /**
  * The checklist for upgrading an App GitHub's manifest flow can't change, such as one created
@@ -23,7 +23,8 @@ export const Checklist = Type.Object({
   missingPermissions: Permissions,
   missingEvents: Type.Array(Type.String()),
   webhook: Type.Union([Type.Object({ url: Type.String({ format: "uri" }), secret: Type.String() }), Type.Null()], {
-    description: "The webhook URL and secret to paste into the App's settings, or null when GitHub already sends deliveries to Cronk, signed.",
+    description:
+      "The webhook URL and secret to paste into the App's settings, or null once GitHub sends deliveries to Cronk signed with Cronk's secret. GitHub never shows a secret, so one Cronk made is listed until a delivery comes signed with it.",
   }),
   installationsNotAccepted: Type.Array(
     Type.Object({ account: Type.String(), htmlUrl: Type.String({ format: "uri" }), missingPermissions: Permissions }),
@@ -41,47 +42,42 @@ function missingOf(has: Record<string, string> | undefined, names: string[]): Re
   return missing;
 }
 
-/** The App's id and private key, decrypted, or a refusal while the installation has no App. */
-export async function appKey({ db, config }: Context): Promise<AppKey> {
-  const { rows } = await db.query<{ app_id: string; private_key: string }>("select app_id, private_key from github_app");
-  const row = rows[0];
-  if (!row) throw githubNotSetUp();
-  return { appId: Number(row.app_id), privateKey: requireSecretBox(config).open(row.private_key) };
-}
-
 /** Cronk's webhook secret for the App, made now if the App was created without one. */
-async function webhookSecret({ db, config }: Context): Promise<string> {
-  const box = requireSecretBox(config);
-  const made = box.seal(randomBytes(32).toString("hex"));
+async function secretToPaste(context: Context): Promise<string> {
   // Only the first of two Admins looking at once stores theirs; both then read the same one.
-  await db.query("update github_app set webhook_secret = $1 where webhook_secret is null", [made]);
-  const { rows } = await db.query<{ webhook_secret: string }>("select webhook_secret from github_app");
-  return box.open(rows[0]!.webhook_secret);
+  await context.db.query("update github_app set webhook_secret = $1 where webhook_secret is null", [
+    requireSecretBox(context.config).seal(randomBytes(32).toString("hex")),
+  ]);
+  return (await webhookSecret(context))!.secret;
 }
 
 export async function checklist(context: Context, userId: string): Promise<Checklist> {
-  const { config, clock } = context;
+  const { config } = context;
   if (!(await isAnyAdmin(context.db, userId))) {
     throw new ApiError(403, "not_admin", "Only an Admin can see what the GitHub App lacks, since that includes its webhook secret.");
   }
-  const jwt = appJwt(await appKey(context), clock.now());
+  const jwt = await appToken(context);
   const [app, hook, installations] = await Promise.all([
     appOnGitHub(config, jwt),
     appWebhook(config, jwt),
     appInstallations(config, jwt),
   ]);
   const url = `${config.publicUrl.origin}${webhooksPath}`;
+  const missingPermissions = missingOf(app.permissions, Object.keys(requiredPermissions));
+  const signedWithOurs = hook?.hasSecret && (await webhookSecret(context))?.confirmed;
+  // An installation's owner can accept only what the App itself asks for.
+  const askedOfInstallations = installationPermissions.filter((name) => !missingPermissions[name]);
   const settingsPath =
     app.owner.type === "Organization"
       ? `/organizations/${encodeURIComponent(app.owner.login)}/settings/apps/${encodeURIComponent(app.slug)}`
       : `/settings/apps/${encodeURIComponent(app.slug)}`;
   return {
     settingsUrl: under(config.github.url, settingsPath).toString(),
-    missingPermissions: missingOf(app.permissions, Object.keys(requiredPermissions)),
+    missingPermissions,
     missingEvents: requiredEvents.filter((event) => !app.events?.includes(event)),
-    webhook: hook?.url === url && hook.hasSecret ? null : { url, secret: await webhookSecret(context) },
+    webhook: hook?.url === url && signedWithOurs ? null : { url, secret: await secretToPaste(context) },
     installationsNotAccepted: installations
-      .map((i) => ({ account: i.account.login, htmlUrl: i.html_url, missingPermissions: missingOf(i.permissions, installationPermissions) }))
+      .map((i) => ({ account: i.account.login, htmlUrl: i.html_url, missingPermissions: missingOf(i.permissions, askedOfInstallations) }))
       .filter((i) => Object.keys(i.missingPermissions).length > 0),
   };
 }

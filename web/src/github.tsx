@@ -188,7 +188,11 @@ function AppChecklist() {
                 Webhook secret
                 <input readOnly value={webhook.secret} onFocus={(event) => event.currentTarget.select()} />
               </label>
-              <small>Only Admins see the secret. Cronk refuses deliveries not signed with it.</small>
+              <small>
+                Only Admins see the secret. Cronk refuses deliveries not signed with it. GitHub never shows a secret, so
+                this stays listed until a delivery arrives signed with it; to check at once, redeliver one from the
+                App's Advanced settings on GitHub.
+              </small>
               </div>
             </>
           )}

@@ -4,7 +4,7 @@ import type { Db } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
-import { convertManifest, under } from "./client.js";
+import { appJwt, convertManifest, under } from "./client.js";
 
 /**
  * The installation's one GitHub App, created through GitHub's manifest flow: Cronk hands
@@ -154,8 +154,9 @@ export async function finishManifestFlow(context: Context, code: string, state: 
   const app = await convertManifest(config, code);
   const { rowCount } = await db.query(
     `insert into github_app (app_id, slug, name, owner_login, html_url, client_id, client_secret, webhook_secret,
-                             private_key, created_by, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing`,
+                             webhook_secret_confirmed_at, private_key, created_by, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, case when $8::text is null then null else $11::timestamptz end, $9, $10, $11)
+     on conflict do nothing`,
     [
       app.id,
       app.slug,
@@ -173,4 +174,28 @@ export async function finishManifestFlow(context: Context, code: string, state: 
   // Another Admin's flow may have finished first.
   if (rowCount === 0) throw appExists();
   return { name: app.name, githubAccount: app.owner.login, htmlUrl: app.html_url };
+}
+
+/** A JSON web token GitHub takes as the App itself, or a refusal while the installation has no App. */
+export async function appToken({ db, config, clock }: Context): Promise<string> {
+  const { rows } = await db.query<{ app_id: string; private_key: string }>("select app_id, private_key from github_app");
+  const row = rows[0];
+  if (!row) throw githubNotSetUp();
+  return appJwt({ appId: Number(row.app_id), privateKey: requireSecretBox(config).open(row.private_key) }, clock.now());
+}
+
+export interface WebhookSecret {
+  secret: string;
+  /** Whether GitHub is known to sign deliveries with it. */
+  confirmed: boolean;
+}
+
+/** The App's webhook secret, decrypted, or nothing if there is no App or it has none. */
+export async function webhookSecret({ db, config }: Context): Promise<WebhookSecret | undefined> {
+  const { rows } = await db.query<{ webhook_secret: string | null; confirmed: boolean }>(
+    "select webhook_secret, webhook_secret_confirmed_at is not null as confirmed from github_app",
+  );
+  const row = rows[0];
+  if (!row?.webhook_secret) return undefined;
+  return { secret: requireSecretBox(config).open(row.webhook_secret), confirmed: row.confirmed };
 }

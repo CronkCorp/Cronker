@@ -75,13 +75,15 @@ describe("upgrading the GitHub App", () => {
     app.webhookUrl = webhook.url;
     app.webhookSecret = webhook.secret;
 
+    // GitHub never shows the secret, so the first delivery signed with it is what confirms it.
+    expect((await (await checklist(cookie)).json()).webhook).toEqual(webhook);
+    const delivered = await cronk.github.deliver(app, "ping", { zen: "Upgraded." });
+    expect(await delivered.json()).toEqual({ applied: true });
     expect(await (await checklist(cookie)).json()).toMatchObject({
       missingPermissions: {},
       missingEvents: [],
       webhook: null,
     });
-    const delivered = await cronk.github.deliver(app, "ping", { zen: "Upgraded." });
-    expect(await delivered.json()).toEqual({ applied: true });
   });
 
   test("a webhook pointing elsewhere is listed", async () => {
@@ -93,6 +95,24 @@ describe("upgrading the GitHub App", () => {
     const { webhook } = await (await checklist(cookie)).json();
 
     expect(webhook).toEqual({ url: `${cronk.url}/api/github/webhooks`, secret: expect.any(String) });
+  });
+
+  test("a webhook already pointing at Cronk with a secret Cronk doesn't know is listed, with the secret to paste", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const app = await createSignInOnlyApp(cookie);
+    app.webhookUrl = `${cronk.url}/api/github/webhooks`;
+    app.webhookSecret = "a secret the Admin made up on GitHub";
+
+    const { webhook } = await (await checklist(cookie)).json();
+
+    expect(webhook).toEqual({ url: `${cronk.url}/api/github/webhooks`, secret: expect.any(String) });
+    expect((await cronk.github.deliver(app, "ping", { zen: "Not ours." })).status).toBe(401);
+    expect((await (await checklist(cookie)).json()).webhook).toEqual(webhook);
+
+    app.webhookSecret = webhook.secret;
+    expect((await cronk.github.deliver(app, "ping", { zen: "Ours." })).status).toBe(200);
+    expect((await (await checklist(cookie)).json()).webhook).toBeNull();
   });
 
   test("an App owned by an organization links to its settings under the organization", async () => {
@@ -125,6 +145,24 @@ describe("upgrading the GitHub App", () => {
     ]);
     acme.accept();
     expect((await (await checklist(cookie)).json()).installationsNotAccepted).toEqual([]);
+  });
+});
+
+describe("upgrading the GitHub App: installations", () => {
+  test("an installation isn't listed for permissions the App itself doesn't ask for yet", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const app = await createSignInOnlyApp(cookie);
+    cronk.github.install(app, "acme", ["api"]);
+
+    const before = await (await checklist(cookie)).json();
+    expect(before.installationsNotAccepted).toEqual([]);
+
+    app.permissions = { ...app.permissions, metadata: "read", pull_requests: "read" };
+    const after = await (await checklist(cookie)).json();
+    expect(after.installationsNotAccepted).toEqual([
+      { account: "acme", htmlUrl: expect.any(String), missingPermissions: { metadata: "read", pull_requests: "read" } },
+    ]);
   });
 });
 
