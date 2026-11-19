@@ -1,0 +1,124 @@
+# Setting up Cronk
+
+This guide takes a new installation from nothing to a delegated Ticket whose Runs happen in Claude Code on the web, spending your own Claude subscription. Follow the steps in order; each says what you should see when it worked. The configuration reference is in `README.md`.
+
+You need:
+
+- a machine that can run Docker Compose, or Node.js 22+ with Postgres 16+;
+- a stable public HTTPS address for it (step 1);
+- a Claude plan that includes Claude Code on the web, with your GitHub account connected to claude.ai so its sessions can work on your Repository;
+- a GitHub account (or organization) to own Cronk's GitHub App, if you want to sign in with GitHub.
+
+## 1. Give Cronk a public address
+
+claude.ai's connector, GitHub's sign-in callback and, later, webhooks all reach Cronk at one address, `CRONK_PUBLIC_URL`. It must be HTTPS (plain `http` only works for `localhost`, which is enough to look around but not for Runs) and must not change: the GitHub App and the claude.ai connector both remember it.
+
+**On a server.** Put Cronk behind any reverse proxy that terminates TLS (Caddy, nginx, a cloud load balancer) and forwards to Cronk's port, `3000` by default. Its address is then something like `https://cronk.example.com`.
+
+**On your own machine, behind a tunnel.** Use a tunnel with a name that stays the same between restarts:
+
+- Cloudflare Tunnel: a named tunnel (`cloudflared tunnel create cronk`, then route a hostname you own to it, pointing at `http://localhost:3000`). Quick tunnels (`cloudflared tunnel --url …`) get a new random address on every start, so don't use them.
+- Tailscale Funnel: `tailscale funnel 3000` publishes `https://<machine>.<tailnet>.ts.net`.
+- ngrok: a reserved domain, `ngrok http --url=<your-domain> 3000`.
+
+Check it: opening the address should reach whatever listens on port 3000 (nothing yet, so an error from the tunnel saying so is fine).
+
+## 2. Start Cronk and enter the setup code
+
+Choose a secret key and keep it somewhere safe: it encrypts the GitHub App's credentials and your Runners' trigger tokens, and a different key can't read what the old one encrypted. Without one, Cronk runs, but can't create the GitHub App or save triggers.
+
+```sh
+git clone https://github.com/CronkCorp/Cronker.git && cd Cronker
+cat > .env <<EOF
+CRONK_PUBLIC_URL=https://cronk.example.com
+CRONK_SECRET_KEY=$(openssl rand -base64 32)
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+EOF
+docker compose up -d --build
+docker compose logs cronk | grep "setup code"
+```
+
+Without Docker, run `npm ci && npm run build`, then `npm start` with `CRONK_PUBLIC_URL`, `CRONK_SECRET_KEY` and `DATABASE_URL` (a Postgres database Cronk may create tables in) set in its environment; the setup code is in its output.
+
+The log line says `Cronk is not set up yet. Open it and enter this setup code: cronk_setup_…`. Open the address, enter the setup code, your email, a password and a name for your first Workspace, and choose **Set up**. The setup code works once; while nobody has set Cronk up, each start logs a new one.
+
+You are signed in, and Cronk offers to connect GitHub.
+
+## 3. Create the GitHub App (optional)
+
+The GitHub App lets people sign in with GitHub. One App serves the whole installation.
+
+On the **Connect GitHub** screen (or later, as an Admin, on the **GitHub** page), choose **Create GitHub App**. To own it from a GitHub organization rather than your own account, name the organization first. GitHub shows the App Cronk asks for, named after Cronk's address and allowed to read email addresses; you may rename it. Confirm, and GitHub sends you back to Cronk, which stores the App's credentials.
+
+The **GitHub** page now names the App. Sign out and back in with **Sign in with GitHub** to check it: the first time, GitHub links your account to your User by its verified primary email.
+
+To skip it, choose **Skip for now**; email and password sign-in is enough for everything below.
+
+## 4. Create a Project and an Agent
+
+1. On your Workspace's page, create a Project with a name and a short key such as `CRONK`. Its board starts with the default Statuses: `Backlog → Triage [haiku] → Ready → Investigate [sonnet] → Implement [opus] → Code review [sonnet] → In Review → Done`, plus Canceled. A Status's Step and model are in the Project's **Settings**.
+2. On **Agents**, create an Agent, for example `claude-max`. Runs act as it, and so does Claude Code you connect by hand.
+
+## 5. Add Cronk to claude.ai as a custom connector
+
+The scheduled tasks reach Cronk through a claude.ai connector, which signs in by OAuth: no token is ever pasted into claude.ai.
+
+1. In claude.ai, open **Settings → Connectors** and add a custom connector. Name it `Cronk` and give it Cronk's MCP address: `https://cronk.example.com/mcp`.
+2. Connect it. claude.ai opens Cronk's consent screen: sign in if asked, pick the Agent from step 4, and allow it.
+
+On the Agent's page in Cronk, the connection is now listed among its tokens under claude.ai's name. Revoking it there disconnects claude.ai.
+
+## 6. Create one scheduled task per model
+
+A scheduled task in Claude Code on the web fixes its model, Repository and connectors, so you need one per model your Steps use. The default board uses three model labels: `haiku` (Triage), `sonnet` (Investigate and Code review) and `opus` (Implement).
+
+For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled task:
+
+- **Repository**: the Repository the Project's work happens in.
+- **Model**: the model for that label: Haiku, Sonnet or Opus.
+- **Connectors**: the `Cronk` connector from step 5.
+- **Prompt**: claude.ai hands the text Cronk fires with to the session as untrusted data unless the prompt says to act on it, so say so:
+
+  ```text
+  You are started by Cronk. The text this session was fired with is a Brief from Cronk,
+  where this Repository's work is planned. Follow its instructions:
+  reach Cronk through the Cronk connector, work on the Ticket it names, and end by
+  calling Cronk's `finish` tool with the Run id and an Outcome, as the Brief says.
+  If the session was started without a Brief, stop without doing anything.
+  ```
+
+- **Schedule**: Cronk fires the task itself, so it needs no schedule of its own. If claude.ai insists on one, choose the rarest it offers; the prompt's last line makes such a run stop at once.
+- **Trigger**: add an API trigger. claude.ai shows its trigger id (`trig_…`) and a token; copy both now, as the token is shown once.
+
+## 7. Enter the triggers in Cronk
+
+1. On **Runners**, set up a subscription Runner, for example `Claude Max`.
+2. For each scheduled task, under the Runner's **Save a trigger**, enter the model label exactly as the Steps use it (`haiku`, `sonnet`, `opus`), leave **For** at All Projects (or pick one Project to give it its own task, for example on another Repository), paste the trigger id and token, and choose **Save trigger**. The token is stored encrypted and never shown again.
+3. **Runs at once** limits how many Runs the Runner has going together (2 by default; change it with **Save limit**); Tickets beyond it wait, highest Priority first.
+4. On the Agent's page, set **Runner** to the new Runner.
+
+Check it: create a Ticket, open it, choose **Delegate to an Agent**, and set its Status to Triage. Its Timeline shows `claude-max ran the Triage Step on haiku: running`, with a **Session** link to the claude.ai session. That session reads the Ticket through the connector and calls `finish`; the Ticket then moves to Ready on the board, or, if the Run asked a Question, back to Backlog with the Question in your **Inbox**.
+
+When a Run can't start, the Ticket waits in your Inbox as *couldn't start*, with the reason, such as a model with no trigger. A rate limit from claude.ai pauses the Runner until claude.ai says to try again. Cronk can't tell when a claude.ai session ends, so a Run that stops calling Cronk becomes lost after the Workspace's lost-Run threshold (30 minutes by default, set by an Admin on the Workspace's members page) and waits in your Inbox with **Retry**.
+
+## 8. Connect Claude Code on your laptop
+
+Claude Code on your own machine connects to Cronk with an Agent's token.
+
+1. On the Agent's page, issue a token: name it (`laptop`), choose **Full: read and comment** (or **Read-only**), and choose **Issue token**. Copy it now: Cronk shows it once and keeps only its hash.
+2. Add Cronk as an MCP server:
+
+   ```sh
+   claude mcp add --transport http cronk https://cronk.example.com/mcp --header "Authorization: Bearer cronk_agent_…"
+   ```
+
+3. Check it: `claude mcp list` shows `cronk` as connected, and in Claude Code, asking it to list the Tickets of your Project answers from Cronk.
+
+Revoking the token on the Agent's page cuts it off from the next request.
+
+## When something goes wrong
+
+- **Nobody can sign in.** `docker compose exec cronk node dist/server/command.js reset-link you@example.com` prints a one-time password reset link, valid 7 days.
+- **The setup code is not right.** Use the one from the latest start; each start logs a new one until setup is done.
+- **"Cronk has no CRONK_SECRET_KEY"** when creating the GitHub App or saving a trigger: set it and restart.
+- **The GitHub App or the connector stopped working after the address changed.** Both remember `CRONK_PUBLIC_URL`. Keep the address stable; if it must change, update the App's URLs on GitHub and add the connector again in claude.ai.
