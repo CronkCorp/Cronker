@@ -294,9 +294,6 @@
 .status-rename input {
   flex: 1;
 }
-.kind-select {
-  width: auto !important;
-}
 .status-row-tools {
   display: flex;
   gap: 4px;
@@ -886,9 +883,6 @@
 .detail-line {
   font-size: 13px;
 }
-.inline-select {
-  width: auto !important;
-}
 .keys-line kbd {
   font-size: 11px;
 }
@@ -1147,15 +1141,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
-}
-.panel-table {
-  padding: 0;
-  gap: 0;
-  overflow: hidden;
-}
-.panel-table > .panel-head {
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
 }
 /* A table cell of row actions stays a cell, so its row's border runs under it too; its buttons sit in a row inside. */
 .cell-actions > div {

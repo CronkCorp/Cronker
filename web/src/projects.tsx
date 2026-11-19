@@ -749,7 +749,7 @@ function StatusRow({
 
 function KindSelect(props: ComponentProps<"select">) {
   return (
-    <select {...props} className="kind-select">
+    <select {...props} className="inline-select">
       {statusKinds.map(({ kind, label }) => (
         <option key={kind} value={kind}>
           {label}

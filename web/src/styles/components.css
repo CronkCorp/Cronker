@@ -103,6 +103,10 @@ textarea.markdown-source {
   margin-top: 3px;
   flex: none;
 }
+/* A select as wide as its options, inside a row. */
+.inline-select {
+  width: auto !important;
+}
 .form-row {
   display: flex;
   flex-wrap: wrap;
@@ -152,6 +156,11 @@ textarea.markdown-source {
   padding: 0;
   gap: 0;
   overflow: hidden;
+}
+/* A flush panel's rows run to its edges; its head keeps the panel's padding, ruled off from them. */
+.panel-flush > .panel-head {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
 }
 
 /* Settings layout: the list of a settings page's sections beside them; above them below 760px. */

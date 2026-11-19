@@ -662,7 +662,7 @@ function Members({
             id: "pending-adds",
             label: "Added, not joined yet",
             children: (
-              <Panel title="Added, not joined yet" id="pending-adds" className="panel-table">
+              <Panel title="Added, not joined yet" id="pending-adds" className="panel-flush">
                 <table aria-labelledby="pending-adds-heading">
                   <tbody>
                     {pending.map((add) => (
@@ -704,7 +704,7 @@ function Members({
             id: "members",
             label: "Members",
             children: (
-            <Panel title="Members" id="members" className="panel-table">
+            <Panel title="Members" id="members" className="panel-flush">
               {members === null ? (
                 <p className="muted">Loading…</p>
               ) : (
