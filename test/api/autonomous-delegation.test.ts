@@ -255,6 +255,36 @@ describe("Verification", () => {
     expect(notUnverified.json.error.code).toBe("not_unverified");
   });
 
+  test("Reopen is refused once the Status of the Step that completed it is removed, leaving it Unverified in Done", async () => {
+    const { ada, project, ticket, status } = await completedUnverified();
+    // Implement's done Outcome moves Tickets to Code review: until it moves them elsewhere, removing Code review is refused.
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Implement")}/step`, ada, {
+      brief: "Implement it.",
+      model: "opus",
+      outcomes: [
+        { name: "done", statusId: status("In Review"), default: true, needsYou: false, countsAsRound: false },
+        { name: "needs you", statusId: status("Ready"), default: false, needsYou: true, countsAsRound: false },
+      ],
+    });
+    await ok("DELETE", `/api/projects/${project.id}/statuses/${status("Code review")}`, ada);
+    expect((await ok("GET", `/api/tickets/${ticket.id}/completion`, ada)).reopen).toEqual({ kind: "refused" });
+    const comments = await ok("GET", `/api/tickets/${ticket.id}/comments`, ada);
+
+    const refused = await call("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "The tests don't pass." });
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toEqual({
+      code: "reopen_status_gone",
+      message:
+        "The Status of the Step that completed CRONK-1 has been removed, so Reopen has nowhere to send it. " +
+        "Accept it, then move it where it should go.",
+    });
+    expect(await ticketOf(ticket.id, ada)).toEqual(
+      expect.objectContaining({ statusId: status("Done"), verification: "unverified" }),
+    );
+    expect(await ok("GET", `/api/tickets/${ticket.id}/comments`, ada)).toEqual(comments);
+  });
+
   test("a plain Status change out of Done is refused for an Unverified Ticket", async () => {
     const { ada, ticket, status } = await completedUnverified();
 
