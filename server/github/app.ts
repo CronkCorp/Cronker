@@ -10,8 +10,8 @@ import { convertManifest, under } from "./client.js";
  * The installation's one GitHub App, created through GitHub's manifest flow: Cronk hands
  * the browser a manifest to post to GitHub, GitHub creates the App and sends the browser
  * back with a code, and Cronk trades the code for the App's credentials, storing its
- * secrets encrypted. This milestone uses the App only to sign Users in; Repository access
- * and webhooks come to the same App later.
+ * secrets encrypted. The App signs Users in, reads the Repositories it's installed on and
+ * sends Cronk webhooks.
  *
  * Any Admin may create it, during setup or later, but only while the installation has
  * none, so no Admin can swap the App every Workspace signs in through.
@@ -36,6 +36,23 @@ const stateLifetimeMs = 60 * 60 * 1000;
 
 export const callbackPath = "/api/github/callback";
 export const createdPath = "/api/github/app/created";
+export const webhooksPath = "/api/github/webhooks";
+
+/**
+ * What the App needs from GitHub: reading email addresses to sign Users in, and reading
+ * Pull Requests, checks and commit statuses on the Repositories it's installed on. Never
+ * write access.
+ */
+export const requiredPermissions: Readonly<Record<string, "read">> = {
+  emails: "read",
+  metadata: "read",
+  pull_requests: "read",
+  checks: "read",
+  statuses: "read",
+};
+
+/** The webhook events the App subscribes to. */
+export const requiredEvents: readonly string[] = ["pull_request", "pull_request_review", "check_run", "check_suite", "status"];
 
 export async function findApp(db: Db): Promise<GitHubApp | null> {
   const { rows } = await db.query<GitHubApp>(
@@ -108,7 +125,10 @@ export async function startManifestFlow(
       callback_urls: [`${origin}${callbackPath}`],
       public: false,
       request_oauth_on_install: false,
-      default_permissions: { emails: "read" },
+      default_permissions: { ...requiredPermissions },
+      default_events: [...requiredEvents],
+      // GitHub generates the webhook secret and hands it back with the App's other credentials.
+      hook_attributes: { url: `${origin}${webhooksPath}`, active: true },
     },
   };
 }

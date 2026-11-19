@@ -26,7 +26,9 @@ describe("creating the GitHub App", () => {
       redirect_url: `${cronk.url}/api/github/app/created`,
       callback_urls: [`${cronk.url}/api/github/callback`],
       public: false,
-      default_permissions: { emails: "read" },
+      default_permissions: { emails: "read", metadata: "read", pull_requests: "read", checks: "read", statuses: "read" },
+      default_events: ["pull_request", "pull_request_review", "check_run", "check_suite", "status"],
+      hook_attributes: { url: `${cronk.url}/api/github/webhooks`, active: true },
     });
 
     const back = await navigate(await postManifestToGitHub(start));
@@ -34,6 +36,14 @@ describe("creating the GitHub App", () => {
     expect(back.headers.get("location")).toBe("/github?created=1");
 
     const [created] = cronk.github.apps;
+    // Exactly these, nothing with write access, so installing the App on an account or organization is an easy yes.
+    expect(start.manifest.default_permissions).toEqual({
+      emails: "read",
+      metadata: "read",
+      pull_requests: "read",
+      checks: "read",
+      statuses: "read",
+    });
     expect(await (await cronk.request("GET", "/api/github/app")).json()).toEqual({
       app: { name: created!.name, githubAccount: "ada", htmlUrl: `${cronk.github.url}/apps/${created!.slug}` },
     });
