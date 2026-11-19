@@ -444,15 +444,15 @@ function ItemBody({
         <>
           <p className="detail-line">{sentence(summary(item))}</p>
           <TicketStatus ticket={ticket} />
-          <TicketPullRequests ticketId={ticket.id} />
-          <LatestReport ticketId={ticket.id} />
+          <TicketPullRequests ticketId={ticket.id} workspaceId={workspace.id} />
+          <LatestReport ticketId={ticket.id} workspaceId={workspace.id} />
         </>
       );
     case "unverified":
       return (
         <>
           <p className="detail-line">{sentence(summary(item))}</p>
-          <LatestReport ticketId={ticket.id} />
+          <LatestReport ticketId={ticket.id} workspaceId={workspace.id} />
         </>
       );
     case "run":
@@ -549,12 +549,16 @@ function Reopen({
   );
 }
 
-/** The Ticket's latest Report, rendered inline, if it has one. */
-function LatestReport({ ticketId }: { ticketId: string }) {
+/** The Ticket's latest Report, rendered inline, if it has one; fetched again after each live event, like the Inbox. */
+function LatestReport({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
   const [report, setReport] = useState<Report | null>(null);
-  useEffect(() => {
-    api.reports(ticketId).then((all) => setReport(all.at(-1) ?? null), () => setReport(null));
-  }, [ticketId]);
+  const latest = useLatest();
+  const load = useCallback(
+    () => latest(api.reports(ticketId), (all) => setReport(all.at(-1) ?? null), () => setReport(null)),
+    [ticketId, latest],
+  );
+  useEffect(load, [load]);
+  useLiveEvents(workspaceId, load);
   if (!report) return null;
   return (
     <div className="report-card">
@@ -571,12 +575,13 @@ function LatestReport({ ticketId }: { ticketId: string }) {
   );
 }
 
-/** The Ticket's Pull Requests, as rows, if it has any. */
-function TicketPullRequests({ ticketId }: { ticketId: string }) {
+/** The Ticket's Pull Requests, as rows, if it has any; fetched again after each live event, like the Inbox. */
+function TicketPullRequests({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
-  useEffect(() => {
-    api.pullRequests(ticketId).then(setPullRequests, () => setPullRequests([]));
-  }, [ticketId]);
+  const latest = useLatest();
+  const load = useCallback(() => latest(api.pullRequests(ticketId), setPullRequests, () => setPullRequests([])), [ticketId, latest]);
+  useEffect(load, [load]);
+  useLiveEvents(workspaceId, load);
   return <PullRequestRows pullRequests={pullRequests} />;
 }
 

@@ -41,7 +41,7 @@ async function inboxWithReport(page: Page, cronk: StartedCronk) {
   await page.getByRole("navigation").getByRole("link", { name: /^Inbox/ }).click();
   const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
   await expect(items).toHaveCount(3);
-  return { items, detail: page.getByRole("region", { name: "Selected item" }) };
+  return { items, detail: page.getByRole("region", { name: "Selected item" }), call, workspaceId: workspace.id as string };
 }
 
 test("an Inbox item shows its kind, key, title and snippet, a Ticket to review its Report's title", async ({ page, cronk }) => {
@@ -108,4 +108,17 @@ test("a Run gone wrong and a Discovered Ticket each read as sentences in the det
 
   await items.nth(1).getByRole("button").click();
   await expect(detail).toContainText(/while on CRONK-1: delegate, move or dismiss it\./);
+});
+
+test("the selected item's Report follows a new Version saved while it is open, in the list and the detail", async ({ page, cronk }) => {
+  const { items, detail, call, workspaceId } = await inboxWithReport(page, cronk);
+  await items.nth(2).getByRole("button").click();
+  await expect(detail.getByRole("link", { name: "Code review report" })).toBeVisible();
+
+  const { items: waiting } = await call("GET", `/api/workspaces/${workspaceId}/inbox`);
+  const { report } = waiting.find((item: { kind: string }) => item.kind === "review");
+  await call("PATCH", `/api/documents/${report.id}`, { baseVersion: 1, title: "Code review, second look" });
+
+  await expect(items.nth(2)).toContainText("Report: Code review, second look");
+  await expect(detail.getByRole("link", { name: "Code review, second look" })).toBeVisible();
 });
