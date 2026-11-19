@@ -39,6 +39,9 @@ export async function linkedDocumentsOf(db: Db, viewer: Viewer, ticketId: string
   return rows;
 }
 
+/** A Document as a link's Change names it: its id, and its title then. */
+type Named = { id: string; title: string };
+
 /**
  * Links a Document of the Ticket's Project or of its Workspace to the Ticket. A User links on any Ticket; an Agent
  * only during its own running Run on it.
@@ -53,9 +56,13 @@ export async function linkDocument(
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     const actor = await linkingActor(tx, caller, ticket);
+    // Held until the link is made, so a delete of the Document either went first, and it is unknown, or waits.
+    if (isUuid(documentId)) await tx.query("select 1 from documents where id = $1 for key share", [documentId]);
     // A Document of another Workspace answers as unknown, even to a User who belongs to both.
     const document = await findDocument(tx, caller, documentId);
-    if (!document || document.workspaceId !== ticket.workspaceId) throw new ApiError(400, "unknown_document", "That Document isn't in this Workspace.");
+    if (!document || document.workspaceId !== ticket.workspaceId) {
+      throw new ApiError(400, "unknown_document", "That Document isn't in this Workspace.");
+    }
     if (document.projectId !== null && document.projectId !== ticket.projectId) {
       throw new ApiError(400, "document_outside_project", `${document.title} is in another Project's page tree.`, {
         rule: "A Ticket links Documents of its own Project or of the Workspace, not of another Project.",
@@ -68,8 +75,9 @@ export async function linkDocument(
       [ticket.id, document.id, ticket.workspaceId, context.clock.now()],
     );
     if (!rowCount) throw new ApiError(409, "document_already_linked", `${ticket.key} already links ${document.title}.`);
-    await recordLinkChange(context, tx, ticket, actor, { id: document.id, title: document.title }, "linked");
-    return { id: document.id, projectId: document.projectId, title: document.title };
+    const linked: LinkedDocument = { id: document.id, projectId: document.projectId, title: document.title };
+    await recordLinkChange(context, tx, ticket, actor, { from: null, to: { id: linked.id, title: linked.title } });
+    return linked;
   });
 }
 
@@ -80,18 +88,16 @@ export async function unlinkDocument(context: Context, caller: Caller, ticketId:
     if (!ticket) throw ticketNotFound();
     const actor = await linkingActor(tx, caller, ticket);
     const { rows } = isUuid(documentId)
-      ? await tx.query<{ id: string; title: string }>(
-          `delete from linked_documents using documents, document_versions versions
-           where linked_documents.ticket_id = $1 and linked_documents.document_id = $2
-             and documents.id = linked_documents.document_id
-             and versions.document_id = documents.id and versions.number = documents.version
-           returning documents.id, versions.title`,
+      ? await tx.query<LinkedDocument>(
+          `select ${columns} from ${fromLinks}
+           where linked_documents.ticket_id = $1 and linked_documents.document_id = $2 for update of linked_documents`,
           [ticket.id, documentId],
         )
       : { rows: [] };
     const unlinked = rows[0];
     if (!unlinked) throw new ApiError(404, "not_found", `${ticket.key} links no such Document.`);
-    await recordLinkChange(context, tx, ticket, actor, unlinked, "unlinked");
+    await tx.query("delete from linked_documents where ticket_id = $1 and document_id = $2", [ticket.id, unlinked.id]);
+    await recordLinkChange(context, tx, ticket, actor, { from: { id: unlinked.id, title: unlinked.title }, to: null });
   });
 }
 
@@ -102,31 +108,16 @@ async function linkingActor(tx: Tx, caller: Caller, ticket: TicketRow): Promise<
 }
 
 /**
- * Records a Document linked or unlinked on the Ticket's timeline, naming it as it is titled now, and tells the
- * Workspace's live streams the Ticket changed.
+ * Records a Document linked (`to`) or unlinked (`from`) on the Ticket's timeline, named as it is titled now, and
+ * tells the Workspace's live streams the Ticket changed.
  */
 async function recordLinkChange(
   { clock, live }: Context,
   tx: Tx,
   ticket: TicketRow,
   actor: ChangeActor,
-  document: { id: string; title: string },
-  linkedOrUnlinked: "linked" | "unlinked",
+  change: { from: Named; to: null } | { from: null; to: Named },
 ): Promise<void> {
-  const [from, to] = linkedOrUnlinked === "linked" ? [null, document] : [document, null];
-  await recordChanges(tx, ticket, actor, clock.now(), [{ field: "linkedDocument", from, to }]);
+  await recordChanges(tx, ticket, actor, clock.now(), [{ field: "linkedDocument", ...change }]);
   live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-}
-
-/** Tells the Workspace's live streams that each Ticket linking the Document changed, before it is deleted. */
-export async function publishLinkingTickets({ live }: Context, tx: Tx, document: { id: string; workspaceId: string }): Promise<void> {
-  const { rows } = await tx.query<{ ticketId: string; projectId: string }>(
-    `select tickets.id as "ticketId", tickets.project_id as "projectId"
-     from linked_documents join tickets on tickets.id = linked_documents.ticket_id
-     where linked_documents.document_id = $1 order by linked_documents.seq`,
-    [document.id],
-  );
-  for (const { ticketId, projectId } of rows) {
-    live.publish(tx, document.workspaceId, { type: "ticket.changed", projectId, ticketId });
-  }
 }

@@ -141,10 +141,10 @@ describe("Linked Documents", () => {
 
     const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
 
-    const ada_ = { kind: "user", id: user.id, name: "ada@example.com" };
+    const byAda = { kind: "user", id: user.id, name: "ada@example.com" };
     expect(timeline.slice(1)).toEqual([
       expect.objectContaining({
-        actor: ada_,
+        actor: byAda,
         field: "linkedDocument",
         from: null,
         to: { id: design.id, title: "Sign-in design" },
@@ -152,7 +152,7 @@ describe("Linked Documents", () => {
         runId: null,
       }),
       expect.objectContaining({
-        actor: ada_,
+        actor: byAda,
         field: "linkedDocument",
         from: { id: design.id, title: "GitHub sign-in design" },
         to: null,

@@ -8,7 +8,6 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
-import { publishLinkingTickets } from "./linked-documents.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace. Each save
@@ -411,7 +410,16 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
         },
       );
     }
-    await publishLinkingTickets(context, tx, document);
+    // It drops out of its links: the Tickets linking it show the change.
+    const linking = await tx.query<{ ticketId: string; projectId: string }>(
+      `select tickets.id as "ticketId", tickets.project_id as "projectId"
+       from linked_documents join tickets on tickets.id = linked_documents.ticket_id
+       where linked_documents.document_id = $1 order by linked_documents.seq`,
+      [document.id],
+    );
+    for (const { ticketId, projectId } of linking.rows) {
+      context.live.publish(tx, document.workspaceId, { type: "ticket.changed", projectId, ticketId });
+    }
     await tx.query("delete from documents where id = $1", [document.id]);
     await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
   });

@@ -55,9 +55,9 @@ const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents " +
   "(only Users delete them). During your running Run on a Ticket " +
   "you may also edit its description, Priority, Labels, due date and estimate, split it into Sub-Tickets, write " +
-  "Reports on it, link and unlink its Documents and finish the Run. A Ticket you file outside your Ticket's " +
-  "Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add " +
-  "blocks from it. Anything else is refused with the rule and what to do instead.";
+  "Reports on it, link Documents to it and unlink them, and finish the Run. A Ticket you file outside your Ticket's " +
+  "Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User delegates, moves or dismisses it you " +
+  "may edit it, title included, and add blocks from it. Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(

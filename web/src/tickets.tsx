@@ -77,7 +77,7 @@ export function TicketScreen({
     latestTimeline(api.timeline(ticketId), setTimeline);
     latestRuns(api.runs(ticketId), setRuns);
   }, [ticketId, latestTimeline, latestRuns]);
-  const loadRelations = useCallback(() => {
+  const loadLinks = useCallback(() => {
     latestRelations(api.relations(ticketId), setRelations, fail);
     latestLinkedDocuments(api.linkedDocuments(ticketId), setLinkedDocuments, fail);
   }, [ticketId, latestRelations, latestLinkedDocuments]);
@@ -102,8 +102,8 @@ export function TicketScreen({
     latestReports(api.reports(ticketId), setReports, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
     latestRuns(api.runs(ticketId), setRuns, fail);
-    loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
+    loadLinks();
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadLinks]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -112,7 +112,7 @@ export function TicketScreen({
     if (all || (thisTicket && event.type === "ticket.changed")) {
       latestTicket(api.ticket(ticketId), setTicket, fail);
       loadTimeline();
-      loadRelations();
+      loadLinks();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
     if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
@@ -133,7 +133,7 @@ export function TicketScreen({
       latestTicket(saved, setTicket);
       await saved;
       loadTimeline();
-      loadRelations();
+      loadLinks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -184,7 +184,7 @@ export function TicketScreen({
             relations={relations}
             suggestions={projectTickets.filter((t) => t.id !== ticket.id)}
             onChanged={() => {
-              loadRelations();
+              loadLinks();
               loadTimeline();
             }}
           />
@@ -193,7 +193,7 @@ export function TicketScreen({
             workspaceId={workspace.id}
             linked={linkedDocuments}
             onChanged={() => {
-              loadRelations();
+              loadLinks();
               loadTimeline();
             }}
           />
@@ -637,12 +637,19 @@ function LinkedDocuments({
 }) {
   const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
   const [unlinkError, setUnlinkError] = useState<string | null>(null);
+  const [treesError, setTreesError] = useState<string | null>(null);
   // Page trees aren't live, so they are read again on opening the list and after each link.
   const loadTrees = useCallback(() => {
     Promise.all([
       api.documents({ kind: "project", id: ticket.projectId }),
       api.documents({ kind: "workspace", id: workspaceId }),
-    ]).then(([project, workspace]) => setTrees({ project, workspace }), () => setTrees(null));
+    ]).then(
+      ([project, workspace]) => {
+        setTreesError(null);
+        setTrees({ project, workspace });
+      },
+      (e: Error) => setTreesError(e.message),
+    );
   }, [ticket.projectId, workspaceId]);
   useEffect(loadTrees, [loadTrees]);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
@@ -680,6 +687,7 @@ function LinkedDocuments({
         </ul>
       )}
       {unlinkError && <p role="alert">{unlinkError}</p>}
+      {treesError && <p role="alert">{treesError}</p>}
       <form onSubmit={onSubmit} className="relation-form">
         <label>
           Link a Document
@@ -687,24 +695,24 @@ function LinkedDocuments({
             <option value="" disabled>
               Choose a Document
             </option>
-            {offered && offered.project.length > 0 && (
-              <optgroup label="This Project">
-                {offered.project.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.title}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {offered && offered.workspace.length > 0 && (
-              <optgroup label="The Workspace">
-                {offered.workspace.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.title}
-                  </option>
-                ))}
-              </optgroup>
-            )}
+            {offered &&
+              (
+                [
+                  ["This Project", offered.project],
+                  ["The Workspace", offered.workspace],
+                ] as const
+              ).map(
+                ([label, documents]) =>
+                  documents.length > 0 && (
+                    <optgroup key={label} label={label}>
+                      {documents.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ),
+              )}
           </select>
         </label>
         <button type="submit" disabled={busy}>

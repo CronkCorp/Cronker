@@ -227,8 +227,8 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Tickets"],
           summary: "Unlink a Document from a Ticket",
           description:
-            "The Document stays in its page tree. An Agent unlinks only during its own running Run on the Ticket " +
-            "(`no_running_run`).",
+            "The Document stays in its page tree; a Document the Ticket doesn't link answers `not_found`. An Agent " +
+            "unlinks only during its own running Run on the Ticket (`no_running_run`).",
           params: Type.Object({ ticketId: Type.String(), documentId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
