@@ -64,6 +64,7 @@ export interface StartedCronk {
   upgrade(): Promise<void>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
   command(...args: string[]): Promise<CommandResult>;
+  /** Closes Cronk and drops what it was started with; stopping it again does nothing. */
   stop(): Promise<void>;
 }
 
@@ -87,6 +88,9 @@ export interface StartCronkOptions {
    */
   migrateBefore?: string;
 }
+
+/** How many ports `startCronk()` and `upgrade()` try before giving up, each picked afresh. */
+const maxBootAttempts = 5;
 
 const commandScript = fileURLToPath(new URL("../../server/command.ts", import.meta.url));
 
@@ -122,32 +126,48 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
 
   const attachmentsDirectory = await mkdtemp(join(tmpdir(), "cronk-attachments-"));
   const removeAttachments = () => rm(attachmentsDirectory, { recursive: true, force: true });
-  // `upgrade()` restarts Cronk on a fresh port: another test may have taken the old one while it stood free.
-  let port = await freePort();
-  let url = `http://127.0.0.1:${port}`;
+  let url = "";
   const secretKey = options.noSecretKey ? undefined : randomBytes(32).toString("base64");
+  // Cronk's public address must name its port before it listens, so the port is picked first; another test may
+  // take it before Cronk listens on it, and then Cronk is started again on another. What the Cronk that could not
+  // listen wrote to the log, such as a setup code the next one replaces, is dropped.
   const boot = async (migrateBefore?: string): Promise<Cronk> => {
-    const started = await createCronk({
-      config: {
-        publicUrl: new URL(url),
-        databaseUrl: database.url,
-        host: "127.0.0.1",
-        port,
-        webRoot: options.webRoot,
-        secretKey,
-        github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
-        claudeApiUrl: new URL(claude.apiUrl),
-        attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
-      },
-      clock,
-      logStream,
-      runnerKinds: { fake: runner.kind },
-      migrateBefore,
-    });
-    await started.listen();
-    return started;
+    for (let attempt = 1; ; attempt++) {
+      const port = await freePort();
+      const candidate = `http://127.0.0.1:${port}`;
+      const logged = logs.length;
+      const started = await createCronk({
+        config: {
+          publicUrl: new URL(candidate),
+          databaseUrl: database.url,
+          host: "127.0.0.1",
+          port,
+          webRoot: options.webRoot,
+          secretKey,
+          github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
+          claudeApiUrl: new URL(claude.apiUrl),
+          attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
+        },
+        clock,
+        logStream,
+        runnerKinds: { fake: runner.kind },
+        migrateBefore,
+      });
+      try {
+        await started.listen();
+        url = candidate;
+        return started;
+      } catch (error) {
+        await started.close();
+        if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt === maxBootAttempts) throw error;
+        logs.splice(logged);
+      }
+    }
   };
   let cronk: Cronk;
+  // Whether `cronk` is closed, as it is when `upgrade()` could not start the next one, so `stop()` closes it only once.
+  let closed = false;
+  let stopped: Promise<void> | undefined;
   try {
     cronk = await boot(options.migrateBefore);
   } catch (error) {
@@ -179,9 +199,9 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async upgrade() {
       await cronk.close();
-      port = await freePort();
-      url = `http://127.0.0.1:${port}`;
+      closed = true;
       cronk = await boot();
+      closed = false;
     },
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
       const all: Record<string, string> = { ...headers };
@@ -204,9 +224,13 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
         );
       });
     },
-    async stop() {
-      await cronk.close();
-      await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
+    stop() {
+      // A test's afterEach may stop this Cronk again when the next test's start failed: the second stop does nothing.
+      stopped ??= (async () => {
+        if (!closed) await cronk.close();
+        await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
+      })();
+      return stopped;
     },
   };
 }
