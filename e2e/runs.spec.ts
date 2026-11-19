@@ -47,6 +47,11 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
   expect(reported.status).toBe(201);
   const reports = page.getByRole("region", { name: "Reports" });
   await expect(reports.getByRole("article", { name: "Findings" })).toContainText("The bug is in parsing.");
+  // The Report is a Document with Versions, leading back to its Ticket.
+  await reports.getByRole("link", { name: "Findings" }).click();
+  await expect(page.getByRole("heading", { name: "Findings" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Versions" })).toContainText("claude-max");
+  await expect(page.getByRole("link", { name: "Report on its Ticket" })).toHaveAttribute("href", `/tickets/${ticket.id}`);
 
   await page.goto(`${cronk.url}/projects/${project.id}`);
   const board = page.getByRole("region", { name: "Board" });
