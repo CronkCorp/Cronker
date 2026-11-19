@@ -124,14 +124,14 @@ export function DocumentScreen({
   const tree: Tree = document.projectId
     ? { kind: "project", id: document.projectId }
     : { kind: "workspace", id: document.workspaceId };
+  // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
+  const home = document.ticketId
+    ? { path: `/tickets/${document.ticketId}`, name: "Report on its Ticket" }
+    : { path: treePage(tree), name: tree.kind === "project" ? "Project Documents" : "Workspace Documents" };
   return (
     <article className="document">
       <p>
-        {document.ticketId ? (
-          <Link to={`/tickets/${document.ticketId}`}>Report on its Ticket</Link>
-        ) : (
-          <Link to={treePage(tree)}>{tree.kind === "project" ? "Project Documents" : "Workspace Documents"}</Link>
-        )}
+        <Link to={home.path}>{home.name}</Link>
       </p>
       <h1>{document.title}</h1>
       <p className="muted">{versionLine(document.version)}</p>
@@ -157,10 +157,7 @@ export function DocumentScreen({
           </div>
           {document.body.trim() ? <Markdown text={document.body} mentions={[]} /> : <p className="muted">Empty.</p>}
           {!document.ticketId && <Move document={document} tree={tree} onMoved={setDocument} />}
-          <Delete
-            document={document}
-            onDeleted={() => navigate(document.ticketId ? `/tickets/${document.ticketId}` : treePage(tree))}
-          />
+          <Delete document={document} onDeleted={() => navigate(home.path)} />
         </>
       )}
       <Versions key={versionsShown} document={document} />

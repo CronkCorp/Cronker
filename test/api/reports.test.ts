@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk, type StartCronkOptions } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk | undefined;
 afterEach(async () => {
@@ -141,6 +142,20 @@ describe("Reports as Documents", () => {
       [1, "agent"],
       [2, "user"],
     ]);
+  });
+
+  test("saving or deleting a Report tells the Workspace's streams, so its Ticket shows it", async () => {
+    const { workspace, ada, project, ticket, asAgent } = await runningRun();
+    const report = await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: "…" });
+    const stream = await openStream(cronk!, ada.cookie!, workspace.id);
+    const changed = { type: "report.changed", data: { projectId: project.id, ticketId: ticket.id, reportId: report.id } };
+
+    await ok("PATCH", `/api/documents/${report.id}`, asAgent, { baseVersion: 1, body: "More." });
+    expect(await stream.next()).toEqual(changed);
+    await ok("DELETE", `/api/documents/${report.id}`, ada);
+    expect(await stream.next()).toEqual(changed);
+    expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([]);
+    stream.close();
   });
 
   test("a Report stays out of page trees: it can't move into one, nor hold a Document under it", async () => {

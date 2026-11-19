@@ -108,7 +108,9 @@ export function TicketScreen({
       loadRelations();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
-    if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
+    if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) {
+      latestReports(api.reports(ticketId), setReports, fail);
+    }
     if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
       latestProject(api.project(project.id), setProject, fail);
     }

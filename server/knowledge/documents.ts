@@ -7,6 +7,7 @@ import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
 
 /**
@@ -85,6 +86,9 @@ export function documentNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Document.");
 }
 
+/** Keeps a query to page-tree Documents: a Report is listed with its Ticket instead. */
+const inAPageTree = "ticket_id is null";
+
 /** Holds the page tree's writes in this transaction, so positions among siblings stay whole. */
 async function lockTree(tx: Tx, tree: Tree): Promise<void> {
   await tx.query("select pg_advisory_xact_lock(hashtext('documents ' || $1 || ' ' || $2))", [
@@ -126,7 +130,7 @@ export async function treeOf(db: Db, tree: Tree): Promise<DocumentSummary[]> {
   const { rows } = await db.query<Row>(
     `with recursive ordered (id, path) as (
        select id, array[position] from documents
-       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null and ticket_id is null
+       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null and ${inAPageTree}
        union all
        select documents.id, ordered.path || documents.position
        from documents join ordered on documents.parent_id = ordered.id
@@ -146,7 +150,7 @@ async function siblingCount(tx: Tx, tree: Tree, parentId: string | null, except:
   const { rows } = await tx.query<{ count: number }>(
     `select count(*)::int as count from documents
      where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
-       and ticket_id is null and id is distinct from $4`,
+       and ${inAPageTree} and id is distinct from $4`,
     [tree.workspaceId, tree.projectId, parentId, except],
   );
   return rows[0]!.count;
@@ -160,7 +164,7 @@ async function requireParentInTree(tx: Tx, tree: Tree, parentId: string): Promis
   const { rowCount } = isUuid(parentId)
     ? await tx.query(
         `select 1 from documents
-         where id = $1 and workspace_id = $2 and project_id is not distinct from $3 and ticket_id is null`,
+         where id = $1 and workspace_id = $2 and project_id is not distinct from $3 and ${inAPageTree}`,
         [parentId, tree.workspaceId, tree.projectId],
       )
     : { rowCount: 0 };
@@ -187,7 +191,7 @@ async function shiftSiblings(
   await tx.query(
     `update documents set position = position + $5
      where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
-       and ticket_id is null and position >= $4 and id is distinct from $6`,
+       and ${inAPageTree} and position >= $4 and id is distinct from $6`,
     [tree.workspaceId, tree.projectId, parentId, from, by, except],
   );
 }
@@ -227,7 +231,7 @@ export async function createDocument(
  * Document locked with its page tree.
  */
 async function moveDocument(tx: Tx, document: Placed, to: { parentId?: string | null; position?: number }): Promise<void> {
-  if (document.position === null) {
+  if (!isInPageTree(document)) {
     throw new ApiError(409, "report_outside_tree", "A Report is listed with its Ticket, so it doesn't move in a page tree.", {
       rule: "A Report is listed with its Ticket instead of in a page tree.",
       advice: "Leave the Report on its Ticket; to keep what it says in a page tree, create a Document there from it.",
@@ -287,6 +291,21 @@ async function versionOf(db: Db | Tx, documentId: string, number: number): Promi
 /** A Document as a write needs it: where it sits, and the number of its current Version. */
 type Placed = Tree & { id: string; version: number; parentId: string | null; position: number | null; ticketId: string | null };
 
+/** Whether the Document sits in a page tree, with a place there, rather than being a Report on a Ticket. */
+const isInPageTree = (document: Placed): document is Placed & { ticketId: null; position: number } =>
+  document.ticketId === null;
+
+/** Tells the Workspace's streams that a Report changed or went, so its Ticket shows it. */
+function reportChanged(live: Live, tx: Tx, report: Placed): void {
+  if (report.ticketId === null) return;
+  live.publish(tx, report.workspaceId, {
+    type: "report.changed",
+    projectId: report.projectId!,
+    ticketId: report.ticketId,
+    reportId: report.id,
+  });
+}
+
 /**
  * The Document's row, locked until the transaction ends, so writes to it queue up. With `tree`, its page tree's
  * lock is taken first: every write holding both takes the tree's before the row's, so none waits on the other.
@@ -322,7 +341,7 @@ export interface DocumentEdit {
  * changed. Moving it makes no Version.
  */
 export async function editDocument(
-  { db, clock }: Context,
+  { db, clock, live }: Context,
   actor: Caller,
   documentId: string,
   edit: DocumentEdit,
@@ -357,6 +376,7 @@ export async function editDocument(
       await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
     }
     if (moving) await moveDocument(tx, document, edit);
+    reportChanged(live, tx, document);
     return (await findDocument(tx, actor, document.id))!;
   });
 }
@@ -404,7 +424,7 @@ export async function compareVersions(
  * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
  * deleted first. Its siblings after it close the gap.
  */
-export async function deleteDocument({ db }: Context, actor: Caller, documentId: string): Promise<void> {
+export async function deleteDocument({ db, live }: Context, actor: Caller, documentId: string): Promise<void> {
   await transaction(db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
@@ -427,6 +447,7 @@ export async function deleteDocument({ db }: Context, actor: Caller, documentId:
       );
     }
     await tx.query("delete from documents where id = $1", [document.id]);
-    if (document.position !== null) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
+    if (isInPageTree(document)) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
+    reportChanged(live, tx, document);
   });
 }
