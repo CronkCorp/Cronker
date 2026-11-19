@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
@@ -372,4 +373,32 @@ export async function compareVersions(
   const from = await readVersion(db, viewer, documentId, numbers.from);
   const to = await readVersion(db, viewer, documentId, numbers.to);
   return { from, to, lines: compareLines(from.body, to.body) };
+}
+
+/**
+ * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
+ * deleted first. Its siblings after it close the gap.
+ */
+export async function deleteDocument({ db }: Context, actor: Caller, documentId: string): Promise<void> {
+  await transaction(db, async (tx) => {
+    const document = await lockDocument(tx, actor, documentId);
+    if (!document) throw documentNotFound();
+    if (actor.kind === "agent") {
+      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Document.`, {
+        rule: "Only a User deletes a Document, so an agent can't remove knowledge.",
+        advice: `Leave the Document as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+      });
+    }
+    await lockTree(tx, document);
+    const children = await siblingCount(tx, document, document.id);
+    if (children > 0) {
+      throw new ApiError(
+        409,
+        "document_has_children",
+        `This Document has ${children} ${children === 1 ? "child" : "children"}; move or delete them first.`,
+      );
+    }
+    await tx.query("delete from documents where id = $1", [document.id]);
+    await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
+  });
 }

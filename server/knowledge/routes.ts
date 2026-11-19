@@ -8,6 +8,7 @@ import {
   compareVersions,
   Comparison,
   createDocument,
+  deleteDocument,
   Document,
   documentNotFound,
   DocumentSummary,
@@ -134,6 +135,25 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),
+    );
+
+    app.delete(
+      "/api/documents/:documentId",
+      {
+        schema: {
+          tags,
+          summary: "Delete a Document",
+          description:
+            "Deletes the Document with all its Versions. Only a User may; Agents are refused with `agent_not_allowed`. " +
+            "Refused with `document_has_children` while Documents sit under it: move or delete them first.",
+          params: DocumentParams,
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await deleteDocument(context, await requireCaller(context, request), request.params.documentId);
+        return reply.code(204).send(null);
+      },
     );
 
     app.get(

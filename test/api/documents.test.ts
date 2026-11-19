@@ -234,3 +234,51 @@ describe("the page tree", () => {
     expect(await treeOf(tree, ada)).toEqual(["Guides", "  Setup"]);
   });
 });
+
+describe("deleting a Document", () => {
+  test("a User deletes a Document, and its siblings close the gap", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    await ok("POST", tree, ada, { title: "Overview" });
+    const draft = await ok("POST", tree, ada, { title: "Draft" });
+    await ok("POST", tree, ada, { title: "Setup" });
+
+    const deleted = await call("DELETE", `/api/documents/${draft.id}`, ada);
+
+    expect(deleted.status).toBe(204);
+    expect((await call("GET", `/api/documents/${draft.id}`, ada)).status).toBe(404);
+    const documents = await ok("GET", tree, ada);
+    expect(documents.map((d: { title: string; position: number }) => [d.title, d.position])).toEqual([
+      ["Overview", 0],
+      ["Setup", 1],
+    ]);
+  });
+
+  test("an Agent can't delete a Document", async () => {
+    const { ada, project, asAgent } = await workspaceWithProject();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, asAgent, { title: "Findings" });
+
+    const refused = await call("DELETE", `/api/documents/${document.id}`, asAgent);
+
+    expect(refused.status).toBe(403);
+    expect(refused.json.error).toEqual(
+      expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Document") }),
+    );
+    expect((await call("GET", `/api/documents/${document.id}`, ada)).status).toBe(200);
+  });
+
+  test("deleting a Document with children is refused until they're moved or deleted", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    const guides = await ok("POST", tree, ada, { title: "Guides" });
+    const setup = await ok("POST", tree, ada, { title: "Setup", parentId: guides.id });
+
+    const refused = await call("DELETE", `/api/documents/${guides.id}`, ada);
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("document_has_children");
+    await ok("PATCH", `/api/documents/${setup.id}`, ada, { parentId: null });
+    expect((await call("DELETE", `/api/documents/${guides.id}`, ada)).status).toBe(204);
+    expect(await treeOf(tree, ada)).toEqual(["Setup"]);
+  });
+});
