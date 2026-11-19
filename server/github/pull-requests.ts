@@ -106,7 +106,7 @@ export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): 
        case when runs.id is null then null
          else json_build_object('runId', runs.id, 'statusId', runs.status_id, 'name', runs.status_name) end
          as "producingStep",
-       (select sent_back.what || jsonb_build_object('at', sent_back.sent_at) from sent_back
+       (select sent_back.failure || jsonb_build_object('at', sent_back.sent_at) from sent_back
         where sent_back.pull_request_id = pull_requests.id and sent_back.ticket_id = pull_request_links.ticket_id
         order by sent_back.seq desc limit 1) as "sentBack"
      from pull_request_links
@@ -204,7 +204,8 @@ async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Pr
  * GitHub's `pull_request` event. A Pull Request of a Repository some Project lists is kept as
  * the delivery reports it, unless Cronk already knows a newer state, and links to the Tickets
  * its title and branch name now. A delivery of its opening records, for each Ticket it links,
- * the Run running on that Ticket then: the producing Step's.
+ * the Run running on that Ticket then: the producing Step's. A check that failed on its latest
+ * commit before Cronk heard of the push sends the Tickets back now.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, pull_request: pr } = payload as {
@@ -259,6 +260,21 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
          set producing_run_id = coalesce(pull_request_links.producing_run_id, excluded.producing_run_id)`,
       [pr.id, repository.id, keys, opened, context.clock.now()],
     );
+  }
+  // A check can fail on a pushed commit before GitHub reports the push: once it is the latest commit, it sends back.
+  if (newest && (state === "open" || state === "draft")) {
+    const { rows: failed } = await tx.query<{ name: string; url: string | null }>(
+      `select name, url from commit_checks where repository_id = $1 and sha = $2 and state = 'failed'
+       order by source_id limit 1`,
+      [repository.id, pr.head.sha],
+    );
+    if (failed[0]) {
+      await sendBackForFailure(context, tx, { id: pr.id, repository: repository.full_name, number: pr.number, url: pr.html_url }, {
+        kind: "check",
+        sha: pr.head.sha,
+        ...failed[0],
+      });
+    }
   }
   if (newest && state === "merged" && !wasMerged) {
     await completeMergedTickets(context, tx, {

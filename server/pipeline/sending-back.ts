@@ -75,29 +75,31 @@ export async function sendBackForFailure(
      join statuses on statuses.id = tickets.status_id
      join runs on runs.id = pull_request_links.producing_run_id
      join statuses producing on producing.id = runs.status_id
+     -- A Status that has lost its Step since produces nothing to send back to.
+     join steps on steps.status_id = producing.id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation and statuses.kind = 'review'
-       and not exists (select 1 from sent_back where sent_back.pull_request_id = $1
-                       and sent_back.ticket_id = tickets.id and sent_back.cause = $2)
      order by tickets.id
      for update of tickets`,
-    [pullRequest.id, causeOf(failure)],
+    [pullRequest.id],
   );
-  const what = describe(failure, pullRequest);
+  const failed = describe(failure, pullRequest);
   for (const { stepStatusId, stepName, ...ticket } of tickets) {
-    const now = context.clock.now();
-    await tx.query(
-      `insert into sent_back (pull_request_id, ticket_id, workspace_id, cause, what, sent_at) values ($1, $2, $3, $4, $5, $6)`,
-      [pullRequest.id, ticket.id, ticket.workspaceId, causeOf(failure), JSON.stringify(shown(failure)), now],
+    // Each head commit and each review sends a Ticket back once.
+    const { rowCount: first } = await tx.query(
+      `insert into sent_back (pull_request_id, ticket_id, workspace_id, cause, failure, sent_at) values ($1, $2, $3, $4, $5, $6)
+       on conflict do nothing`,
+      [pullRequest.id, ticket.id, ticket.workspaceId, causeOf(failure), JSON.stringify(shown(failure)), context.clock.now()],
     );
+    if (!first) continue;
     const decision = await moveByCronk(context, tx, ticket, {
       target: { kind: "sentBack", step: { statusId: stepStatusId, name: stepName } },
       by: { kind: "cronk" },
       stopReason: `${failure.kind === "check" ? "A failing check" : "Requested changes"} sent ${ticket.key} back to ${stepName}.`,
       verification: "unverified",
     });
-    const then = decision.outcome?.needsYou
+    const sentWhere = decision.outcome?.needsYou
       ? `That is past ${stepName}'s round limit, so ${ticket.key} comes to its Assignee instead.`
       : `Sent ${ticket.key} back to ${stepName}.`;
-    await insertComment(context, tx, ticket, { kind: "cronk" }, `${what} ${then}`, null);
+    await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null);
   }
 }

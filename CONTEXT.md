@@ -77,7 +77,7 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor writes on a Ticket, possibly as a reply to another Comment on the same Ticket. Cronk itself writes one when a failing check or a review requesting changes sends a Ticket back, linking it.
+A Markdown message an Actor, or Cronk itself, writes on a Ticket, possibly as a reply to another Comment on the same Ticket. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it.
 _Avoid_: Note, message, post
 
 **Change**:
