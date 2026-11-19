@@ -33,7 +33,13 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
 
   const timeline = page.getByRole("region", { name: "Timeline" });
   await expect(timeline.getByRole("listitem").filter({ hasText: "Triage · claude-max · haiku" })).toContainText("Run running");
-  await expect(page.getByRole("region", { name: "Run" })).toContainText("Triage");
+  // The Run card: its state, when it started, the Agent, the Step and its model, and the session link.
+  const runCard = page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Run" });
+  await expect(runCard).toContainText("Run running");
+  await expect(runCard).toContainText("since");
+  await expect(runCard).toContainText("claude-max");
+  await expect(runCard).toContainText("Triage haiku");
+  await expect(runCard.getByRole("link", { name: "Session" })).toHaveAttribute("href", "https://claude.ai/code/session_1");
   await expect(timeline.getByRole("link", { name: "Session" })).toHaveAttribute("href", "https://claude.ai/code/session_1");
 
   // During its Run the Agent edits the Ticket and writes a Report; both show up live.

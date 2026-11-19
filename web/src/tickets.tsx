@@ -316,7 +316,7 @@ export function TicketScreen({
               />
             )}
           </Fields>
-          <RunCard ticket={ticket} runs={runs} agents={agents} statusModel={status?.step?.model ?? null} onRetried={() => apply(api.retry(ticket.id))} />
+          <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
           <PullRequestRows pullRequests={pullRequests} />
           <Relations
             ticket={ticket}
@@ -670,14 +670,14 @@ function RunCard({
   ticket,
   runs,
   agents,
-  statusModel,
+  step,
   onRetried,
 }: {
   ticket: Ticket;
   runs: Run[];
   agents: Agent[];
-  /** The model of the Step it waits for. */
-  statusModel: string | null;
+  /** The Step it waits for, named after its Status. */
+  step: { name: string; model: string } | null;
   onRetried: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -689,9 +689,13 @@ function RunCard({
       <section aria-label="Run" className="panel side-section run-card">
         <div className="run-card-head">
           <RunState state="waiting" reason={waitingReasons[ticket.waiting]} />
-          {statusModel && <ModelLabel model={statusModel} />}
         </div>
         {delegate && <Actor actor={{ kind: "agent", name: delegate.name }} />}
+        {step && (
+          <p className="small">
+            {step.name} <ModelLabel model={step.model} />
+          </p>
+        )}
         <p className="small muted">Waiting: {waitingReasons[ticket.waiting]}.</p>
       </section>
     );
