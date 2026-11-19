@@ -78,6 +78,7 @@ describe("MCP with an Agent token", () => {
       "add_block",
       "attach_file",
       "comment",
+      "compare_decision_versions",
       "compare_term_versions",
       "compare_versions",
       "create_document",
@@ -621,6 +622,11 @@ describe("MCP with an Agent token", () => {
     expect(first.json).toEqual(expect.objectContaining({ number: 1, body: "It's boring." }));
     const versions = await call(client, "list_decision_versions", { decision: postgres.json.id });
     expect(versions.json.map((v: { number: number }) => v.number)).toEqual([1, 2]);
+    const compared = await call(client, "compare_decision_versions", { decision: postgres.json.id, from: 1, to: 2 });
+    expect(compared.json.lines).toEqual([
+      { change: "same", text: "It's boring." },
+      { change: "added", text: "It works." },
+    ]);
 
     await cronk.request("PATCH", `/api/decisions/${postgres.json.id}`, { cookie, body: { baseVersion: 2, status: "accepted" } });
     const current = await call(client, "read_decision", { decision: postgres.json.id });

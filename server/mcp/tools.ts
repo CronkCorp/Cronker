@@ -700,6 +700,21 @@ export function buildMcpServer(api: Api): McpServer {
   );
 
   server.registerTool(
+    "compare_decision_versions",
+    {
+      title: "Compare two Versions of a Decision",
+      description: "Both Versions, and their bodies compared line by line: each line `same`, `removed` or `added`.",
+      inputSchema: {
+        decision: decisionArgument,
+        from: z.number().int().min(1).describe("The earlier Version's number."),
+        to: z.number().int().min(1).describe("The later Version's number."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ decision, from, to }) => answer(() => get(`${decisionPath(decision)}/versions/compare?from=${from}&to=${to}`)),
+  );
+
+  server.registerTool(
     "propose_decision",
     {
       title: "Propose a Decision",
