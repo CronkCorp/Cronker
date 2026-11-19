@@ -52,8 +52,9 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents " +
-  "(only Users delete them). During your running Run on a Ticket " +
+  "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents " +
+  "(only Users delete them), and propose Decisions and edit their text (only Users change a Decision's status). " +
+  "During your running Run on a Ticket " +
   "you may also edit its description, Priority, Labels, due date and estimate, split it into Sub-Tickets, write " +
   "Reports on it and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, " +
   "waiting for its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add " +
@@ -65,7 +66,8 @@ export function buildMcpServer(api: Api): McpServer {
     {
       instructions:
         "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
-        `each Project and of the Workspace. You act as one Agent. ${rights}`,
+        "each Project and of the Workspace, and recorded choices as numbered Decisions of each Project and of the " +
+        `Workspace. You act as one Agent. ${rights}`,
     },
   );
 
@@ -436,6 +438,95 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
+  );
+
+  const decisionArgument = z.string().min(1).describe("The Decision's id.");
+  const decisionPath = (decision: string) => `/api/decisions/${encodeURIComponent(decision)}`;
+
+  /** The path of a scope's Decisions: the Project's with that key, or the Workspace's own when none is given. */
+  async function decisionsPath(project: string | undefined) {
+    if (project) return `/api/projects/${(await projectByKey(project, ", or leave the Project out for the Workspace's")).id}/decisions`;
+    return `/api/workspaces/${(await ownWorkspace()).id}/decisions`;
+  }
+
+  server.registerTool(
+    "list_decisions",
+    {
+      title: "List Decisions",
+      description:
+        "A Project's Decisions, or the Workspace's own when no Project is given, by number, without their bodies: " +
+        "each with its status (proposed, accepted, rejected, deprecated or superseded) and, when superseded, the " +
+        "Decision replacing it (`supersededById`). Read one with `read_decision`.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(await decisionsPath(project))),
+  );
+
+  server.registerTool(
+    "read_decision",
+    {
+      title: "Read a Decision",
+      description:
+        "A Decision of your Workspace with its Markdown body, at its current Version, whose number a save names as its " +
+        "`baseVersion`; or, given a Version's number, that earlier Version.",
+      inputSchema: {
+        decision: decisionArgument,
+        version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ decision, version }) =>
+      answer(() => get(version === undefined ? decisionPath(decision) : `${decisionPath(decision)}/versions/${version}`)),
+  );
+
+  server.registerTool(
+    "list_decision_versions",
+    {
+      title: "List a Decision's Versions",
+      description: "Each Version of a Decision, oldest first: its number, title, status, the Actor who saved it and when.",
+      inputSchema: { decision: decisionArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ decision }) => answer(() => get(`${decisionPath(decision)}/versions`)),
+  );
+
+  server.registerTool(
+    "propose_decision",
+    {
+      title: "Propose a Decision",
+      description:
+        "Records a choice and its reasoning as a proposed Decision of a Project, or of the Workspace when no Project " +
+        "is given, numbered next there, at Version 1 by your Agent. Only a User accepts, rejects or otherwise changes " +
+        "its status.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+        title: z.string().min(1),
+        body: z.string().optional().describe("Markdown: the context, the choice and its consequences."),
+      },
+    },
+    ({ project, ...input }) => answer(async () => send("POST", await decisionsPath(project), input)),
+  );
+
+  server.registerTool(
+    "edit_decision",
+    {
+      title: "Save a Decision's text",
+      description:
+        "A new title or body saves a Decision as its next Version, by your Agent, based on the Version you read: give " +
+        "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
+        "the current Version as `current`: merge your change into it and save again based on it. Accepted Decisions " +
+        "stay editable. Only Users change a Decision's status, and nobody deletes one.",
+      inputSchema: {
+        decision: decisionArgument,
+        baseVersion: z.number().int().min(1).describe("The number of the Version your save is based on."),
+        title: z.string().min(1).optional(),
+        body: z.string().optional().describe("The whole new body, in Markdown."),
+      },
+    },
+    ({ decision, ...edit }) => answer(() => send("PATCH", decisionPath(decision), edit)),
   );
 
   server.registerTool(
