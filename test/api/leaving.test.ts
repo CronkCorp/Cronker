@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
@@ -112,13 +113,35 @@ describe("removing a User from a Workspace", () => {
     const expected = {
       count: 2,
       items: [
-        { kind: "reassign", ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", assigneeId: null }), formerAssignee },
-        { kind: "reassign", ticket: expect.objectContaining({ id: idle.id, key: "CRONK-2", assigneeId: null }), formerAssignee },
+        {
+          kind: "reassign",
+          ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", assigneeId: null }),
+          formerAssignee,
+          since: "2026-01-01T09:00:00.000Z",
+        },
+        {
+          kind: "reassign",
+          ticket: expect.objectContaining({ id: idle.id, key: "CRONK-2", assigneeId: null }),
+          formerAssignee,
+          since: "2026-01-01T09:00:00.000Z",
+        },
       ],
     };
     expect(await inbox(ada)).toEqual(expected);
     expect(await inbox({ cookie: cy.cookie })).toEqual(expected);
     expect(await inbox({ cookie: dee.cookie })).toEqual({ count: 0, items: [] });
+  });
+
+  test("such a Ticket carries the time its Assignee was removed, not when it entered its Status", async () => {
+    const { workspace, ada, ticket, remove } = await beaAtWork();
+    cronk.clock.advance(hours(4));
+    await remove();
+    cronk.clock.advance(hours(1));
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { title: "Bea's old work" });
+
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items).toEqual([
+      expect.objectContaining({ kind: "reassign", since: "2026-01-01T13:00:00.000Z" }),
+    ]);
   });
 
   test("assigning such a Ticket, or delegating it, takes it out of the Admins' Inbox", async () => {

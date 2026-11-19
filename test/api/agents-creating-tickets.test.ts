@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
@@ -311,6 +312,18 @@ describe("waiting Discovered Tickets in the Inbox", () => {
     return { ...setup, found, inbox, agentEdits };
   }
 
+  test("one carries the time it was filed", async () => {
+    const setup = await runningRun();
+    cronk.clock.advance(hours(2));
+    const found = await ok("POST", `/api/projects/${setup.project.id}/tickets`, setup.asAgent, { title: "Found it", runId: setup.run.id });
+    cronk.clock.advance(hours(1));
+    await ok("PATCH", `/api/tickets/${found.id}`, setup.asAgent, { priority: "low" });
+
+    expect((await ok("GET", `/api/workspaces/${setup.workspace.id}/inbox`, setup.ada)).items).toEqual([
+      expect.objectContaining({ kind: "discovered", since: "2026-01-01T11:00:00.000Z" }),
+    ]);
+  });
+
   test("one waits in its Assignee's Inbox, with the Agent, source Ticket and Run it came from", async () => {
     const { workspace, ada, ticket, agent, run, found, inbox } = await discoveredInInbox();
 
@@ -330,6 +343,7 @@ describe("waiting Discovered Tickets in the Inbox", () => {
             },
           }),
           agent: { id: agent.id, name: "claude-max" },
+          since: "2026-01-01T09:00:00.000Z",
         },
       ],
     });

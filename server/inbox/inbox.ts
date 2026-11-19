@@ -11,11 +11,15 @@ import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../
  * state that put it there changes.
  */
 
+/** When an item began waiting on the User; `when` says what that is for its kind. */
+const Since = (when: string) => Type.String({ format: "date-time", description: `When it began waiting: ${when}.` });
+
 /** A Ticket in a Review Status, waiting for its Assignee's review. */
 export const ReviewItem = Type.Object({
   kind: Type.Literal("review"),
   ticket: TicketSummary,
   status: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
+  since: Since("when the Ticket entered its Status"),
 });
 
 /** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
@@ -23,6 +27,7 @@ export const QuestionItem = Type.Object({
   kind: Type.Literal("question"),
   ticket: TicketSummary,
   question: Question,
+  since: Since("when the Run asked it"),
 });
 
 /**
@@ -48,6 +53,7 @@ export const NeedsYouItem = Type.Object({
         "is an Inbox item of its own.",
     }),
   ),
+  since: Since("when the Ticket entered its Status"),
 });
 
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting where it is for the Delegate's Owner to Retry. */
@@ -60,6 +66,7 @@ export const RunItem = Type.Object({
     step: Type.Object({ statusId: Type.String({ format: "uuid" }), name: Type.String() }),
     endReason: Type.Union([Type.String(), Type.Null()]),
   }),
+  since: Since("when the Run ended, or was refused"),
 });
 
 const StatusRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
@@ -72,6 +79,7 @@ export const UnverifiedItem = Type.Object({
   completedBy: Type.Union([StatusRef, Type.Null()], {
     description: "The Step that completed it, by its Status, where Reopen sends it; null once that Status is removed.",
   }),
+  since: Since("when the Ticket was completed, entering its Done Status"),
 });
 
 /** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
@@ -79,6 +87,7 @@ export const DiscoveredItem = Type.Object({
   kind: Type.Literal("discovered"),
   ticket: TicketSummary,
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Agent that filed it." }),
+  since: Since("when the Agent filed it"),
 });
 
 /** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it to someone. */
@@ -86,6 +95,7 @@ export const ReassignItem = Type.Object({
   kind: Type.Literal("reassign"),
   ticket: TicketSummary,
   formerAssignee: User,
+  since: Since("when its Assignee was removed from the Workspace"),
 });
 
 export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem, ReassignItem]);
@@ -103,13 +113,14 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
   const questions = await openQuestionsFor(db, userId, workspaceId);
   type Row = TicketRow & {
     statusName: string;
+    statusEnteredAt: Date;
     inReview: boolean;
     completedBy: { id: string; name: string } | null;
     handedBack: { outcome: string; step: { statusId: string | null; name: string }; question?: string } | null;
   };
   const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
-       statuses.kind = 'review' as "inReview",
+       tickets.status_entered_at as "statusEnteredAt", statuses.kind = 'review' as "inReview",
        case when completed_by.id is not null then json_build_object('id', completed_by.id, 'name', completed_by.name)
          end as "completedBy",
        case when needs_you.ticket_id is not null then json_build_object(
@@ -126,32 +137,57 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      order by projects.key, tickets.number`,
     [workspaceId, userId, questions.map((q) => q.ticketId)],
   );
-  const summary = ({ statusName: _s, inReview: _r, completedBy: _c, handedBack: _h, ...row }: Row) => ticketSummary(row);
+  const summary = ({ statusName: _s, statusEnteredAt: _e, inReview: _r, completedBy: _c, handedBack: _h, ...row }: Row) => ticketSummary(row);
   const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
   const items: InboxItem[] = [
     // A Ticket reassigned between the two reads drops out with its Question.
     ...questions.flatMap(({ ticketId, ...question }): InboxItem[] => {
       const ticket = tickets.get(ticketId);
-      return ticket ? [{ kind: "question", ticket, question }] : [];
+      return ticket ? [{ kind: "question", ticket, question, since: question.askedAt }] : [];
     }),
     ...rows.flatMap((row): InboxItem[] =>
       row.handedBack
-        ? [{ kind: "needsYou", ticket: summary(row), status: { id: row.statusId, name: row.statusName }, ...row.handedBack }]
+        ? [
+            {
+              kind: "needsYou",
+              ticket: summary(row),
+              status: { id: row.statusId, name: row.statusName },
+              ...row.handedBack,
+              since: row.statusEnteredAt.toISOString(),
+            },
+          ]
         : [],
     ),
     ...rows.flatMap((row): InboxItem[] =>
-      row.inReview ? [{ kind: "review", ticket: summary(row), status: { id: row.statusId, name: row.statusName } }] : [],
+      row.inReview
+        ? [
+            {
+              kind: "review",
+              ticket: summary(row),
+              status: { id: row.statusId, name: row.statusName },
+              since: row.statusEnteredAt.toISOString(),
+            },
+          ]
+        : [],
     ),
     ...rows.flatMap((row): InboxItem[] =>
       row.verification === "unverified"
-        ? [{ kind: "unverified", ticket: summary(row), status: { id: row.statusId, name: row.statusName }, completedBy: row.completedBy }]
+        ? [
+            {
+              kind: "unverified",
+              ticket: summary(row),
+              status: { id: row.statusId, name: row.statusName },
+              completedBy: row.completedBy,
+              since: row.statusEnteredAt.toISOString(),
+            },
+          ]
         : [],
     ),
   ];
   // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents,
   // unless it already waits for its next Run (after a Retry, while its Runner is full).
-  const { rows: wentWrong } = await db.query<TicketRow & { run: Static<typeof RunItem>["run"] }>(
-    `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
+  const { rows: wentWrong } = await db.query<TicketRow & { run: Static<typeof RunItem>["run"]; endedAt: Date }>(
+    `select ${ticketColumns}, tickets.workspace_id as "workspaceId", runs.ended_at as "endedAt",
        json_build_object('id', runs.id, 'state', runs.state,
          'step', json_build_object('statusId', runs.status_id, 'name', runs.status_name), 'endReason', runs.end_reason) as run
      from tickets join projects on projects.id = tickets.project_id
@@ -162,7 +198,9 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      order by projects.key, tickets.number`,
     [workspaceId, userId, wentWrongStates],
   );
-  for (const { run, ...row } of wentWrong) items.push({ kind: "run", ticket: ticketSummary(row), run });
+  for (const { run, endedAt, ...row } of wentWrong) {
+    items.push({ kind: "run", ticket: ticketSummary(row), run, since: endedAt.toISOString() });
+  }
   const { rows: discovered } = await db.query<TicketRow & { agent: { id: string; name: string } }>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
        json_build_object('id', agents.id, 'name', agents.name) as agent
@@ -172,18 +210,25 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      order by projects.key, tickets.number`,
     [workspaceId, userId],
   );
-  for (const { agent, ...row } of discovered) items.push({ kind: "discovered", ticket: ticketSummary(row), agent });
+  for (const { agent, ...row } of discovered) {
+    items.push({ kind: "discovered", ticket: ticketSummary(row), agent, since: row.createdAt.toISOString() });
+  }
   if (workspace.isAdmin) {
-    const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User }>(
+    // Its Assignee's removal is its latest assignee Change, as assigning it again takes it out of the Inbox.
+    const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User; removedAt: Date }>(
       `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
-         json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee"
+         json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee",
+         coalesce((select max(changes.at) from changes where changes.ticket_id = tickets.id and changes.field = 'assignee'),
+           tickets.status_entered_at) as "removedAt"
        from tickets join projects on projects.id = tickets.project_id
        join users on users.id = tickets.former_assignee_id
        where tickets.workspace_id = $1 and tickets.assignee_id is null
        order by projects.key, tickets.number`,
       [workspaceId],
     );
-    for (const { formerAssignee, ...row } of toReassign) items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee });
+    for (const { formerAssignee, removedAt, ...row } of toReassign) {
+      items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee, since: removedAt.toISOString() });
+    }
   }
   return { count: items.length, items };
 }

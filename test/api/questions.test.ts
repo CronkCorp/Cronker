@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
@@ -104,6 +105,7 @@ describe("where a Question shows", () => {
         step: { statusId: status("Investigate"), name: "Investigate" },
         askedAt: "2026-01-01T09:00:00.000Z",
       },
+      since: "2026-01-01T09:00:00.000Z",
     });
   });
 });
@@ -230,17 +232,19 @@ describe("Tickets moved by needs you", () => {
   test("wait in the Assignee's Inbox beside the Question until they move again", async () => {
     const setup = await investigating();
     const { workspace, ada, ticket, status } = setup;
+    cronk.clock.advance(hours(1));
     const item = await ask(setup, "Blue or green?");
     const inbox = () => ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
 
     expect((await inbox()).items).toEqual([
-      expect.objectContaining({ kind: "question" }),
+      expect.objectContaining({ kind: "question", since: "2026-01-01T10:00:00.000Z" }),
       {
         kind: "needsYou",
         ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1" }),
         status: { id: status("Backlog"), name: "Backlog" },
         outcome: "needs you",
         step: { statusId: status("Investigate"), name: "Investigate" },
+        since: "2026-01-01T10:00:00.000Z",
       },
     ]);
 
@@ -248,8 +252,9 @@ describe("Tickets moved by needs you", () => {
     await ok("POST", `/api/questions/${item.question.id}/dismiss`, ada);
     expect((await inbox()).items.map((i: { kind: string }) => i.kind)).toEqual(["needsYou"]);
     // Editing anything but its Status keeps it there.
+    cronk.clock.advance(hours(1));
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { title: "Pick a colour, please" });
-    expect((await inbox()).count).toBe(1);
+    expect((await inbox()).items).toEqual([expect.objectContaining({ kind: "needsYou", since: "2026-01-01T10:00:00.000Z" })]);
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Ready") });
     expect(await inbox()).toEqual({ count: 0, items: [] });
@@ -302,6 +307,7 @@ describe("needs you at a round limit", () => {
       question:
         "Code review sent CRONK-1 back by changes once, its round limit, so it comes to you instead. " +
         "Read the latest Reports, then move it on yourself.",
+      since: "2026-01-01T09:00:00.000Z",
     });
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });

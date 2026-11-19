@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
@@ -331,12 +332,23 @@ describe("the Inbox", () => {
           ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", verification: "unverified" }),
           status: { id: status("Done"), name: "Done" },
           completedBy: { id: status("Code review"), name: "Code review" },
+          since: "2026-01-01T09:00:00.000Z",
         },
       ],
     });
 
     await ok("POST", `/api/tickets/${ticket.id}/accept`, ada);
     expect(await inboxOf(workspace.id, ada)).toEqual({ count: 0, items: [] });
+  });
+
+  test("an Unverified completion carries the time its Run completed it", async () => {
+    const setup = await inCodeReview();
+    cronk.clock.advance(hours(3));
+    await ok("POST", `/api/runs/${setup.run.id}/finish`, setup.asAgent, { outcome: "complete" });
+
+    expect((await inboxOf(setup.workspace.id, setup.ada)).items).toEqual([
+      expect.objectContaining({ kind: "unverified", since: "2026-01-01T12:00:00.000Z" }),
+    ]);
   });
 
   test("Reopening it removes it from the Inbox", async () => {

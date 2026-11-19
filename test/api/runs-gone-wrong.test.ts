@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
@@ -63,8 +64,10 @@ const states = async (ticketId: string, as: Request) =>
 describe("failed Runs", () => {
   test("a Run its Runner reports ended without finishing puts its Ticket in the Delegate's Owner's Inbox, where it stays", async () => {
     const { ada, ticket, run, status, inbox } = await runningRun();
+    cronk.clock.advance(hours(2));
 
     await cronk.runner.endWithoutFinishing(run.id, "The session crashed.");
+    cronk.clock.advance(hours(1));
 
     expect(await inbox()).toEqual({
       count: 1,
@@ -78,6 +81,7 @@ describe("failed Runs", () => {
             step: { statusId: status("Triage"), name: "Triage" },
             endReason: "The session crashed.",
           },
+          since: "2026-01-01T11:00:00.000Z",
         },
       ],
     });
