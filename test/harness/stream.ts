@@ -21,9 +21,18 @@ export interface OpenStream {
  * response has started, which is after the server has subscribed the stream, so changes the
  * test makes from then on are seen.
  */
-export async function openStream(cronk: StartedCronk, cookie: string, workspaceId: string): Promise<OpenStream> {
+export function openStream(cronk: StartedCronk, cookie: string, workspaceId: string): Promise<OpenStream> {
+  return openEvents(cronk, cookie, `/api/workspaces/${workspaceId}/events`);
+}
+
+/** Opens the signed-in User's own Runners' event stream, as `openStream` opens a Workspace's. */
+export function openRunnerStream(cronk: StartedCronk, cookie: string): Promise<OpenStream> {
+  return openEvents(cronk, cookie, "/api/runners/events");
+}
+
+async function openEvents(cronk: StartedCronk, cookie: string, path: string): Promise<OpenStream> {
   const abort = new AbortController();
-  const response = await fetch(new URL(`/api/workspaces/${workspaceId}/events`, cronk.url), {
+  const response = await fetch(new URL(path, cronk.url), {
     headers: { cookie, accept: "text/event-stream" },
     signal: abort.signal,
   });

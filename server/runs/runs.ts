@@ -266,6 +266,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   );
   if (inserted.rowCount === 0) return "none";
   if (!runner) return "started";
+  runnerChanged(context, tx, { runnerId: ticket.runnerId!, ownerId: ticket.runnerOwnerId! });
 
   const start: RunToStart = {
     runId,
@@ -294,13 +295,14 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
         // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits, rather than showing as
         // couldn't-start. The Runner's queue pauses until the limit passes, so none of its waiting Tickets meet
         // the same limit meanwhile; the periodic check resumes it then (`resumePausedRunners`).
-        const runnerId = await lockSlotOf(tx, runId);
+        const slot = (await lockSlotOf(tx, runId))!;
         const { rowCount } = await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
         if (rowCount) await tx.query("update tickets set waits_for_run = true where id = $1", [ticketId]);
         await tx.query("update runners set paused_until = greatest(paused_until, $2) where id = $1", [
-          runnerId,
+          slot.runnerId,
           result.refusal.retryAt,
         ]);
+        runnerChanged(context, tx, slot);
       } else {
         await freeSlot(context, tx, runId);
         await tx.query(
@@ -318,9 +320,9 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
  * Holds the Runner's slots still until the transaction ends: everything that starts or ends a Run through
  * it takes this lock, so counting its running Runs and waiting Tickets gives the answer that stands.
  */
-async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number; paused: boolean }> {
-  const { rows } = await tx.query<{ limit: number; paused: boolean }>(
-    "select run_limit as limit, paused_until is not null as paused from runners where id = $1 for update",
+async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number; paused: boolean; ownerId: string }> {
+  const { rows } = await tx.query<{ limit: number; paused: boolean; ownerId: string }>(
+    `select run_limit as limit, paused_until is not null as paused, owner_id as "ownerId" from runners where id = $1 for update`,
     [runnerId],
   );
   return rows[0]!;
@@ -328,21 +330,29 @@ async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number; pa
 
 /**
  * Call before ending the Run: locks it, then holds its Runner's slots still (always in that order), and once the transaction commits gives the slot
- * the Run frees to the Runner's next waiting Ticket.
+ * the Run frees to the Runner's next waiting Ticket. The Runner's Owner is told its count of running Runs changed.
  */
 async function freeSlot(context: Context, tx: Tx, runId: string): Promise<void> {
-  const runnerId = await lockSlotOf(tx, runId);
-  if (runnerId) afterCommit(tx, () => startWaitingRuns(context, runnerId));
+  const slot = await lockSlotOf(tx, runId);
+  if (!slot) return;
+  runnerChanged(context, tx, slot);
+  afterCommit(tx, () => startWaitingRuns(context, slot.runnerId));
 }
 
-/** Locks the Run, then holds its Runner's slots still; returns the Runner, if it has one. */
-async function lockSlotOf(tx: Tx, runId: string): Promise<string | null> {
+/** Locks the Run, then holds its Runner's slots still; returns the Runner and its Owner, if it has one. */
+async function lockSlotOf(tx: Tx, runId: string): Promise<{ runnerId: string; ownerId: string } | null> {
   const { rows } = await tx.query<{ runnerId: string | null }>(`select runner_id as "runnerId" from runs where id = $1 for update`, [
     runId,
   ]);
   const runnerId = rows[0]?.runnerId ?? null;
-  if (runnerId) await lockRunner(tx, runnerId);
-  return runnerId;
+  if (!runnerId) return null;
+  const { ownerId } = await lockRunner(tx, runnerId);
+  return { runnerId, ownerId };
+}
+
+/** Tells the Runner's Owner, once the transaction commits, that it changed: a Run started or ended on it, or its queue paused or resumed. */
+function runnerChanged(context: Context, tx: Tx, { runnerId, ownerId }: { runnerId: string; ownerId: string }): void {
+  context.live.publishToOwner(tx, ownerId, { type: "runner.changed", runnerId });
 }
 
 /**
@@ -442,11 +452,15 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
 
 /** Resumes the queues of rate-limited Runners whose pause has passed, giving out their free slots. */
 export async function resumePausedRunners(context: Context): Promise<void> {
-  const { rows } = await context.db.query<{ id: string }>(
-    "update runners set paused_until = null where paused_until <= $1 returning id",
-    [context.clock.now()],
-  );
-  for (const { id } of rows) await startWaitingRuns(context, id);
+  const resumed = await transaction(context.db, async (tx) => {
+    const { rows } = await tx.query<{ runnerId: string; ownerId: string }>(
+      `update runners set paused_until = null where paused_until <= $1 returning id as "runnerId", owner_id as "ownerId"`,
+      [context.clock.now()],
+    );
+    for (const runner of rows) runnerChanged(context, tx, runner);
+    return rows;
+  });
+  for (const { runnerId } of resumed) await startWaitingRuns(context, runnerId);
 }
 
 /**

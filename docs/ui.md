@@ -203,7 +203,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 ### Agents and Runners
 
 - **Agents:** one card per Agent with its avatar, name, the Tickets delegated to it and its running Runs, its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
-- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face.
+- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face. The page streams the User's own Runners, so the count and the pause stay current while it is open.
 
 ### Signed-out pages and the consent screen
 
@@ -212,7 +212,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ## Live updates
 
-Server-sent events keep open views current. Every screen treats them the same way:
+Server-sent events keep open views current: each Workspace has its stream, and a User's own Runners, which belong to no Workspace, have theirs. Every screen treats them the same way:
 
 - New entries appear in place (timeline entries at the end, Inbox items in their group), with a short `--accent` ring that fades over about 2s. The page never scrolls on its own unless the User is already at the end.
 - A changed field updates where it is shown, such as the side panel, a card on the board or the Run card. Nothing reloads the whole page or flashes empty while reloading.

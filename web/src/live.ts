@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
- * Live updates: one server-sent event stream per Workspace, shared by every screen that
- * listens to it. Events only name what changed; screens fetch it again through the API.
+ * Live updates: one server-sent event stream per Workspace, and one for the User's own Runners, each shared by
+ * every screen that listens to it. Events only name what changed; screens fetch it again through the API.
  */
 
 export type LiveEvent =
@@ -21,7 +21,12 @@ export type LiveEvent =
 
 const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed"];
 
-type Listener = (event: LiveEvent) => void;
+/** What the User's own Runners' stream tells: a Run started or ended on one, or its queue paused or resumed. */
+export type RunnerEvent = { type: "runner.changed"; runnerId: string } | { type: "reconnected" };
+
+const runnerEventTypes = ["runner.changed"];
+
+type Listener = (event: LiveEvent | RunnerEvent) => void;
 
 /** Whether a stream is connected, or away and reconnecting. */
 export type LiveState = "live" | "reconnecting";
@@ -33,14 +38,18 @@ interface Stream {
   stateListeners: Set<(state: LiveState) => void>;
 }
 
+/** Open streams by their address. */
 const streams = new Map<string, Stream>();
 
-function open(workspaceId: string): Stream {
-  let stream = streams.get(workspaceId);
+const workspaceStream = (workspaceId: string) => `/api/workspaces/${encodeURIComponent(workspaceId)}/events`;
+const runnersStream = "/api/runners/events";
+
+function open(url: string): Stream {
+  let stream = streams.get(url);
   if (!stream) {
-    const source = new EventSource(`/api/workspaces/${encodeURIComponent(workspaceId)}/events`);
+    const source = new EventSource(url);
     const created: Stream = { source, listeners: new Set(), state: "live", stateListeners: new Set() };
-    const emit = (event: LiveEvent) => created.listeners.forEach((l) => l(event));
+    const emit = (event: LiveEvent | RunnerEvent) => created.listeners.forEach((l) => l(event));
     const setState = (state: LiveState) => {
       created.state = state;
       created.stateListeners.forEach((l) => l(state));
@@ -52,53 +61,71 @@ function open(workspaceId: string): Stream {
       opened = true;
     });
     source.addEventListener("error", () => setState("reconnecting"));
-    for (const type of eventTypes) {
-      source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent));
+    for (const type of url === runnersStream ? runnerEventTypes : eventTypes) {
+      source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent | RunnerEvent));
     }
     stream = created;
-    streams.set(workspaceId, stream);
+    streams.set(url, stream);
   }
   return stream;
 }
 
 /** Closes a stream once nothing listens to it any more. */
-function release(workspaceId: string, stream: Stream) {
+function release(url: string, stream: Stream) {
   if (stream.listeners.size === 0 && stream.stateListeners.size === 0) {
     stream.source.close();
-    streams.delete(workspaceId);
+    streams.delete(url);
   }
 }
 
-function listen(workspaceId: string, listener: Listener): () => void {
-  const stream = open(workspaceId);
+function listen(url: string, listener: Listener): () => void {
+  const stream = open(url);
   stream.listeners.add(listener);
   return () => {
     stream.listeners.delete(listener);
-    release(workspaceId, stream);
+    release(url, stream);
   };
 }
 
-/** Whether the Workspace's stream is live or reconnecting, for the Live indicator. */
-export function useLiveState(workspaceId: string): LiveState {
-  const [state, setState] = useState<LiveState>(() => streams.get(workspaceId)?.state ?? "live");
+function useStreamState(url: string): LiveState {
+  const [state, setState] = useState<LiveState>(() => streams.get(url)?.state ?? "live");
   useEffect(() => {
-    const stream = open(workspaceId);
+    const stream = open(url);
     setState(stream.state);
     stream.stateListeners.add(setState);
     return () => {
       stream.stateListeners.delete(setState);
-      release(workspaceId, stream);
+      release(url, stream);
     };
-  }, [workspaceId]);
+  }, [url]);
   return state;
 }
 
-/** Calls `onEvent` with each event of the Workspace's stream while the component is shown. */
-export function useLiveEvents(workspaceId: string, onEvent: Listener): void {
+/** Whether the Workspace's stream is live or reconnecting, for the Live indicator. */
+export function useLiveState(workspaceId: string): LiveState {
+  return useStreamState(workspaceStream(workspaceId));
+}
+
+/** Whether the User's own Runners' stream is live or reconnecting, for the Live indicator. */
+export function useRunnersLiveState(): LiveState {
+  return useStreamState(runnersStream);
+}
+
+function useStreamEvents<E>(url: string | null, onEvent: (event: E) => void): void {
   const current = useRef(onEvent);
   current.current = onEvent;
+  useEffect(() => (url ? listen(url, (event) => current.current(event as E)) : undefined), [url]);
+}
+
+/** Calls `onEvent` with each event of the Workspace's stream while the component is shown. */
+export function useLiveEvents(workspaceId: string, onEvent: (event: LiveEvent) => void): void {
   // Nothing streams without a Workspace, such as for a User who belongs to none.
-  useEffect(() => (workspaceId ? listen(workspaceId, (event) => current.current(event)) : undefined), [workspaceId]);
+  useStreamEvents(workspaceId ? workspaceStream(workspaceId) : null, onEvent);
+}
+
+/** Calls `onEvent` with each event of the User's own Runners' stream while the component is shown. */
+export function useRunnerEvents(onEvent: (event: RunnerEvent) => void): void {
+  useStreamEvents(runnersStream, onEvent);
 }
 
 /**
