@@ -1,5 +1,6 @@
 import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
+import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
 import { moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
@@ -47,6 +48,12 @@ const shown = (failure: Failure) =>
     ? { kind: failure.kind, name: failure.name, sha: failure.sha, url: failure.url }
     : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
 
+/** The failure as a `sentBack` Change names it: the check, or the review, with its link. */
+const named = (failure: Failure) =>
+  failure.kind === "check"
+    ? { kind: failure.kind, name: failure.name, url: failure.url }
+    : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
+
 const linked = (text: string, url: string | null) => (url ? `[${text}](${url})` : text);
 
 function describe(failure: Failure, pullRequest: FailedPullRequest): string {
@@ -86,6 +93,10 @@ export async function sendBackForFailure(
     [pullRequest.id],
   );
   const failed = describe(failure, pullRequest);
+  const cause = {
+    pullRequest: { id: pullRequest.id, repository: pullRequest.repository, number: pullRequest.number, url: pullRequest.url },
+    failure: named(failure),
+  };
   let sent = false;
   for (const { stepStatusId, stepName, ...ticket } of tickets) {
     // Each head commit and each review sends a Ticket back once.
@@ -101,6 +112,10 @@ export async function sendBackForFailure(
       by: { kind: "cronk" },
       stopReason: `${failure.kind === "check" ? "A failing check" : "Requested changes"} sent ${ticket.key} back to ${stepName}.`,
       verification: "unverified",
+      // Recorded at the move's time, ahead of the Change moving it.
+      beforeMove: async (_decision, now) => {
+        await recordChanges(tx, ticket, { kind: "cronk" }, now, [{ field: "sentBack", from: null, to: cause }]);
+      },
     });
     const sentWhere = decision.outcome?.needsYou
       ? `That is past ${stepName}'s round limit, so ${ticket.key} comes to its Assignee instead.`

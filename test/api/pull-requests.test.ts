@@ -818,6 +818,46 @@ describe("Failures sending work back", () => {
     expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
   });
 
+  test("a failing check records a sentBack Change by Cronk naming the Pull Request and the check, just before its move", async () => {
+    const { cookie, app, installation, cronker, ticket } = await inReview();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, cookie);
+    const at = timeline.findIndex((c: { field: string }) => c.field === "sentBack");
+    expect(timeline[at]).toMatchObject({
+      actor: { kind: "cronk", name: "Cronk" },
+      from: null,
+      to: {
+        pullRequest: { id: 501, repository: "cronkcorp/cronker", number: 7, url: "https://github.com/cronkcorp/cronker/pull/7" },
+        failure: { kind: "check", name: "test", url: "https://github.com/cronkcorp/cronker/runs/10" },
+      },
+      runId: null,
+    });
+    expect(timeline[at + 1]).toMatchObject({
+      actor: { kind: "cronk" },
+      field: "status",
+      from: { name: "In Review" },
+      to: { name: "Implement" },
+      at: timeline[at].at,
+    });
+  });
+
+  test("each send-back from the same Pull Request records its own sentBack Change, requested changes naming the review", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, finishImplementing } = await inReview();
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    await finishImplementing();
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, cookie);
+    const pullRequest = { id: 501, repository: "cronkcorp/cronker", number: 7, url: "https://github.com/cronkcorp/cronker/pull/7" };
+    expect(timeline.filter((c: { field: string }) => c.field === "sentBack").map((c: { to: unknown }) => c.to)).toEqual([
+      { pullRequest, failure: { kind: "check", name: "test", url: "https://github.com/cronkcorp/cronker/runs/10" } },
+      { pullRequest, failure: { kind: "review", reviewer: "bea", url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72" } },
+    ]);
+  });
+
   test.each<[string, string, { conclusion?: string; state?: string }]>([
     ["a check run that failed", "check_run", { conclusion: "failure" }],
     ["a check run that timed out", "check_run", { conclusion: "timed_out" }],
