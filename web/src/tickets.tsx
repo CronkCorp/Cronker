@@ -1266,6 +1266,8 @@ function CommentThread({
   const replies = comments.filter((c) => c.replyToId === comment.id);
   const parent = comment.replyToId ? comments.find((c) => c.id === comment.replyToId) : undefined;
   const question = comment.questionId !== null;
+  // Cronk writes a Comment only when a failing check or requested changes send the Ticket back.
+  const sentBack = comment.actor.kind === "cronk";
   // The first User's reply answers a Question.
   const answered = question && replies.some((r) => r.actor.kind === "user");
   const askedIn = question ? runs.find((r) => r.question === comment.body && r.questionBy === "agent") : undefined;
@@ -1276,11 +1278,11 @@ function CommentThread({
   };
   return (
     <article
-      aria-label={`${question ? "Question from" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
+      aria-label={`${question ? "Question from" : sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
       className={`entry-body comment${depth > 0 ? " reply" : ""}${arrived.has(`comment:${comment.id}`) ? " arrived" : ""}`}
     >
       <p className="entry-head">
-        {depth === 0 && <KindLabel kind={question ? "Question" : "Comment"} />}{" "}
+        {depth === 0 && <KindLabel kind={question ? "Question" : sentBack ? "Sent back" : "Comment"} />}{" "}
         <Actor actor={actor} avatar={depth > 0} /> <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}
