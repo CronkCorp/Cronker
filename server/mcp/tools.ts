@@ -311,7 +311,8 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "During your running Run on a Ticket, adds a Report to it: Markdown such as an investigation's findings, " +
         "listed with the Ticket for its Users and read by later Runs on it. Refused for any other Ticket and outside " +
-        "a running Run. A Report can also be given to `finish`.",
+        "a running Run. A Report can also be given to `finish`. A Report is a Document with Versions: " +
+        "`read_document` and `edit_document` take its id.",
       inputSchema: {
         ticket: ticketArgument,
         title: z.string().min(1).describe("A short title, such as `Findings`."),
