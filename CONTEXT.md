@@ -107,7 +107,7 @@ A Document a Run writes on its Ticket, such as an investigation's findings, list
 _Avoid_: Summary, write-up, result
 
 **Linked Document**:
-A Document linked to a Ticket from the Ticket's side, so it is one click away.
+A Document of the Ticket's Project or of the Workspace, linked from the Ticket's side so it is one click away.
 _Avoid_: Relation (reserved for Ticket to Ticket), reference
 
 **Attachment**:
@@ -137,7 +137,7 @@ A GitHub repository that one or more Projects list as holding their code, reache
 _Avoid_: Repo (in the product), codebase
 
 **Pull Request**:
-A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains. A merge by a User completes a Ticket as Verified; a merge by an agent completes it as Unverified.
+A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains. A merge by a User of the Ticket's Workspace completes the Ticket as Verified; any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified.
 _Avoid_: PR (in the product), merge request, change
 
 ### Actors
