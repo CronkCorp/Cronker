@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { test as base, type Locator, type Page } from "@playwright/test";
+import { expect, test as base, type Locator, type Page } from "@playwright/test";
+import { firstUser } from "../test/harness/flows.js";
 import { startCronk, type StartedCronk } from "../test/harness/start-cronk.js";
 
 export const webRoot = fileURLToPath(new URL("../dist/web/", import.meta.url));
@@ -39,4 +40,13 @@ export async function openProjectSettings(page: Page) {
 /** How wide something is drawn, to tell a button that fits its label from one that spans its card. */
 export async function widthOf(locator: Locator) {
   return (await locator.boundingBox())!.width;
+}
+
+/** Signs the first User in through the sign-in page, as `setUp` made them, and waits for the frame. */
+export async function signInInBrowser(page: Page, cronk: StartedCronk) {
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill(firstUser.email);
+  await page.getByLabel("Password").fill(firstUser.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
 }

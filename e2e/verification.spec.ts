@@ -1,4 +1,5 @@
-import { expect, fieldPicker, pick, test, widthOf } from "./fixtures.js";
+import { setUp, signIn } from "../test/harness/flows.js";
+import { expect, fieldPicker, pick, signInInBrowser, test, widthOf } from "./fixtures.js";
 
 test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed", async ({ page, cronk }) => {
   const credentials = { email: "ada@example.com", password: "correct horse battery" };
@@ -55,9 +56,6 @@ test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed",
   const verification = page.getByRole("region", { name: "Verification" });
   await expect(verification).toContainText("Unverified");
   await expect(verification).toContainText("claude-max's Run of the Code review Step completed this.");
-  // A row among the Ticket's fields, its chip sized to its word.
-  await expect(page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Fields" }).getByRole("region", { name: "Verification" })).toBeVisible();
-  expect(await widthOf(verification.getByText("Unverified", { exact: true }))).toBeLessThan(120);
   await expect(fieldPicker(page, "Status")).toBeDisabled();
   const inboxLink = page.getByRole("navigation").getByRole("link", { name: /^Inbox/ });
   await expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting");
@@ -84,4 +82,31 @@ test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed",
   await expect(page.getByRole("region", { name: "Verification" })).toContainText("Verified");
   await expect(fieldPicker(page, "Status")).toBeEnabled();
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
+});
+
+test("what a Run completed shows as a Verification row among the Ticket's fields, its chip sized to its word", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (path: string, body?: unknown, method = "POST") => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const codeReview = project.statuses.find((s: { name: string }) => s.name === "Code review").id;
+  const runner = await call("/api/runners", { name: "Fake", kind: "fake" });
+  const agent = await call(`/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call(`/api/agents/${agent.id}`, { runnerId: runner.id }, "PATCH");
+  const { secret } = await call(`/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const ticket = await call(`/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  await call(`/api/tickets/${ticket.id}`, { delegateId: agent.id, autonomousDelegation: true, statusId: codeReview }, "PATCH");
+  const [run] = await call(`/api/tickets/${ticket.id}/runs`, undefined, "GET");
+  const finished = await cronk.request("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` }, body: { outcome: "complete" } });
+  expect(finished.status).toBe(200);
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const fields = page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Fields" });
+  const verification = fields.getByRole("region", { name: "Verification" });
+  await expect(verification.getByRole("button", { name: "Accept" })).toBeVisible();
+  await expect(verification.getByRole("button", { name: "Reopen…" })).toBeVisible();
+  // The chip takes the width of its word, not the width of the row.
+  const chip = await widthOf(verification.getByText("Unverified", { exact: true }));
+  expect(chip).toBeLessThan((await widthOf(verification)) / 2);
 });

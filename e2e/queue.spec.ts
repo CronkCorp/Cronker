@@ -1,4 +1,5 @@
-import { expect, test } from "./fixtures.js";
+import { setUp, signIn } from "../test/harness/flows.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
 
 test("board cards show Tickets waiting for a Runner slot and blocked, live", async ({ page, cronk }) => {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -57,4 +58,29 @@ test("board cards show Tickets waiting for a Runner slot and blocked, live", asy
   await expect(card("Waiting")).toContainText("Run running");
   await expect(card("Waiting")).not.toContainText("Run waiting");
   await expect(card("Blocked")).toContainText("Run waiting: Runner full");
+});
+
+test("a waiting Run's card on the Ticket names its Agent, the Step it waits for with its model, and why", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (path: string, body?: unknown, method = "POST") => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  const runner = await call("/api/runners", { name: "Fake", kind: "fake" });
+  await call(`/api/runners/${runner.id}`, { limit: 1 }, "PATCH");
+  const agent = await call(`/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call(`/api/agents/${agent.id}`, { runnerId: runner.id }, "PATCH");
+  const running = await call(`/api/projects/${project.id}/tickets`, { title: "Running" });
+  const waiting = await call(`/api/projects/${project.id}/tickets`, { title: "Waiting" });
+  for (const ticket of [running, waiting]) {
+    cronk.clock.advance(1000);
+    await call(`/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage }, "PATCH");
+  }
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${waiting.id}`);
+  const runCard = page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Run" });
+  await expect(runCard).toContainText("Run waiting: Runner full");
+  await expect(runCard).toContainText("claude-max");
+  await expect(runCard).toContainText("Triage haiku");
 });

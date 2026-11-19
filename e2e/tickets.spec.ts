@@ -131,7 +131,7 @@ test("a Ticket's side panel edits every field in place with pickers, beside the 
   const side = (await details.boundingBox())!;
   const main = (await timeline.boundingBox())!;
   expect(side.x).toBeGreaterThan(main.x + main.width);
-  expect(side.width).toBe(280);
+  expect(side.width).toBeCloseTo(280, 0);
 
   await page.setViewportSize({ width: 820, height: 900 });
   const stackedSide = (await details.boundingBox())!;

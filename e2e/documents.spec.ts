@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { addMember, firstUser, setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, test } from "./fixtures.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
 
 /** Sets Cronk up with Ada and Bea in one Workspace, signs Ada in, and opens a Workspace Document Ada wrote. */
 async function openDocument(page: Page, cronk: StartedCronk, body: string) {
@@ -119,11 +119,7 @@ test("a Ticket links a Document of its Project or the Workspace from a picker, a
   await post(`/api/projects/${project.id}/documents`, { title: "Security notes" });
   await post(`/api/workspaces/${workspace.id}/documents`, { title: "How Runs start" });
 
-  await page.goto(cronk.url);
-  await page.getByLabel("Email").fill(firstUser.email);
-  await page.getByLabel("Password").fill(firstUser.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await signInInBrowser(page, cronk);
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
 
   const linked = page.getByRole("region", { name: "Linked Documents" });

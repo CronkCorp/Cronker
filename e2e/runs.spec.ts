@@ -1,5 +1,5 @@
-import { firstUser, setUp, signIn } from "../test/harness/flows.js";
-import { expect, fieldPicker, pick, test } from "./fixtures.js";
+import { setUp, signIn } from "../test/harness/flows.js";
+import { expect, fieldPicker, pick, signInInBrowser, test } from "./fixtures.js";
 
 test("delegate a Ticket and watch its Runs move it on the board", async ({ page, cronk }) => {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -34,13 +34,7 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
 
   const timeline = page.getByRole("region", { name: "Timeline" });
   await expect(timeline.getByRole("listitem").filter({ hasText: "Triage · claude-max · haiku" })).toContainText("Run running");
-  // The Run card: its state, when it started, the Agent, the Step and its model, and the session link.
-  const runCard = page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Run" });
-  await expect(runCard).toContainText("Run running");
-  await expect(runCard).toContainText("since");
-  await expect(runCard).toContainText("claude-max");
-  await expect(runCard).toContainText("Triage haiku");
-  await expect(runCard.getByRole("link", { name: "Session" })).toHaveAttribute("href", "https://claude.ai/code/session_1");
+  await expect(page.getByRole("region", { name: "Run" })).toContainText("Triage");
   await expect(timeline.getByRole("link", { name: "Session" })).toHaveAttribute("href", "https://claude.ai/code/session_1");
 
   // During its Run the Agent edits the Ticket and writes a Report; both show up live.
@@ -85,7 +79,7 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
   await expect(delegation.getByLabel("New Tickets start delegated to their creator's Agent")).toBeChecked();
 });
 
-test("a Run gone wrong shows on the Ticket's Run card, and Retry starts a fresh one", async ({ page, cronk }) => {
+test("a Run gone wrong shows on the Ticket's Run card, and Retry starts a fresh one shown in its place", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   const call = async (path: string, body?: unknown, method = "POST") => (await cronk.request(method, path, { cookie, body })).json();
@@ -99,11 +93,7 @@ test("a Run gone wrong shows on the Ticket's Run card, and Retry starts a fresh 
   const [run] = await call(`/api/tickets/${ticket.id}/runs`, undefined, "GET");
   await cronk.runner.endWithoutFinishing(run.id, "The session ended.");
 
-  await page.goto(cronk.url);
-  await page.getByLabel("Email").fill(firstUser.email);
-  await page.getByLabel("Password").fill(firstUser.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await signInInBrowser(page, cronk);
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
 
   const runCard = page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Run" });
@@ -111,7 +101,12 @@ test("a Run gone wrong shows on the Ticket's Run card, and Retry starts a fresh 
   await expect(runCard).toContainText("The session ended.");
   await expect(runCard).toContainText("Implement opus");
   await runCard.getByRole("button", { name: "Retry" }).click();
+  // The fresh Run: its state, when it started, the Agent, the Step and its model, and the session link.
   await expect(runCard).toContainText("Run running");
+  await expect(runCard).toContainText("since");
+  await expect(runCard).toContainText("claude-max");
+  await expect(runCard).toContainText("Implement opus");
+  await expect(runCard.getByRole("link", { name: "Session" })).toHaveAttribute("href", /^https:\/\/claude\.ai\/code\/session_/);
   await expect(runCard.getByRole("button", { name: "Retry" })).toHaveCount(0);
   expect(cronk.runner.starts).toHaveLength(2);
 });

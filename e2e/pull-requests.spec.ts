@@ -1,5 +1,5 @@
-import { expect, test } from "./fixtures.js";
-import { createGitHubApp, firstUser, setUp, signIn } from "../test/harness/flows.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
+import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
 
 test("a Ticket shows the Pull Requests naming its key, with their state and checks, updating live", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
@@ -94,11 +94,7 @@ test("a Pull Request's row shows its review state: changes requested, then who m
     review: { id: 72, state: "changes_requested", user: { login: "bea", id: 4072 }, html_url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72" },
   });
 
-  await page.goto(cronk.url);
-  await page.getByLabel("Email").fill(firstUser.email);
-  await page.getByLabel("Password").fill(firstUser.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await signInInBrowser(page, cronk);
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
 
   const row = page.getByRole("region", { name: "Pull Requests" }).getByRole("listitem").filter({ hasText: "#7 CRONK-1: make it so" });
