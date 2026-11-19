@@ -635,3 +635,59 @@ ul.repositories .warning {
 .decision .versions {
   margin-top: 1.25rem;
 }
+/* A Ticket's Pull Requests, in the side panel above its fields. */
+.side {
+  display: grid;
+  gap: 1.25rem;
+  align-content: start;
+}
+.pull-requests h2 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+.pull-requests ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.pull-request-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+}
+.pull-request-state {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 0.45rem;
+}
+.pull-request-state.open {
+  color: var(--ok);
+}
+.pull-request-state.draft {
+  color: var(--muted);
+  border-style: dashed;
+}
+.pull-request-state.merged {
+  color: var(--accent);
+}
+.pull-request-state.closed {
+  color: var(--warn);
+}
+.check-count.passed {
+  color: var(--ok);
+}
+.check-count.failed {
+  color: var(--warn);
+}
+.check-count.pending {
+  color: var(--muted);
+}
