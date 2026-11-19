@@ -122,12 +122,11 @@
   color: var(--muted);
 }
 
-/* Board: open columns share the width, tight enough that the default nine Statuses fit a 1280px screen; a
-   column's name wraps rather than being cut off. Done and
-   Canceled start collapsed. */
+/* Board: open columns share the width, tight enough that the default nine Statuses fit a 1280px screen. A
+   column's name wraps rather than being cut off. Done and Canceled start collapsed. */
 .board {
   display: grid;
-  gap: 6px;
+  gap: var(--space-2);
   align-items: start;
 }
 .column {
@@ -136,7 +135,7 @@
   min-width: 0;
   min-height: 60vh;
   align-content: start;
-  padding: 6px;
+  padding: var(--space-1);
   border: 1px solid transparent;
   border-radius: var(--radius-panel);
   background: var(--surface-2);
@@ -149,7 +148,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px 6px;
+  gap: 0 6px;
   min-height: 26px;
   padding: 0 2px;
 }
@@ -162,14 +161,15 @@
   color: var(--muted);
   font-size: 12px;
 }
-/* The Step's model label sits on a line of its own under the name, kept even without one so cards line up. */
+/* The Step's model label sits on a line of its own under the name; every open column keeps that line, so cards
+   line up. */
 .column:not(.column-collapsed) .column-head {
   min-height: 40px;
   align-content: start;
 }
 .column-step {
   flex-basis: 100%;
-  padding-left: 12px;
+  padding-left: var(--space-3);
 }
 .column-toggle {
   display: inline-flex;
@@ -199,8 +199,8 @@
   display: grid;
   gap: var(--space-2);
 }
-/* Key and Priority share the first line, Priority beside the key and under it when they don't fit; title and meta
-   take a line each. */
+/* Priority follows the key on the first line, wrapping under it in a narrow column; title and meta take a line
+   each. */
 .card {
   display: flex;
   flex-wrap: wrap;

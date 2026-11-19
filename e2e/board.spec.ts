@@ -43,9 +43,17 @@ test("a 1280px screen shows every Status of the board, named in full, without si
   await page.setViewportSize({ width: 1280, height: 800 });
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
-  const project = await (
-    await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } })
-  ).json();
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  // A busy card in a column with a Step: Priority, Labels, a long word in its title and an Assignee.
+  const busy = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Export Terms as GLOSSARY.md and Decisions as docs/adr/" });
+  await call("PATCH", `/api/tickets/${busy.id}`, {
+    statusId: status("Code review"),
+    priority: "urgent",
+    labels: ["security", "documentation"],
+    assigneeId: (await call("GET", "/api/me")).user.id,
+  });
 
   await page.goto(cronk.url);
   await page.getByLabel("Email").fill("ada@example.com");
@@ -73,5 +81,7 @@ test("a 1280px screen shows every Status of the board, named in full, without si
     const model = models[name];
     if (model) expect(await whole(column.getByText(model, { exact: true })), `${name}'s ${model} is shown in full`).toBe(true);
   }
+  const card = board.getByRole("region", { name: "Code review", exact: true }).getByRole("link", { name: /^CRONK-1 / });
+  expect(await whole(card), "the busy card fits its column").toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
 });
