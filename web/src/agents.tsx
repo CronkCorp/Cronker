@@ -4,7 +4,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime } from "./ui/controls.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Every Ticket of the Workspace, to count what each Agent is delegated and running. */
@@ -40,7 +40,7 @@ export function Agents({ user, workspace }: { user: User; workspace: WorkspaceSu
   return (
     <div className="page">
       <PageHead
-        crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]}
+        crumbs={[workspaceCrumb(workspace)]}
         title="Agents"
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
@@ -220,7 +220,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
     <div className="page page-settings">
       <PageHead
         crumbs={[
-          { label: workspace.name, to: `/workspaces/${workspace.id}` },
+          workspaceCrumb(workspace),
           { label: "Agents", to: `/workspaces/${workspace.id}/agents` },
         ]}
         title={

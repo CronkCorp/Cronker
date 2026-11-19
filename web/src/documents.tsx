@@ -23,7 +23,7 @@ import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime } from "./ui/controls.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -202,7 +202,7 @@ export function DocumentScreen({
   // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
   const home = document.ticketId ? `/tickets/${document.ticketId}` : treePage(tree);
   const crumbs = [
-    { label: workspace.name, to: `/workspaces/${workspace.id}` },
+    workspaceCrumb(workspace),
     ...(project ? [{ label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }] : []),
     document.ticketId
       ? { label: <span className="mono">{ticket?.key ?? "Its Ticket"}</span>, to: home }

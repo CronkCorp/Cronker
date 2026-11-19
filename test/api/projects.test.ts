@@ -44,6 +44,7 @@ describe("creating a Project", () => {
       key: "CRONK",
       newTicketsDelegated: false,
       autonomousDelegationDefault: false,
+      pullRequestAutomation: true,
       statuses: defaultBoard.map((status) => ({
         id: expect.any(String),
         ...status,

@@ -20,7 +20,7 @@ import { Markdown } from "./markdown.js";
 import { PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime } from "./ui/controls.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { KindLabel, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker } from "./ui/picker.js";
@@ -102,7 +102,9 @@ function summary(item: InboxItem): string {
     case "review":
       return `Waiting for your review in ${item.status.name}`;
     case "unverified":
-      return `Completed by the ${item.completedBy?.name ?? "removed"} Step, Unverified: Accept or Reopen it`;
+      return item.completedWithoutStep
+        ? "Completed outside any Step, Unverified: Accept or Reopen it"
+        : `Completed by the ${item.completedBy?.name ?? "removed"} Step, Unverified: Accept or Reopen it`;
     case "run":
       return `Its ${item.run.step.name} Run ${wentWrong[item.run.state]}${item.run.endReason ? `: ${item.run.endReason}` : ""}`;
     case "discovered": {
@@ -235,7 +237,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
 
   return (
     <div className="page">
-      <PageHead title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
+      <PageHead crumbs={[workspaceCrumb(workspace)]} title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
       <FormError error={failure} />
       {inbox &&
         (shown.length === 0 ? (

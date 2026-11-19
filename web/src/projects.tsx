@@ -8,6 +8,7 @@ import {
   type Member,
   type Priority,
   type Project,
+  type ProjectEdit,
   type ProjectSummary,
   type Status,
   type StatusKind,
@@ -25,7 +26,7 @@ import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented } from "./ui/controls.js";
+import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
 
@@ -52,7 +53,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="page">
-      <PageHead title={workspace.name} />
+      <PageHead crumbs={[{ label: "Workspace" }]} title={workspace.name} />
       <FormError error={failure} />
       {projects &&
         (projects.length === 0 ? (
@@ -181,7 +182,7 @@ export function ProjectScreen({
   if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
 
   const base = `/projects/${project.id}`;
-  const home = { label: workspace.name, to: `/workspaces/${workspace.id}` };
+  const home = workspaceCrumb(workspace);
   if (view === "settings") {
     return (
       <div className="page page-settings">
@@ -195,6 +196,7 @@ export function ProjectScreen({
         <BriefPreview project={project} />
         <DelegationSettings project={project} onChange={setProject} />
         <RepositoriesSettings project={project} />
+        <PullRequestAutomationSettings project={project} onChange={setProject} />
       </div>
     );
   }
@@ -544,10 +546,11 @@ function List({
   );
 }
 
-function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+/** Changes the Project's settings, one toggle at a time, with what went wrong. */
+function useProjectEdit(project: Project, onChange: (project: Project) => void) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const toggle = async (edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) => {
+  const toggle = async (edit: ProjectEdit) => {
     setBusy(true);
     setError(null);
     try {
@@ -558,6 +561,11 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
       setBusy(false);
     }
   };
+  return { error, busy, toggle };
+}
+
+function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+  const { error, busy, toggle } = useProjectEdit(project, onChange);
   return (
     <Panel
       title="Delegation defaults"
@@ -581,6 +589,28 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
           onChange={(e) => void toggle({ autonomousDelegationDefault: e.target.checked })}
         />
         Tickets first delegated get Autonomous Delegation
+      </label>
+      <FormError error={error} />
+    </Panel>
+  );
+}
+
+function PullRequestAutomationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+  const { error, busy, toggle } = useProjectEdit(project, onChange);
+  return (
+    <Panel
+      title="Pull Request automation"
+      id="pull-request-automation"
+      description="A merged Pull Request completes the Tickets it links: Verified when a User of this Workspace merged it, otherwise Unverified. Turned off, merges only update the Pull Request's state."
+    >
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.pullRequestAutomation}
+          disabled={busy}
+          onChange={(e) => void toggle({ pullRequestAutomation: e.target.checked })}
+        />
+        Merges complete their Tickets
       </label>
       <FormError error={error} />
     </Panel>
@@ -755,7 +785,7 @@ export function ScopeSwitch({
 
 /** Crumbs leading to a Project's or the Workspace's knowledge page. */
 export function knowledgeCrumbs(workspace: Workspace, project: ProjectSummary | null, page: ReactNode) {
-  const home = { label: workspace.name, to: `/workspaces/${workspace.id}` };
+  const home = workspaceCrumb(workspace);
   return project
     ? [home, { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }, { label: page }]
     : [home, { label: page }];
