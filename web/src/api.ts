@@ -326,6 +326,7 @@ export interface Change {
     | "autonomousDelegation"
     | "verification"
     | "dismissed"
+    | "linkedDocument"
     | RelationKind;
   from: unknown;
   to: unknown;
@@ -480,6 +481,14 @@ export interface DocumentEdit {
   position?: number;
 }
 
+/** A Document linked to a Ticket, from its Project's page tree or the Workspace's. */
+export interface LinkedDocument {
+  id: string;
+  /** Null for a Document of the Workspace's page tree. */
+  projectId: string | null;
+  title: string;
+}
+
 /** Which page tree: a Project's, or the Workspace's. */
 export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
 
@@ -630,6 +639,12 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
+  linkedDocuments: (ticketId: string) =>
+    call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
+  linkDocument: (ticketId: string, documentId: string) =>
+    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId }),
+  unlinkDocument: (ticketId: string, documentId: string) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/documents/${encodeURIComponent(documentId)}`),
   documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
   createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
     call<Document>("POST", treePath(tree), input),

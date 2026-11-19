@@ -12,7 +12,8 @@ export const ChangedBy = Type.Union([
  * What a Change changed. `created` marks the Ticket's creation. `parent` is this Ticket's parent; `subTicket`,
  * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null). `stepSkipped`
  * marks Cronk passing the Ticket on past a Step it didn't pass, before the `status` Change moving it. `dismissed` marks a
- * User dismissing a Discovered Ticket from their Inbox.
+ * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
+ * unlinked (to null), as `{ id, title }` titled then.
  */
 export const changeFields = [
   "created",
@@ -34,6 +35,7 @@ export const changeFields = [
   "autonomousDelegation",
   "verification",
   "dismissed",
+  "linkedDocument",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 

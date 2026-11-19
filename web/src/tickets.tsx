@@ -8,6 +8,8 @@ import {
   type Comment,
   labelRuleShown,
   type LabelRule,
+  type LinkedDocument,
+  type DocumentSummary,
   type Member,
   type Priority,
   type Project,
@@ -28,7 +30,10 @@ import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 
-/** A Ticket: its fields, its description, its Reports, its Relations, its Comments and its timeline of Changes. */
+/**
+ * A Ticket: its fields, its description, its Reports, its Relations, its Linked Documents, its Comments and its
+ * timeline of Changes.
+ */
 export function TicketScreen({
   workspace,
   user,
@@ -51,6 +56,7 @@ export function TicketScreen({
   const [runs, setRuns] = useState<Run[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
+  const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,16 +70,17 @@ export function TicketScreen({
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
   const latestRelations = useLatest();
+  const latestLinkedDocuments = useLatest();
   const latestProjectTickets = useLatest();
   const fail = (e: Error) => setFailure(e.message);
   const loadTimeline = useCallback(() => {
     latestTimeline(api.timeline(ticketId), setTimeline);
     latestRuns(api.runs(ticketId), setRuns);
   }, [ticketId, latestTimeline, latestRuns]);
-  const loadRelations = useCallback(
-    () => latestRelations(api.relations(ticketId), setRelations, fail),
-    [ticketId, latestRelations],
-  );
+  const loadLinks = useCallback(() => {
+    latestRelations(api.relations(ticketId), setRelations, fail);
+    latestLinkedDocuments(api.linkedDocuments(ticketId), setLinkedDocuments, fail);
+  }, [ticketId, latestRelations, latestLinkedDocuments]);
 
   useEffect(() => {
     const first = api.ticket(ticketId);
@@ -95,8 +102,8 @@ export function TicketScreen({
     latestReports(api.reports(ticketId), setReports, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
     latestRuns(api.runs(ticketId), setRuns, fail);
-    loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
+    loadLinks();
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadLinks]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -105,7 +112,7 @@ export function TicketScreen({
     if (all || (thisTicket && event.type === "ticket.changed")) {
       latestTicket(api.ticket(ticketId), setTicket, fail);
       loadTimeline();
-      loadRelations();
+      loadLinks();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
     if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) {
@@ -128,7 +135,7 @@ export function TicketScreen({
       latestTicket(saved, setTicket);
       await saved;
       loadTimeline();
-      loadRelations();
+      loadLinks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -140,7 +147,7 @@ export function TicketScreen({
     setComments((shown) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
 
   if (failure) return <p role="alert">{failure}</p>;
-  if (!ticket || !project || !relations) return <p>Loading…</p>;
+  if (!ticket || !project || !relations || !linkedDocuments) return <p>Loading…</p>;
   return (
     <article className="ticket">
       <p>
@@ -179,7 +186,16 @@ export function TicketScreen({
             relations={relations}
             suggestions={projectTickets.filter((t) => t.id !== ticket.id)}
             onChanged={() => {
-              loadRelations();
+              loadLinks();
+              loadTimeline();
+            }}
+          />
+          <LinkedDocuments
+            ticket={ticket}
+            workspaceId={workspace.id}
+            linked={linkedDocuments}
+            onChanged={() => {
+              loadLinks();
               loadTimeline();
             }}
           />
@@ -606,6 +622,110 @@ function Relations({
   );
 }
 
+/**
+ * The Documents linked to the Ticket, each a link to it, with a form to link another of the Ticket's Project or of
+ * the Workspace.
+ */
+function LinkedDocuments({
+  ticket,
+  workspaceId,
+  linked,
+  onChanged,
+}: {
+  ticket: Ticket;
+  workspaceId: string;
+  linked: LinkedDocument[];
+  onChanged: () => void;
+}) {
+  const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
+  const [unlinkError, setUnlinkError] = useState<string | null>(null);
+  const [treesError, setTreesError] = useState<string | null>(null);
+  // Page trees aren't live, so they are read again on opening the list and after each link.
+  const loadTrees = useCallback(() => {
+    Promise.all([
+      api.documents({ kind: "project", id: ticket.projectId }),
+      api.documents({ kind: "workspace", id: workspaceId }),
+    ]).then(
+      ([project, workspace]) => {
+        setTreesError(null);
+        setTrees({ project, workspace });
+      },
+      (e: Error) => setTreesError(e.message),
+    );
+  }, [ticket.projectId, workspaceId]);
+  useEffect(loadTrees, [loadTrees]);
+  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
+    await api.linkDocument(ticket.id, field(form, "document"));
+    element.reset();
+    loadTrees();
+    onChanged();
+  });
+  const unlink = async (documentId: string) => {
+    setUnlinkError(null);
+    try {
+      await api.unlinkDocument(ticket.id, documentId);
+      onChanged();
+    } catch (e) {
+      setUnlinkError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const isLinked = new Set(linked.map((d) => d.id));
+  const unlinked = (documents: DocumentSummary[]) => documents.filter((d) => !isLinked.has(d.id));
+  const offered = trees && { project: unlinked(trees.project), workspace: unlinked(trees.workspace) };
+  return (
+    <section aria-label="Linked Documents" className="relations">
+      <h2>Linked Documents</h2>
+      {linked.length > 0 && (
+        <ul aria-label="Linked Documents">
+          {linked.map((document) => (
+            <li key={document.id}>
+              <Link to={`/documents/${document.id}`}>{document.title}</Link>
+              {document.projectId === null && <span className="muted"> (Workspace)</span>}{" "}
+              <button type="button" className="link" onClick={() => void unlink(document.id)}>
+                Unlink
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {unlinkError && <p role="alert">{unlinkError}</p>}
+      {treesError && <p role="alert">{treesError}</p>}
+      <form onSubmit={onSubmit} className="relation-form">
+        <label>
+          Link a Document
+          <select name="document" required defaultValue="" onFocus={loadTrees}>
+            <option value="" disabled>
+              Choose a Document
+            </option>
+            {offered &&
+              (
+                [
+                  ["This Project", offered.project],
+                  ["The Workspace", offered.workspace],
+                ] as const
+              ).map(
+                ([label, documents]) =>
+                  documents.length > 0 && (
+                    <optgroup key={label} label={label}>
+                      {documents.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ),
+              )}
+          </select>
+        </label>
+        <button type="submit" disabled={busy}>
+          Link
+        </button>
+      </form>
+      {error && <p role="alert">{error}</p>}
+    </section>
+  );
+}
+
 /** What the Ticket's Runs wrote, oldest first; shown only once there is one. */
 function Reports({ reports }: { reports: Report[] }) {
   if (reports.length === 0) return null;
@@ -707,7 +827,10 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | RelationKind>, string> = {
+const fieldNames: Record<
+  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | RelationKind>,
+  string
+> = {
   delegate: "Delegate",
   title: "Title",
   description: "Description",
@@ -747,6 +870,11 @@ function described(change: Change): string {
     return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;
   }
   if (change.field === "description") return "changed the Description";
+  if (change.field === "linkedDocument") {
+    return change.to
+      ? `linked the Document ${(change.to as { title: string }).title}`
+      : `unlinked the Document ${(change.from as { title: string }).title}`;
+  }
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
     return change.to

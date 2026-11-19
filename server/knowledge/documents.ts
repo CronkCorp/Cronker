@@ -422,9 +422,10 @@ export async function compareVersions(
 
 /**
  * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
- * deleted first. Its siblings after it close the gap.
+ * deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
  */
-export async function deleteDocument({ db, live }: Context, actor: Caller, documentId: string): Promise<void> {
+export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
+  const { db, live } = context;
   await transaction(db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
@@ -445,6 +446,16 @@ export async function deleteDocument({ db, live }: Context, actor: Caller, docum
           advice: "Move its children under another parent or to the top of the page tree, or delete them, first.",
         },
       );
+    }
+    // It drops out of its links: the Tickets linking it show the change.
+    const linking = await tx.query<{ ticketId: string; projectId: string }>(
+      `select tickets.id as "ticketId", tickets.project_id as "projectId"
+       from linked_documents join tickets on tickets.id = linked_documents.ticket_id
+       where linked_documents.document_id = $1 order by linked_documents.seq`,
+      [document.id],
+    );
+    for (const { ticketId, projectId } of linking.rows) {
+      live.publish(tx, document.workspaceId, { type: "ticket.changed", projectId, ticketId });
     }
     await tx.query("delete from documents where id = $1", [document.id]);
     if (isInPageTree(document)) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
