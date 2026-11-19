@@ -1,5 +1,5 @@
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
-import { attachmentUrl, type Mention } from "./api.js";
+import { attachmentUrl, isAttachmentUrl, type Mention } from "./api.js";
 import { Link } from "./router.js";
 
 /** A minimal view of the Markdown syntax tree, enough to find text outside links and code. */
@@ -49,7 +49,7 @@ function urlTransform(url: string): string {
 
 const components: Components = {
   a: ({ href, children }) =>
-    href?.startsWith("/api/") ? (
+    href && isAttachmentUrl(href) ? (
       <a href={href} download>
         {children}
       </a>

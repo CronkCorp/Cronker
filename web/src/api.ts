@@ -305,6 +305,11 @@ export function attachmentUrl(id: string): string {
   return `/api/attachments/${encodeURIComponent(id)}/content`;
 }
 
+/** Whether a URL is where an Attachment downloads from. */
+export function isAttachmentUrl(url: string): boolean {
+  return /^\/api\/attachments\/[^/]+\/content$/.test(url);
+}
+
 /** Markdown a Run wrote on its Ticket. */
 export interface Report {
   id: string;
