@@ -1,5 +1,4 @@
-import { createReadStream } from "node:fs";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 
@@ -10,8 +9,8 @@ import type { Readable } from "node:stream";
 export interface AttachmentStorage {
   /** Keeps the bytes under the id, replacing any already there. */
   put(id: string, bytes: Buffer): Promise<void>;
-  /** The bytes kept under the id. */
-  get(id: string): Readable;
+  /** The bytes kept under the id, or nothing if none are. */
+  get(id: string): Promise<Readable | undefined>;
   /** Forgets the bytes kept under the id, if any. */
   delete(id: string): Promise<void>;
 }
@@ -28,9 +27,16 @@ export function directoryStorage(directory: string): AttachmentStorage {
       await writeFile(partial, bytes);
       await rename(partial, path(id));
     },
-    get: (id) => createReadStream(path(id)),
+    async get(id) {
+      // Opened before anything is sent, so a missing file is refused rather than cut off.
+      const file = await open(path(id)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      return file?.createReadStream();
+    },
     async delete(id) {
-      await rm(path(id), { force: true });
+      await Promise.all([rm(path(id), { force: true }), rm(`${path(id)}.partial`, { force: true })]);
     },
   };
 }

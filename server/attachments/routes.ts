@@ -43,7 +43,7 @@ export function attachmentRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { limitBytes } = context.config.attachments;
 
   return async (app) => {
-    // An upload's body is the file itself, of whatever type it is; it is read here, refused past the limit.
+    // An attached file comes as the request's body itself, of whatever type it is; it is read here, refused past the limit.
     app.removeAllContentTypeParsers();
     app.addContentTypeParser("*", (request, payload, done) => {
       const declared = Number(request.headers["content-length"]);
