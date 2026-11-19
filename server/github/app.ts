@@ -4,14 +4,14 @@ import type { Db } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
-import { convertManifest, under } from "./client.js";
+import { appJwt, convertManifest, under } from "./client.js";
 
 /**
  * The installation's one GitHub App, created through GitHub's manifest flow: Cronk hands
  * the browser a manifest to post to GitHub, GitHub creates the App and sends the browser
  * back with a code, and Cronk trades the code for the App's credentials, storing its
- * secrets encrypted. This milestone uses the App only to sign Users in; Repository access
- * and webhooks come to the same App later.
+ * secrets encrypted. The App signs Users in, reads the Repositories it's installed on and
+ * sends Cronk webhooks.
  *
  * Any Admin may create it, during setup or later, but only while the installation has
  * none, so no Admin can swap the App every Workspace signs in through.
@@ -36,6 +36,23 @@ const stateLifetimeMs = 60 * 60 * 1000;
 
 export const callbackPath = "/api/github/callback";
 export const createdPath = "/api/github/app/created";
+export const webhooksPath = "/api/github/webhooks";
+
+/**
+ * What the App needs from GitHub: reading email addresses to sign Users in, and reading
+ * Pull Requests, checks and commit statuses on the Repositories it's installed on. Never
+ * write access.
+ */
+export const requiredPermissions: Readonly<Record<string, "read">> = {
+  emails: "read",
+  metadata: "read",
+  pull_requests: "read",
+  checks: "read",
+  statuses: "read",
+};
+
+/** The webhook events the App subscribes to. */
+export const requiredEvents: readonly string[] = ["pull_request", "pull_request_review", "check_run", "check_suite", "status"];
 
 export async function findApp(db: Db): Promise<GitHubApp | null> {
   const { rows } = await db.query<GitHubApp>(
@@ -66,7 +83,7 @@ export async function appCredentials({ db, config }: Context): Promise<AppCreden
 const appExists = () =>
   new ApiError(409, "github_app_exists", "This installation already has its GitHub App.");
 
-async function isAnyAdmin(db: Db, userId: string): Promise<boolean> {
+export async function isAnyAdmin(db: Db, userId: string): Promise<boolean> {
   const { rowCount } = await db.query("select 1 from memberships where user_id = $1 and is_admin limit 1", [userId]);
   return rowCount !== 0;
 }
@@ -108,7 +125,10 @@ export async function startManifestFlow(
       callback_urls: [`${origin}${callbackPath}`],
       public: false,
       request_oauth_on_install: false,
-      default_permissions: { emails: "read" },
+      default_permissions: { ...requiredPermissions },
+      default_events: [...requiredEvents],
+      // GitHub generates the webhook secret and hands it back with the App's other credentials.
+      hook_attributes: { url: `${origin}${webhooksPath}`, active: true },
     },
   };
 }
@@ -134,8 +154,9 @@ export async function finishManifestFlow(context: Context, code: string, state: 
   const app = await convertManifest(config, code);
   const { rowCount } = await db.query(
     `insert into github_app (app_id, slug, name, owner_login, html_url, client_id, client_secret, webhook_secret,
-                             private_key, created_by, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing`,
+                             webhook_secret_confirmed_at, private_key, created_by, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, case when $8::text is null then null else $11::timestamptz end, $9, $10, $11)
+     on conflict do nothing`,
     [
       app.id,
       app.slug,
@@ -153,4 +174,28 @@ export async function finishManifestFlow(context: Context, code: string, state: 
   // Another Admin's flow may have finished first.
   if (rowCount === 0) throw appExists();
   return { name: app.name, githubAccount: app.owner.login, htmlUrl: app.html_url };
+}
+
+/** A JSON web token GitHub takes as the App itself, or a refusal while the installation has no App. */
+export async function appToken({ db, config, clock }: Context): Promise<string> {
+  const { rows } = await db.query<{ app_id: string; private_key: string }>("select app_id, private_key from github_app");
+  const row = rows[0];
+  if (!row) throw githubNotSetUp();
+  return appJwt({ appId: Number(row.app_id), privateKey: requireSecretBox(config).open(row.private_key) }, clock.now());
+}
+
+export interface WebhookSecret {
+  secret: string;
+  /** Whether GitHub is known to sign deliveries with it. */
+  confirmed: boolean;
+}
+
+/** The App's webhook secret, decrypted, or nothing if there is no App or it has none. */
+export async function webhookSecret({ db, config }: Context): Promise<WebhookSecret | undefined> {
+  const { rows } = await db.query<{ webhook_secret: string | null; confirmed: boolean }>(
+    "select webhook_secret, webhook_secret_confirmed_at is not null as confirmed from github_app",
+  );
+  const row = rows[0];
+  if (!row?.webhook_secret) return undefined;
+  return { secret: requireSecretBox(config).open(row.webhook_secret), confirmed: row.confirmed };
 }

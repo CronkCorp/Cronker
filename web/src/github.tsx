@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type GitHubApp, type WorkspaceSummary } from "./api.js";
+import { api, type GitHubApp, type GitHubChecklist, type GitHubInstallation, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { returnAfterSignIn } from "./storage.js";
 
@@ -105,6 +105,149 @@ export function GitHubSetupStep({ onSkip }: { onSkip: () => void }) {
   );
 }
 
+/** How GitHub's settings page names each permission Cronk asks for. */
+const permissionNames: Record<string, string> = {
+  emails: "Email addresses (account permission)",
+  metadata: "Metadata",
+  pull_requests: "Pull requests",
+  checks: "Checks",
+  statuses: "Commit statuses",
+};
+
+/** How GitHub's settings page names each event Cronk subscribes to. */
+const eventNames: Record<string, string> = {
+  pull_request: "Pull request",
+  pull_request_review: "Pull request review",
+  check_run: "Check run",
+  check_suite: "Check suite",
+  status: "Status",
+};
+
+function PermissionList({ permissions }: { permissions: Record<string, string> }) {
+  return (
+    <ul>
+      {Object.entries(permissions).map(([name, access]) => (
+        <li key={name}>
+          {permissionNames[name] ?? name}: {access === "read" ? "Read-only" : access}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** For Admins: what the App lacks, to add by hand in its settings on GitHub. */
+function AppChecklist() {
+  const [checklist, setChecklist] = useState<GitHubChecklist | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.githubChecklist().then(setChecklist, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+  if (error) return <p role="alert">Couldn't ask GitHub what the App has: {error}</p>;
+  if (!checklist) return <p>Asking GitHub what the App has…</p>;
+
+  const { settingsUrl, missingPermissions, missingEvents, webhook, installationsNotAccepted } = checklist;
+  const appComplete = Object.keys(missingPermissions).length === 0 && missingEvents.length === 0 && !webhook;
+  return (
+    <section aria-labelledby="checklist-heading">
+      <h2 id="checklist-heading">What the App needs</h2>
+      {appComplete ? (
+        <p>The App has every permission, event and webhook setting Cronk needs.</p>
+      ) : (
+        <>
+          <p>
+            The App lacks some of what Cronk needs to read Pull Requests and hear from GitHub. GitHub can't change an
+            existing App from Cronk, so add these in <a href={settingsUrl}>the App's settings on GitHub</a>, save, and
+            reload this page.
+          </p>
+          {Object.keys(missingPermissions).length > 0 && (
+            <>
+              <h3>Permissions</h3>
+              <PermissionList permissions={missingPermissions} />
+            </>
+          )}
+          {missingEvents.length > 0 && (
+            <>
+              <h3>Subscribe to events</h3>
+              <ul>
+                {missingEvents.map((event) => (
+                  <li key={event}>{eventNames[event] ?? event}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {webhook && (
+            <>
+              <h3>Webhook</h3>
+              <p>Check Active, and paste:</p>
+              <div className="issued-link">
+              <label>
+                Webhook URL
+                <input readOnly value={webhook.url} onFocus={(event) => event.currentTarget.select()} />
+              </label>
+              <label>
+                Webhook secret
+                <input readOnly value={webhook.secret} onFocus={(event) => event.currentTarget.select()} />
+              </label>
+              <small>
+                Only Admins see the secret. Cronk refuses deliveries not signed with it. GitHub never shows a secret, so
+                this stays listed until a delivery arrives signed with it; to check at once, redeliver one from the
+                App's Advanced settings on GitHub.
+              </small>
+              </div>
+            </>
+          )}
+        </>
+      )}
+      {installationsNotAccepted.length > 0 && (
+        <>
+          <h3>Installations that haven't accepted</h3>
+          <p>Each installation's owner on GitHub accepts the App's new permissions on its page there. Until then, Cronk can't read its Pull Requests.</p>
+          <ul>
+            {installationsNotAccepted.map((installation) => (
+              <li key={installation.htmlUrl}>
+                <a href={installation.htmlUrl}>{installation.account}</a> lacks
+                <PermissionList permissions={installation.missingPermissions} />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Where the App is installed, and the Repositories each installation covers. */
+function Installations({ app }: { app: GitHubApp }) {
+  const [installations, setInstallations] = useState<GitHubInstallation[] | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.githubInstallations().then(setInstallations, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+  return (
+    <section aria-labelledby="installations-heading">
+      <h2 id="installations-heading">Installations</h2>
+      {error ? (
+        <p role="alert">Couldn't ask GitHub where the App is installed: {error}</p>
+      ) : !installations ? (
+        <p>Asking GitHub where the App is installed…</p>
+      ) : installations.length === 0 ? (
+        <p>
+          The App isn't installed anywhere yet. Install it from <a href={app.htmlUrl}>its page on GitHub</a> on the
+          accounts and organizations whose Repositories Cronk should read.
+        </p>
+      ) : (
+        <ul>
+          {installations.map((installation) => (
+            <li key={installation.account}>
+              {installation.account}: {installation.repositories.map((r) => r.fullName).join(", ") || "no Repositories"}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 /** The installation's GitHub App: who it is, or, for Admins, creating it. */
 export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   const [app, setApp] = useState<GitHubApp | null | undefined>(undefined);
@@ -119,17 +262,21 @@ export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   const isAdmin = workspaces.some((w) => w.isAdmin);
 
   return (
-    <section className="narrow">
+    <section className="github-page">
       <h1>GitHub</h1>
       {outcome.error && <p role="alert">{outcome.error}</p>}
       {outcome.created && <p role="status">The GitHub App is created. People can now sign in with GitHub.</p>}
       {app === undefined ? (
         <p>Loading…</p>
       ) : app ? (
-        <p>
-          This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, under the GitHub account {app.githubAccount}. People sign in
-          with GitHub through it.
-        </p>
+        <>
+          <p>
+            This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, under the GitHub account {app.githubAccount}. People
+            sign in with GitHub through it, and Cronk reads the Pull Requests of the Repositories it's installed on.
+          </p>
+          {isAdmin && <AppChecklist />}
+          <Installations app={app} />
+        </>
       ) : (
         <>
           <p>This installation has no GitHub App yet, so nobody can sign in with GitHub.</p>

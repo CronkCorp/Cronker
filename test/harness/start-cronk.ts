@@ -85,9 +85,9 @@ async function freePort(): Promise<number> {
 
 export async function startCronk(options: StartCronkOptions = {}): Promise<StartedCronk> {
   const database = await createTestDatabase();
-  const github = await startStandInGitHub();
-  const claude = await startStandInClaude();
   const clock = options.clock ?? new TestClock();
+  const github = await startStandInGitHub(clock);
+  const claude = await startStandInClaude();
   const runner = new FakeRunner();
   const logs: LogLine[] = [];
   const logStream = new Writable({

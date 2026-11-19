@@ -18,6 +18,20 @@ export interface GitHubApp {
   htmlUrl: string;
 }
 
+/** What the GitHub App lacks of what Cronk needs, as GitHub reports it. */
+export interface GitHubChecklist {
+  settingsUrl: string;
+  missingPermissions: Record<string, string>;
+  missingEvents: string[];
+  webhook: { url: string; secret: string } | null;
+  installationsNotAccepted: { account: string; htmlUrl: string; missingPermissions: Record<string, string> }[];
+}
+
+export interface GitHubInstallation {
+  account: string;
+  repositories: { id: number; fullName: string }[];
+}
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -464,6 +478,8 @@ export const api = {
   addMemberByGitHub: (id: string, login: string) =>
     call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
   githubApp: () => call<{ app: GitHubApp | null }>("GET", "/api/github/app").then((r) => r.app),
+  githubChecklist: () => call<GitHubChecklist>("GET", "/api/github/app/checklist"),
+  githubInstallations: () => call<GitHubInstallation[]>("GET", "/api/github/installations"),
   startGitHubApp: (githubOrganization?: string) =>
     call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization }),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),

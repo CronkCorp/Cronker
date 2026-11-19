@@ -4,7 +4,13 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
-import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow } from "./app.js";
+import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
+import { Installation, listInstallations } from "./installations.js";
+import { Checklist, checklist } from "./upgrade.js";
+import { receiveDelivery } from "./webhooks.js";
+
+/** GitHub sends webhook payloads of up to 25 MB. */
+const webhookBodyLimit = 25 * 1024 * 1024;
 
 /** Where a browser GitHub sent back is sent on: a page of the web client, with an error code if it failed. */
 function pageWith(path: string, error: unknown, fallback: string, parameter = "error"): string {
@@ -93,6 +99,70 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         return reply.code(201).send(await startManifestFlow(context, user.id, request.body.githubOrganization));
       },
     );
+
+    app.get(
+      "/api/github/app/checklist",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "What the GitHub App still lacks (Admins only)",
+          description:
+            "Asks GitHub, as the App, what it has, and lists what it lacks of what Cronk needs: permissions, events, and the webhook URL and secret to paste into the App's settings on GitHub (`settingsUrl`), which the manifest flow can't change for an existing App. Also lists the App's installations whose owner hasn't accepted the permissions they lack. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+          response: { 200: Checklist, 401: ErrorBody, 403: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request) => checklist(context, (await requireUser(context, request)).id),
+    );
+
+    app.get(
+      "/api/github/installations",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "The GitHub App's installations and the Repositories each covers",
+          description:
+            "Every GitHub account or organization the App is installed on, with the Repositories it covers there, as GitHub reports them now. Installing the App on GitHub is what makes a Repository available to Cronk. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+          response: { 200: Type.Array(Installation), 401: ErrorBody, 403: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request) => {
+        await requireUser(context, request);
+        return listInstallations(context);
+      },
+    );
+
+    // The webhook endpoint reads its body as bytes, since the signature covers exactly those.
+    await app.register(async (hooks) => {
+      hooks.removeAllContentTypeParsers();
+      hooks.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: webhookBodyLimit }, (_request, body, done) => done(null, body));
+      hooks.post(
+        webhooksPath,
+        {
+          bodyLimit: webhookBodyLimit,
+          schema: {
+            tags: ["GitHub"],
+            summary: "Where GitHub sends the App's webhook deliveries",
+            description:
+              "For GitHub only. A delivery must carry `X-Hub-Signature-256`, the HMAC-SHA256 of its body under the App's webhook secret, or it is refused with `invalid_signature` before anything else is looked at. Each delivery is applied once, by its `X-GitHub-Delivery` id: `applied` says whether this call applied it, and is false for one applied before.",
+            response: { 200: Type.Object({ applied: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody },
+          },
+        },
+        async (request) => {
+          const header = (name: string): string | undefined => {
+            const value = request.headers[name];
+            return Array.isArray(value) ? value[0] : value;
+          };
+          const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+          const applied = await receiveDelivery(context, body, {
+            signature: header("x-hub-signature-256"),
+            event: header("x-github-event"),
+            id: header("x-github-delivery"),
+            contentType: header("content-type"),
+          });
+          return { applied };
+        },
+      );
+    });
 
     app.get(
       createdPath,
