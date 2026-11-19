@@ -30,7 +30,7 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page.getByRole("link", { name: "claude-max" }).click();
   await page.getByLabel("Runner").selectOption("Fake");
-  await expect(page.getByLabel("Runner")).toHaveValue(/.+/);
+  await expect(page.getByLabel("Runner").locator("option:checked")).toHaveText("Fake");
   await page.getByLabel("Token name").fill("cloud");
   await page.getByRole("button", { name: "Issue token" }).click();
   const secret = await page.getByLabel("Token cloud").inputValue();
@@ -72,7 +72,8 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
     expect(finished.status).toBe(200);
   };
 
-  // Its Run asks a Question: the Ticket goes back to Backlog and the Question waits in the Inbox.
+  // Its Run asks a Question: the Ticket goes back to Backlog, and the Inbox holds both the Question
+  // and the Ticket handed back by the needs you Outcome.
   await finish({ outcome: "needs you", question: "Should the button be **blue** or green?" });
   const inboxLink = page.getByRole("navigation").getByRole("link", { name: /^Inbox/ });
   await expect(inboxLink).toHaveAccessibleName("Inbox, 2 waiting");
@@ -92,7 +93,7 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
   expect(cronk.runner.starts).toHaveLength(2);
 
-  // On the board the card moves through the Steps as each Run finishes, without a reload.
+  // On the board the Ticket moves from Status to Status as each Step's Run finishes, without a reload.
   await page.goto(boardUrl);
   const cardIn = (status: string) => lane(status).getByRole("link", { name: /CRONK-1 Make it so/ });
   await expect(cardIn("Triage")).toContainText("Run running");
