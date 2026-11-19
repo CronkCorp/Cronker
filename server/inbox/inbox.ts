@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
 import { User } from "../identity/user.js";
+import { latestReportOf, ReportRef } from "../knowledge/reports.js";
 import { openQuestionsFor, Question } from "../runs/questions.js";
 import { WentWrongState, wentWrongStates } from "../runs/states.js";
 import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
@@ -15,10 +16,7 @@ import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../
 const Since = (when: string) => Type.String({ format: "date-time", description: `When it began waiting: ${when}.` });
 
 /** The Ticket's latest Report, for the Inbox to show its title. */
-const LatestReport = Type.Union(
-  [Type.Object({ id: Type.String({ format: "uuid" }), title: Type.String({ description: "Its current Version's." }) }), Type.Null()],
-  { description: "The Ticket's latest Report, or null when it has none." },
-);
+const LatestReport = Type.Union([ReportRef, Type.Null()], { description: "The Ticket's latest Report, or null when it has none." });
 
 /** A Ticket in a Review Status, waiting for its Assignee's review. */
 export const ReviewItem = Type.Object({
@@ -130,7 +128,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     completedBy: { id: string; name: string } | null;
     completedWithoutStep: boolean;
     handedBack: { outcome: string; step: { statusId: string | null; name: string }; question?: string } | null;
-    report: { id: string; title: string } | null;
+    report: ReportRef | null;
   };
   const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
@@ -142,9 +140,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
          'step', json_build_object('statusId', needs_you.step_status_id, 'name', needs_you.step_status_name)
        )::jsonb || case when needs_you.question is null then '{}' else jsonb_build_object('question', needs_you.question) end
        end as "handedBack",
-       (select json_build_object('id', documents.id, 'title', versions.title)
-          from documents join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
-          where documents.ticket_id = tickets.id order by documents.seq desc limit 1) as report
+       ${latestReportOf("tickets.id")} as report
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      left join needs_you on needs_you.ticket_id = tickets.id
@@ -154,8 +150,16 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      order by projects.key, tickets.number`,
     [workspaceId, userId, questions.map((q) => q.ticketId)],
   );
-  const summary = ({ statusName: _s, statusEnteredAt: _e, inReview: _r, completedBy: _c, completedWithoutStep: _w, handedBack: _h, report: _p, ...row }: Row) =>
-    ticketSummary(row);
+  const summary = ({
+    statusName: _s,
+    statusEnteredAt: _e,
+    inReview: _r,
+    completedBy: _c,
+    completedWithoutStep: _w,
+    handedBack: _h,
+    report: _report,
+    ...row
+  }: Row) => ticketSummary(row);
   const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
   /** The Ticket, the Status it waits in, and when it entered it. */
   const inStatus = (row: Row) => ({
@@ -173,7 +177,15 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     ...rows.flatMap((row): InboxItem[] => (row.inReview ? [{ kind: "review", ...inStatus(row), report: row.report }] : [])),
     ...rows.flatMap((row): InboxItem[] =>
       row.verification === "unverified"
-        ? [{ kind: "unverified", ...inStatus(row), completedBy: row.completedBy, completedWithoutStep: row.completedWithoutStep, report: row.report }]
+        ? [
+            {
+              kind: "unverified",
+              ...inStatus(row),
+              completedBy: row.completedBy,
+              completedWithoutStep: row.completedWithoutStep,
+              report: row.report,
+            },
+          ]
         : [],
     ),
   ];
