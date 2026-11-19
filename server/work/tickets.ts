@@ -646,7 +646,11 @@ export async function editTicket(
       await subTicketChange(ticket.parentId, { field: "subTicket", from: self, to: null });
       await subTicketChange(next.parentId, { field: "subTicket", from: null, to: self });
     }
-    if (next.autonomousDelegation !== ticket.autonomousDelegation && next.autonomousDelegation !== null) {
+    // A Sub-Ticket inherits its parent's Autonomous Delegation, so it follows any change, and goes along with a
+    // Delegation passed down.
+    const delegationPassedDown = next.delegateId !== null && next.delegateId !== ticket.delegateId;
+    const autonomousChanged = next.autonomousDelegation !== ticket.autonomousDelegation;
+    if ((autonomousChanged || delegationPassedDown) && next.autonomousDelegation !== null) {
       await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
     }
     // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
@@ -654,11 +658,7 @@ export async function editTicket(
     const entered = next.statusId !== ticket.statusId;
     const delegateChanged = next.delegateId !== ticket.delegateId;
     if (entered || delegateChanged) {
-      const { rows } = await tx.query<{ name: string }>(
-        "select coalesce(email, '@' || github_login) as name from users where id = $1",
-        [userId],
-      );
-      const who = rows[0]!.name;
+      const who = await nameOfUser(tx, userId);
       const moved = changes.find((c) => c.field === "status")?.to as { name: string } | undefined;
       const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
       const reason = moved
@@ -675,6 +675,7 @@ export async function editTicket(
     // A User moving the Ticket by hand starts its rounds afresh at every Step.
     if (entered) await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
+    if (delegateChanged) await passDelegationDown(context, tx, ticket, next, userId, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
     if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
@@ -751,6 +752,77 @@ async function passAutonomousDelegationDown(
     const subTicket = { id: row.id, workspaceId: ticket.workspaceId };
     await recordChanges(tx, subTicket, userId, now, [{ field: "autonomousDelegation", from: row.from, to: value }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: row.id });
+  }
+}
+
+/**
+ * Gives the Ticket's Sub-Tickets, however deep, its new Delegation, as each Sub-Ticket inherits it. Delegated, they
+ * take its Assignee and Delegate, even over a Delegation of their own; undelegated, those that held its Delegate
+ * lose it and keep their Assignee, while any delegated to another Agent keep theirs. Each records the User's Changes,
+ * and a running Run on one whose Delegate changed stops, as on any re-delegation.
+ */
+async function passDelegationDown(
+  context: Context,
+  tx: Tx,
+  ticket: TicketRow,
+  next: Row,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  const undelegated = next.delegateId === null;
+  const { rows } = await tx.query<{
+    id: string;
+    key: string;
+    assigneeId: string | null;
+    assignee: string | null;
+    delegateId: string | null;
+    delegate: string | null;
+  }>(
+    `with recursive descendants (id) as (
+       select id from tickets where parent_id = $1
+       union
+       select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
+     )
+     select tickets.id, projects.key || '-' || tickets.number as key,
+       tickets.assignee_id as "assigneeId", users.email as assignee,
+       tickets.delegate_id as "delegateId", agents.name as delegate
+     from tickets join descendants using (id) join projects on projects.id = tickets.project_id
+     left join users on users.id = tickets.assignee_id left join agents on agents.id = tickets.delegate_id
+     where ${undelegated ? "tickets.delegate_id = $2" : "tickets.assignee_id is distinct from $3 or tickets.delegate_id is distinct from $2"}
+     order by tickets.id for update of tickets`,
+    undelegated ? [ticket.id, ticket.delegateId] : [ticket.id, next.delegateId, next.assigneeId],
+  );
+  if (rows.length === 0) return;
+  const assignee = undelegated ? null : await named(tx, "select id, email as name from users where id = $1", next.assigneeId);
+  const delegate = await named(tx, "select id, name from agents where id = $1", next.delegateId);
+  const who = await nameOfUser(tx, userId);
+  for (const subTicket of rows) {
+    const assigneeId = undelegated ? subTicket.assigneeId : next.assigneeId;
+    await tx.query(
+      `update tickets set assignee_id = $2, delegate_id = $3,
+       discovery_waits = case when $3::uuid is not null and delegate_id is distinct from $3 then false else discovery_waits end
+       where id = $1`,
+      [subTicket.id, assigneeId, next.delegateId],
+    );
+    const changes: NewChange[] = [];
+    if (subTicket.assigneeId !== assigneeId) {
+      const from = subTicket.assigneeId === null ? null : { id: subTicket.assigneeId, name: subTicket.assignee };
+      changes.push({ field: "assignee", from, to: assignee });
+    }
+    if (subTicket.delegateId !== next.delegateId) {
+      const from = subTicket.delegateId === null ? null : { id: subTicket.delegateId, name: subTicket.delegate };
+      changes.push({ field: "delegate", from, to: delegate });
+    }
+    await recordChanges(tx, { id: subTicket.id, workspaceId: ticket.workspaceId }, userId, now, changes);
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: subTicket.id });
+    if (subTicket.delegateId !== next.delegateId) {
+      const reason = delegate
+        ? `${who} delegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}, to ${delegate.name}.`
+        : `${who} undelegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}.`;
+      await stopRunningRun(context, tx, subTicket.id, reason, now);
+      // Gaining a Delegate may get the Sub-Ticket a Run; losing it ends its wait for one.
+      await startRunIfNeeded(context, tx, subTicket.id, now);
+    }
   }
 }
 
@@ -897,6 +969,15 @@ async function heldDelegationOf(
   );
   const { assigneeId, delegateId } = rows[0]!;
   return delegateId !== null && (await holdAgentInUse(tx, delegateId)) ? { assigneeId, delegateId } : null;
+}
+
+/** How a stop reason names the User: their email, or else their GitHub login. */
+async function nameOfUser(tx: Tx, userId: string): Promise<string> {
+  const { rows } = await tx.query<{ name: string }>(
+    "select coalesce(email, '@' || github_login) as name from users where id = $1",
+    [userId],
+  );
+  return rows[0]!.name;
 }
 
 async function ownerOf(tx: Tx, agentId: string): Promise<string | undefined> {
