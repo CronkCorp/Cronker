@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
+import { completeMergedTickets } from "../pipeline/merges.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
 
@@ -9,8 +10,8 @@ import type { EventHandler } from "./webhooks.js";
  * Pull Requests in the Repositories Projects list, and the Tickets they link to: those whose
  * key their branch or title contains, in the Projects listing the Pull Request's Repository.
  * Projects sharing a key there, always of different Workspaces, all get the link. Links are
- * only added, as a title or branch comes to name another key, never removed. Nothing a Pull
- * Request does moves a Ticket here.
+ * only added, as a title or branch comes to name another key, never removed. Only a merge moves
+ * Tickets, which Pipeline applies.
  */
 
 export const pullRequestStates = ["open", "draft", "merged", "closed"] as const;
@@ -53,6 +54,9 @@ export const PullRequest = Type.Object({
     { description: "`open`, `draft` (open but not ready for review), `merged` or `closed` (closed unmerged)." },
   ),
   checks: Type.Array(Check, { description: "The checks on its latest commit, the latest of each by name." }),
+  mergedBy: Type.Union([Type.String(), Type.Null()], {
+    description: "The login of the GitHub account that merged it, as GitHub reported it; null until merged, or when GitHub named none.",
+  }),
   producingStep: Type.Union([ProducingStep, Type.Null()], {
     description:
       "The Step of the Run that was running on this Ticket when GitHub reported the Pull Request opened, or null if none was, as when a User opened it.",
@@ -67,7 +71,7 @@ export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): 
   const { rows } = await db.query<Omit<PullRequest, "id" | "checks"> & { id: string; repositoryId: string; sha: string }>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId", pull_requests.head_sha as sha,
        pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.title,
-       pull_requests.branch, pull_requests.url, pull_requests.state,
+       pull_requests.branch, pull_requests.url, pull_requests.state, pull_requests.merged_by_login as "mergedBy",
        case when runs.id is null then null
          else json_build_object('runId', runs.id, 'statusId', runs.status_id, 'name', runs.status_name) end
          as "producingStep"
@@ -110,6 +114,8 @@ interface PullRequestPayload {
   draft?: boolean;
   merged?: boolean;
   merged_at?: string | null;
+  merged_by?: { id?: unknown; login?: unknown } | null;
+  auto_merge?: unknown;
   html_url: string;
   head: { ref: string; sha: string };
   updated_at: string;
@@ -169,15 +175,26 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
   if (typeof repository?.id !== "number" || typeof repository.full_name !== "string" || !isPullRequest(pr)) return;
   if (!(await isListed(tx, repository.id))) return;
 
-  await tx.query(
-    `insert into pull_requests (id, repository_id, repository_full_name, number, title, branch, head_sha, state, url, updated_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  const state = stateOf(pr);
+  const mergedBy =
+    state === "merged" && typeof pr.merged_by?.id === "number" && typeof pr.merged_by.login === "string"
+      ? { id: pr.merged_by.id, login: pr.merged_by.login }
+      : null;
+  // Whether Cronk knew the Pull Request merged already, so only the delivery of its merge completes Tickets.
+  const { rows: known } = await tx.query<{ state: PullRequestState }>("select state from pull_requests where id = $1 for update", [
+    pr.id,
+  ]);
+  const { rowCount: kept } = await tx.query(
+    `insert into pull_requests (id, repository_id, repository_full_name, number, title, branch, head_sha, state, url,
+       merged_by_login, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      on conflict (id) do update set repository_id = excluded.repository_id,
        repository_full_name = excluded.repository_full_name, number = excluded.number, title = excluded.title,
        branch = excluded.branch, head_sha = excluded.head_sha, state = excluded.state, url = excluded.url,
-       updated_at = excluded.updated_at
+       merged_by_login = excluded.merged_by_login, updated_at = excluded.updated_at
      where pull_requests.updated_at <= excluded.updated_at`,
-    [pr.id, repository.id, repository.full_name, pr.number, pr.title, pr.head.ref, pr.head.sha, stateOf(pr), pr.html_url, pr.updated_at],
+    [pr.id, repository.id, repository.full_name, pr.number, pr.title, pr.head.ref, pr.head.sha, state, pr.html_url,
+      mergedBy?.login ?? null, pr.updated_at],
   );
 
   // Keys named by this delivery link even if it arrived late, since links are only ever added. A key may be
@@ -200,6 +217,13 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
          set producing_run_id = coalesce(pull_request_links.producing_run_id, excluded.producing_run_id)`,
       [pr.id, repository.id, keys, opened, context.clock.now()],
     );
+  }
+  if (kept && state === "merged" && known[0]?.state !== "merged") {
+    await completeMergedTickets(context, tx, {
+      pullRequest: { id: pr.id, repository: repository.full_name, number: pr.number, title: pr.title, url: pr.html_url },
+      mergedBy,
+      autoMerged: pr.auto_merge !== null && pr.auto_merge !== undefined,
+    });
   }
   await announce(context, tx, [pr.id]);
 };

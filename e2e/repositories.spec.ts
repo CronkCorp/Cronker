@@ -1,7 +1,7 @@
 import { expect, openProjectSettings, test } from "./fixtures.js";
 import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
 
-test("add a Repository the App is installed on to a Project, see its rename, and remove it", async ({ page, cronk }) => {
+test("add a Repository the App is installed on to a Project, turn Pull Request automation off, see its rename, and remove it", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   cronk.github.signedInAs = cronk.github.account("ada-gh");
@@ -25,6 +25,14 @@ test("add a Repository the App is installed on to a Project, see its rename, and
   await repositories.getByRole("button", { name: "Add Repository" }).click();
   await expect(repositories.getByRole("listitem")).toHaveText(["cronkcorp/cronkerRemove"]);
   await expect(repositories.getByLabel("Repository to add").getByRole("option")).toHaveText(["cronkcorp/website"]);
+
+  // Pull Request automation is on until turned off, which sticks.
+  const automation = page.getByRole("region", { name: "Pull Request automation" }).getByLabel("Merges complete their Tickets");
+  await expect(automation).toBeChecked();
+  await automation.click();
+  await expect(automation).not.toBeChecked();
+  await page.reload();
+  await expect(automation).not.toBeChecked();
 
   // Renamed on GitHub, the Repository shows its new name live.
   cronker.name = "cronk";

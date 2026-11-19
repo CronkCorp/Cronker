@@ -29,6 +29,8 @@ export async function acceptTicket(context: Context, user: User, ticketId: strin
 /**
  * A User Reopens an Unverified Ticket with a Comment saying why: it goes back to the Status of the Step
  * that completed it, no longer Unverified, and gets a new Run there. It blocks again what it blocked.
+ * A Ticket completed by work no Step produced, such as a merge of a Pull Request a User opened, stays
+ * where it is, no longer Unverified, for the User to move.
  */
 export async function reopenTicket(context: Context, user: User, ticketId: string, comment: string): Promise<Ticket> {
   const { db, clock, live } = context;
@@ -36,15 +38,21 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     const ticket = await unverifiedTicket(tx, user, ticketId, "Reopened");
     // Holds the board still until the move commits, so the Status it goes back to can't be removed meanwhile.
     await tx.query("select 1 from projects where id = $1 for share", [ticket.projectId]);
-    const { rows } = await tx.query<{ from: { id: string; name: string }; to: { id: string; name: string } | null }>(
+    const { rows } = await tx.query<{
+      from: { id: string; name: string };
+      to: { id: string; name: string } | null;
+      withoutStep: boolean;
+    }>(
       `select json_build_object('id', current.id, 'name', current.name) as from,
-         case when back.id is null then null else json_build_object('id', back.id, 'name', back.name) end as to
+         case when back.id is null then null else json_build_object('id', back.id, 'name', back.name) end as to,
+         tickets.completed_without_step as "withoutStep"
        from tickets join statuses current on current.id = tickets.status_id
        left join statuses back on back.id = tickets.completed_from_status_id
        where tickets.id = $1`,
       [ticket.id],
     );
-    const { from, to } = rows[0]!;
+    const { from, withoutStep } = rows[0]!;
+    const to = rows[0]!.to ?? (withoutStep ? from : null);
     if (!to) {
       throw new ApiError(
         409,
@@ -55,7 +63,9 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     }
     const now = clock.now();
     await tx.query(
-      `update tickets set status_id = $2, status_entered_at = $3, verification = null, completed_from_status_id = null
+      `update tickets set status_id = $2,
+         status_entered_at = case when status_id = $2 then status_entered_at else $3 end,
+         verification = null, completed_from_status_id = null, completed_without_step = false
        where id = $1`,
       [ticket.id, to.id, now],
     );
@@ -64,7 +74,7 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     await insertComment(context, tx, ticket, { kind: "user", id: user.id }, comment, null);
     await recordChanges(tx, ticket, user.id, now, [
-      { field: "status", from, to },
+      ...(to.id === from.id ? [] : [{ field: "status" as const, from, to }]),
       { field: "verification", from: "unverified", to: null },
     ]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });

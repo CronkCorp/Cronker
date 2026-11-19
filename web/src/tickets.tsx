@@ -305,6 +305,8 @@ export function TicketScreen({
             <Verification
               ticket={ticket}
               runs={runs}
+              changes={timeline}
+              pullRequests={pullRequests}
               onAccept={() => apply(api.acceptTicket(ticket.id))}
               onReopen={async (comment) => {
                 const reopened = api.reopenTicket(ticket.id, comment);
@@ -549,17 +551,21 @@ function Fields({
 }
 
 /**
- * A Ticket a Run completed: Unverified until the User Accepts it, or Reopens it with a Comment saying why,
- * sending it back to the Step that completed it.
+ * A Ticket a Run or a merge completed: Unverified until the User Accepts it, or Reopens it with a Comment saying why,
+ * sending it back to the Step that completed it (or produced the merged Pull Request); without one, it stays put.
  */
 function Verification({
   ticket,
   runs,
+  changes,
+  pullRequests,
   onAccept,
   onReopen,
 }: {
   ticket: Ticket;
   runs: Run[];
+  changes: Change[];
+  pullRequests: PullRequest[];
   onAccept: () => Promise<void>;
   onReopen: (comment: string) => Promise<void>;
 }) {
@@ -568,8 +574,27 @@ function Verification({
     await onReopen(field(form, "comment"));
     setReopening(false);
   });
+  // The latest completion, and the merge Cronk recorded with it, if a merge completed it.
+  const completion = changes.filter((c) => c.field === "verification" && c.from === null).at(-1);
+  const merge = completion && changes.find((c) => c.field === "merged" && c.at === completion.at);
   const completing = runs.filter((r) => r.state === "finished").at(-1);
-  const by = completing ? `${completing.agent.name}'s Run of the ${completing.step.name} Step` : "A Run";
+  let by: string;
+  let back: string;
+  if (merge) {
+    const { pullRequest, mergedBy } = merge.to as Merged & { pullRequest: { id: number } };
+    const name = `${pullRequest.repository}#${pullRequest.number}`;
+    by = mergedBy ? `@${mergedBy} merged ${name}` : `${name} was merged`;
+    const producing = pullRequests.find((pr) => pr.id === pullRequest.id)?.producingStep;
+    back = producing ? `send it back to the ${producing.name} Step` : "leave it here for you to move";
+  } else {
+    by = completing ? `${completing.agent.name}'s Run of the ${completing.step.name} Step` : "A Run";
+    back = "send it back to that Step";
+  }
+  const verifiedText = !merge
+    ? "A Run completed this and a User Accepted it."
+    : completion.to === "verified"
+      ? `Verified: ${by}, a merge by a User of this Workspace.`
+      : `${by}, completing this, and a User Accepted it.`;
   return (
     <section aria-label="Verification" className="panel side-section verification">
       <div className="field-row">
@@ -577,10 +602,13 @@ function Verification({
         {ticket.verification === "verified" ? <Chip tone="ok">Verified</Chip> : <Chip tone="info">Unverified</Chip>}
       </div>
       {ticket.verification === "verified" ? (
-        <p className="muted small">A Run completed this and a User Accepted it.</p>
+        <p className="muted small">{verifiedText}</p>
       ) : (
         <>
-          <p className="small">{by} completed this. It is Unverified until you Accept it, or Reopen it to send it back to that Step.</p>
+          <p className="small">
+            {by}
+            {merge ? ", completing this" : " completed this"}. It is Unverified until you Accept it, or Reopen it to {back}.
+          </p>
           <Actions>
             <Button variant="primary" size="small" onClick={() => void onAccept()}>
               Accept
@@ -591,7 +619,12 @@ function Verification({
           </Actions>
         </>
       )}
-      <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description="It goes back to the Step that completed it, with your Comment.">
+      <Dialog
+        open={reopening}
+        onOpenChange={setReopening}
+        title={`Reopen ${ticket.key}`}
+        description={`With your Comment, Reopen will ${back}.`}
+      >
         <form onSubmit={onSubmit}>
           <Field label="Why reopen it?">
             <textarea name="comment" required rows={4} autoFocus />
@@ -964,7 +997,7 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | RelationKind>,
+  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | RelationKind>,
   string
 > = {
   delegate: "Delegate",
@@ -998,8 +1031,19 @@ interface StepSkipped {
   outcome: string;
 }
 
+/** What a `merged` Change records: the Pull Request as it was then, and the login of the GitHub account that merged it. */
+interface Merged {
+  pullRequest: { repository: string; number: number; title: string };
+  mergedBy: string | null;
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
+  if (change.field === "merged") {
+    const { pullRequest, mergedBy } = change.to as Merged;
+    const name = `${pullRequest.repository}#${pullRequest.number} ${pullRequest.title}`;
+    return mergedBy ? `completed it: @${mergedBy} merged ${name}` : `completed it: ${name} was merged`;
+  }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "stepSkipped") {
     const { status, labelRule, outcome } = change.to as StepSkipped;

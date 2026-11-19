@@ -8,6 +8,7 @@ import {
   type Member,
   type Priority,
   type Project,
+  type ProjectEdit,
   type ProjectSummary,
   type Status,
   type StatusKind,
@@ -195,6 +196,7 @@ export function ProjectScreen({
         <BriefPreview project={project} />
         <DelegationSettings project={project} onChange={setProject} />
         <RepositoriesSettings project={project} />
+        <PullRequestAutomationSettings project={project} onChange={setProject} />
       </div>
     );
   }
@@ -544,10 +546,11 @@ function List({
   );
 }
 
-function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+/** Changes the Project's settings, one toggle at a time, with what went wrong. */
+function useProjectEdit(project: Project, onChange: (project: Project) => void) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const toggle = async (edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) => {
+  const toggle = async (edit: ProjectEdit) => {
     setBusy(true);
     setError(null);
     try {
@@ -558,6 +561,11 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
       setBusy(false);
     }
   };
+  return { error, busy, toggle };
+}
+
+function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+  const { error, busy, toggle } = useProjectEdit(project, onChange);
   return (
     <Panel
       title="Delegation defaults"
@@ -581,6 +589,28 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
           onChange={(e) => void toggle({ autonomousDelegationDefault: e.target.checked })}
         />
         Tickets first delegated get Autonomous Delegation
+      </label>
+      <FormError error={error} />
+    </Panel>
+  );
+}
+
+function PullRequestAutomationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+  const { error, busy, toggle } = useProjectEdit(project, onChange);
+  return (
+    <Panel
+      title="Pull Request automation"
+      id="pull-request-automation"
+      description="A merged Pull Request completes the Tickets it links: Verified when a User of this Workspace merged it, otherwise Unverified. Turned off, merges only update the Pull Request's state."
+    >
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.pullRequestAutomation}
+          disabled={busy}
+          onChange={(e) => void toggle({ pullRequestAutomation: e.target.checked })}
+        />
+        Merges complete their Tickets
       </label>
       <FormError error={error} />
     </Panel>

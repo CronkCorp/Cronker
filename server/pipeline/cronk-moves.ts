@@ -35,6 +35,11 @@ export type CronkMoveTarget =
       statusId: string;
       /** The Status of the Step that produced the work, where Reopen sends a completed Ticket; null for none. */
       completedFrom: string | null;
+      /**
+       * Whether no Step produced the work, as with a Pull Request a User opened: Reopen then leaves the completed
+       * Ticket where it is. Otherwise a null `completedFrom` means that Step's Status is gone, and Reopen is refused.
+       */
+      withoutStep?: boolean;
     };
 
 export interface CronkMove {
@@ -117,11 +122,11 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   if (statuses.find((s) => s.id === to)!.kind === "done") {
     // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.
     const completedFrom = target.kind === "outcome" ? target.step.statusId : target.completedFrom;
-    await tx.query("update tickets set verification = $2, completed_from_status_id = $3 where id = $1", [
-      ticket.id,
-      move.verification,
-      completedFrom,
-    ]);
+    const withoutStep = target.kind === "status" && target.withoutStep === true;
+    await tx.query(
+      "update tickets set verification = $2, completed_from_status_id = $3, completed_without_step = $4 where id = $1",
+      [ticket.id, move.verification, completedFrom, withoutStep],
+    );
     await recordChanges(tx, ticket, move.by, now, [{ field: "verification", from: ticket.verification, to: move.verification }]);
   }
   context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });

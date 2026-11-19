@@ -331,6 +331,7 @@ describe("the Inbox", () => {
           ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", verification: "unverified" }),
           status: { id: status("Done"), name: "Done" },
           completedBy: { id: status("Code review"), name: "Code review" },
+          completedWithoutStep: false,
         },
       ],
     });
