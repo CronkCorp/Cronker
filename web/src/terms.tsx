@@ -3,6 +3,7 @@ import { api, ApiError, type Place, type Term, type TermVersion, type Workspace 
 import { field, useSubmit } from "./forms.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
+import { Button } from "./button.js";
 
 /** Where a glossary is shown: a Project's Glossary tab, or the Workspace's Glossary page. */
 const glossaryPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/glossary` : `/workspaces/${place.id}/glossary`);
@@ -61,9 +62,9 @@ function NewTerm({ place }: { place: Place }) {
         Words to avoid
         <input name="avoid" placeholder="Separated by commas" />
       </label>
-      <button type="submit" disabled={busy}>
+      <Button variant="primary" type="submit" disabled={busy}>
         Create Term
-      </button>
+      </Button>
       {error && <p role="alert">{error}</p>}
     </form>
   );
@@ -164,9 +165,9 @@ export function TermScreen({
       ) : (
         <>
           <div className="actions">
-            <button type="button" onClick={() => setEditing(true)}>
+            <Button variant="secondary" type="button" onClick={() => setEditing(true)}>
               Edit
-            </button>
+            </Button>
           </div>
           {term.definition.trim() ? <Markdown text={term.definition} mentions={[]} /> : <p className="muted">No definition.</p>}
           {term.avoid.length > 0 && <p>Avoid: {term.avoid.join(", ")}</p>}
@@ -236,9 +237,9 @@ function Editor({
             <dt>Words to avoid</dt>
             <dd>{current.avoid.join(", ") || "None"}</dd>
           </dl>
-          <button
+          <Button
+            variant="ghost"
             type="button"
-            className="secondary"
             onClick={() => {
               setBase(current.number);
               setCurrent(null);
@@ -246,16 +247,16 @@ function Editor({
             }}
           >
             Base my draft on Version {current.number}
-          </button>
+          </Button>
         </section>
       )}
       <div className="actions">
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Save
-        </button>
-        <button type="button" className="link" onClick={onCancel}>
+        </Button>
+        <Button variant="ghost" type="button" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -270,9 +271,9 @@ function Delete({ term, onDeleted }: { term: Term; onDeleted: () => void }) {
   return (
     <>
       <form onSubmit={onSubmit} className="inline">
-        <button type="submit" className="secondary" disabled={busy}>
+        <Button variant="ghost" type="submit" disabled={busy}>
           Delete Term
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </>

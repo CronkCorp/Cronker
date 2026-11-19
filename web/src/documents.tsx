@@ -16,6 +16,7 @@ import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
+import { Button } from "./button.js";
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
 function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSummary[]> {
@@ -63,9 +64,9 @@ export function PageTree({ tree }: { tree: Tree }) {
           New Document title
           <input name="title" required maxLength={300} />
         </label>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Create Document
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </section>
@@ -148,7 +149,7 @@ export function DocumentScreen({
       <p>
         <Link to={home.path}>{home.name}</Link>
       </p>
-      <h1>{document.title}</h1>
+      <h1 className="title">{document.title}</h1>
       <p className="muted">{versionLine(document.version)}</p>
       {editing ? (
         <Editor
@@ -167,9 +168,9 @@ export function DocumentScreen({
       ) : (
         <>
           <div className="actions">
-            <button type="button" onClick={() => setEditing(true)}>
+            <Button variant="secondary" type="button" onClick={() => setEditing(true)}>
               Edit
-            </button>
+            </Button>
           </div>
           {document.body.trim() ? <Markdown text={document.body} mentions={[]} /> : <p className="muted">Empty.</p>}
           <Attachments
@@ -248,9 +249,9 @@ export function Editor<T>({
           <h2>{versionLine(current)}</h2>
           <p className="muted">Merge its changes into your draft, then save based on it.</p>
           <pre>{current.body}</pre>
-          <button
+          <Button
+            variant="ghost"
             type="button"
-            className="secondary"
             onClick={() => {
               setBase(current.number);
               setCurrent(null);
@@ -258,16 +259,16 @@ export function Editor<T>({
             }}
           >
             Base my draft on Version {current.number}
-          </button>
+          </Button>
         </section>
       )}
       <div className="actions">
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Save
-        </button>
-        <button type="button" className="link" onClick={onCancel}>
+        </Button>
+        <Button variant="ghost" type="button" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -310,9 +311,9 @@ function Move({ document, tree, onMoved }: { document: Document; tree: Tree; onM
           Place among its siblings
           <input name="position" type="number" min={0} placeholder="Last" />
         </label>
-        <button type="submit" className="secondary" disabled={busy}>
+        <Button variant="ghost" type="submit" disabled={busy}>
           Move
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </>
@@ -328,9 +329,9 @@ function Delete({ document, onDeleted }: { document: Document; onDeleted: () => 
   return (
     <>
       <form onSubmit={onSubmit} className="inline">
-        <button type="submit" className="secondary" disabled={busy}>
+        <Button variant="ghost" type="submit" disabled={busy}>
           Delete Document
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </>
@@ -374,9 +375,9 @@ export function Versions({ source }: { source: VersionSource }) {
       <ol>
         {versions.map((version) => (
           <li key={version.number}>
-            <button type="button" className="link" onClick={() => read(version.number)}>
+            <Button variant="ghost" type="button" onClick={() => read(version.number)}>
               {versionLine(version)}
-            </button>{" "}
+            </Button>{" "}
             <span className="muted">{version.title}</span>
           </li>
         ))}
@@ -403,9 +404,9 @@ export function Versions({ source }: { source: VersionSource }) {
               ))}
             </select>
           </label>
-          <button type="submit" className="secondary" disabled={busy}>
+          <Button variant="ghost" type="submit" disabled={busy}>
             Compare
-          </button>
+          </Button>
         </form>
       )}
       {error && <p role="alert">{error}</p>}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type ProjectSummary, type Runner, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { Button } from "./button.js";
 
 /**
  * The User's own Runners: ways for Cronk to start their Agents' Runs with their own credentials.
@@ -45,9 +46,9 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
             <input name="name" required autoComplete="off" placeholder="Claude Max" />
           </label>
           {create.error && <p role="alert">{create.error}</p>}
-          <button type="submit" disabled={create.busy}>
+          <Button variant="primary" type="submit" disabled={create.busy}>
             Set up a subscription Runner
-          </button>
+          </Button>
         </form>
       </div>
       {error && <p role="alert">{error}</p>}
@@ -115,9 +116,9 @@ function RunnerSettings({
             <input name="limit" type="number" min={1} max={100} required defaultValue={runner.limit} />
           </label>
           {limit.error && <p role="alert">{limit.error}</p>}
-          <button type="submit" disabled={limit.busy}>
+          <Button variant="primary" type="submit" disabled={limit.busy}>
             Save limit
-          </button>
+          </Button>
         </form>
         {runner.kind === "subscription" && (
           <form onSubmit={save.onSubmit} aria-label="Save a trigger">
@@ -148,9 +149,9 @@ function RunnerSettings({
               The token is stored encrypted and never shown again. Saving a model again replaces its trigger.
             </small>
             {save.error && <p role="alert">{save.error}</p>}
-            <button type="submit" disabled={save.busy}>
+            <Button variant="primary" type="submit" disabled={save.busy}>
               Save trigger
-            </button>
+            </Button>
           </form>
         )}
       </div>
@@ -173,15 +174,15 @@ function RunnerSettings({
               <tbody>
                 {runner.triggers.map((trigger) => (
                   <tr key={trigger.id}>
-                    <td>{trigger.model}</td>
+                    <td className="mono">{trigger.model}</td>
                     <td>{projectName(trigger.projectId)}</td>
                     <td>
                       <code>{trigger.triggerId}</code>
                     </td>
                     <td className="actions">
-                      <button type="button" onClick={() => remove(trigger.id)}>
+                      <Button variant="secondary" type="button" onClick={() => remove(trigger.id)}>
                         Remove
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))}

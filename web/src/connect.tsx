@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, type ConnectRequest } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { Button } from "./button.js";
 
 /**
  * The consent screen of Cronk's OAuth server: a connector, such as claude.ai's, asks to
@@ -72,16 +73,16 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
             ))}
           </fieldset>
           {approve.error && <p role="alert">{approve.error}</p>}
-          <button type="submit" disabled={approve.busy || leaving}>
+          <Button variant="primary" type="submit" disabled={approve.busy || leaving}>
             Connect
-          </button>
+          </Button>
         </form>
       )}
       <form onSubmit={deny.onSubmit}>
         {deny.error && <p role="alert">{deny.error}</p>}
-        <button type="submit" className="secondary" disabled={deny.busy || leaving}>
+        <Button variant="ghost" type="submit" disabled={deny.busy || leaving}>
           Don't connect
-        </button>
+        </Button>
       </form>
       <p className="muted">
         Removing the Agent, or revoking the token named {name} among its tokens, disconnects {name}.

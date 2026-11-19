@@ -31,6 +31,7 @@ import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
+import { Button } from "./button.js";
 
 /**
  * A Ticket: its fields, its description, its Reports, its Relations, its Linked Documents, its Comments and its
@@ -171,8 +172,8 @@ export function TicketScreen({
       <p>
         <Link to={`/projects/${project.id}`}>{project.name}</Link>
       </p>
-      <h1>
-        <span className="muted">{ticket.key}</span> {ticket.title}
+      <h1 className="title">
+        <span className="key">{ticket.key}</span> {ticket.title}
       </h1>
       {error && <p role="alert">{error}</p>}
       {ticket.verification && (
@@ -263,9 +264,9 @@ function TextFields({ ticket, onSave }: { ticket: Ticket; onSave: (edit: TicketE
         <textarea value={description} rows={6} onChange={(e) => setDescription(e.target.value)} />
       </label>
       <div>
-        <button type="submit" disabled={busy || (title === ticket.title && description === ticket.description)}>
+        <Button variant="primary" type="submit" disabled={busy || (title === ticket.title && description === ticket.description)}>
           Save
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -506,22 +507,22 @@ function Verification({
               </label>
               {error && <p role="alert">{error}</p>}
               <div className="actions">
-                <button type="submit" disabled={busy}>
+                <Button variant="primary" type="submit" disabled={busy}>
                   Reopen
-                </button>
-                <button type="button" className="link" onClick={() => setReopening(false)}>
+                </Button>
+                <Button variant="ghost" type="button" onClick={() => setReopening(false)}>
                   Cancel
-                </button>
+                </Button>
               </div>
             </form>
           ) : (
             <div className="actions">
-              <button type="button" onClick={() => void onAccept()}>
+              <Button variant="primary" type="button" onClick={() => void onAccept()}>
                 Accept
-              </button>
-              <button type="button" className="secondary" onClick={() => setReopening(true)}>
+              </Button>
+              <Button variant="secondary" type="button" onClick={() => setReopening(true)}>
                 Reopen
-              </button>
+              </Button>
             </div>
           )}
         </>
@@ -539,7 +540,7 @@ const relationGroups: { kind: RelationKind; label: string }[] = [
 function TicketLink({ ticket }: { ticket: TicketRef }) {
   return (
     <Link to={`/tickets/${ticket.id}`}>
-      {ticket.key} {ticket.title}
+      <span className="key">{ticket.key}</span> {ticket.title}
     </Link>
   );
 }
@@ -605,9 +606,9 @@ function Relations({
               {inGroup.map((relation) => (
                 <li key={relation.id}>
                   <TicketLink ticket={relation.ticket} />{" "}
-                  <button type="button" className="link" onClick={() => void remove(relation.id)}>
+                  <Button variant="ghost" type="button" onClick={() => void remove(relation.id)}>
                     Remove
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -637,9 +638,9 @@ function Relations({
             </option>
           ))}
         </datalist>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Add
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </section>
@@ -705,9 +706,9 @@ function LinkedDocuments({
             <li key={document.id}>
               <Link to={`/documents/${document.id}`}>{document.title}</Link>
               {document.projectId === null && <span className="muted"> (Workspace)</span>}{" "}
-              <button type="button" className="link" onClick={() => void unlink(document.id)}>
+              <Button variant="ghost" type="button" onClick={() => void unlink(document.id)}>
                 Unlink
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -741,9 +742,9 @@ function LinkedDocuments({
               )}
           </select>
         </label>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Link
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </section>
@@ -828,9 +829,9 @@ function Comments({
             {replyingTo === comment.id ? (
               <CommentForm label="Reply" button="Send reply" onSend={(body) => send(body, comment.id)} />
             ) : (
-              <button type="button" className="link" onClick={() => setReplyingTo(comment.id)}>
+              <Button variant="ghost" type="button" onClick={() => setReplyingTo(comment.id)}>
                 Reply
-              </button>
+              </Button>
             )}
           </article>
         );
@@ -856,9 +857,9 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
       </label>
       {error && <p role="alert">{error}</p>}
       <div>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           {button}
-        </button>
+        </Button>
       </div>
     </form>
   );
@@ -948,7 +949,7 @@ const runStateShown: Record<Run["state"], string> = {
 function RunEntry({ run }: { run: Run }) {
   return (
     <li className="run-entry">
-      {run.agent.name} ran the {run.step.name} Step on {run.model}:{" "}
+      {run.agent.name} ran the {run.step.name} Step on <span className="mono">{run.model}</span>:{" "}
       <span className={`run-state ${run.state}`}>{runStateShown[run.state]}</span>
       {run.outcome && <> with {run.outcome}</>}
       {run.endReason && <>: {run.endReason}</>}

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { Button } from "./button.js";
 
 /**
  * A new Step's starting point: sends Tickets on to the next Status, or back to the first other one for a User,
@@ -70,13 +71,14 @@ function StepItem({
     }
   };
 
-  const summary = status.step
-    ? [
-        status.step.model,
-        `${status.step.outcomes.length} Outcomes`,
-        ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : []),
-      ].join(", ")
-    : "No Step: Tickets here wait for a User";
+  const summary = status.step ? (
+    <>
+      <span className="mono">{status.step.model}</span>,{" "}
+      {[`${status.step.outcomes.length} Outcomes`, ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : [])].join(", ")}
+    </>
+  ) : (
+    "No Step: Tickets here wait for a User"
+  );
 
   return (
     <li>
@@ -86,9 +88,9 @@ function StepItem({
         </summary>
         {error && <p role="alert">{error}</p>}
         {draft === null ? (
-          <button type="button" onClick={() => setDraft(newStep(project, status))}>
+          <Button variant="secondary" type="button" onClick={() => setDraft(newStep(project, status))}>
             Add a Step to {status.name}
-          </button>
+          </Button>
         ) : (
           <StepForm
             project={project}
@@ -263,18 +265,20 @@ function StepForm({
                   />
                   Counts as a round
                 </label>
-                <button
+                <Button
+                  variant="secondary"
                   type="button"
                   aria-label={`Remove Outcome ${label} of ${of}`}
                   onClick={() => onDraft({ ...draft, outcomes: draft.outcomes.filter((_, i) => i !== index) })}
                 >
                   Remove
-                </button>
+                </Button>
               </li>
             );
           })}
         </ol>
-        <button
+        <Button
+          variant="secondary"
           type="button"
           onClick={() =>
             onDraft({
@@ -287,20 +291,20 @@ function StepForm({
           }
         >
           Add an Outcome to {of}
-        </button>
+        </Button>
       </fieldset>
       <div className="inline">
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Save the Step on {of}
-        </button>
+        </Button>
         {status.step ? (
-          <button type="button" disabled={busy} onClick={() => void onRemove()}>
+          <Button variant="secondary" type="button" disabled={busy} onClick={() => void onRemove()}>
             Remove the Step from {of}
-          </button>
+          </Button>
         ) : (
-          <button type="button" disabled={busy} onClick={onCancel}>
+          <Button variant="secondary" type="button" disabled={busy} onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         )}
       </div>
     </form>
@@ -330,9 +334,9 @@ export function BriefPreview({ project }: { project: Project }) {
           Ticket key
           <input name="key" required placeholder={`${project.key}-1`} />
         </label>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Preview Brief
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
       {brief && (

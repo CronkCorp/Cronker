@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent } from "react";
 import { api, attachmentUrl, type Attachment, type AttachmentOwner } from "./api.js";
+import { Button } from "./button.js";
 
 /** A size as people read it. */
 function sized(bytes: number): string {
@@ -71,15 +72,15 @@ export function Attachments({
               </span>{" "}
               <code title="Markdown that refers to it">{markdownReference(attachment)}</code>{" "}
               {canAttach && (
-                <button
+                <Button
+                  variant="ghost"
                   type="button"
-                  className="link"
                   disabled={busy}
                   aria-label={`Remove ${attachment.name}`}
                   onClick={() => run(() => api.removeAttachment(attachment.id))}
                 >
                   Remove
-                </button>
+                </Button>
               )}
             </li>
           ))}

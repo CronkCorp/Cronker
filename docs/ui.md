@@ -4,7 +4,7 @@ How Cronk's web client looks and behaves. Read this before changing anything in 
 
 This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are the old Cronk's prototypes: they show the look to aim for, but also concepts this rewrite dropped (Claims, Agent Sessions, Protected items, Suggestions, Triage). Where a screenshot and this text differ, the text wins.
 
-The web client doesn't follow this file yet. The styling pass at the end of milestone 2 (`docs/roadmap.md`) brings it in line: first the foundation (tokens, faces, components, the frame), then each screen. Until then, new screens use the tokens and components once they exist, and leave old screens to that pass.
+The web client doesn't fully follow this file yet. The styling pass at the end of milestone 2 (`docs/roadmap.md`) brings it in line: first the foundation (tokens, faces, components, the frame), then each screen. The tokens, the faces, the type scale and `<Button>` are in place; until the rest is, new screens use the tokens and components that exist, and leave old screens to that pass.
 
 ## Principles
 

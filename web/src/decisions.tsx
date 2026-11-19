@@ -13,6 +13,7 @@ import { Editor, versionLine, Versions } from "./documents.js";
 import { field, useSubmit } from "./forms.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
+import { Button } from "./button.js";
 
 const statusLabel = (status: DecisionStatus) => status[0]!.toUpperCase() + status.slice(1);
 
@@ -65,9 +66,9 @@ export function DecisionList({ place }: { place: Place }) {
           New Decision title
           <input name="title" required maxLength={300} />
         </label>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Record Decision
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </section>
@@ -136,7 +137,7 @@ export function DecisionScreen({
       <p>
         <Link to={listPage(place)}>{place.kind === "project" ? "Project Decisions" : "Workspace Decisions"}</Link>
       </p>
-      <h1>
+      <h1 className="title">
         Decision {decision.number}: {decision.title}
       </h1>
       <p>
@@ -168,9 +169,9 @@ export function DecisionScreen({
       ) : (
         <>
           <div className="actions">
-            <button type="button" onClick={() => setEditing(true)}>
+            <Button variant="secondary" type="button" onClick={() => setEditing(true)}>
               Edit
-            </button>
+            </Button>
           </div>
           {decision.body.trim() ? <Markdown text={decision.body} mentions={[]} /> : <p className="muted">Empty.</p>}
           <StatusForm
@@ -256,9 +257,9 @@ function StatusForm({
             </select>
           </label>
         )}
-        <button type="submit" className="secondary" disabled={busy}>
+        <Button variant="ghost" type="submit" disabled={busy}>
           Change status
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </>
