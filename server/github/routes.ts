@@ -2,11 +2,13 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
+import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
 import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
 import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
+import { addRepository, removeRepository, repositoriesOf, Repository } from "./repositories.js";
 import { receiveDelivery } from "./webhooks.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
@@ -128,6 +130,57 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         await requireUser(context, request);
         return listInstallations(context);
+      },
+    );
+
+    app.get(
+      "/api/projects/:projectId/repositories",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "The Repositories a Project lists as holding its code",
+          description: "Each by GitHub's id, with its owner and name as GitHub last reported them, which follow renames and transfers.",
+          params: Type.Object({ projectId: Type.String() }),
+          response: { 200: Type.Array(Repository), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => repositoriesOf(context, await requireCaller(context, request), request.params.projectId),
+    );
+
+    app.post(
+      "/api/projects/:projectId/repositories",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "Add a Repository to a Project (Users only)",
+          description:
+            "Adds a Repository one of the GitHub App's installations covers (see `GET /api/github/installations`), by GitHub's id. Refused with `repository_not_installed` if no installation covers it, `repository_already_listed` if the Project lists it already, `github_not_set_up` while there is no App, and `github_unavailable` if GitHub can't be asked.",
+          params: Type.Object({ projectId: Type.String() }),
+          body: Type.Object({ id: Type.Integer({ minimum: 1, description: "GitHub's id for the Repository." }) }),
+          response: { 201: Repository, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        return reply.code(201).send(await addRepository(context, user.id, request.params.projectId, request.body.id));
+      },
+    );
+
+    app.delete(
+      "/api/projects/:projectId/repositories/:repositoryId",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "Remove a Repository from a Project (Users only)",
+          description: "Its Pull Requests stop linking to the Project's Tickets. Answers 404 if the Project doesn't list it.",
+          params: Type.Object({ projectId: Type.String(), repositoryId: Type.Integer({ minimum: 1 }) }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        await removeRepository(context, user.id, request.params.projectId, request.params.repositoryId);
+        return reply.code(204).send(null);
       },
     );
 

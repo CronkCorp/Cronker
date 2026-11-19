@@ -147,7 +147,8 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "A new title or body saves the Document as its next Version, by the caller, and needs `baseVersion`: the " +
             "number of the Version it's based on. A save based on an outdated Version is refused with " +
             "`outdated_version`, carrying the current Version as `current`. A new parent or place moves it within " +
-            "its page tree, making no Version; it can't move under itself or one of its own descendants.",
+            "its page tree, making no Version; it can't move under itself or one of its own descendants. A Report " +
+            "is listed with its Ticket, not in a page tree, so moving one is refused with `report_outside_tree`.",
           params: DocumentParams,
           body: Type.Object({
             baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),

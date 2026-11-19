@@ -115,7 +115,9 @@ export function TicketScreen({
       loadLinks();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
-    if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
+    if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) {
+      latestReports(api.reports(ticketId), setReports, fail);
+    }
     if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
       latestProject(api.project(project.id), setProject, fail);
     }
@@ -732,7 +734,9 @@ function Reports({ reports }: { reports: Report[] }) {
       <h2>Reports</h2>
       {reports.map((report) => (
         <article key={report.id} aria-label={report.title} className="comment">
-          <h3>{report.title}</h3>
+          <h3>
+            <Link to={`/documents/${report.id}`}>{report.title}</Link>
+          </h3>
           <div className="comment-meta">
             <strong>{report.agent.name}</strong> <span className="muted">(Agent)</span> <When at={report.createdAt} />
           </div>

@@ -2,13 +2,16 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { webhookSecret } from "./app.js";
+import { appToken, findApp, webhookSecret } from "./app.js";
+import { appDeliveries, redeliver } from "./client.js";
+import { onRepositoryEvent } from "./repositories.js";
 
 /**
  * The App's webhook deliveries. Each is checked against the App's webhook secret before
  * anything else is done with it, then applied once: its delivery id is recorded in the same
  * transaction that applies it, so a delivery GitHub sends again changes nothing. The id isn't
  * signed, so handlers must still change nothing for a signed body seen before under another.
+ * A failed delivery is asked for again by `replayFailedDeliveries`.
  */
 
 export interface Delivery {
@@ -21,7 +24,7 @@ export interface Delivery {
 export type EventHandler = (context: Context, tx: Tx, delivery: Delivery) => Promise<void>;
 
 /** Handlers by event name. Events with none, such as `ping`, are recorded and otherwise ignored. */
-const handlers: Record<string, EventHandler> = {};
+const handlers: Record<string, EventHandler> = { repository: onRepositoryEvent };
 
 const invalidSignature = () =>
   new ApiError(401, "invalid_signature", "The delivery isn't signed with the GitHub App's webhook secret.");
@@ -75,4 +78,34 @@ export async function receiveDelivery(
     await handlers[event]?.(context, tx, { id, event, payload });
     return true;
   });
+}
+
+/**
+ * GitHub doesn't retry a delivery that failed, so one sent while Cronk or its tunnel was down
+ * would be missed. This asks GitHub for the App's recent deliveries and has each failed one
+ * redelivered. GitHub keeps deliveries three days; nothing replays a longer outage. A delivery
+ * Cronk refused, such as one signed before its webhook secret was pasted into the App's
+ * settings, isn't applied, so it is asked for again on each pass until it applies or GitHub
+ * drops it.
+ */
+export async function replayFailedDeliveries(context: Context): Promise<void> {
+  if (!(await findApp(context.db))) return;
+  const jwt = await appToken(context);
+  const failed = (await appDeliveries(context.config, jwt)).filter((a) => a.status_code < 200 || a.status_code >= 300);
+  if (failed.length === 0) return;
+  const { rows } = await context.db.query<{ id: string }>("select id from github_deliveries where id = any($1)", [
+    failed.map((a) => a.guid),
+  ]);
+  // Deliveries applied, or asked for again in this pass: a delivery has an attempt for each time GitHub sent it.
+  const done = new Set(rows.map((r) => r.id));
+  // One redelivery GitHub refuses, such as of a delivery it stopped keeping since listing it, doesn't stop the rest.
+  let refused: unknown;
+  for (const attempt of failed) {
+    if (done.has(attempt.guid)) continue;
+    done.add(attempt.guid);
+    await redeliver(context.config, jwt, attempt.id).catch((error: unknown) => {
+      refused ??= error;
+    });
+  }
+  if (refused) throw refused;
 }

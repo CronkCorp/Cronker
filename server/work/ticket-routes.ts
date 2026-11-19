@@ -7,7 +7,7 @@ import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
-import { Report, reportsOn, writeReport } from "./reports.js";
+import { Report, reportsOn, writeReport } from "../knowledge/reports.js";
 import { acceptTicket, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {

@@ -42,6 +42,8 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/oauth/requests/{requestId}/deny",
     "/api/projects/{projectId}",
     "/api/projects/{projectId}/documents",
+    "/api/projects/{projectId}/repositories",
+    "/api/projects/{projectId}/repositories/{repositoryId}",
     "/api/projects/{projectId}/statuses",
     "/api/projects/{projectId}/statuses/{statusId}",
     "/api/projects/{projectId}/statuses/{statusId}/step",

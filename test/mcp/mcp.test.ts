@@ -224,6 +224,11 @@ describe("MCP with an Agent token", () => {
 
     const written = await call(client, "write_report", { ticket: "CRONK-1", title: "Findings", body: "In the parser." });
     expect(written.isError).toBe(false);
+    // The Report is a Document on the Ticket, with Versions, read like any other.
+    const document = await call(client, "read_document", { document: written.json.id });
+    expect(document.json).toEqual(
+      expect.objectContaining({ ticketId: ticket.id, title: "Findings", version: expect.objectContaining({ number: 1 }) }),
+    );
     const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
     await call(client, "finish", { run: read.runs[0].id, outcome: "done" });
 
