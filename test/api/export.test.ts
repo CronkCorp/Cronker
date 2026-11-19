@@ -124,6 +124,21 @@ describe("Exporting knowledge", () => {
     });
   });
 
+  test("Markdown in a Term's name or a replacing Decision's title is escaped, so the bold name and the link hold", async () => {
+    const { ada, project } = await workspaceWithProject();
+    await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "C*", definition: "A language." });
+    const old = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Old" });
+    const replacing = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use [brackets] *now*" });
+    await ok("PATCH", `/api/decisions/${old.id}`, ada, { baseVersion: 1, status: "superseded", supersededById: replacing.id });
+
+    const { files } = await ok("GET", `/api/projects/${project.id}/export`, ada);
+
+    expect(files[0].content).toBe("# Glossary\n\n**C\\***:\nA language.\n");
+    expect(files[1].content).toBe(
+      "# Old\n\nStatus: superseded by [0002 Use \\[brackets\\] \\*now\\*](0002-use-brackets-now.md)\n",
+    );
+  });
+
   test("an empty Project exports a GLOSSARY.md with no Terms and no Decisions", async () => {
     const { ada, project } = await workspaceWithProject();
 

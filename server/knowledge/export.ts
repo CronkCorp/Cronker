@@ -20,10 +20,13 @@ export const Export = Type.Object({
 });
 export type Export = Static<typeof Export>;
 
+/** Text set inside Markdown's emphasis or link text, its markup characters escaped so they show as typed. */
+const escapeInline = (text: string) => text.replace(/[\\*_[\]`]/g, (c) => `\\${c}`);
+
 /** A glossary as Markdown: each Term's name in bold, its definition, then the words to avoid. */
 function glossaryFile(terms: Term[]): ExportedFile {
   const entries = terms.map((term) => {
-    const lines = [`**${term.name}**:`];
+    const lines = [`**${escapeInline(term.name)}**:`];
     if (term.definition.trim()) lines.push(term.definition.trim());
     if (term.avoid.length > 0) lines.push(`_Avoid_: ${term.avoid.join(", ")}`);
     return lines.join("\n");
@@ -53,7 +56,7 @@ function decisionFileName(decision: Pick<Decision, "number" | "title">): string 
 function decisionFile(decision: Decision, byId: Map<string, Decision>): ExportedFile {
   const replacement = decision.supersededById ? byId.get(decision.supersededById) : undefined;
   const status = replacement
-    ? `superseded by [${fourDigits(replacement)} ${replacement.title}](${decisionFileName(replacement)})`
+    ? `superseded by [${fourDigits(replacement)} ${escapeInline(replacement.title)}](${decisionFileName(replacement)})`
     : decision.status;
   const parts = [`# ${decision.title}`, `Status: ${status}`];
   if (decision.body.trim()) parts.push(decision.body.trim());
