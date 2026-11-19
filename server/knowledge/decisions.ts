@@ -243,18 +243,20 @@ export async function createDecision(
 export const DecisionSummary = Type.Omit(Decision, ["body"]);
 export type DecisionSummary = Static<typeof DecisionSummary>;
 
-/** The scope's Decisions by number, without their bodies. */
-export async function decisionsOf(db: Db, scope: Place): Promise<DecisionSummary[]> {
+/** The scope's Decisions by number, with their bodies. */
+export async function decisionsWithBodiesOf(db: Db, scope: Place): Promise<Decision[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromDecisions}
      where decisions.workspace_id = $1 and decisions.project_id is not distinct from $2
      order by decisions.number`,
     [scope.workspaceId, scope.projectId],
   );
-  return rows.map((row) => {
-    const { body: _body, ...summary } = present(row);
-    return summary;
-  });
+  return rows.map(present);
+}
+
+/** The scope's Decisions by number, without their bodies. */
+export async function decisionsOf(db: Db, scope: Place): Promise<DecisionSummary[]> {
+  return (await decisionsWithBodiesOf(db, scope)).map(({ body: _body, ...summary }) => summary);
 }
 
 /** One saved state of a Decision with its body. */
