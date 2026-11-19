@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures.js";
-import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
+import { createGitHubApp, firstUser, setUp, signIn } from "../test/harness/flows.js";
 
 test("a Ticket shows the Pull Requests naming its key, with their state and checks, updating live", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
@@ -60,4 +60,55 @@ test("a Ticket shows the Pull Requests naming its key, with their state and chec
   const card = page.getByRole("region", { name: "Code to review" }).getByRole("article", { name: "#7 CRONK-1: list Pull Requests" });
   await expect(card).toContainText("cronk-1-list");
   await expect(card.getByRole("listitem")).toHaveText(["✗ test failed"]);
+});
+
+test("a Pull Request's row shows its review state: changes requested, then who merged it", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const call = async (path: string, body?: unknown, method = "POST") => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call(`/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const runner = await call("/api/runners", { name: "Fake", kind: "fake" });
+  const agent = await call(`/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call(`/api/agents/${agent.id}`, { runnerId: runner.id }, "PATCH");
+  const { secret } = await call(`/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const ticket = await call(`/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  await call(`/api/tickets/${ticket.id}`, { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") }, "PATCH");
+
+  const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
+  const pullRequest = { id: 501, number: 7, title: "CRONK-1: make it so", state: "open", draft: false, merged: false,
+    html_url: "https://github.com/cronkcorp/cronker/pull/7", head: { ref: "cronk-1", sha: "c1" }, updated_at: "2026-01-01T09:00:00Z" };
+  const event = (action: string, fields: object = {}) => ({ action, installation: { id: installation.id }, repository, pull_request: { ...pullRequest, ...fields } });
+  // The Implement Run opens it, then finishes: the Ticket waits In Review.
+  await cronk.github.deliver(app, "pull_request", event("opened"));
+  const [run] = await call(`/api/tickets/${ticket.id}/runs`, undefined, "GET");
+  const finished = await cronk.request("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` }, body: { outcome: "done" } });
+  expect(finished.status).toBe(200);
+  await cronk.github.deliver(app, "pull_request_review", {
+    ...event("submitted"),
+    review: { id: 72, state: "changes_requested", user: { login: "bea", id: 4072 }, html_url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72" },
+  });
+
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill(firstUser.email);
+  await page.getByLabel("Password").fill(firstUser.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+
+  const row = page.getByRole("region", { name: "Pull Requests" }).getByRole("listitem").filter({ hasText: "#7 CRONK-1: make it so" });
+  await expect(row).toContainText("Open");
+  await expect(row.getByRole("link", { name: "Changes requested by @bea" })).toHaveAttribute(
+    "href",
+    "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
+  );
+
+  await cronk.github.deliver(app, "pull_request", event("closed", { state: "closed", merged: true, merged_by: { login: "ada", id: 1 }, updated_at: "2026-01-01T12:00:00Z" }));
+  await expect(row).toContainText("Merged");
+  await expect(row).toContainText("Merged by @ada");
 });
