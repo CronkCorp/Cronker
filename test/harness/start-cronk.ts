@@ -88,6 +88,9 @@ export interface StartCronkOptions {
   migrateBefore?: string;
 }
 
+/** How many ports `startCronk()` and `upgrade()` try before giving up, each picked afresh. */
+const maxBootAttempts = 5;
+
 const commandScript = fileURLToPath(new URL("../../server/command.ts", import.meta.url));
 
 async function freePort(): Promise<number> {
@@ -122,30 +125,43 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
 
   const attachmentsDirectory = await mkdtemp(join(tmpdir(), "cronk-attachments-"));
   const removeAttachments = () => rm(attachmentsDirectory, { recursive: true, force: true });
-  // `upgrade()` restarts Cronk on a fresh port: another test may have taken the old one while it stood free.
-  let port = await freePort();
-  let url = `http://127.0.0.1:${port}`;
+  let url = "";
   const secretKey = options.noSecretKey ? undefined : randomBytes(32).toString("base64");
+  // Cronk's public address must name its port before it listens, so the port is picked first; another test may
+  // take it before Cronk listens on it, and then Cronk is started again on another. What the Cronk that could not
+  // listen wrote to the log, such as a setup code the next one replaces, is dropped.
   const boot = async (migrateBefore?: string): Promise<Cronk> => {
-    const started = await createCronk({
-      config: {
-        publicUrl: new URL(url),
-        databaseUrl: database.url,
-        host: "127.0.0.1",
-        port,
-        webRoot: options.webRoot,
-        secretKey,
-        github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
-        claudeApiUrl: new URL(claude.apiUrl),
-        attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
-      },
-      clock,
-      logStream,
-      runnerKinds: { fake: runner.kind },
-      migrateBefore,
-    });
-    await started.listen();
-    return started;
+    for (let attempt = 1; ; attempt++) {
+      const port = await freePort();
+      const candidate = `http://127.0.0.1:${port}`;
+      const logged = logs.length;
+      const started = await createCronk({
+        config: {
+          publicUrl: new URL(candidate),
+          databaseUrl: database.url,
+          host: "127.0.0.1",
+          port,
+          webRoot: options.webRoot,
+          secretKey,
+          github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
+          claudeApiUrl: new URL(claude.apiUrl),
+          attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
+        },
+        clock,
+        logStream,
+        runnerKinds: { fake: runner.kind },
+        migrateBefore,
+      });
+      try {
+        await started.listen();
+        url = candidate;
+        return started;
+      } catch (error) {
+        await started.close();
+        if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt === maxBootAttempts) throw error;
+        logs.splice(logged);
+      }
+    }
   };
   let cronk: Cronk;
   try {
@@ -179,8 +195,6 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async upgrade() {
       await cronk.close();
-      port = await freePort();
-      url = `http://127.0.0.1:${port}`;
       cronk = await boot();
     },
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
