@@ -7,8 +7,8 @@ import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
-import { useArrivals, useLatest, useLiveEvents } from "./live.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
+import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
+import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
@@ -218,9 +218,9 @@ export function WorkspaceGlossary({ workspace }: { workspace: Workspace }) {
     [workspace.id, latest],
   );
   useEffect(load, [load]);
-  // A Project's Term can replace one of the Workspace's, so every Term change is shown here.
+  // A Project's Term can replace one of the Workspace's, so every Term change is shown here, and each Project's key.
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected" || event.type === "term.changed" || event.type === "project.created") load();
+    if (event.type === "reconnected" || event.type === "term.changed" || event.type === "project.created" || event.type === "project.changed") load();
   });
   if (failure) return <FormError error={failure} />;
   if (!data) return <p className="muted">Loading…</p>;
@@ -243,9 +243,7 @@ export function TermScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  /** Deleted by someone else while shown: it stays on screen, marked, until the User moves on. */
-  const [gone, setGone] = useState(false);
-  const deletingHere = useRef(false);
+  const { gone, failed, deleteHere } = useDeletedElsewhere();
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
   usePlace("terms", term?.projectId ?? null);
@@ -263,9 +261,7 @@ export function TermScreen({
   const latestTerm = useLatest();
   useLiveEvents(workspace.id, (event) => {
     if (event.type !== "reconnected" && !(event.type === "term.changed" && event.termId === termId)) return;
-    latestTerm(api.term(termId), setTerm, (e) => {
-      if (e instanceof ApiError && e.status === 404 && !deletingHere.current) setGone(true);
-    });
+    latestTerm(api.term(termId), setTerm, failed);
   });
   const projectId = term?.projectId ?? null;
   useEffect(() => {
@@ -307,11 +303,7 @@ export function TermScreen({
         }
       />
       {gone && (
-        <Banner tone="warn" label="Deleted elsewhere">
-          <p>
-            Deleted elsewhere: this Term is no longer in its glossary. <Link to={glossaryPage(place)}>Back to Terms</Link>
-          </p>
-        </Banner>
+        <DeletedElsewhere back={{ to: glossaryPage(place), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
       )}
       {editing ? (
         <Editor
@@ -337,12 +329,7 @@ export function TermScreen({
         title={`Delete the Term ${term.name}?`}
         confirm="Delete"
         onConfirm={async () => {
-          deletingHere.current = true;
-          try {
-            await api.deleteTerm(term.id);
-          } finally {
-            deletingHere.current = false;
-          }
+          await deleteHere(() => api.deleteTerm(term.id));
           navigate(glossaryPage(place));
         }}
       >

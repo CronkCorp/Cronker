@@ -221,7 +221,7 @@ export async function createDocument(
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: tree.workspaceId }, 1, input, actor, now);
-    live.publish(tx, tree.workspaceId, { type: "document.changed", projectId: tree.projectId, documentId: id });
+    documentChanged(live, tx, { ...tree, id, ticketId: null });
     return (await findDocument(tx, actor, id))!;
   });
 }
@@ -300,7 +300,7 @@ const isInPageTree = (document: Placed): document is Placed & { ticketId: null; 
  * Tells the Workspace's streams that a Document changed or went: one in a page tree so its tree and page show it,
  * a Report so its Ticket does.
  */
-function documentChanged(live: Live, tx: Tx, document: Placed): void {
+function documentChanged(live: Live, tx: Tx, document: Tree & { id: string; ticketId: string | null }): void {
   if (document.ticketId === null) {
     live.publish(tx, document.workspaceId, { type: "document.changed", projectId: document.projectId, documentId: document.id });
     return;

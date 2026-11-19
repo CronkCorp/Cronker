@@ -18,12 +18,12 @@ import {
 import { Attachments, markdownReference } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
-import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -205,9 +205,7 @@ export function DocumentScreen({
   const [deleting, setDeleting] = useState(false);
   const [versionsShown, setVersionsShown] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  /** Deleted by someone else while shown: it stays on screen, marked, until the User moves on. */
-  const [gone, setGone] = useState(false);
-  const deletingHere = useRef(false);
+  const { gone, failed, deleteHere } = useDeletedElsewhere();
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
   usePlace("documents", document?.projectId ?? null);
@@ -226,10 +224,8 @@ export function DocumentScreen({
   /** Fetches the shown Document again after a live event, keeping it on screen if it went meanwhile. */
   const reload = useCallback(
     () =>
-      latestDocument(api.document(documentId), setDocument, (e) => {
-        if (e instanceof ApiError && e.status === 404 && !deletingHere.current) setGone(true);
-      }),
-    [documentId, latestDocument],
+      latestDocument(api.document(documentId), setDocument, failed),
+    [documentId, latestDocument, failed],
   );
   const projectId = document?.projectId ?? null;
   const ticketId = document?.ticketId ?? null;
@@ -299,11 +295,9 @@ export function DocumentScreen({
         }
       />
       {gone && (
-        <Banner tone="warn" label="Deleted elsewhere">
-          <p>
-            Deleted elsewhere: this Document is no longer kept. <Link to={home}>{document.ticketId ? "Back to its Ticket" : "Back to Documents"}</Link>
-          </p>
-        </Banner>
+        <DeletedElsewhere back={{ to: home, label: document.ticketId ? "Back to its Ticket" : "Back to Documents" }}>
+          this Document is no longer kept.
+        </DeletedElsewhere>
       )}
       {editing ? (
         <Editor
@@ -356,12 +350,7 @@ export function DocumentScreen({
         title={`Delete ${document.title}?`}
         confirm="Delete"
         onConfirm={async () => {
-          deletingHere.current = true;
-          try {
-            await api.deleteDocument(document.id);
-          } finally {
-            deletingHere.current = false;
-          }
+          await deleteHere(() => api.deleteDocument(document.id));
           navigate(home);
         }}
       >

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError } from "./api.js";
 
 /**
  * Live updates: one server-sent event stream per Workspace, and one for the User's own Runners, each shared by
@@ -183,4 +184,27 @@ export function useArrivals(keys: string[], ready = true): Set<string> {
     );
   }, [joined, ready]);
   return arrived;
+}
+
+/**
+ * Whether the item a page shows was deleted by someone else while shown, so the page keeps it on screen, marked,
+ * until the User moves on. `failed` takes a live refetch's failure; `deleteHere` wraps the page's own delete, which
+ * isn't someone else's.
+ */
+export function useDeletedElsewhere(): { gone: boolean; failed: (error: Error) => void; deleteHere: (remove: () => Promise<void>) => Promise<void> } {
+  const [gone, setGone] = useState(false);
+  const deletingHere = useRef(false);
+  const failed = useCallback((error: Error) => {
+    if (error instanceof ApiError && error.status === 404 && !deletingHere.current) setGone(true);
+  }, []);
+  const deleteHere = useCallback(async (remove: () => Promise<void>) => {
+    deletingHere.current = true;
+    try {
+      await remove();
+    } catch (error) {
+      deletingHere.current = false;
+      throw error;
+    }
+  }, []);
+  return { gone, failed, deleteHere };
 }

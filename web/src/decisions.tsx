@@ -214,7 +214,8 @@ export function DecisionScreen({
   const loadOthers = useCallback(() => {
     if (place) latestOthers(api.decisions(place), setOthers, () => setOthers([]));
   }, [place?.kind, place?.id, latestOthers]);
-  useEffect(loadOthers, [loadOthers]);
+  // Its own save may supersede it by another, which the banner names; it shows even while the stream is away.
+  useEffect(loadOthers, [loadOthers, decision?.version.number]);
   useEffect(() => {
     if (place?.kind === "project") api.project(place.id).then(setProject, () => setProject(null));
   }, [place?.kind, place?.id]);
