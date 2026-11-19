@@ -47,7 +47,7 @@ export function PriorityTag({ priority }: { priority: Priority }) {
   );
 }
 
-export type Tone = "neutral" | "ok" | "warn" | "danger" | "info" | "agent";
+export type Tone = "neutral" | "ok" | "warn" | "info";
 
 /** A Label, or with a tone, a state marker such as "Verified" or "Unverified". */
 export function Chip({ tone = "neutral", children, title }: { tone?: Tone; children: ReactNode; title?: string }) {

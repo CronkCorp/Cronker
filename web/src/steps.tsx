@@ -139,7 +139,6 @@ function StepForm({
 
   return (
     <form
-      className="step"
       onSubmit={(event: FormEvent) => {
         event.preventDefault();
         void onSave();
@@ -203,7 +202,7 @@ function StepForm({
           </Field>
         )}
       </div>
-      <fieldset className="outcomes-set">
+      <fieldset>
         <legend className="field-label">Outcomes of {of}</legend>
         <ol className="outcomes">
           {draft.outcomes.map((outcome, index) => {

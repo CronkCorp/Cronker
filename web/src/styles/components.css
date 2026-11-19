@@ -103,6 +103,10 @@ textarea.markdown-source {
   margin-top: 3px;
   flex: none;
 }
+/* A select as wide as its options, inside a row. */
+.inline-select {
+  width: auto !important;
+}
 .form-row {
   display: flex;
   flex-wrap: wrap;
@@ -152,6 +156,11 @@ textarea.markdown-source {
   padding: 0;
   gap: 0;
   overflow: hidden;
+}
+/* A flush panel's rows run to its edges; its head keeps the panel's padding, ruled off from them. */
+.panel-flush > .panel-head {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
 }
 
 /* Settings layout: the list of a settings page's sections beside them; above them below 760px. */
@@ -459,29 +468,15 @@ textarea.markdown-source {
   border-color: var(--warn);
   color: var(--warn);
 }
-.chip-danger {
-  border-color: var(--danger);
-  color: var(--danger);
-}
 .chip-info {
   border-color: var(--info);
   color: var(--info);
 }
-.chip-agent {
-  background: var(--agent-soft);
-  color: var(--agent);
-}
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
 
-/* Run states */
-.run-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+/* The 11px uppercase pills: Run states, Decision statuses and Pull Request states. */
+.run-state,
+.decision-status,
+.pr-state {
   padding: 0 7px;
   border: 1px solid var(--muted);
   border-radius: var(--radius-pill);
@@ -492,6 +487,13 @@ textarea.markdown-source {
   line-height: 17px;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* Run states */
+.run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 .run-state-running {
   border-color: transparent;
@@ -527,12 +529,22 @@ textarea.markdown-source {
   }
 }
 
-/* Kind labels */
-.kind-label {
+/* The 11px caps of the type scale: kind labels and the labels over groups (sidebar, menus, pickers, the Inbox's
+   groups, a timeline's days). */
+.kind-label,
+.menu-label,
+.picker-group-label,
+.sidebar-group-label,
+.inbox-group,
+.timeline-day {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* Kind labels */
+.kind-label {
   white-space: nowrap;
 }
 .kind-accent {
@@ -554,20 +566,12 @@ textarea.markdown-source {
   color: var(--muted);
 }
 
-/* Decision statuses */
-.decision-status {
+.decision-status,
+.pr-state {
   display: inline-block;
-  padding: 0 7px;
-  border: 1px solid var(--muted);
-  border-radius: var(--radius-pill);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 17px;
-  text-transform: uppercase;
-  white-space: nowrap;
 }
+
+/* Decision statuses */
 .decision-status-proposed {
   border-color: var(--warn);
   color: var(--warn);
@@ -586,19 +590,6 @@ textarea.markdown-source {
 }
 
 /* Pull Request states */
-.pr-state {
-  display: inline-block;
-  padding: 0 7px;
-  border: 1px solid var(--muted);
-  border-radius: var(--radius-pill);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 17px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
 .pr-state-draft {
   border-style: dashed;
 }
@@ -764,10 +755,6 @@ textarea.markdown-source {
 .menu-label {
   padding: 6px 10px 2px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .menu-separator {
   height: 1px;
@@ -895,10 +882,6 @@ textarea.markdown-source {
   display: block;
   padding: var(--space-1) var(--space-2) 0;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .picker-empty {
   padding: 6px 8px;

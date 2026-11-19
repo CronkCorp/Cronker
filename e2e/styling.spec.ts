@@ -62,3 +62,34 @@ test("only the sign-in form's buttons span their card; other signed-out pages' b
   await expect(page.getByRole("heading", { name: "Join Ada's Workspace" })).toBeVisible();
   expect(await width(page.getByRole("button", { name: "Join" }))).toBeLessThan((await width(page.getByLabel("Choose a password"))) / 2);
 });
+
+// docs/ui.md: components use only tokens, never literal colours. Read from the stylesheets the browser was served.
+test("every colour the stylesheets set comes from a token", async ({ page, cronk }) => {
+  await page.goto(cronk.url);
+  await expect(page.getByRole("heading", { name: "Set up Cronk" })).toBeVisible();
+  const literals = await page.evaluate(() => {
+    const keywords = new Set(["transparent", "currentcolor", "inherit", "initial", "unset", "revert", "none"]);
+    const found: string[] = [];
+    const visit = (rules: CSSRuleList) => {
+      for (const rule of rules) {
+        if ("cssRules" in rule && !(rule instanceof CSSStyleRule)) visit((rule as CSSGroupingRule).cssRules);
+        if (!("style" in rule)) continue;
+        const style = (rule as CSSStyleRule).style;
+        for (const property of style) {
+          if (property.startsWith("--")) continue; // the tokens themselves
+          const value = style.getPropertyValue(property);
+          const words = value.replace(/var\([^)]*\)/g, " ").match(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|o?lab|o?lch|color|color-mix|light-dark)\([^)]*\)|[a-z]+/gi) ?? [];
+          for (const word of words) {
+            const clear = /^rgba?\(\s*0,\s*0,\s*0,\s*0\s*\)$/.test(word); // how the browser writes transparent
+            if (!clear && !keywords.has(word.toLowerCase()) && CSS.supports("color", word)) {
+              found.push(`${(rule as CSSStyleRule).selectorText ?? (rule as CSSKeyframeRule).keyText} { ${property}: ${value} }`);
+            }
+          }
+        }
+      }
+    };
+    for (const sheet of document.styleSheets) visit(sheet.cssRules);
+    return found;
+  });
+  expect(literals).toEqual([]);
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import {
   api,
   ApiError,
@@ -116,7 +116,7 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
   const branch = (parentId: string | null, depth: number): ReactNode =>
     (children.get(parentId) ?? []).map((document) => (
       <li key={document.id}>
-        <Link to={`/documents/${document.id}`} className={`row${arrived.has(document.id) ? " arrived" : ""}`} style={{ paddingLeft: 16 + depth * 20 }}>
+        <Link to={`/documents/${document.id}`} className={`row tree-row${arrived.has(document.id) ? " arrived" : ""}`} style={{ "--depth": depth } as CSSProperties}>
           <span className="row-title">{document.title}</span>
           <span className="row-meta">
             <span className="muted small">Version {document.version.number}</span>

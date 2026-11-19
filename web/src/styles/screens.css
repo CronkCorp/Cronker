@@ -70,6 +70,9 @@
   width: 80px;
   flex: none;
 }
+.tree-row {
+  padding-left: calc(var(--space-4) + var(--depth, 0) * 20px);
+}
 .people {
   display: inline-flex;
   gap: 4px;
@@ -125,11 +128,12 @@
 /* Board: open columns share the width, tight enough that the default nine Statuses fit a 1280px screen. A
    column's name wraps rather than being cut off. Done and Canceled start collapsed. */
 .board {
-  display: grid;
+  display: flex;
   gap: var(--space-2);
-  align-items: start;
+  align-items: flex-start;
 }
 .column {
+  flex: 1 1 0;
   display: grid;
   gap: var(--space-2);
   min-width: 0;
@@ -185,6 +189,7 @@
   background: var(--border);
 }
 .column-collapsed {
+  flex: 0 0 36px;
   justify-items: center;
   padding: var(--space-2) 2px;
 }
@@ -290,9 +295,6 @@
 }
 .status-rename input {
   flex: 1;
-}
-.kind-select {
-  width: auto !important;
 }
 .status-row-tools {
   display: flex;
@@ -553,10 +555,6 @@
   position: relative;
   padding-left: 36px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .entry {
   position: relative;
@@ -805,10 +803,6 @@
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .inbox-item {
   border-bottom: 1px solid var(--border);
@@ -882,9 +876,6 @@
 /* A line of prose with Actors and pills in it: inline, so punctuation sits against the words before it. */
 .detail-line {
   font-size: 13px;
-}
-.inline-select {
-  width: auto !important;
 }
 .keys-line kbd {
   font-size: 11px;
@@ -1144,15 +1135,6 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-4);
-}
-.panel-table {
-  padding: 0;
-  gap: 0;
-  overflow: hidden;
-}
-.panel-table > .panel-head {
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
 }
 /* A table cell of row actions stays a cell, so its row's border runs under it too; its buttons sit in a row inside. */
 .cell-actions > div {

@@ -368,7 +368,7 @@ function Detail({
     <div className="detail">
       <p className="detail-head">
         <KindLabel kind={kindOf(item)} />
-        <Link to={`/tickets/${ticket.id}`} className="detail-ticket">
+        <Link to={`/tickets/${ticket.id}`}>
           <Key>{ticket.key}</Key> {ticket.title}
         </Link>
       </p>

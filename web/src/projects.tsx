@@ -439,11 +439,10 @@ function Board({
   };
 
   const collapsed = (status: Status) => collapsible(status) && !opened.has(status.id);
-  const columns = project.statuses.map((status) => (collapsed(status) ? "36px" : "minmax(0, 1fr)")).join(" ");
   return (
     <>
       <FormError error={error} />
-      <section aria-label="Board" className="board" style={{ gridTemplateColumns: columns }}>
+      <section aria-label="Board" className="board">
         {project.statuses.map((status) => {
           const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
           const isCollapsed = collapsed(status);
@@ -749,7 +748,7 @@ function StatusRow({
 
 function KindSelect(props: ComponentProps<"select">) {
   return (
-    <select {...props} className="kind-select">
+    <select {...props} className="inline-select">
       {statusKinds.map(({ kind, label }) => (
         <option key={kind} value={kind}>
           {label}

@@ -356,7 +356,7 @@ function ManageTokens({
         </Banner>
       )}
       {tokens.length > 0 && (
-        <table className="tokens">
+        <table>
           <tbody>
             {tokens.map((token) => (
               <tr key={token.id}>
