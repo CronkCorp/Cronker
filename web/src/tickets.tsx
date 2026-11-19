@@ -36,7 +36,7 @@ import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
-import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
@@ -295,6 +295,7 @@ export function TicketScreen({
             runs={runs}
             comments={comments}
             reports={reports}
+            pullRequests={pullRequests}
             onAdded={addComment}
             onChanged={loadComments}
           />
@@ -1084,6 +1085,104 @@ function described(change: Change): string {
   return `changed ${fieldNames[field]} from ${shown(change, change.from)} to ${shown(change, change.to)}`;
 }
 
+/**
+ * Cronk's Changes recorded at the same moment as one that says why: a skipped Step's move on out of its Status,
+ * and a merge's move to a Done Status with the Verification it completed the Ticket as.
+ */
+function recordedWith(change: Change, changes: Change[], project: Project): Change[] {
+  if (change.actor.kind !== "cronk") return [];
+  const sameMoment = changes.filter((c) => c.actor.kind === "cronk" && c.at === change.at);
+  if (change.field === "stepSkipped") {
+    const skipped = (change.to as StepSkipped).status.id;
+    const moved = sameMoment.find((c) => c.field === "status" && (c.from as { id: string }).id === skipped);
+    return moved ? [moved] : [];
+  }
+  if (change.field !== "merged") return [];
+  const kindOf = (value: unknown) => project.statuses.find((s) => s.id === (value as { id: string }).id)?.kind;
+  return [
+    sameMoment.find((c) => c.field === "status" && kindOf(c.to) === "done"),
+    sameMoment.find((c) => c.field === "verification"),
+  ].filter((c) => c !== undefined);
+}
+
+/** Each Change that says why with the Changes recorded with it, which show in its line instead of their own. */
+function explanations(changes: Change[], project: Project): Map<string, Change[]> {
+  return new Map(
+    changes
+      .map((change) => [change.id, recordedWith(change, changes, project)] as const)
+      .filter(([, related]) => related.length > 0),
+  );
+}
+
+/** How far apart Cronk records a send-back, its move and its Comment, at most. */
+const sendBackWindow = 5_000;
+
+/**
+ * When Cronk moved the Ticket back for the failure its Comment names, so the Comment reads right after that move
+ * and before the Run the move started; Cronk writes the Comment a moment after both.
+ */
+function movedBackAt(comment: Comment, changes: Change[]): string | undefined {
+  if (comment.actor.kind !== "cronk") return undefined;
+  const written = new Date(comment.createdAt).getTime();
+  return changes.findLast((c) => {
+    const at = new Date(c.at).getTime();
+    return c.actor.kind === "cronk" && c.field === "status" && at <= written && written - at <= sendBackWindow;
+  })?.at;
+}
+
+/**
+ * A Change Cronk made, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
+ * where it moved on to, and a move of its own the failing check or requested changes that sent the Ticket back.
+ */
+function describedByCronk(change: Change, related: Change[], pullRequests: PullRequest[]): ReactNode {
+  const moved = related.find((c) => c.field === "status");
+  if (change.field === "merged") {
+    const verification = related.find((c) => c.field === "verification")?.to;
+    return (
+      <>
+        {described(change)}
+        {moved && <>, moving it to {shown(moved, moved.to)}</>}
+        {verification === "verified" ? ", Verified by that merge" : verification === "unverified" ? " as Unverified" : ""}
+      </>
+    );
+  }
+  if (change.field === "stepSkipped") {
+    return (
+      <>
+        {described(change)}
+        {moved && <> to {shown(moved, moved.to)}</>}
+      </>
+    );
+  }
+  if (change.field !== "status") return described(change);
+  // Cronk moves a Ticket on its own only to send it back, as a failing check or requested changes do.
+  const at = new Date(change.at).getTime();
+  const cause = pullRequests.find(
+    (pr) => pr.sentBack && Math.abs(new Date(pr.sentBack.at).getTime() - at) <= sendBackWindow,
+  );
+  const failure = cause?.sentBack;
+  return (
+    <>
+      sent it back from {shown(change, change.from)} to {shown(change, change.to)}
+      {cause && failure && (
+        <>
+          :{" "}
+          {failure.kind === "check" ? (
+            <>
+              the check <ExternalLink url={failure.url}>{failure.name}</ExternalLink> failed on{" "}
+            </>
+          ) : (
+            <>
+              {failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} <ExternalLink url={failure.url}>requested changes</ExternalLink> on{" "}
+            </>
+          )}
+          <ExternalLink url={cause.url}>{pullRequestName(cause)}</ExternalLink>
+        </>
+      )}
+    </>
+  );
+}
+
 function shown(change: Change, value: unknown): string {
   if (value === null || (Array.isArray(value) && value.length === 0)) return "none";
   if (change.field === "priority") return priorityLabel(value as Priority);
@@ -1103,6 +1202,12 @@ type Entry =
   | { at: string; key: string; kind: "comment"; comment: Comment }
   | { at: string; key: string; kind: "report"; report: Report };
 
+/**
+ * Entries recorded at the same moment read cause before effect: a move, then the Comment Cronk wrote about it,
+ * then a Report, then the Run the move started.
+ */
+const tieOrder: Record<Entry["kind"], number> = { change: 0, comment: 1, report: 2, run: 3 };
+
 /** Whether the page is scrolled to its end, where new entries may scroll it on. */
 const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 48;
 
@@ -1116,6 +1221,7 @@ function Timeline({
   runs,
   comments,
   reports,
+  pullRequests,
   onAdded,
   onChanged,
 }: {
@@ -1128,16 +1234,24 @@ function Timeline({
   runs: Run[];
   comments: Comment[];
   reports: Report[];
+  /** The Ticket's Pull Requests, whose send-backs name why Cronk sent the Ticket back. */
+  pullRequests: PullRequest[];
   onAdded: (comment: Comment) => void;
   /** Something attached to a Comment changed. */
   onChanged: () => void;
 }) {
+  const explained = explanations(changes, project);
+  const shownInAnother = new Set([...explained.values()].flat().map((c) => c.id));
   const entries: Entry[] = [
-    ...changes.map((change) => ({ at: change.at, key: `change:${change.id}`, kind: "change" as const, change })),
+    ...changes
+      .filter((change) => !shownInAnother.has(change.id))
+      .map((change) => ({ at: change.at, key: `change:${change.id}`, kind: "change" as const, change })),
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, kind: "run" as const, run })),
-    ...comments.filter((c) => c.replyToId === null).map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
+    ...comments
+      .filter((c) => c.replyToId === null)
+      .map((comment) => ({ at: movedBackAt(comment, changes) ?? comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
+  ].sort((a, b) => a.at.localeCompare(b.at) || tieOrder[a.kind] - tieOrder[b.kind]);
   const runOf = new Map(runs.map((run) => [run.id, run]));
   const arrived = useArrivals([...entries.map((e) => e.key), ...comments.map((c) => `comment:${c.id}`)], loaded);
 
@@ -1161,7 +1275,7 @@ function Timeline({
     if (thisDay !== day) {
       day = thisDay;
       rows.push(
-        <li key={`day:${entry.key}`} className="timeline-day" aria-hidden="true">
+        <li key={`day:${entry.key}`} className="timeline-day">
           <span>{thisDay}</span>
         </li>,
       );
@@ -1176,7 +1290,8 @@ function Timeline({
             <span className="ring" />
           </span>
           <p className="entry-line">
-            <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} /> {described(change)}
+            <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
+            {change.actor.kind === "cronk" ? describedByCronk(change, explained.get(change.id) ?? [], pullRequests) : described(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,
@@ -1266,6 +1381,8 @@ function CommentThread({
   const replies = comments.filter((c) => c.replyToId === comment.id);
   const parent = comment.replyToId ? comments.find((c) => c.id === comment.replyToId) : undefined;
   const question = comment.questionId !== null;
+  // Cronk writes a Comment only when a failing check or requested changes send the Ticket back.
+  const sentBack = comment.actor.kind === "cronk";
   // The first User's reply answers a Question.
   const answered = question && replies.some((r) => r.actor.kind === "user");
   const askedIn = question ? runs.find((r) => r.question === comment.body && r.questionBy === "agent") : undefined;
@@ -1276,11 +1393,11 @@ function CommentThread({
   };
   return (
     <article
-      aria-label={`${question ? "Question from" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
+      aria-label={`${question ? "Question from" : sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
       className={`entry-body comment${depth > 0 ? " reply" : ""}${arrived.has(`comment:${comment.id}`) ? " arrived" : ""}`}
     >
       <p className="entry-head">
-        {depth === 0 && <KindLabel kind={question ? "Question" : "Comment"} />}{" "}
+        {depth === 0 && <KindLabel kind={question ? "Question" : sentBack ? "Sent back" : "Comment"} />}{" "}
         <Actor actor={actor} avatar={depth > 0} /> <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}

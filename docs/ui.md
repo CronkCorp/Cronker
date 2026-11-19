@@ -101,7 +101,7 @@ The web client keeps its own small component set, styled with the tokens in plai
   - Then clock time for today ("10:18") and "yesterday".
   - Then day and time ("14 Nov 09:52"), with the year only when it differs from the current one.
   - The exact time is always in `title`.
-  - A timeline shows clock times with a separator for each day ("Today", "Yesterday", "14 Nov").
+  - A timeline shows clock times with a separator for each day ("Today", "Yesterday", "14 Nov"), read out like its entries.
 - **Empty states:** a short heading saying what will appear and one line saying how it gets there ("Runs write a Report when they finish a Step").
 - **Decision status** (`<DecisionStatusPill>`): 11px uppercase pill. Proposed is outlined `--warn`, Accepted filled `--ok-soft` with `--ok` text, Superseded outlined `--info`, Rejected outlined `--muted`, and Deprecated dashed `--muted`.
 - **Pull Request state** (`<PullRequestState>`): 11px uppercase pill. Draft dashed `--muted`, Open outlined `--ok`, Merged filled `--agent-soft` with `--agent` text, Closed outlined `--danger`. **Checks** show as counts: ✓ in `--ok`, ✗ in `--danger`, ● running in `--warn`.
@@ -151,7 +151,8 @@ The web client keeps its own small component set, styled with the tokens in plai
   - **Comment:** the body in a bordered bubble, with replies indented under it. A Question is a Comment from the Agent in a `--warn-soft` box with its answer box. A send-back by Cronk is a Comment labelled `SENT BACK`, naming the failing checks (each linking to GitHub) or the review.
   - **Report:** a card with an `--agent` border, its title and an "Open Report" link. The body shows at body size, its headings scaled down to 14px.
   - **Run:** a single line with the Run state pill, the Step, the Agent and the Outcome it chose ("Implement · claude-laptop · done → Code review").
-  - **Change:** a single muted line with a small ring in the gutter, such as "claude-laptop moved it from Implement to Code review". Cronk's own Changes name the reason ("Cronk moved it to Done: Ada merged #212, Verified by that merge").
+  - **Change:** a single muted line with a small ring in the gutter, such as "claude-laptop changed Status from Implement to Code review in its Implement Run". Cronk's own Changes name the reason in one line, folding in the move and Verification recorded with it: "Cronk completed it: @ada merged cronkcorp/cronker#212 Rate-limit sign-in, moving it to Done, Verified by that merge", "Cronk skipped the Code review Step (skipped by no-review), moving on by approve to In Review", or "Cronk sent it back from In Review to Implement: the check test failed on cronkcorp/cronker#212", linking the check or review.
+  - **Order:** what was recorded together reads cause before effect: a move, then the `SENT BACK` Comment Cronk wrote about it, then a Report, then the Run the move started.
 - **Replying:** Comments and Questions offer Reply; Runs, Reports and Changes don't.
 
 ![Ticket, dark](ui/ticket-dark.png)

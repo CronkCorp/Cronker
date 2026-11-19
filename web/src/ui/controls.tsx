@@ -224,6 +224,17 @@ export function daySeparator(date: Date, now: Date): string {
   return dayShown(date, now);
 }
 
+/** A link out of Cronk, such as to GitHub, opening in a new tab; the text alone when there is no address. */
+export function ExternalLink({ url, children }: { url: string | null; children: ReactNode }) {
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  ) : (
+    <>{children}</>
+  );
+}
+
 /** A time as it reads relative to now, with the exact time in its tooltip. */
 export function RelativeTime({ at, clock = false }: { at: string; /** Clock time only, as on a timeline. */ clock?: boolean }) {
   const now = useNow();
