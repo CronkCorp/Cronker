@@ -104,7 +104,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             type: "http",
             scheme: "bearer",
             description:
-              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents; during their running Run on a Ticket they may also edit some of its fields, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, and create and save Terms; during their running Run on a Ticket they may also edit some of its fields, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
           },
         },
       },
