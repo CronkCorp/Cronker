@@ -67,8 +67,7 @@ export const SentBack = Type.Union(
 );
 export type SentBack = Static<typeof SentBack>;
 
-export const reviewStates = ["approved", "changes_requested"] as const;
-export type ReviewState = (typeof reviewStates)[number];
+const reviewStates = ["approved", "changes_requested"] as const;
 
 export const PullRequestReview = Type.Object(
   {
@@ -430,7 +429,7 @@ export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payl
   if ((action !== "submitted" && action !== "dismissed") || typeof review?.id !== "number" || typeof pr?.id !== "number") return;
   if (typeof review.state !== "string") return;
   const state = action === "dismissed" ? "dismissed" : review.state.toLowerCase();
-  if (state !== "approved" && state !== "changes_requested" && state !== "dismissed") return;
+  if (state !== "dismissed" && !(reviewStates as readonly string[]).includes(state)) return;
   const { rows } = await tx.query<{ repository: string; number: number; url: string; open: boolean }>(
     `select repository_full_name as repository, number, url, state in ('open', 'draft') as open
      from pull_requests where id = $1`,
@@ -440,25 +439,29 @@ export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payl
   if (!known) return;
   const reviewer = typeof review.user?.login === "string" ? review.user.login : null;
   const url = typeof review.html_url === "string" ? review.html_url : null;
+  let changed = false;
   // A review of an account GitHub no longer names has no reviewer to keep it under.
   if (reviewer !== null) {
     // Kept unless a later review is known; a dismissal of the same review wins whichever arrives first.
-    await tx.query(
+    const { rowCount } = await tx.query(
       `insert into pull_request_reviews (pull_request_id, reviewer, review_id, state, url) values ($1, $2, $3, $4, $5)
        on conflict (pull_request_id, reviewer) do update set review_id = excluded.review_id, state = excluded.state,
          url = excluded.url
        where pull_request_reviews.review_id < excluded.review_id
-         or (pull_request_reviews.review_id = excluded.review_id and excluded.state = 'dismissed')`,
+         or (pull_request_reviews.review_id = excluded.review_id and excluded.state = 'dismissed'
+           and pull_request_reviews.state <> 'dismissed')`,
       [pr.id, reviewer, review.id, state, url],
     );
+    changed = rowCount !== 0;
   }
   if (state === "changes_requested" && known.open) {
-    await sendBackForFailure(context, tx, { id: pr.id, repository: known.repository, number: known.number, url: known.url }, {
+    const sent = await sendBackForFailure(context, tx, { id: pr.id, repository: known.repository, number: known.number, url: known.url }, {
       kind: "review",
       id: review.id,
       reviewer,
       url,
     });
+    changed ||= sent;
   }
-  await announce(context, tx, [pr.id]);
+  if (changed) await announce(context, tx, [pr.id]);
 };

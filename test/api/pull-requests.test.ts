@@ -379,7 +379,7 @@ describe("A Pull Request's review state", () => {
     expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toBeNull();
   });
 
-  test("requested changes show whatever the Ticket's Status, without sending it back, and the Workspace hears of each review", async () => {
+  test("requested changes show whatever the Ticket's Status, without sending it back, and the Workspace hears of it", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "In Backlog" });
     const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
@@ -389,6 +389,9 @@ describe("A Pull Request's review state", () => {
     await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
 
     expect(await stream.next()).toEqual({ type: "pull_requests.changed", data: { projectId: project.id, ticketId: ticket.id } });
+    // The same review delivered again changes nothing, so nothing is heard.
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+    await stream.expectQuiet();
     stream.close();
     expect((await pullRequestsOf(ticket.id, cookie))[0]).toMatchObject({
       reviewState: { state: "changes_requested", reviewer: "bea" },
@@ -970,11 +973,21 @@ describe("Failures sending work back", () => {
     cronk.clock.advance(hours(1));
     await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
 
-    expect((await pullRequestsOf(ticket.id, cookie))[0].sentBack).toEqual({
-      kind: "review",
-      reviewer: "bea",
-      url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
-      at: "2026-01-01T11:00:00.000Z",
+    expect((await pullRequestsOf(ticket.id, cookie))[0]).toMatchObject({
+      reviewState: { state: "changes_requested", reviewer: "bea", url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72" },
+      sentBack: {
+        kind: "review",
+        reviewer: "bea",
+        url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
+        at: "2026-01-01T11:00:00.000Z",
+      },
+    });
+
+    // An approval that follows replaces the review state; what sent the Ticket back stays.
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 73, state: "approved", reviewer: "bea" }));
+    expect((await pullRequestsOf(ticket.id, cookie))[0]).toMatchObject({
+      reviewState: { state: "approved", reviewer: "bea" },
+      sentBack: { kind: "review", reviewer: "bea" },
     });
   });
 
