@@ -169,3 +169,25 @@ export interface InstallationOnGitHub {
 export async function appInstallations({ github }: Config, jwt: string): Promise<InstallationOnGitHub[]> {
   return allPages(under(github.apiUrl, "/app/installations"), jwt, "/app/installations", (body) => body as InstallationOnGitHub[]);
 }
+
+/** A new token for acting on one installation's Repositories, and when GitHub says it expires. */
+export async function installationToken(
+  { github }: Config,
+  jwt: string,
+  installationId: number,
+): Promise<{ token: string; expiresAt: Date }> {
+  const url = under(github.apiUrl, `/app/installations/${installationId}/access_tokens`);
+  const response = await call(url, { method: "POST", headers: { authorization: `Bearer ${jwt}` } });
+  const body = await jsonOf<{ token: string; expires_at: string }>(response, "The installation token request");
+  return { token: body.token, expiresAt: new Date(body.expires_at) };
+}
+
+/** The repositories an installation covers. */
+export async function installationRepositories({ github }: Config, token: string): Promise<{ id: number; full_name: string }[]> {
+  return allPages(
+    under(github.apiUrl, "/installation/repositories"),
+    token,
+    "/installation/repositories",
+    (body) => (body as { repositories: { id: number; full_name: string }[] }).repositories,
+  );
+}

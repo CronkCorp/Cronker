@@ -150,3 +150,59 @@ describe("upgrading the GitHub App: refusals", () => {
     expect(await response.json()).toEqual({ error: { code: "github_not_set_up", message: expect.any(String) } });
   });
 });
+
+describe("the App's installations", () => {
+  test("a User sees the App's installations and the Repositories each covers", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    const many = Array.from({ length: 105 }, (_, n) => `service-${String(n).padStart(3, "0")}`);
+    cronk.github.install(app, "acme", many);
+    const bea = cronk.github.install(app, "bea", ["notes"]);
+    const member = await addMember(cronk, cookie, workspace.id, "cy@example.com");
+
+    const response = await cronk.request("GET", "/api/github/installations", { cookie: member.cookie });
+
+    expect(response.status).toBe(200);
+    const installations = await response.json();
+    expect(installations).toHaveLength(2);
+    expect(installations[0].account).toBe("acme");
+    expect(installations[0].repositories).toHaveLength(105);
+    expect(installations[0].repositories[104]).toEqual({ id: expect.any(Number), fullName: "acme/service-104" });
+    expect(installations[1]).toEqual({ account: "bea", repositories: [{ id: bea.repositories[0]!.id, fullName: "bea/notes" }] });
+  });
+
+  test("installation tokens are fetched once and reused until shortly before they expire", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const acme = cronk.github.install(cronk.github.apps[0]!, "acme", ["api"]);
+    const list = async () => expect((await cronk.request("GET", "/api/github/installations", { cookie })).status).toBe(200);
+
+    await list();
+    await list();
+    expect(cronk.github.tokensIssued).toHaveLength(1);
+    expect(cronk.github.tokensIssued[0]!.installationId).toBe(acme.id);
+
+    // GitHub's tokens last an hour; 54 minutes on, the first is still used.
+    cronk.clock.advance(54 * 60 * 1000);
+    await list();
+    expect(cronk.github.tokensIssued).toHaveLength(1);
+
+    // Within five minutes of its expiry, a new one is fetched, and then reused in turn.
+    cronk.clock.advance(2 * 60 * 1000);
+    await list();
+    await list();
+    expect(cronk.github.tokensIssued).toHaveLength(2);
+  });
+
+  test("without a GitHub App there are no installations to list", async () => {
+    await setUp(cronk);
+
+    const response = await cronk.request("GET", "/api/github/installations", { cookie: await signIn(cronk) });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: { code: "github_not_set_up", message: expect.any(String) } });
+  });
+});

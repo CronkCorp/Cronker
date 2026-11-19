@@ -5,6 +5,7 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
 import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
+import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
 import { receiveDelivery } from "./webhooks.js";
 
@@ -111,6 +112,23 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => checklist(context, (await requireUser(context, request)).id),
+    );
+
+    app.get(
+      "/api/github/installations",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "The GitHub App's installations and the Repositories each covers",
+          description:
+            "Every GitHub account or organization the App is installed on, with the Repositories it covers there, as GitHub reports them now. Installing the App on GitHub is what makes a Repository available to Cronk. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+          response: { 200: Type.Array(Installation), 401: ErrorBody, 403: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request) => {
+        await requireUser(context, request);
+        return listInstallations(context);
+      },
     );
 
     // The webhook endpoint reads its body as bytes, since the signature covers exactly those.
