@@ -21,12 +21,12 @@ import { DocumentScreen, WorkspaceDocuments } from "./documents.js";
 import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
-import { Link, navigate, replace, usePath } from "./router.js";
+import { navigate, replace, usePath } from "./router.js";
 import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Button, buttonClass, EmptyState, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
+import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved, workspaceCrumb } from "./ui/controls.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 type Screen =
@@ -306,9 +306,6 @@ function SignedIn({
     return true;
   };
 
-  // The password page is a centred card outside the frame; it leads back to the Workspace on screen.
-  if (path === "/password") return <ChangePassword back={current ? `/workspaces/${current.id}` : "/"} />;
-
   let page: ReactNode;
   if (path === "/workspaces/new") {
     page = (
@@ -319,6 +316,8 @@ function SignedIn({
         }}
       />
     );
+  } else if (path === "/password") {
+    page = <ChangePassword />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {
@@ -395,9 +394,9 @@ function SignedIn({
   } else if (current && (routedId || path === "/")) {
     page = <WorkspaceHome key={current.id} workspace={current} />;
   } else if (workspaces.length === 0 && path === "/") {
-    page = <EmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</EmptyState>;
+    page = <PlacelessEmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</PlacelessEmptyState>;
   } else {
-    page = <EmptyState title="Nothing is here.">The page may have moved, or you may not see it.</EmptyState>;
+    page = <PlacelessEmptyState title="Nothing is here.">The page may have moved, or you may not see it.</PlacelessEmptyState>;
   }
 
   return (
@@ -415,6 +414,12 @@ function SignedIn({
   );
 }
 
+/** An empty page that belongs to no sidebar item, such as one that isn't there; the sidebar marks none. */
+function PlacelessEmptyState({ title, children }: { title: string; children: ReactNode }) {
+  usePlace(null);
+  return <EmptyState title={title}>{children}</EmptyState>;
+}
+
 function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) => void }) {
   usePlace(null);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
@@ -422,7 +427,7 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   });
   return (
     <div className="page page-settings">
-      <PageHead title="New Workspace" />
+      <PageHead crumbs={[{ label: "Workspaces" }]} title="New Workspace" />
       <Panel>
         <p className="muted">You'll be its Admin, and can add Users to it.</p>
         <form onSubmit={onSubmit}>
@@ -441,8 +446,8 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   );
 }
 
-/** The signed-in User's password: a centred card outside the frame, like the other pages about signing in. */
-function ChangePassword({ back }: { back: string }) {
+function ChangePassword() {
+  usePlace(null);
   const [done, setDone] = useState(false);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     setDone(false);
@@ -451,26 +456,26 @@ function ChangePassword({ back }: { back: string }) {
     setDone(true);
   });
   return (
-    <Centered title="Change your password">
-      <form onSubmit={onSubmit}>
-        <Field label="Current password">
-          <input name="currentPassword" type="password" required autoComplete="current-password" />
-        </Field>
-        <Field label="New password" hint="At least 8 characters. Changing it ends your other sign-ins.">
-          <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
-        </Field>
-        <FormError error={error} />
-        <Actions>
-          <Button type="submit" variant="primary" disabled={busy}>
-            Change password
-          </Button>
-          <Saved shown={done}>Password changed. Your other sign-ins have ended.</Saved>
-        </Actions>
-      </form>
-      <Link to={back} className={buttonClass("ghost")}>
-        Back to Cronk
-      </Link>
-    </Centered>
+    <div className="page page-settings">
+      <PageHead crumbs={[{ label: "Account" }]} title="Password" />
+      <Panel>
+        <form onSubmit={onSubmit}>
+          <Field label="Current password">
+            <input name="currentPassword" type="password" required autoComplete="current-password" />
+          </Field>
+          <Field label="New password" hint="At least 8 characters. Changing it ends your other sign-ins.">
+            <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
+          </Field>
+          <FormError error={error} />
+          <Actions>
+            <Button type="submit" variant="primary" disabled={busy}>
+              Change password
+            </Button>
+            <Saved shown={done}>Password changed. Your other sign-ins have ended.</Saved>
+          </Actions>
+        </form>
+      </Panel>
+    </div>
   );
 }
 
@@ -507,7 +512,7 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
   });
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: workspace.name }]} title="Settings" />
+      <PageHead crumbs={[workspaceCrumb(workspace)]} title="Settings" />
       <FormError error={failure} />
       <Panel title="Name" id="workspace-name">
         <form onSubmit={rename.onSubmit}>
@@ -599,7 +604,7 @@ function Members({
 
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: workspace.name }]} title="Members" />
+      <PageHead crumbs={[workspaceCrumb(workspace)]} title="Members" />
       {workspace.isAdmin && (
         <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
           <div className="form-columns">

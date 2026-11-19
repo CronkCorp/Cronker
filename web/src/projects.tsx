@@ -25,7 +25,7 @@ import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented } from "./ui/controls.js";
+import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
 
@@ -52,7 +52,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="page">
-      <PageHead title={workspace.name} />
+      <PageHead crumbs={[{ label: "Workspace" }]} title={workspace.name} />
       <FormError error={failure} />
       {projects &&
         (projects.length === 0 ? (
@@ -181,7 +181,7 @@ export function ProjectScreen({
   if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
 
   const base = `/projects/${project.id}`;
-  const home = { label: workspace.name, to: `/workspaces/${workspace.id}` };
+  const home = workspaceCrumb(workspace);
   if (view === "settings") {
     return (
       <div className="page page-settings">
@@ -755,7 +755,7 @@ export function ScopeSwitch({
 
 /** Crumbs leading to a Project's or the Workspace's knowledge page. */
 export function knowledgeCrumbs(workspace: Workspace, project: ProjectSummary | null, page: ReactNode) {
-  const home = { label: workspace.name, to: `/workspaces/${workspace.id}` };
+  const home = workspaceCrumb(workspace);
   return project
     ? [home, { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }, { label: page }]
     : [home, { label: page }];
