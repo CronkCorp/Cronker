@@ -666,7 +666,7 @@ describe("Failures sending work back", () => {
 
   /**
    * A delegated Ticket whose Implement Run opened Pull Request 501 (`CRONK-1`, branch `b`, latest commit `c1`), then
-   * moved by Ada to In Review, a Review Status.
+   * finished with *done*, which, past Code review that its `no-review` Label skips, moved it to In Review, a Review Status.
    */
   async function inReview() {
     const setup = await projectWithRepository();
@@ -674,13 +674,28 @@ describe("Failures sending work back", () => {
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
     const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
     await ok("PATCH", `/api/agents/${agent.id}`, cookie, { runnerId: runner.id });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Make it so" });
-    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { delegateId: agent.id, statusId: statusNamed(project, "Implement") });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, {
+      delegateId: agent.id,
+      labels: ["no-review"],
+      statusId: statusNamed(project, "Implement"),
+    });
     const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b", sha: "c1" };
     await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
-    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: statusNamed(project, "In Review") });
+    /** The Agent finishes the Run running on the Ticket with *done*. */
+    const finishImplementing = async () => {
+      const running = (await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie)).find((r: { state: string }) => r.state === "running");
+      const finished = await cronk.request("POST", `/api/runs/${running.id}/finish`, {
+        headers: { authorization: `Bearer ${secret}` },
+        body: { outcome: "done" },
+      });
+      expect(finished.status, await finished.clone().text()).toBe(200);
+    };
+    await finishImplementing();
     const status = (name: string) => statusNamed(project, name);
-    return { ...setup, ticket, pr, status };
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    return { ...setup, ticket, pr, status, finishImplementing };
   }
 
   const ticketOf = async (ticketId: string, cookie: string) => ok("GET", `/api/tickets/${ticketId}`, cookie);
@@ -698,7 +713,7 @@ describe("Failures sending work back", () => {
     expect(comments[0].body).toContain("https://github.com/cronkcorp/cronker/runs/10");
     // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
     const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
-    expect(runs.map((r: { state: string; statusName: string }) => r.state)).toEqual(["stopped", "running"]);
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
   });
 
   test.each<[string, string, { conclusion?: string; state?: string }]>([
@@ -756,6 +771,43 @@ describe("Failures sending work back", () => {
         "@mallory [requested changes](https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72) on " +
           "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7). Sent CRONK-1 back to Implement.",
       ],
+    ]);
+  });
+
+  test("sending back counts as a round for the producing Step; past its round limit *needs you* applies, with Cronk's Question in the Inbox", async () => {
+    const { workspace, project, cookie, app, installation, cronker, ticket, pr, status, finishImplementing } = await inReview();
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Implement");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Implement")}/step`, cookie, { ...step, roundLimit: 1 });
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    // The next round pushes a new commit and comes back for review.
+    await deliver(app, "pull_request", pullRequestEvent("synchronize", installation, cronker, { ...pr, sha: "c2", updatedAt: "2026-01-01T10:00:00Z" }));
+    await finishImplementing();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 11, name: "test", sha: "c2", status: "completed", conclusion: "failure" }));
+
+    // Implement's *needs you* Outcome moves it to Ready.
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Ready") });
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, cookie);
+    expect(items.filter((i: { kind: string }) => i.kind === "needsYou")).toEqual([
+      expect.objectContaining({
+        ticket: expect.objectContaining({ key: "CRONK-1" }),
+        status: { id: status("Ready"), name: "Ready" },
+        outcome: "needs you",
+        step: { statusId: status("Implement"), name: "Implement" },
+        question:
+          "Failing checks and requested changes sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
+          "instead. Read the latest Comments, then move it on yourself.",
+      }),
+    ]);
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments.map((c: { body: string }) => c.body)).toEqual([
+      "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed on " +
+        "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
+      "The check [**test**](https://github.com/cronkcorp/cronker/runs/11) failed on " +
+        "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c2`. " +
+        "That is past Implement's round limit, so CRONK-1 comes to its Assignee instead.",
     ]);
   });
 });
