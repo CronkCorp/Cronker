@@ -115,7 +115,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Page head:** the title, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Project settings), and New Ticket as the only primary action, last.
 - **Project settings:** in the settings layout, one section each for Statuses and their Steps (with the Brief preview), Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories and Pull Request automation. A Step the User opened stays open after saving.
 - **List rows:** Status dot, key, title, Labels, Priority tag, the running Run's state when there is one, and the Delegate's and Assignee's avatars, each named in its tooltip ("Delegate: claude-laptop").
-- **Board:** open columns share the main column's width. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A 1280px screen shows every Status without sideways scrolling. Cards show the key, Priority, title, Labels, the avatars, and a Run state pill while a Run is running, waiting or has gone wrong.
+- **Board:** open columns share the main column's width. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A 1280px screen shows every Status without sideways scrolling. A column's name wraps rather than being cut off, with its Step's model label on a line under it. Cards show the key with the Priority beside it, then the title, Labels, the avatars, and a Run state pill while a Run is running, waiting or has gone wrong.
 
 ### Inbox
 

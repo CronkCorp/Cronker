@@ -22,13 +22,21 @@ export interface MovedTicket {
   verification: "unverified" | "verified" | null;
 }
 
-/** Where a move by Cronk sends the Ticket: by an Outcome of a Step, or straight to a Status. */
+/**
+ * Where a move by Cronk sends the Ticket: by an Outcome of a Step, back to the Status of the Step that produced its
+ * work (as a failing check or requested changes do, counting as a round), or straight to a Status.
+ */
 export type CronkMoveTarget =
   | {
       kind: "outcome";
       /** The Step whose Outcome it is, by its Status, with its name as shown in Cronk's Question. */
       step: { statusId: string; name: string };
       outcome: Outcome;
+    }
+  | {
+      kind: "sentBack";
+      /** The Step that produced the work, by its Status, with its name as shown in Cronk's Question. */
+      step: { statusId: string; name: string };
     }
   | {
       kind: "status";
@@ -76,11 +84,11 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   const statuses = await statusesOf(tx, ticket.projectId);
   const { target } = move;
   const decision: CronkMoveDecision = { outcome: target.kind === "outcome" ? target.outcome : null, question: null };
-  if (target.kind === "outcome") {
+  if (target.kind === "outcome" || target.kind === "sentBack") {
     const step = statuses.find((s) => s.id === target.step.statusId)?.step;
-    // An Outcome counting as a round adds one for this Ticket and Step, until the count has reached the
-    // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
-    if (target.outcome.countsAsRound && step) {
+    // An Outcome counting as a round, or work sent back, adds one for this Ticket and Step, until the count has
+    // reached the Step's round limit: then *needs you* applies instead, with Cronk's own Question.
+    if ((target.kind === "sentBack" || target.outcome.countsAsRound) && step) {
       const { rows } = await tx.query<{ stepId: string; count: number | null }>(
         `select steps.id as "stepId", round_counts.count from steps
          left join round_counts on round_counts.step_id = steps.id and round_counts.ticket_id = $2
@@ -91,8 +99,11 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
       if ((count ?? 0) >= step.roundLimit) {
         decision.outcome = step.outcomes.find((o) => o.needsYou)!;
         decision.question =
-          `${target.step.name} sent ${ticket.key} back by ${target.outcome.name} ${times(step.roundLimit)}, its round limit, ` +
-          "so it comes to you instead. Read the latest Reports, then move it on yourself.";
+          target.kind === "outcome"
+            ? `${target.step.name} sent ${ticket.key} back by ${target.outcome.name} ${times(step.roundLimit)}, its round limit, ` +
+              "so it comes to you instead. Read the latest Reports, then move it on yourself."
+            : `Failing checks and requested changes sent ${ticket.key} back to ${target.step.name} ${times(step.roundLimit)}, ` +
+              "its round limit, so it comes to you instead. Read the latest Comments, then move it on yourself.";
       } else {
         await tx.query(
           `insert into round_counts (workspace_id, ticket_id, step_id, count) values ($1, $2, $3, 1)
@@ -105,12 +116,14 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   await move.beforeMove?.(decision, now);
 
   if (move.stopReason !== undefined) await stopRunningRun(context, tx, ticket.id, move.stopReason, now);
-  const to = decision.outcome?.statusId ?? (target.kind === "status" ? target.statusId : ticket.statusId);
+  const to =
+    decision.outcome?.statusId ??
+    (target.kind === "status" ? target.statusId : target.kind === "sentBack" ? target.step.statusId : ticket.statusId);
   if (to !== ticket.statusId) {
     await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticket.id, to, now]);
     // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
     await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
-    if (decision.outcome?.needsYou && target.kind === "outcome") {
+    if (decision.outcome?.needsYou && target.kind !== "status") {
       await tx.query(
         `insert into needs_you (ticket_id, workspace_id, run_id, outcome, step_status_id, step_status_name, question)
          values ($1, $2, $3, $4, $5, $6, $7)`,
@@ -123,7 +136,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   }
   if (statuses.find((s) => s.id === to)!.kind === "done") {
     // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.
-    const completedFrom = target.kind === "outcome" ? target.step.statusId : target.completedFrom;
+    const completedFrom = target.kind === "status" ? target.completedFrom : target.step.statusId;
     const withoutStep = target.kind === "status" && target.withoutStep === true;
     await tx.query(
       `update tickets set verification = $2, completed_from_status_id = $3, completed_without_step = $4,
