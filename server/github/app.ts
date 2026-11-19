@@ -83,7 +83,7 @@ export async function appCredentials({ db, config }: Context): Promise<AppCreden
 const appExists = () =>
   new ApiError(409, "github_app_exists", "This installation already has its GitHub App.");
 
-async function isAnyAdmin(db: Db, userId: string): Promise<boolean> {
+export async function isAnyAdmin(db: Db, userId: string): Promise<boolean> {
   const { rowCount } = await db.query("select 1 from memberships where user_id = $1 and is_admin limit 1", [userId]);
   return rowCount !== 0;
 }

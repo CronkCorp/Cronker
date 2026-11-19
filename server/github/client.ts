@@ -1,3 +1,4 @@
+import { createSign } from "node:crypto";
 import type { Config } from "../config.js";
 import { ApiError } from "../http/errors.js";
 import type { AppCredentials } from "./app.js";
@@ -100,4 +101,71 @@ export async function accountByLogin({ github }: Config, login: string): Promise
   const response = await call(under(github.apiUrl, `/users/${encodeURIComponent(login)}`));
   if (response.status === 404) return undefined;
   return jsonOf<{ id: number; login: string }>(response, "/users");
+}
+
+/** The App's identity on GitHub's API: its id and private key. */
+export interface AppKey {
+  appId: number;
+  privateKey: string;
+}
+
+/**
+ * A JSON web token the App signs with its private key, which GitHub takes as the App itself
+ * for ten minutes at most. Backdated a minute against clocks running apart.
+ */
+export function appJwt({ appId, privateKey }: AppKey, now: Date): string {
+  const seconds = Math.floor(now.getTime() / 1000);
+  const encode = (part: unknown) => Buffer.from(JSON.stringify(part)).toString("base64url");
+  const unsigned = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ iat: seconds - 60, exp: seconds + 540, iss: String(appId) })}`;
+  const signature = createSign("RSA-SHA256").update(unsigned).sign(privateKey).toString("base64url");
+  return `${unsigned}.${signature}`;
+}
+
+/** Every item of a list GitHub pages through, following its `Link: <…>; rel="next"` headers. */
+async function allPages<T>(first: URL, token: string, what: string, itemsOf: (body: unknown) => T[]): Promise<T[]> {
+  const items: T[] = [];
+  let url: URL | undefined = first;
+  url.searchParams.set("per_page", "100");
+  // GitHub caps what it lists; 100 pages of 100 is far beyond any installation Cronk serves.
+  for (let pages = 0; url && pages < 100; pages++) {
+    const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+    items.push(...itemsOf(await jsonOf<unknown>(response, what)));
+    const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get("link") ?? "")?.[1];
+    url = next ? new URL(next) : undefined;
+  }
+  return items;
+}
+
+export interface AppOnGitHub {
+  slug: string;
+  owner: { login: string; type: string };
+  permissions: Record<string, string>;
+  events: string[];
+}
+
+/** The App as GitHub has it now, with what it asks for, edited by hand or not. */
+export async function appOnGitHub({ github }: Config, jwt: string): Promise<AppOnGitHub> {
+  const response = await call(under(github.apiUrl, "/app"), { headers: { authorization: `Bearer ${jwt}` } });
+  return jsonOf<AppOnGitHub>(response, "/app");
+}
+
+/** Where the App's webhook deliveries go, and whether they're signed; nothing if it has no webhook. */
+export async function appWebhook({ github }: Config, jwt: string): Promise<{ url: string; hasSecret: boolean } | undefined> {
+  const response = await call(under(github.apiUrl, "/app/hook/config"), { headers: { authorization: `Bearer ${jwt}` } });
+  if (response.status === 404) return undefined;
+  const config = await jsonOf<{ url?: string; secret?: string | null }>(response, "/app/hook/config");
+  return { url: config.url ?? "", hasSecret: Boolean(config.secret) };
+}
+
+export interface InstallationOnGitHub {
+  id: number;
+  account: { login: string };
+  html_url: string;
+  /** What the installation's owner has accepted, which may lag behind what the App asks for. */
+  permissions: Record<string, string>;
+}
+
+/** Every installation of the App. */
+export async function appInstallations({ github }: Config, jwt: string): Promise<InstallationOnGitHub[]> {
+  return allPages(under(github.apiUrl, "/app/installations"), jwt, "/app/installations", (body) => body as InstallationOnGitHub[]);
 }

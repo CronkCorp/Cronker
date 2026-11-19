@@ -5,6 +5,7 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
 import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
+import { Checklist, checklist } from "./upgrade.js";
 import { receiveDelivery } from "./webhooks.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
@@ -96,6 +97,20 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         return reply.code(201).send(await startManifestFlow(context, user.id, request.body.githubOrganization));
       },
+    );
+
+    app.get(
+      "/api/github/app/checklist",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "What the GitHub App still lacks (Admins only)",
+          description:
+            "Asks GitHub, as the App, what it has, and lists what it lacks of what Cronk needs: permissions, events, and the webhook URL and secret to paste into the App's settings on GitHub (`settingsUrl`), which the manifest flow can't change for an existing App. Also lists the App's installations whose owner hasn't accepted the permissions they lack. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+          response: { 200: Checklist, 401: ErrorBody, 403: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request) => checklist(context, (await requireUser(context, request)).id),
     );
 
     // The webhook endpoint reads its body as bytes, since the signature covers exactly those.
