@@ -10,6 +10,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { Editor, versionLine, Versions } from "./documents.js";
+import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
@@ -36,6 +37,7 @@ export function DecisionList({ place }: { place: Place }) {
   if (!decisions) return <p>Loading…</p>;
   return (
     <section aria-label="Decisions" className="decision-list">
+      <ExportLink place={place} />
       {decisions.length === 0 ? (
         <p>No Decisions yet.</p>
       ) : (
