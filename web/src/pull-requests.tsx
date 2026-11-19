@@ -30,7 +30,7 @@ export function CheckCounts({ checks }: { checks: Check[] }) {
 
 /**
  * The Pull Requests whose branch or title names the Ticket's key, one row each: number, title, state and check
- * counts, and what last sent the Ticket back. Hidden until there is one; GitHub's webhooks keep them current.
+ * counts, review state, and the failing check that last sent the Ticket back. Hidden until there is one; GitHub's webhooks keep them current.
  */
 export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] }) {
   if (pullRequests.length === 0) return null;
@@ -56,18 +56,15 @@ export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] 
   );
 }
 
-/**
- * Where a Pull Request's review stands, as far as Cronk knows: who merged it, or the requested changes that sent the
- * Ticket back, linking the review.
- */
+/** Where a Pull Request's review stands: who merged it, or else who approved it or requested changes, linking the review. */
 function ReviewState({ pullRequest: pr }: { pullRequest: PullRequest }) {
   if (pr.mergedBy) return <span className="small muted">Merged by @{pr.mergedBy}</span>;
-  if (pr.sentBack?.kind !== "review") return null;
-  const what = `Changes requested${pr.sentBack.reviewer ? ` by @${pr.sentBack.reviewer}` : ""}`;
+  if (!pr.reviewState) return null;
+  const { state, reviewer, url } = pr.reviewState;
+  const what = `${state === "approved" ? "Approved" : "Changes requested"} by @${reviewer}`;
   return (
     <span className="small">
-      <ExternalLink url={pr.sentBack.url}>{what}</ExternalLink>{" "}
-      <RelativeTime at={pr.sentBack.at} />
+      <ExternalLink url={url}>{what}</ExternalLink>
     </span>
   );
 }
@@ -93,7 +90,7 @@ function SentBackBy({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["s
 
 const checkWords = { passed: "✓", failed: "✗", pending: "●", neutral: "–" } as const;
 
-/** For a Ticket in a Review Status: a card per Pull Request with its branch, state and every check. */
+/** For a Ticket in a Review Status: a card per Pull Request with its branch, state, review state and every check. */
 export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[] }) {
   if (pullRequests.length === 0) return null;
   return (
@@ -112,6 +109,12 @@ export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[]
           <p className="small muted">
             <span className="mono">{pr.branch}</span>
             {pr.producingStep && <> · from the {pr.producingStep.name} Step</>}
+            {(pr.mergedBy || pr.reviewState) && (
+              <>
+                {" · "}
+                <ReviewState pullRequest={pr} />
+              </>
+            )}
           </p>
           {pr.checks.length > 0 && (
             <ul className="side-list">

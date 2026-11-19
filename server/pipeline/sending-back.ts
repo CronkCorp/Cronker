@@ -58,13 +58,16 @@ function describe(failure: Failure, pullRequest: FailedPullRequest): string {
   return `${by} ${linked("requested changes", failure.url)} on ${name}.`;
 }
 
-/** Sends the Tickets the Pull Request links back for the failure. Call it in the transaction that recorded the failure. */
+/**
+ * Sends the Tickets the Pull Request links back for the failure, and says whether it sent any. Call it in the
+ * transaction that recorded the failure.
+ */
 export async function sendBackForFailure(
   context: Context,
   tx: Tx,
   pullRequest: FailedPullRequest,
   failure: Failure,
-): Promise<void> {
+): Promise<boolean> {
   const { rows: tickets } = await tx.query<MovedTicket & { stepStatusId: string; stepName: string }>(
     `select tickets.id, projects.key || '-' || tickets.number as key, tickets.workspace_id as "workspaceId",
        tickets.project_id as "projectId", tickets.status_id as "statusId", tickets.verification,
@@ -83,6 +86,7 @@ export async function sendBackForFailure(
     [pullRequest.id],
   );
   const failed = describe(failure, pullRequest);
+  let sent = false;
   for (const { stepStatusId, stepName, ...ticket } of tickets) {
     // Each head commit and each review sends a Ticket back once.
     const { rowCount: first } = await tx.query(
@@ -91,6 +95,7 @@ export async function sendBackForFailure(
       [pullRequest.id, ticket.id, ticket.workspaceId, causeOf(failure), JSON.stringify(shown(failure)), context.clock.now()],
     );
     if (!first) continue;
+    sent = true;
     const decision = await moveByCronk(context, tx, ticket, {
       target: { kind: "sentBack", step: { statusId: stepStatusId, name: stepName } },
       by: { kind: "cronk" },
@@ -102,4 +107,5 @@ export async function sendBackForFailure(
       : `Sent ${ticket.key} back to ${stepName}.`;
     await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null);
   }
+  return sent;
 }

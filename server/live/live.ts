@@ -26,7 +26,7 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "comment.added": "A Comment was added to a Ticket.",
   "report.added": "A Run wrote a Report on a Ticket.",
   "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
-  "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state or checks.",
+  "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state, checks or reviews.",
   "attachments.changed":
     "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
 };

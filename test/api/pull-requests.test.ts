@@ -163,6 +163,7 @@ describe("Pull Requests linking to Tickets", () => {
       checks: [],
       mergedBy: null,
       producingStep: null,
+      reviewState: null,
       sentBack: null,
     };
     expect(await pullRequestsOf(first.id, cookie)).toEqual([shown]);
@@ -320,6 +321,106 @@ describe("A Pull Request's state", () => {
   });
 });
 
+describe("A Pull Request's review state", () => {
+  test("an approval shows, on a Pull Request no Run opened, whatever the Ticket's Status", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Ada's own" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toBeNull();
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "approved", reviewer: "bea" }));
+
+    expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toEqual({
+      state: "approved",
+      reviewer: "bea",
+      url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-70",
+    });
+  });
+
+  test("each reviewer's latest review wins, a late delivery changes nothing, and a review that only comments leaves it", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Reviewed twice" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    const reviewStateAfter = async (review: { id: number; state: string; reviewer: string }) => {
+      await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, review));
+      const state = (await pullRequestsOf(ticket.id, cookie))[0].reviewState;
+      return state && `${state.state} by ${state.reviewer}`;
+    };
+
+    expect(await reviewStateAfter({ id: 70, state: "approved", reviewer: "bea" })).toBe("approved by bea");
+    expect(await reviewStateAfter({ id: 72, state: "changes_requested", reviewer: "bea" })).toBe("changes_requested by bea");
+    expect(await reviewStateAfter({ id: 71, state: "approved", reviewer: "bea" })).toBe("changes_requested by bea");
+    expect(await reviewStateAfter({ id: 73, state: "commented", reviewer: "bea" })).toBe("changes_requested by bea");
+    expect(await reviewStateAfter({ id: 74, state: "approved", reviewer: "bea" })).toBe("approved by bea");
+    // Of several reviewers, changes one of them still requests outweigh another's approval.
+    expect(await reviewStateAfter({ id: 75, state: "changes_requested", reviewer: "cy" })).toBe("changes_requested by cy");
+    expect(await reviewStateAfter({ id: 76, state: "approved", reviewer: "dee" })).toBe("changes_requested by cy");
+    expect(await reviewStateAfter({ id: 77, state: "approved", reviewer: "cy" })).toBe("approved by cy");
+  });
+
+  test("a dismissed review clears it, leaving the other reviewers' reviews", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Dismissed" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "approved", reviewer: "bea" }));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "cy" }));
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "dismissed", reviewer: "cy" }, "dismissed"));
+    expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toMatchObject({ state: "approved", reviewer: "bea" });
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "dismissed", reviewer: "bea" }, "dismissed"));
+    expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toBeNull();
+
+    // The submission delivered after its dismissal leaves it dismissed.
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "approved", reviewer: "bea" }));
+    expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toBeNull();
+  });
+
+  test("a review delivered before Cronk hears of its Pull Request shows once it does; one in a Repository no Project lists is not kept", async () => {
+    const { cookie, app, installation, project, cronker, website } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Early review" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    const elsewhere = { id: 502, number: 8, title: "CRONK-1 elsewhere", branch: "b" };
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "approved", reviewer: "bea" }));
+    await deliver(app, "pull_request_review", reviewEvent(installation, website, elsewhere, { id: 71, state: "approved", reviewer: "bea" }));
+    expect(await pullRequestsOf(ticket.id, cookie)).toEqual([]);
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    // Listed only now, the other Repository's Pull Request shows without the review delivered before.
+    await post(cookie, `/api/projects/${project.id}/repositories`, { id: website.id });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, website, elsewhere));
+
+    expect((await pullRequestsOf(ticket.id, cookie)).map((p: { number: number; reviewState: unknown }) => [p.number, p.reviewState])).toEqual([
+      [7, { state: "approved", reviewer: "bea", url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-70" }],
+      [8, null],
+    ]);
+  });
+
+  test("requested changes show whatever the Ticket's Status, without sending it back, and the Workspace hears of it", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "In Backlog" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    const stream = await openStream(cronk, cookie, workspace.id);
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await stream.next()).toEqual({ type: "pull_requests.changed", data: { projectId: project.id, ticketId: ticket.id } });
+    // The same review delivered again changes nothing, so nothing is heard.
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+    await stream.expectQuiet();
+    stream.close();
+    expect((await pullRequestsOf(ticket.id, cookie))[0]).toMatchObject({
+      reviewState: { state: "changes_requested", reviewer: "bea" },
+      sentBack: null,
+    });
+    const after = await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json();
+    expect(after.statusId).toBe(ticket.statusId);
+  });
+});
 
 describe("A Pull Request's checks", () => {
   test("shows the check runs and commit statuses on its latest commit, the latest of each", async () => {
@@ -892,11 +993,21 @@ describe("Failures sending work back", () => {
     cronk.clock.advance(hours(1));
     await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
 
-    expect((await pullRequestsOf(ticket.id, cookie))[0].sentBack).toEqual({
-      kind: "review",
-      reviewer: "bea",
-      url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
-      at: "2026-01-01T11:00:00.000Z",
+    expect((await pullRequestsOf(ticket.id, cookie))[0]).toMatchObject({
+      reviewState: { state: "changes_requested", reviewer: "bea", url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72" },
+      sentBack: {
+        kind: "review",
+        reviewer: "bea",
+        url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
+        at: "2026-01-01T11:00:00.000Z",
+      },
+    });
+
+    // An approval that follows replaces the review state; what sent the Ticket back stays.
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 73, state: "approved", reviewer: "bea" }));
+    expect((await pullRequestsOf(ticket.id, cookie))[0]).toMatchObject({
+      reviewState: { state: "approved", reviewer: "bea" },
+      sentBack: { kind: "review", reviewer: "bea" },
     });
   });
 
