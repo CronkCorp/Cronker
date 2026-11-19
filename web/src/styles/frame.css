@@ -265,6 +265,10 @@
 .page-settings {
   max-width: 760px;
 }
+/* A settings page with a section list: its 180px list and 24px gap beside 760px of sections. */
+.page-settings:has(> .settings) {
+  max-width: 964px;
+}
 .page-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;

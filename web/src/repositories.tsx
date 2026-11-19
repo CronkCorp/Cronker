@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type GitHubInstallation, type Project, type Repository } from "./api.js";
-import { field } from "./forms.js";
+import { field, useSave } from "./forms.js";
 import { useLatest } from "./live.js";
-import { Actions, Banner, Button, Field, FormError, Panel } from "./ui/controls.js";
+import { Actions, Banner, Button, Field, FormError, Panel, Saved } from "./ui/controls.js";
 
 /**
  * The Repositories a Project lists as holding its code, added from those the GitHub App's
@@ -13,13 +13,13 @@ export function RepositoriesSettings({ project }: { project: Project }) {
   const [installations, setInstallations] = useState<GitHubInstallation[] | undefined>(undefined);
   const [installationsError, setInstallationsError] = useState<string | null>(null);
   const [noApp, setNoApp] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { error, busy, saved, save } = useSave();
+  const [loadError, setLoadError] = useState<string | null>(null);
   const latest = useLatest();
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   useEffect(() => {
-    latest(api.repositories(project.id), setRepositories, (e) => setError(e.message));
+    latest(api.repositories(project.id), setRepositories, (e) => setLoadError(e.message));
   }, [project]);
   useEffect(() => {
     api.githubInstallations().then(setInstallations, (e: unknown) => {
@@ -28,18 +28,12 @@ export function RepositoriesSettings({ project }: { project: Project }) {
     });
   }, []);
 
-  const change = async (act: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
+  const change = (act: () => Promise<unknown>) =>
+    save(async () => {
       await act();
       setRepositories(await api.repositories(project.id));
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+      setLoadError(null);
+    });
 
   const add = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -55,7 +49,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
       id="repositories"
       description="The GitHub Repositories holding this Project's code. Their Pull Requests link to the Tickets whose keys they name."
     >
-      <FormError error={error} />
+      <FormError error={loadError ?? error} />
       {repositories && repositories.length === 0 && <p className="muted">The Project lists no Repositories yet.</p>}
       {repositories && repositories.length > 0 && (
         <ul className="repositories">
@@ -113,6 +107,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
           </Actions>
         </form>
       )}
+      <Saved shown={saved} />
     </Panel>
   );
 }
