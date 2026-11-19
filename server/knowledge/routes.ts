@@ -10,9 +10,11 @@ import {
   createDocument,
   Document,
   documentNotFound,
+  DocumentSummary,
   editDocument,
   findDocument,
   readVersion,
+  treeOf,
   Version,
   versionsOf,
   VersionWithBody,
@@ -23,6 +25,13 @@ const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
 const tags = ["Documents"];
 const DocumentParams = Type.Object({ documentId: Type.String() });
 const VersionNumber = Type.Integer({ minimum: 1 });
+const ParentId = Type.Union([Type.Null(), Type.String()], {
+  description: "A Document of the same page tree to sit under, or null for the top.",
+});
+const Position = Type.Integer({
+  minimum: 0,
+  description: "A place among its siblings, counting from 0; last when left out or past the end.",
+});
 
 /** A save refused for being based on an outdated Version, with the current Version to merge into. */
 const OutdatedVersionBody = Type.Object({
@@ -42,9 +51,15 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags,
           summary: "Create a Document in a Project's page tree",
-          description: "Creates the Document last at the top of the Project's page tree, at Version 1 by its Actor.",
+          description:
+            "Creates the Document under a parent of the Project's page tree, or at its top, at Version 1 by its Actor.",
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({ title: Title, body: Type.Optional(Body) }),
+          body: Type.Object({
+            title: Title,
+            body: Type.Optional(Body),
+            parentId: Type.Optional(ParentId),
+            position: Type.Optional(Position),
+          }),
           response: { 201: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -52,9 +67,29 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         const caller = await requireCaller(context, request);
         const project = await findProject(db, caller, request.params.projectId);
         if (!project) throw projectNotFound();
-        const { title, body = "" } = request.body;
+        const { body = "", ...input } = request.body;
         const tree = { workspaceId: project.workspaceId, projectId: project.id };
-        return reply.code(201).send(await createDocument(context, caller, tree, { title, body }));
+        return reply.code(201).send(await createDocument(context, caller, tree, { ...input, body }));
+      },
+    );
+
+    app.get(
+      "/api/projects/:projectId/documents",
+      {
+        schema: {
+          tags,
+          summary: "A Project's page tree",
+          description:
+            "The Project's Documents without their bodies, in tree order: each right after its parent, siblings by " +
+            "their place.",
+          params: Type.Object({ projectId: Type.String() }),
+          response: { 200: Type.Array(DocumentSummary), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const project = await findProject(db, await requireCaller(context, request), request.params.projectId);
+        if (!project) throw projectNotFound();
+        return treeOf(db, { workspaceId: project.workspaceId, projectId: project.id });
       },
     );
 
@@ -81,16 +116,19 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags,
-          summary: "Save a Document",
+          summary: "Save, rename or move a Document",
           description:
             "A new title or body saves the Document as its next Version, by the caller, and needs `baseVersion`: the " +
             "number of the Version it's based on. A save based on an outdated Version is refused with " +
-            "`outdated_version`, carrying the current Version as `current`.",
+            "`outdated_version`, carrying the current Version as `current`. A new parent or place moves it within " +
+            "its page tree, making no Version; it can't move under itself or one of its own descendants.",
           params: Type.Object({ documentId: Type.String() }),
           body: Type.Object({
             baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
             title: Type.Optional(Title),
             body: Type.Optional(Body),
+            parentId: Type.Optional(ParentId),
+            position: Type.Optional(Position),
           }),
           response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody },
         },

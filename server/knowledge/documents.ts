@@ -108,28 +108,141 @@ async function insertVersion(
   );
 }
 
-/** Creates a Document in the page tree, last among its siblings, at Version 1 by its Actor. */
+export const DocumentSummary = Type.Omit(Document, ["body"]);
+export type DocumentSummary = Static<typeof DocumentSummary>;
+
+/** A page tree's Documents in tree order: each right after its parent, siblings by their place; without bodies. */
+export async function treeOf(db: Db, tree: Tree): Promise<DocumentSummary[]> {
+  const { rows } = await db.query<Row>(
+    `with recursive ordered (id, path) as (
+       select id, array[position] from documents
+       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null
+       union all
+       select documents.id, ordered.path || documents.position
+       from documents join ordered on documents.parent_id = ordered.id
+     )
+     select ${columns} from ordered join ${fromDocuments} on documents.id = ordered.id
+     order by ordered.path`,
+    [tree.workspaceId, tree.projectId],
+  );
+  return rows.map((row) => {
+    const { body: _body, ...summary } = present(row);
+    return summary;
+  });
+}
+
+/** How many Documents but `except` sit directly under the parent, or at the top of the tree for none. */
+async function siblingCount(tx: Tx, tree: Tree, parentId: string | null, except: string | null = null): Promise<number> {
+  const { rows } = await tx.query<{ count: number }>(
+    `select count(*)::int as count from documents
+     where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
+       and id is distinct from $4`,
+    [tree.workspaceId, tree.projectId, parentId, except],
+  );
+  return rows[0]!.count;
+}
+
+/** Refuses a parent that isn't a Document of the same page tree. */
+async function requireParentInTree(tx: Tx, tree: Tree, parentId: string): Promise<void> {
+  const { rowCount } = isUuid(parentId)
+    ? await tx.query(
+        "select 1 from documents where id = $1 and workspace_id = $2 and project_id is not distinct from $3",
+        [parentId, tree.workspaceId, tree.projectId],
+      )
+    : { rowCount: 0 };
+  if (rowCount === 0) {
+    throw new ApiError(409, "parent_outside_tree", "The parent must be a Document of the same page tree.", {
+      rule: "A Document's parent is in its own page tree: a Project's and the Workspace's are separate.",
+      advice: "List the page tree's Documents and choose a parent among them, or leave the parent out.",
+    });
+  }
+}
+
+/**
+ * Makes room at a place among the parent's children, or closes the gap a Document left there, moving each
+ * Document but `except` from that place on.
+ */
+async function shiftSiblings(
+  tx: Tx,
+  tree: Tree,
+  parentId: string | null,
+  from: number,
+  by: 1 | -1,
+  except: string | null = null,
+): Promise<void> {
+  await tx.query(
+    `update documents set position = position + $5
+     where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
+       and position >= $4 and id is distinct from $6`,
+    [tree.workspaceId, tree.projectId, parentId, from, by, except],
+  );
+}
+
+/**
+ * Creates a Document in the page tree, under a parent of the same tree or at the top, at a place among its
+ * siblings or last, at Version 1 by its Actor.
+ */
 export async function createDocument(
   { db, clock }: Context,
   actor: Caller,
   tree: Tree,
-  input: { title: string; body: string },
+  input: { title: string; body: string; parentId?: string | null; position?: number },
 ): Promise<Document> {
   return transaction(db, async (tx) => {
     await lockTree(tx, tree);
+    const parentId = input.parentId ?? null;
+    if (parentId) await requireParentInTree(tx, tree, parentId);
+    const count = await siblingCount(tx, tree, parentId);
+    const position = Math.min(input.position ?? count, count);
+    await shiftSiblings(tx, tree, parentId, position, 1);
     const now = clock.now();
     const { rows } = await tx.query<{ id: string }>(
       `insert into documents (workspace_id, project_id, parent_id, position, version, created_at)
-       values ($1, $2, null,
-         (select count(*) from documents where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null),
-         1, $3)
-       returning id`,
-      [tree.workspaceId, tree.projectId, now],
+       values ($1, $2, $3, $4, 1, $5) returning id`,
+      [tree.workspaceId, tree.projectId, parentId, position, now],
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: tree.workspaceId }, 1, input, actor, now);
     return (await findDocument(tx, actor, id))!;
   });
+}
+
+/**
+ * Moves a Document under another parent of its page tree, or to the top, at a place among its new siblings or
+ * last; or to another place among its siblings. Refused under itself or one of its own descendants.
+ */
+async function moveDocument(
+  tx: Tx,
+  document: Tree & { id: string; parentId: string | null; position: number },
+  to: { parentId?: string | null; position?: number },
+): Promise<void> {
+  await lockTree(tx, document);
+  const parentId = to.parentId === undefined ? document.parentId : to.parentId;
+  if (parentId) {
+    await requireParentInTree(tx, document, parentId);
+    const { rowCount } = await tx.query(
+      `with recursive above (id, parent_id) as (
+         select id, parent_id from documents where id = $1
+         union all
+         select documents.id, documents.parent_id from documents join above on documents.id = above.parent_id
+       )
+       select 1 from above where id = $2`,
+      [parentId, document.id],
+    );
+    if (rowCount) {
+      throw new ApiError(409, "document_cycle", "A Document can't move under itself or one of its own descendants.", {
+        rule: "A page tree has no cycles: a Document never sits under itself.",
+        advice: "Choose a parent outside the Document's own branch, or move its children out first.",
+      });
+    }
+  }
+  if (parentId === document.parentId && to.position === undefined) return;
+  // Leaving its place closes the gap there, then its new siblings make room.
+  await shiftSiblings(tx, document, document.parentId, document.position + 1, -1, document.id);
+  const count = await siblingCount(tx, document, parentId, document.id);
+  const position = Math.min(to.position ?? count, count);
+  await shiftSiblings(tx, document, parentId, position, 1, document.id);
+  await tx.query("update documents set parent_id = $2, position = $3 where id = $1", [document.id, parentId, position]);
 }
 
 /** One saved state of a Document with its body. */
@@ -172,11 +285,16 @@ export interface DocumentEdit {
   baseVersion?: number;
   title?: string;
   body?: string;
+  /** Another parent in the same page tree, or null for the top. */
+  parentId?: string | null;
+  /** A place among its siblings, counting from 0; last if past the end, or when moving to another parent without one. */
+  position?: number;
 }
 
 /**
- * Saves a Document. A new title or body makes the next Version by the Actor, and must be based on the current
- * Version: a save based on an outdated one is refused with the current Version, so its Actor can see what changed.
+ * Saves or moves a Document. A new title or body makes the next Version by the Actor, and must be based on the
+ * current Version: a save based on an outdated one is refused with the current Version, so its Actor can see what
+ * changed. Moving it makes no Version.
  */
 export async function editDocument(
   { db, clock }: Context,
@@ -212,6 +330,7 @@ export async function editDocument(
       await insertVersion(tx, document, number, content, actor, clock.now());
       await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
     }
+    if (edit.parentId !== undefined || edit.position !== undefined) await moveDocument(tx, document, edit);
     return (await findDocument(tx, actor, document.id))!;
   });
 }

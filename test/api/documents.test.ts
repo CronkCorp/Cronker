@@ -164,3 +164,73 @@ describe("Documents", () => {
     expect(refused.json.error.code).toBe("base_version_needed");
   });
 });
+
+/** A page tree as `title` lines, each indented two spaces per level below the top, in tree order. */
+async function treeOf(path: string, as: As) {
+  const documents: { id: string; parentId: string | null; position: number; title: string }[] = await ok("GET", path, as);
+  const depth = new Map<string | null, number>([[null, -1]]);
+  return documents.map((d) => {
+    depth.set(d.id, depth.get(d.parentId)! + 1);
+    return `${"  ".repeat(depth.get(d.id)!)}${d.title}`;
+  });
+}
+
+describe("the page tree", () => {
+  test("Documents are listed in tree order: each under its parent, siblings by their place", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    const guides = await ok("POST", tree, ada, { title: "Guides" });
+    await ok("POST", tree, ada, { title: "Decisions" });
+    await ok("POST", tree, ada, { title: "Setup", parentId: guides.id });
+    await ok("POST", tree, ada, { title: "Overview", position: 0 });
+    await ok("POST", tree, ada, { title: "Testing", parentId: guides.id, position: 0 });
+
+    expect(await treeOf(tree, ada)).toEqual(["Overview", "Guides", "  Testing", "  Setup", "Decisions"]);
+  });
+
+  test("moving a Document changes its parent and place without making a Version", async () => {
+    const { ada, project, asAgent } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    const guides = await ok("POST", tree, ada, { title: "Guides" });
+    const setup = await ok("POST", tree, ada, { title: "Setup" });
+    await ok("POST", tree, ada, { title: "Testing", parentId: guides.id });
+    await ok("POST", tree, ada, { title: "Decisions" });
+
+    const moved = await ok("PATCH", `/api/documents/${setup.id}`, asAgent, { parentId: guides.id, position: 0 });
+
+    expect(moved).toEqual(expect.objectContaining({ parentId: guides.id, position: 0 }));
+    expect(moved.version.number).toBe(1);
+    expect(await treeOf(tree, ada)).toEqual(["Guides", "  Setup", "  Testing", "Decisions"]);
+
+    await ok("PATCH", `/api/documents/${setup.id}`, ada, { parentId: null });
+    expect(await treeOf(tree, ada)).toEqual(["Guides", "  Testing", "Decisions", "Setup"]);
+    await ok("PATCH", `/api/documents/${setup.id}`, ada, { position: 1 });
+    expect(await treeOf(tree, ada)).toEqual(["Guides", "  Testing", "Setup", "Decisions"]);
+  });
+
+  test("renaming a Document saves its next Version, which the tree shows", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    const document = await ok("POST", tree, ada, { title: "Setpu", body: "Run it." });
+
+    const renamed = await ok("PATCH", `/api/documents/${document.id}`, ada, { baseVersion: 1, title: "Setup" });
+
+    expect(renamed).toEqual(expect.objectContaining({ title: "Setup", body: "Run it." }));
+    expect(renamed.version.number).toBe(2);
+    expect(await treeOf(tree, ada)).toEqual(["Setup"]);
+  });
+
+  test("a Document can't move under itself or one of its own descendants", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    const guides = await ok("POST", tree, ada, { title: "Guides" });
+    const setup = await ok("POST", tree, ada, { title: "Setup", parentId: guides.id });
+
+    const underItself = await call("PATCH", `/api/documents/${guides.id}`, ada, { parentId: guides.id });
+    const underChild = await call("PATCH", `/api/documents/${guides.id}`, ada, { parentId: setup.id });
+
+    expect([underItself.status, underItself.json.error.code]).toEqual([409, "document_cycle"]);
+    expect([underChild.status, underChild.json.error.code]).toEqual([409, "document_cycle"]);
+    expect(await treeOf(tree, ada)).toEqual(["Guides", "  Setup"]);
+  });
+});
