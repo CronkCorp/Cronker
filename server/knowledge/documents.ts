@@ -1,18 +1,21 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { forgetAttachments } from "../attachments/attachments.js";
+import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
-import type { Scope } from "./scopes.js";
+import type { Place } from "./places.js";
+import { outdatedVersion } from "./versions.js";
 
 /**
- * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace. Each save
- * makes a Version recording its Actor; the Document shows its current Version.
+ * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace, or, as a Report,
+ * on a Ticket. Each save makes a Version recording its Actor; the Document shows its current Version.
  */
 
 /** One saved state of a Document, without its body. */
@@ -28,12 +31,20 @@ export const Document = Type.Object({
   id: Type.String({ format: "uuid" }),
   workspaceId: Type.String({ format: "uuid" }),
   projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
-    description: "The Project whose page tree holds it, or null for the Workspace's.",
+    description: "The Project whose page tree holds it, or null for the Workspace's; a Report's is its Ticket's Project.",
+  }),
+  ticketId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Ticket it is a Report on, listed with the Ticket instead of in a page tree; null in a page tree.",
+  }),
+  runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Run that wrote it, for a Report; otherwise null.",
   }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
-    description: "The Document above it in the same page tree, or null at the top.",
+    description: "The Document above it in the same page tree, or null at the top; null for a Report.",
   }),
-  position: Type.Integer({ minimum: 0, description: "Its place among its siblings, counting from 0." }),
+  position: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], {
+    description: "Its place among its siblings, counting from 0; null for a Report.",
+  }),
   title: Type.String(),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
@@ -41,12 +52,12 @@ export const Document = Type.Object({
 export type Document = Static<typeof Document>;
 
 /** Which page tree a Document is in: a Project's, or the Workspace's when `projectId` is null. */
-export type Tree = Scope;
+export type Tree = Place;
 
 type Row = Omit<Document, "version"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
 
 const columns = `documents.id, documents.workspace_id as "workspaceId", documents.project_id as "projectId",
-  documents.parent_id as "parentId", documents.position, versions.title, versions.body,
+  documents.ticket_id as "ticketId", documents.run_id as "runId", documents.parent_id as "parentId", documents.position, versions.title, versions.body,
   json_build_object('number', versions.number, 'title', versions.title,
     'actor', ${actorColumn("users", "agents")}, 'savedAt', versions.saved_at) as version`;
 
@@ -75,6 +86,9 @@ export function documentNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Document.");
 }
 
+/** Keeps a query to page-tree Documents: a Report is listed with its Ticket instead. */
+const inAPageTree = "ticket_id is null";
+
 /** Holds the page tree's writes in this transaction, so positions among siblings stay whole. */
 async function lockTree(tx: Tx, tree: Tree): Promise<void> {
   await tx.query("select pg_advisory_xact_lock(hashtext('documents ' || $1 || ' ' || $2))", [
@@ -83,12 +97,13 @@ async function lockTree(tx: Tx, tree: Tree): Promise<void> {
   ]);
 }
 
-async function insertVersion(
+/** Records a Version of the Document, numbered, by its Actor. */
+export async function insertVersion(
   tx: Tx,
   document: { id: string; workspaceId: string },
   number: number,
   content: { title: string; body: string },
-  actor: Caller,
+  actor: { kind: "user" | "agent"; id: string },
   now: Date,
 ): Promise<void> {
   await tx.query(
@@ -115,7 +130,7 @@ export async function treeOf(db: Db, tree: Tree): Promise<DocumentSummary[]> {
   const { rows } = await db.query<Row>(
     `with recursive ordered (id, path) as (
        select id, array[position] from documents
-       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null
+       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null and ${inAPageTree}
        union all
        select documents.id, ordered.path || documents.position
        from documents join ordered on documents.parent_id = ordered.id
@@ -135,7 +150,7 @@ async function siblingCount(tx: Tx, tree: Tree, parentId: string | null, except:
   const { rows } = await tx.query<{ count: number }>(
     `select count(*)::int as count from documents
      where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
-       and id is distinct from $4`,
+       and ${inAPageTree} and id is distinct from $4`,
     [tree.workspaceId, tree.projectId, parentId, except],
   );
   return rows[0]!.count;
@@ -148,7 +163,8 @@ const childCount = (tx: Tx, document: Tree & { id: string }) => siblingCount(tx,
 async function requireParentInTree(tx: Tx, tree: Tree, parentId: string): Promise<void> {
   const { rowCount } = isUuid(parentId)
     ? await tx.query(
-        "select 1 from documents where id = $1 and workspace_id = $2 and project_id is not distinct from $3",
+        `select 1 from documents
+         where id = $1 and workspace_id = $2 and project_id is not distinct from $3 and ${inAPageTree}`,
         [parentId, tree.workspaceId, tree.projectId],
       )
     : { rowCount: 0 };
@@ -175,7 +191,7 @@ async function shiftSiblings(
   await tx.query(
     `update documents set position = position + $5
      where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
-       and position >= $4 and id is distinct from $6`,
+       and ${inAPageTree} and position >= $4 and id is distinct from $6`,
     [tree.workspaceId, tree.projectId, parentId, from, by, except],
   );
 }
@@ -215,6 +231,12 @@ export async function createDocument(
  * Document locked with its page tree.
  */
 async function moveDocument(tx: Tx, document: Placed, to: { parentId?: string | null; position?: number }): Promise<void> {
+  if (!isInPageTree(document)) {
+    throw new ApiError(409, "report_outside_tree", "A Report is listed with its Ticket, so it doesn't move in a page tree.", {
+      rule: "A Report is listed with its Ticket instead of in a page tree.",
+      advice: "Leave the Report on its Ticket; to keep what it says in a page tree, create a Document there from it.",
+    });
+  }
   const parentId = to.parentId === undefined ? document.parentId : to.parentId;
   if (parentId) {
     await requireParentInTree(tx, document, parentId);
@@ -267,7 +289,22 @@ async function versionOf(db: Db | Tx, documentId: string, number: number): Promi
 }
 
 /** A Document as a write needs it: where it sits, and the number of its current Version. */
-type Placed = Tree & { id: string; version: number; parentId: string | null; position: number };
+type Placed = Tree & { id: string; version: number; parentId: string | null; position: number | null; ticketId: string | null };
+
+/** Whether the Document sits in a page tree, with a place there, rather than being a Report on a Ticket. */
+const isInPageTree = (document: Placed): document is Placed & { ticketId: null; position: number } =>
+  document.ticketId === null;
+
+/** Tells the Workspace's streams that a Report changed or went, so its Ticket shows it. */
+function reportChanged(live: Live, tx: Tx, report: Placed): void {
+  if (report.ticketId === null) return;
+  live.publish(tx, report.workspaceId, {
+    type: "report.changed",
+    projectId: report.projectId!,
+    ticketId: report.ticketId,
+    reportId: report.id,
+  });
+}
 
 /**
  * The Document's row, locked until the transaction ends, so writes to it queue up. With `tree`, its page tree's
@@ -277,7 +314,7 @@ async function lockDocument(tx: Tx, viewer: Viewer, documentId: string, { tree =
   if (!isUuid(documentId)) return undefined;
   const view = inView(viewer, "documents.workspace_id", "$2");
   const select = `select id, workspace_id as "workspaceId", project_id as "projectId", parent_id as "parentId", position,
-    version from documents where id = $1 and ${view.sql}`;
+    ticket_id as "ticketId", version from documents where id = $1 and ${view.sql}`;
   if (tree) {
     // A Document never changes page tree, so the one read before locking is the one it is in.
     const found = (await tx.query<Placed>(select, [documentId, view.value])).rows[0];
@@ -304,7 +341,7 @@ export interface DocumentEdit {
  * changed. Moving it makes no Version.
  */
 export async function editDocument(
-  { db, clock }: Context,
+  { db, clock, live }: Context,
   actor: Caller,
   documentId: string,
   edit: DocumentEdit,
@@ -322,16 +359,7 @@ export async function editDocument(
       }
       const current = (await versionOf(tx, document.id, document.version))!;
       if (edit.baseVersion !== current.number) {
-        throw new ApiError(
-          409,
-          "outdated_version",
-          `The Document is at Version ${current.number}, but this save is based on Version ${edit.baseVersion}.`,
-          {
-            rule: "A save based on an outdated Version is refused, so it never overwrites a change its Actor hasn't seen.",
-            advice: "Merge your change into the current Version, given as `current`, and save again based on it.",
-          },
-          { current },
-        );
+        throw outdatedVersion("Document", current, edit.baseVersion);
       }
       const number = current.number + 1;
       const content = { title: edit.title ?? current.title, body: edit.body ?? current.body };
@@ -339,6 +367,7 @@ export async function editDocument(
       await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
     }
     if (moving) await moveDocument(tx, document, edit);
+    reportChanged(live, tx, document);
     return (await findDocument(tx, actor, document.id))!;
   });
 }
@@ -383,10 +412,11 @@ export async function compareVersions(
 }
 
 /**
- * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
- * deleted first. Its siblings after it close the gap.
+ * Deletes a Document with all its Versions and Attachments; only a User may. Refused while it has children: they are
+ * moved or deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
  */
-export async function deleteDocument({ db }: Context, actor: Caller, documentId: string): Promise<void> {
+export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
+  const { db, live } = context;
   await transaction(db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
@@ -408,7 +438,22 @@ export async function deleteDocument({ db }: Context, actor: Caller, documentId:
         },
       );
     }
+    const attached = await tx.query<{ id: string }>("delete from attachments where document_id = $1 returning id", [
+      document.id,
+    ]);
+    afterCommit(tx, () => forgetAttachments(context, attached.rows.map((row) => row.id)));
+    // It drops out of its links: the Tickets linking it show the change.
+    const linking = await tx.query<{ ticketId: string; projectId: string }>(
+      `select tickets.id as "ticketId", tickets.project_id as "projectId"
+       from linked_documents join tickets on tickets.id = linked_documents.ticket_id
+       where linked_documents.document_id = $1 order by linked_documents.seq`,
+      [document.id],
+    );
+    for (const { ticketId, projectId } of linking.rows) {
+      live.publish(tx, document.workspaceId, { type: "ticket.changed", projectId, ticketId });
+    }
     await tx.query("delete from documents where id = $1", [document.id]);
-    await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
+    if (isInPageTree(document)) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
+    reportChanged(live, tx, document);
   });
 }

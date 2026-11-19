@@ -18,6 +18,8 @@ import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
 import { DecisionList } from "./decisions.js";
 import { PageTree } from "./documents.js";
+import { ProjectGlossary } from "./terms.js";
+import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
@@ -83,11 +85,11 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
 }
 
-type View = "board" | "list" | "settings" | "documents" | "decisions";
+type View = "board" | "list" | "settings" | "documents" | "glossary" | "decisions";
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** A Project of the Workspace on screen, as a board, as a list, its page tree of Documents, its Decisions, or its settings. */
+/** A Project of the Workspace on screen, as a board, as a list, its page tree of Documents, its glossary, its Decisions, or its settings. */
 export function ProjectScreen({
   workspace,
   projectId,
@@ -133,7 +135,7 @@ export function ProjectScreen({
     if (event.type === "reconnected") {
       loadProject();
       loadTickets();
-    } else if (event.projectId !== projectId) {
+    } else if (!("projectId" in event) || event.projectId !== projectId) {
       return;
     } else if (event.type === "statuses.changed" || event.type === "project.changed") {
       loadProject();
@@ -160,6 +162,9 @@ export function ProjectScreen({
         <Link to={`${base}/documents`} current={view === "documents"}>
           Documents
         </Link>
+        <Link to={`${base}/glossary`} current={view === "glossary"}>
+          Glossary
+        </Link>
         <Link to={`${base}/decisions`} current={view === "decisions"}>
           Decisions
         </Link>
@@ -168,7 +173,8 @@ export function ProjectScreen({
         </Link>
       </nav>
       {view === "documents" && <PageTree tree={{ kind: "project", id: project.id }} />}
-      {view === "decisions" && <DecisionList scope={{ kind: "project", id: project.id }} />}
+      {view === "glossary" && <ProjectGlossary projectId={project.id} />}
+      {view === "decisions" && <DecisionList place={{ kind: "project", id: project.id }} />}
       {(view === "board" || view === "list") && (
         <>
           <NewTicket project={project} onCreated={loadTickets} />
@@ -187,6 +193,7 @@ export function ProjectScreen({
       {view === "settings" && (
         <>
           <DelegationSettings project={project} onChange={setProject} />
+          <RepositoriesSettings project={project} />
           <Settings project={project} onChange={setProject} />
           <StepsSettings project={project} onChange={setProject} />
           <BriefPreview project={project} />

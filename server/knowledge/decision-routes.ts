@@ -20,7 +20,8 @@ import {
   findDecision,
   readDecisionVersion,
 } from "./decisions.js";
-import { scopes } from "./scopes.js";
+import { knowledgePlaces } from "./places.js";
+import { OutdatedVersionBody } from "./versions.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Body = Type.String({ maxLength: 500_000, description: "Markdown: the choice and its reasoning." });
@@ -29,16 +30,6 @@ const DecisionParams = Type.Object({ decisionId: Type.String() });
 const VersionNumber = Type.Integer({ minimum: 1 });
 const SupersededById = Type.Union([Type.String(), Type.Null()], {
   description: "With the status superseded: the Decision replacing it, of the same Project, or of the Workspace for one of the Workspace's.",
-});
-
-/** A save refused for being based on an outdated Version, with the current Version to merge into. */
-const OutdatedVersionBody = Type.Object({
-  error: Type.Object({
-    ...ErrorBody.properties.error.properties,
-    current: Type.Optional(
-      Type.Object(DecisionVersionWithBody.properties, { description: "The Decision's current Version." }),
-    ),
-  }),
 });
 
 const statusRules =
@@ -50,30 +41,31 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
 
   return async (app) => {
-    for (const scope of scopes(context, "decisions")) {
-      const { params } = scope;
+    for (const place of knowledgePlaces(db)) {
+      const { params } = place;
+      const path = `${place.path}/decisions`;
 
       app.get(
-        scope.path,
+        path,
         {
           schema: {
             tags,
-            summary: `${scope.name[0]!.toUpperCase()}${scope.name.slice(1)} Decisions`,
+            summary: `${place.name[0]!.toUpperCase()}${place.name.slice(1)} Decisions`,
             description:
               "Its Decisions by number, without their bodies. A Project's Decisions and the Workspace's own are separate.",
             params,
             response: { 200: Type.Array(DecisionSummary), 401: ErrorBody, 404: ErrorBody },
           },
         },
-        async (request) => decisionsOf(db, await scope.find(request, await requireCaller(context, request))),
+        async (request) => decisionsOf(db, await place.find(request, await requireCaller(context, request))),
       );
 
       app.post(
-        scope.path,
+        path,
         {
           schema: {
             tags,
-            summary: `Record one of ${scope.name} Decisions`,
+            summary: `Record one of ${place.name} Decisions`,
             description:
               "Records the Decision numbered next in order of creation, at Version 1 by its Actor, as proposed unless " +
               `a status is given. ${statusRules}`,
@@ -90,7 +82,7 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
         async (request, reply) => {
           const caller = await requireCaller(context, request);
           const { body = "", ...input } = request.body;
-          const created = await createDecision(context, caller, await scope.find(request, caller), { ...input, body });
+          const created = await createDecision(context, caller, await place.find(request, caller), { ...input, body });
           return reply.code(201).send(created);
         },
       );
@@ -132,7 +124,7 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
             status: Type.Optional(DecisionStatus),
             supersededById: Type.Optional(SupersededById),
           }),
-          response: { 200: Decision, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody },
+          response: { 200: Decision, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Decision", DecisionVersionWithBody) },
         },
       },
       async (request) => editDecision(context, await requireCaller(context, request), request.params.decisionId, request.body),

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
   ApiError,
+  type Attachment,
   type Comparison,
   type Document,
   type DocumentSummary,
@@ -10,7 +11,9 @@ import {
   type VersionWithBody,
   type Workspace,
 } from "./api.js";
+import { Attachments } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
+import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
 
@@ -82,7 +85,10 @@ export function WorkspaceDocuments({ workspace }: { workspace: Workspace }) {
 export const versionLine = (version: { number: number; actor: { name: string }; savedAt: string }) =>
   `Version ${version.number} by ${version.actor.name}, ${new Date(version.savedAt).toLocaleString()}`;
 
-/** A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. */
+/**
+ * A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. A
+ * Report is listed with its Ticket instead, so it leads back there and doesn't move.
+ */
 export function DocumentScreen({
   workspace,
   documentId,
@@ -97,6 +103,7 @@ export function DocumentScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [versionsShown, setVersionsShown] = useState(0);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
 
@@ -110,6 +117,17 @@ export function DocumentScreen({
     );
   }, [documentId, workspace.id]);
   useEffect(load, [load]);
+  const latestAttachments = useLatest();
+  const loadAttachments = useCallback(
+    () => latestAttachments(api.attachments({ kind: "document", id: documentId }), setAttachments),
+    [documentId, latestAttachments],
+  );
+  useEffect(loadAttachments, [loadAttachments]);
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "attachments.changed" && "documentId" in event && event.documentId === documentId)) {
+      loadAttachments();
+    }
+  });
 
   const saved = (next: Document) => {
     setDocument(next);
@@ -121,10 +139,14 @@ export function DocumentScreen({
   const tree: Tree = document.projectId
     ? { kind: "project", id: document.projectId }
     : { kind: "workspace", id: document.workspaceId };
+  // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
+  const home = document.ticketId
+    ? { path: `/tickets/${document.ticketId}`, name: "Report on its Ticket" }
+    : { path: treePage(tree), name: tree.kind === "project" ? "Project Documents" : "Workspace Documents" };
   return (
     <article className="document">
       <p>
-        <Link to={treePage(tree)}>{tree.kind === "project" ? "Project Documents" : "Workspace Documents"}</Link>
+        <Link to={home.path}>{home.name}</Link>
       </p>
       <h1>{document.title}</h1>
       <p className="muted">{versionLine(document.version)}</p>
@@ -150,8 +172,14 @@ export function DocumentScreen({
             </button>
           </div>
           {document.body.trim() ? <Markdown text={document.body} mentions={[]} /> : <p className="muted">Empty.</p>}
-          <Move document={document} tree={tree} onMoved={setDocument} />
-          <Delete document={document} onDeleted={() => navigate(treePage(tree))} />
+          <Attachments
+            owner={{ kind: "document", id: document.id }}
+            attachments={attachments}
+            label="Attachments"
+            onChanged={loadAttachments}
+          />
+          {!document.ticketId && <Move document={document} tree={tree} onMoved={setDocument} />}
+          <Delete document={document} onDeleted={() => navigate(home.path)} />
         </>
       )}
       <Versions

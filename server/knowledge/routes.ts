@@ -19,7 +19,9 @@ import {
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
-import { scopes } from "./scopes.js";
+import { knowledgePlaces } from "./places.js";
+import { OutdatedVersionBody } from "./versions.js";
+import { linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
@@ -34,20 +36,13 @@ const Position = Type.Integer({
   description: "A place among its siblings, counting from 0; last when left out or past the end.",
 });
 
-/** A save refused for being based on an outdated Version, with the current Version to merge into. */
-const OutdatedVersionBody = Type.Object({
-  error: Type.Object({
-    ...ErrorBody.properties.error.properties,
-    current: Type.Optional(Type.Object(VersionWithBody.properties, { description: "The Document's current Version." })),
-  }),
-});
 
 export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
 
   return async (app) => {
     // A Project's page tree and the Workspace's are reached the same way, each from its own path.
-    const trees = scopes(context, "documents");
+    const trees = knowledgePlaces(db).map((place) => ({ ...place, path: `${place.path}/documents` }));
     for (const tree of trees) {
       const { params } = tree;
 
@@ -122,7 +117,8 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "A new title or body saves the Document as its next Version, by the caller, and needs `baseVersion`: the " +
             "number of the Version it's based on. A save based on an outdated Version is refused with " +
             "`outdated_version`, carrying the current Version as `current`. A new parent or place moves it within " +
-            "its page tree, making no Version; it can't move under itself or one of its own descendants.",
+            "its page tree, making no Version; it can't move under itself or one of its own descendants. A Report " +
+            "is listed with its Ticket, not in a page tree, so moving one is refused with `report_outside_tree`.",
           params: DocumentParams,
           body: Type.Object({
             baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
@@ -131,7 +127,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             parentId: Type.Optional(ParentId),
             position: Type.Optional(Position),
           }),
-          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody },
+          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Document", VersionWithBody) },
         },
       },
       async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),
@@ -152,6 +148,65 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         await deleteDocument(context, await requireCaller(context, request), request.params.documentId);
+        return reply.code(204).send(null);
+      },
+    );
+
+    const TicketParams = Type.Object({ ticketId: Type.String() });
+
+    app.get(
+      "/api/tickets/:ticketId/documents",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Linked Documents",
+          description: "Documents of the Ticket's Project or of the Workspace linked to it, oldest link first.",
+          params: TicketParams,
+          response: { 200: Type.Array(LinkedDocument), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => linkedDocumentsOf(db, await requireCaller(context, request), request.params.ticketId),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/documents",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Link a Document to a Ticket",
+          description:
+            "Links a Document of the Ticket's Project or of the Workspace (`document_outside_project` for another " +
+            "Project's; `unknown_document` for one not in the Workspace), once (`document_already_linked`). An Agent " +
+            "links only during its own running Run on the Ticket (`no_running_run`). A deleted Document drops out of " +
+            "its links.",
+          params: TicketParams,
+          body: Type.Object({ documentId: Type.String({ description: "A Document of the Ticket's Project or Workspace." }) }),
+          response: { 201: LinkedDocument, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        const linked = await linkDocument(context, caller, request.params.ticketId, request.body.documentId);
+        return reply.code(201).send(linked);
+      },
+    );
+
+    app.delete(
+      "/api/tickets/:ticketId/documents/:documentId",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Unlink a Document from a Ticket",
+          description:
+            "The Document stays in its page tree; a Document the Ticket doesn't link answers `not_found`. An Agent " +
+            "unlinks only during its own running Run on the Ticket (`no_running_run`).",
+          params: Type.Object({ ticketId: Type.String(), documentId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        await unlinkDocument(context, caller, request.params.ticketId, request.params.documentId);
         return reply.code(204).send(null);
       },
     );

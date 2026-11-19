@@ -4,36 +4,42 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
-import { findTicketRow, runOfAgent, ticketNotFound } from "./tickets.js";
+import { findTicketRow, runOfAgent, ticketNotFound } from "../work/tickets.js";
+import { insertVersion } from "./documents.js";
 
 /**
- * A Document a Run writes on its Ticket, such as an investigation's findings, listed with the Ticket instead of
- * in a page tree; later Runs on the Ticket read it. Kept as Markdown with a title until Documents exist.
+ * Reports: Documents a Run writes on its Ticket, such as an investigation's findings, listed with the Ticket instead
+ * of in a page tree; later Runs on the Ticket read them. Each is a Document of the Ticket's Project, with Versions,
+ * whose first Version is by the Run's Agent; a Report shows its current Version.
  */
 export const Report = Type.Object({
-  id: Type.String({ format: "uuid" }),
+  id: Type.String({ format: "uuid", description: "Also the Report's Document's id, under which its Versions are read." }),
   ticketId: Type.String({ format: "uuid" }),
   runId: Type.String({ format: "uuid", description: "The Run that wrote it." }),
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Run's Agent." }),
-  title: Type.String(),
-  body: Type.String({ description: "Markdown." }),
+  title: Type.String({ description: "Its current Version's." }),
+  body: Type.String({ description: "Markdown; its current Version's." }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Report = Static<typeof Report>;
 
 type Row = Omit<Report, "createdAt"> & { createdAt: Date };
 
-const columns = `reports.id, reports.ticket_id as "ticketId", reports.run_id as "runId",
-  json_build_object('id', agents.id, 'name', agents.name) as agent, reports.title, reports.body,
-  reports.created_at as "createdAt"`;
+const columns = `documents.id, documents.ticket_id as "ticketId", documents.run_id as "runId",
+  json_build_object('id', agents.id, 'name', agents.name) as agent, versions.title, versions.body,
+  documents.created_at as "createdAt"`;
+
+const fromReports = `documents
+  join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
+  join runs on runs.id = documents.run_id
+  join agents on agents.id = runs.agent_id`;
 
 const present = (row: Row): Report => ({ ...row, createdAt: row.createdAt.toISOString() });
 
 async function rowsOf(db: Db | Tx, where: string, param: string): Promise<Row[]> {
-  const { rows } = await db.query<Row>(
-    `select ${columns} from reports join agents on agents.id = reports.agent_id where ${where} order by reports.seq`,
-    [param],
-  );
+  const { rows } = await db.query<Row>(`select ${columns} from ${fromReports} where ${where} order by documents.seq`, [
+    param,
+  ]);
   return rows;
 }
 
@@ -41,10 +47,10 @@ async function rowsOf(db: Db | Tx, where: string, param: string): Promise<Row[]>
 export async function reportsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Report[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  return (await rowsOf(db, "reports.ticket_id = $1", ticket.id)).map(present);
+  return (await rowsOf(db, "documents.ticket_id = $1", ticket.id)).map(present);
 }
 
-/** Records a Report of the Run, in the transaction that locked its Ticket. */
+/** Records a Report of the Run, at Version 1 by its Agent, in the transaction that locked its Ticket. */
 export async function recordReport(
   { clock, live }: Context,
   tx: Tx,
@@ -52,12 +58,15 @@ export async function recordReport(
   run: { id: string; agentId: string },
   input: { title: string; body: string },
 ): Promise<Report> {
+  const now = clock.now();
   const { rows } = await tx.query<{ id: string }>(
-    `insert into reports (workspace_id, ticket_id, run_id, agent_id, title, body, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-    [ticket.workspaceId, ticket.id, run.id, run.agentId, input.title.trim(), input.body, clock.now()],
+    `insert into documents (workspace_id, project_id, ticket_id, run_id, version, created_at)
+     values ($1, $2, $3, $4, 1, $5) returning id`,
+    [ticket.workspaceId, ticket.projectId, ticket.id, run.id, now],
   );
-  const [report] = await rowsOf(tx, "reports.id = $1", rows[0]!.id);
+  const id = rows[0]!.id;
+  await insertVersion(tx, { id, workspaceId: ticket.workspaceId }, 1, input, { kind: "agent", id: run.agentId }, now);
+  const [report] = await rowsOf(tx, "documents.id = $1", id);
   live.publish(tx, ticket.workspaceId, {
     type: "report.added",
     projectId: ticket.projectId,

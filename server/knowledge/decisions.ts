@@ -8,7 +8,8 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
-import type { Scope } from "./scopes.js";
+import type { Place } from "./places.js";
+import { outdatedVersion } from "./versions.js";
 
 /**
  * Decisions: recorded choices with their reasoning and a status, of a Project or of the Workspace, numbered in
@@ -90,7 +91,7 @@ export function decisionNotFound(): ApiError {
 }
 
 /** Holds the scope's new Decisions in this transaction, so their numbers count up one by one. */
-async function lockScope(tx: Tx, scope: Scope): Promise<void> {
+async function lockScope(tx: Tx, scope: Place): Promise<void> {
   await tx.query("select pg_advisory_xact_lock(hashtext('decisions ' || $1 || ' ' || $2))", [
     scope.workspaceId,
     scope.projectId ?? "workspace",
@@ -176,7 +177,7 @@ function statusAsked(
 /** Refuses a replacing Decision that is the Decision itself, or not another of its own Project or the Workspace's. */
 async function requireReplacementInScope(
   tx: Tx,
-  decision: Scope & { id: string | null },
+  decision: Place & { id: string | null },
   asked: StatusWithReplacement,
 ): Promise<void> {
   const replacement = asked.supersededById;
@@ -216,7 +217,7 @@ async function requireReplacementInScope(
 export async function createDecision(
   { db, clock }: Context,
   actor: Caller,
-  scope: Scope,
+  scope: Place,
   input: { title: string; body: string; status?: DecisionStatus; supersededById?: string | null },
 ): Promise<Decision> {
   const asked = statusAsked(null, input);
@@ -243,7 +244,7 @@ export const DecisionSummary = Type.Omit(Decision, ["body"]);
 export type DecisionSummary = Static<typeof DecisionSummary>;
 
 /** The scope's Decisions by number, without their bodies. */
-export async function decisionsOf(db: Db, scope: Scope): Promise<DecisionSummary[]> {
+export async function decisionsOf(db: Db, scope: Place): Promise<DecisionSummary[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromDecisions}
      where decisions.workspace_id = $1 and decisions.project_id is not distinct from $2
@@ -283,10 +284,10 @@ async function versionOf(db: Db | Tx, decisionId: string, number: number): Promi
 }
 
 /** A Decision as a save needs it, its row locked until the transaction ends, so saves to it queue up. */
-async function lockDecision(tx: Tx, viewer: Viewer, decisionId: string): Promise<(Scope & { id: string; version: number }) | undefined> {
+async function lockDecision(tx: Tx, viewer: Viewer, decisionId: string): Promise<(Place & { id: string; version: number }) | undefined> {
   if (!isUuid(decisionId)) return undefined;
   const view = inView(viewer, "decisions.workspace_id", "$2");
-  const { rows } = await tx.query<Scope & { id: string; version: number }>(
+  const { rows } = await tx.query<Place & { id: string; version: number }>(
     `select id, workspace_id as "workspaceId", project_id as "projectId", version from decisions
      where id = $1 and ${view.sql} for update`,
     [decisionId, view.value],
@@ -328,16 +329,7 @@ export async function editDecision(
       });
     }
     if (edit.baseVersion !== current.number) {
-      throw new ApiError(
-        409,
-        "outdated_version",
-        `The Decision is at Version ${current.number}, but this save is based on Version ${edit.baseVersion}.`,
-        {
-          rule: "A save based on an outdated Version is refused, so it never overwrites a change its Actor hasn't seen.",
-          advice: "Merge your change into the current Version, given as `current`, and save again based on it.",
-        },
-        { current },
-      );
+      throw outdatedVersion("Decision", current, edit.baseVersion);
     }
     await requireReplacementInScope(tx, decision, asked);
     const number = current.number + 1;

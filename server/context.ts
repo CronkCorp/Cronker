@@ -1,3 +1,4 @@
+import type { AttachmentStorage } from "./attachments/storage.js";
 import type { Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
@@ -16,4 +17,6 @@ export interface Context {
   runners: Record<string, Runner>;
   /** The GitHub App's installation tokens, held until shortly before they expire. */
   installationTokens: InstallationTokens;
+  /** Where Attachments' bytes are kept. */
+  attachments: AttachmentStorage;
 }

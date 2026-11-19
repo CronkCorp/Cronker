@@ -6,7 +6,7 @@ import {
   type DecisionStatus,
   decisionStatuses,
   type DecisionSummary,
-  type Scope,
+  type Place,
   type Workspace,
 } from "./api.js";
 import { Editor, versionLine, Versions } from "./documents.js";
@@ -16,19 +16,19 @@ import { Link, navigate } from "./router.js";
 
 const statusLabel = (status: DecisionStatus) => status[0]!.toUpperCase() + status.slice(1);
 
-/** Where a scope's Decisions are listed: a Project's Decisions tab, or the Workspace's Decisions page. */
-const listPage = (scope: Scope) => (scope.kind === "project" ? `/projects/${scope.id}/decisions` : `/workspaces/${scope.id}/decisions`);
+/** Where a Project's or the Workspace's Decisions are listed: a Project's Decisions tab, or the Workspace's Decisions page. */
+const listPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/decisions` : `/workspaces/${place.id}/decisions`);
 
 /** A Project's Decisions, or the Workspace's own, by number, and a form to record one. */
-export function DecisionList({ scope }: { scope: Scope }) {
+export function DecisionList({ place }: { place: Place }) {
   const [decisions, setDecisions] = useState<DecisionSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
-    api.decisions(scope).then(setDecisions, (e: Error) => setFailure(e.message));
-  }, [scope.kind, scope.id]);
+    api.decisions(place).then(setDecisions, (e: Error) => setFailure(e.message));
+  }, [place.kind, place.id]);
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
-    const created = await api.createDecision(scope, { title: field(form, "title") });
+    const created = await api.createDecision(place, { title: field(form, "title") });
     navigate(`/decisions/${created.id}`);
   });
 
@@ -79,7 +79,7 @@ export function WorkspaceDecisions({ workspace }: { workspace: Workspace }) {
   return (
     <>
       <h1>{workspace.name} Decisions</h1>
-      <DecisionList scope={{ kind: "workspace", id: workspace.id }} />
+      <DecisionList place={{ kind: "workspace", id: workspace.id }} />
     </>
   );
 }
@@ -114,14 +114,14 @@ export function DecisionScreen({
   }, [decisionId, workspace.id]);
   useEffect(load, [load]);
 
-  const scope: Scope | null = decision
+  const place: Place | null = decision
     ? decision.projectId
       ? { kind: "project", id: decision.projectId }
       : { kind: "workspace", id: decision.workspaceId }
     : null;
   useEffect(() => {
-    if (scope) api.decisions(scope).then(setOthers, () => setOthers([]));
-  }, [scope?.kind, scope?.id]);
+    if (place) api.decisions(place).then(setOthers, () => setOthers([]));
+  }, [place?.kind, place?.id]);
 
   const saved = (next: Decision) => {
     setDecision(next);
@@ -129,12 +129,12 @@ export function DecisionScreen({
   };
 
   if (failure) return <p role="alert">{failure}</p>;
-  if (!decision || !scope) return <p>Loading…</p>;
+  if (!decision || !place) return <p>Loading…</p>;
   const replacement = others.find((d) => d.id === decision.supersededById);
   return (
     <article className="decision">
       <p>
-        <Link to={listPage(scope)}>{scope.kind === "project" ? "Project Decisions" : "Workspace Decisions"}</Link>
+        <Link to={listPage(place)}>{place.kind === "project" ? "Project Decisions" : "Workspace Decisions"}</Link>
       </p>
       <h1>
         Decision {decision.number}: {decision.title}
@@ -196,7 +196,7 @@ export function DecisionScreen({
   );
 }
 
-/** Changes the Decision's status, naming the Decision of the same scope that replaces it when superseded. */
+/** Changes the Decision's status, naming the Decision of the same place that replaces it when superseded. */
 function StatusForm({
   decision,
   others,
