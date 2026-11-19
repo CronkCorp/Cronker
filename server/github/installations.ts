@@ -1,8 +1,8 @@
 import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
-import { appInstallations, appJwt, installationRepositories, installationToken } from "./client.js";
-import { appKey } from "./upgrade.js";
+import { appToken } from "./app.js";
+import { appInstallations, installationRepositories, installationToken } from "./client.js";
 
 /**
  * The App's installations on GitHub accounts and organizations, and the tokens Cronk acts
@@ -19,12 +19,12 @@ export class InstallationTokens {
 
   constructor(private readonly clock: Clock) {}
 
-  /** A token for the installation, fetched with `fetch` unless the one held is still good. */
-  async get(installationId: number, fetch: () => Promise<{ token: string; expiresAt: Date }>): Promise<string> {
+  /** A token for the installation, fetched with `fetchToken` unless the one held is still good. */
+  async get(installationId: number, fetchToken: () => Promise<{ token: string; expiresAt: Date }>): Promise<string> {
     const held = await this.#tokens.get(installationId)?.catch(() => undefined);
     if (held && held.expiresAt.getTime() - expiryMarginMs > this.clock.now().getTime()) return held.token;
     // A failed fetch isn't kept, so the next call tries again.
-    const fetching = fetch();
+    const fetching = fetchToken();
     this.#tokens.set(installationId, fetching);
     fetching.catch(() => {
       if (this.#tokens.get(installationId) === fetching) this.#tokens.delete(installationId);
@@ -37,23 +37,22 @@ export const Installation = Type.Object({
   /** The GitHub account or organization the App is installed on. */
   account: Type.String(),
   repositories: Type.Array(
-    Type.Object({ id: Type.Integer({ description: "GitHub's id for the repository." }), fullName: Type.String({ description: "`owner/name`." }) }),
+    Type.Object({ id: Type.Integer({ description: "GitHub's id for the Repository." }), fullName: Type.String({ description: "`owner/name`." }) }),
   ),
 });
 export type Installation = Static<typeof Installation>;
 
 /** A token for acting on one installation's Repositories, as the App. */
 export async function tokenFor(context: Context, installationId: number): Promise<string> {
-  const { config, clock } = context;
   return context.installationTokens.get(installationId, async () =>
-    installationToken(config, appJwt(await appKey(context), clock.now()), installationId),
+    installationToken(context.config, await appToken(context), installationId),
   );
 }
 
 /** Every installation of the App, with the Repositories it covers. */
 export async function listInstallations(context: Context): Promise<Installation[]> {
-  const { config, clock } = context;
-  const installations = await appInstallations(config, appJwt(await appKey(context), clock.now()));
+  const { config } = context;
+  const installations = await appInstallations(config, await appToken(context));
   return Promise.all(
     installations.map(async (installation) => ({
       account: installation.account.login,

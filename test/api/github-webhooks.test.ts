@@ -41,6 +41,28 @@ describe("webhooks", () => {
   });
 });
 
+describe("webhooks: form-encoded", () => {
+  test("a delivery GitHub sends form-encoded, as an App set to that content type does, is accepted", async () => {
+    const app = await withApp();
+    const body = new URLSearchParams({ payload: JSON.stringify(ping) }).toString();
+    const signature = `sha256=${createHmac("sha256", app.webhookSecret!).update(body).digest("hex")}`;
+
+    const response = await fetch(`${cronk.url}/api/github/webhooks`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "x-github-event": "ping",
+        "x-github-delivery": "form-1",
+        "x-hub-signature-256": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ applied: true });
+  });
+});
+
 describe("webhooks: refusals", () => {
   test("an unsigned delivery is refused", async () => {
     const app = await withApp();

@@ -148,7 +148,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           },
         },
         async (request) => {
-          const header = (name: string) => {
+          const header = (name: string): string | undefined => {
             const value = request.headers[name];
             return Array.isArray(value) ? value[0] : value;
           };
@@ -157,6 +157,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
             signature: header("x-hub-signature-256"),
             event: header("x-github-event"),
             id: header("x-github-delivery"),
+            contentType: header("content-type"),
           });
           return { applied };
         },

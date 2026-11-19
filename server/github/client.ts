@@ -131,7 +131,8 @@ async function allPages<T>(first: URL, token: string, what: string, itemsOf: (bo
     const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
     items.push(...itemsOf(await jsonOf<unknown>(response, what)));
     const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get("link") ?? "")?.[1];
-    url = next ? new URL(next) : undefined;
+    // The token goes only where the first page came from.
+    url = next && new URL(next).origin === first.origin ? new URL(next) : undefined;
   }
   return items;
 }
