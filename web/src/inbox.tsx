@@ -267,7 +267,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
                             <span className="inbox-item-head">
                               <KindLabel kind={kindOf(item)} />
                               <span className="ticket-key">{item.ticket.key}</span>
-                              {item.kind === "question" && <RelativeTime at={item.question.askedAt} />}
+                              <RelativeTime at={item.since} />
                             </span>
                             <span className="inbox-item-title">{item.ticket.title}</span>
                             <span className="inbox-item-snippet">{isResolved ? "Resolved elsewhere" : summary(item)}</span>
