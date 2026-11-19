@@ -18,7 +18,9 @@ export const protectedResourcePath = `/.well-known/oauth-protected-resource${mcp
  */
 export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPluginAsync {
   return async (app) => {
-    app.post(mcpPath, { schema: { hide: true } }, async (request, reply) => {
+    // A request may carry a whole Attachment as base64, a third larger than its bytes.
+    const bodyLimit = Math.ceil(context.config.attachments.limitBytes / 3) * 4 + 1024 * 1024;
+    app.post(mcpPath, { schema: { hide: true }, bodyLimit }, async (request, reply) => {
       const authorization = request.headers.authorization;
       try {
         if (!offersBearer(authorization)) {
@@ -37,12 +39,12 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
         return sendError(reply, 401, error.code, error.message, error.guidance);
       }
 
-      const asAgent: Api = async (method, path, body) => {
+      const asAgent: Api = async (method, path, body, file) => {
         const response = await api.inject({
           method: method as "GET" | "POST" | "PATCH",
           url: path,
-          headers: { authorization },
-          ...(body === undefined ? {} : { payload: body as object }),
+          headers: { authorization, ...(file ? { "content-type": file.mediaType } : {}) },
+          ...(file ? { payload: file.bytes } : body === undefined ? {} : { payload: body as object }),
         });
         return { status: response.statusCode, json: response.body ? response.json() : null };
       };

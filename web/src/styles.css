@@ -335,6 +335,28 @@ button.link {
 .markdown code {
   font-size: 0.9em;
 }
+.markdown img {
+  max-width: 100%;
+}
+.attachments {
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+.attachments ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+}
+.attachments li {
+  overflow-wrap: anywhere;
+}
+.attachments code {
+  font-size: 0.85em;
+}
+.attachments .attach input {
+  display: block;
+  margin-top: 0.25rem;
+}
 .shell header nav {
   display: flex;
   gap: 1rem;
@@ -574,4 +596,20 @@ td.actions {
 .versions details pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+ul.repositories {
+  list-style: none;
+  padding: 0;
+}
+ul.repositories li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+ul.repositories .warning {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--warn);
 }

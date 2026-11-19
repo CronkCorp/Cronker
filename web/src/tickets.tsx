@@ -4,10 +4,13 @@ import {
   nameOf,
   priorities,
   type Agent,
+  type Attachment,
   type Change,
   type Comment,
   labelRuleShown,
   type LabelRule,
+  type LinkedDocument,
+  type DocumentSummary,
   type Member,
   type Priority,
   type Project,
@@ -22,13 +25,17 @@ import {
   type User,
   type Workspace,
 } from "./api.js";
+import { Attachments } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 
-/** A Ticket: its fields, its description, its Reports, its Relations, its Comments and its timeline of Changes. */
+/**
+ * A Ticket: its fields, its description, its Reports, its Relations, its Linked Documents, its Comments and its
+ * timeline of Changes.
+ */
 export function TicketScreen({
   workspace,
   user,
@@ -47,10 +54,12 @@ export function TicketScreen({
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
+  const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,19 +70,29 @@ export function TicketScreen({
   const latestProject = useLatest();
   const latestComments = useLatest();
   const latestReports = useLatest();
+  const latestAttachments = useLatest();
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
   const latestRelations = useLatest();
+  const latestLinkedDocuments = useLatest();
   const latestProjectTickets = useLatest();
   const fail = (e: Error) => setFailure(e.message);
   const loadTimeline = useCallback(() => {
     latestTimeline(api.timeline(ticketId), setTimeline);
     latestRuns(api.runs(ticketId), setRuns);
   }, [ticketId, latestTimeline, latestRuns]);
-  const loadRelations = useCallback(
-    () => latestRelations(api.relations(ticketId), setRelations, fail),
-    [ticketId, latestRelations],
+  const loadAttachments = useCallback(
+    () => latestAttachments(api.attachments({ kind: "ticket", id: ticketId }), setAttachments, fail),
+    [ticketId, latestAttachments],
   );
+  const loadComments = useCallback(
+    () => latestComments(api.comments(ticketId), setComments, fail),
+    [ticketId, latestComments],
+  );
+  const loadLinks = useCallback(() => {
+    latestRelations(api.relations(ticketId), setRelations, fail);
+    latestLinkedDocuments(api.linkedDocuments(ticketId), setLinkedDocuments, fail);
+  }, [ticketId, latestRelations, latestLinkedDocuments]);
 
   useEffect(() => {
     const first = api.ticket(ticketId);
@@ -95,8 +114,9 @@ export function TicketScreen({
     latestReports(api.reports(ticketId), setReports, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
     latestRuns(api.runs(ticketId), setRuns, fail);
-    loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
+    loadAttachments();
+    loadLinks();
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -105,10 +125,17 @@ export function TicketScreen({
     if (all || (thisTicket && event.type === "ticket.changed")) {
       latestTicket(api.ticket(ticketId), setTicket, fail);
       loadTimeline();
-      loadRelations();
+      loadLinks();
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
-    if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
+    if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) {
+      latestReports(api.reports(ticketId), setReports, fail);
+    }
+    // A Comment's Attachments come with the Comments.
+    if (all || (thisTicket && event.type === "attachments.changed")) {
+      loadAttachments();
+      loadComments();
+    }
     if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
       latestProject(api.project(project.id), setProject, fail);
     }
@@ -126,7 +153,7 @@ export function TicketScreen({
       latestTicket(saved, setTicket);
       await saved;
       loadTimeline();
-      loadRelations();
+      loadLinks();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -138,7 +165,7 @@ export function TicketScreen({
     setComments((shown) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
 
   if (failure) return <p role="alert">{failure}</p>;
-  if (!ticket || !project || !relations) return <p>Loading…</p>;
+  if (!ticket || !project || !relations || !linkedDocuments) return <p>Loading…</p>;
   return (
     <article className="ticket">
       <p>
@@ -171,17 +198,32 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
+          <Attachments
+            owner={{ kind: "ticket", id: ticket.id }}
+            attachments={attachments}
+            label="Attachments"
+            onChanged={loadAttachments}
+          />
           <Reports reports={reports} />
           <Relations
             ticket={ticket}
             relations={relations}
             suggestions={projectTickets.filter((t) => t.id !== ticket.id)}
             onChanged={() => {
-              loadRelations();
+              loadLinks();
               loadTimeline();
             }}
           />
-          <Comments ticket={ticket} comments={comments} onAdded={addComment} />
+          <LinkedDocuments
+            ticket={ticket}
+            workspaceId={workspace.id}
+            linked={linkedDocuments}
+            onChanged={() => {
+              loadLinks();
+              loadTimeline();
+            }}
+          />
+          <Comments ticket={ticket} user={user} comments={comments} onAdded={addComment} onChanged={loadComments} />
           <Timeline changes={timeline} runs={runs} />
         </div>
         <Fields
@@ -604,6 +646,110 @@ function Relations({
   );
 }
 
+/**
+ * The Documents linked to the Ticket, each a link to it, with a form to link another of the Ticket's Project or of
+ * the Workspace.
+ */
+function LinkedDocuments({
+  ticket,
+  workspaceId,
+  linked,
+  onChanged,
+}: {
+  ticket: Ticket;
+  workspaceId: string;
+  linked: LinkedDocument[];
+  onChanged: () => void;
+}) {
+  const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
+  const [unlinkError, setUnlinkError] = useState<string | null>(null);
+  const [treesError, setTreesError] = useState<string | null>(null);
+  // Page trees aren't live, so they are read again on opening the list and after each link.
+  const loadTrees = useCallback(() => {
+    Promise.all([
+      api.documents({ kind: "project", id: ticket.projectId }),
+      api.documents({ kind: "workspace", id: workspaceId }),
+    ]).then(
+      ([project, workspace]) => {
+        setTreesError(null);
+        setTrees({ project, workspace });
+      },
+      (e: Error) => setTreesError(e.message),
+    );
+  }, [ticket.projectId, workspaceId]);
+  useEffect(loadTrees, [loadTrees]);
+  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
+    await api.linkDocument(ticket.id, field(form, "document"));
+    element.reset();
+    loadTrees();
+    onChanged();
+  });
+  const unlink = async (documentId: string) => {
+    setUnlinkError(null);
+    try {
+      await api.unlinkDocument(ticket.id, documentId);
+      onChanged();
+    } catch (e) {
+      setUnlinkError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const isLinked = new Set(linked.map((d) => d.id));
+  const unlinked = (documents: DocumentSummary[]) => documents.filter((d) => !isLinked.has(d.id));
+  const offered = trees && { project: unlinked(trees.project), workspace: unlinked(trees.workspace) };
+  return (
+    <section aria-label="Linked Documents" className="relations">
+      <h2>Linked Documents</h2>
+      {linked.length > 0 && (
+        <ul aria-label="Linked Documents">
+          {linked.map((document) => (
+            <li key={document.id}>
+              <Link to={`/documents/${document.id}`}>{document.title}</Link>
+              {document.projectId === null && <span className="muted"> (Workspace)</span>}{" "}
+              <button type="button" className="link" onClick={() => void unlink(document.id)}>
+                Unlink
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {unlinkError && <p role="alert">{unlinkError}</p>}
+      {treesError && <p role="alert">{treesError}</p>}
+      <form onSubmit={onSubmit} className="relation-form">
+        <label>
+          Link a Document
+          <select name="document" required defaultValue="" onFocus={loadTrees}>
+            <option value="" disabled>
+              Choose a Document
+            </option>
+            {offered &&
+              (
+                [
+                  ["This Project", offered.project],
+                  ["The Workspace", offered.workspace],
+                ] as const
+              ).map(
+                ([label, documents]) =>
+                  documents.length > 0 && (
+                    <optgroup key={label} label={label}>
+                      {documents.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ),
+              )}
+          </select>
+        </label>
+        <button type="submit" disabled={busy}>
+          Link
+        </button>
+      </form>
+      {error && <p role="alert">{error}</p>}
+    </section>
+  );
+}
+
 /** What the Ticket's Runs wrote, oldest first; shown only once there is one. */
 function Reports({ reports }: { reports: Report[] }) {
   if (reports.length === 0) return null;
@@ -612,7 +758,9 @@ function Reports({ reports }: { reports: Report[] }) {
       <h2>Reports</h2>
       {reports.map((report) => (
         <article key={report.id} aria-label={report.title} className="comment">
-          <h3>{report.title}</h3>
+          <h3>
+            <Link to={`/documents/${report.id}`}>{report.title}</Link>
+          </h3>
           <div className="comment-meta">
             <strong>{report.agent.name}</strong> <span className="muted">(Agent)</span> <When at={report.createdAt} />
           </div>
@@ -629,12 +777,17 @@ function When({ at }: { at: string }) {
 
 function Comments({
   ticket,
+  user,
   comments,
   onAdded,
+  onChanged,
 }: {
   ticket: Ticket;
+  user: User;
   comments: Comment[];
   onAdded: (comment: Comment) => void;
+  /** Something attached to a Comment changed. */
+  onChanged: () => void;
 }) {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const byId = new Map(comments.map((c) => [c.id, c]));
@@ -664,6 +817,14 @@ function Comments({
               {comment.questionId && <span className="badge">Question</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
+            <Attachments
+              owner={{ kind: "comment", id: comment.id }}
+              attachments={comment.attachments}
+              label={`Attachments of ${comment.actor.name}'s Comment`}
+              // Files are attached to a Comment by its author.
+              canAttach={comment.actor.kind === "user" && comment.actor.id === user.id}
+              onChanged={onChanged}
+            />
             {replyingTo === comment.id ? (
               <CommentForm label="Reply" button="Send reply" onSend={(body) => send(body, comment.id)} />
             ) : (
@@ -703,7 +864,10 @@ function CommentForm({ label, button, onSend }: { label: string; button: string;
   );
 }
 
-const fieldNames: Record<Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | RelationKind>, string> = {
+const fieldNames: Record<
+  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | RelationKind>,
+  string
+> = {
   delegate: "Delegate",
   title: "Title",
   description: "Description",
@@ -743,6 +907,11 @@ function described(change: Change): string {
     return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;
   }
   if (change.field === "description") return "changed the Description";
+  if (change.field === "linkedDocument") {
+    return change.to
+      ? `linked the Document ${(change.to as { title: string }).title}`
+      : `unlinked the Document ${(change.from as { title: string }).title}`;
+  }
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
     return change.to

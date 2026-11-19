@@ -38,7 +38,7 @@ docker compose up -d --build
 docker compose logs cronk | grep "setup code"
 ```
 
-Without Docker, run `npm ci && npm run build`, then `npm start` with `CRONK_PUBLIC_URL`, `CRONK_SECRET_KEY` and `DATABASE_URL` (a Postgres database Cronk may create tables in) set in its environment; the setup code is in its output.
+Without Docker, run `npm ci && npm run build`, then `npm start` with `CRONK_PUBLIC_URL`, `CRONK_SECRET_KEY` and `DATABASE_URL` (a Postgres database Cronk may create tables in) set in its environment; the setup code is in its output. Attachments are kept as files in `CRONK_ATTACHMENTS_DIR` (by default `data/attachments` under the directory Cronk starts in), so back that directory up with the database.
 
 The log line says `Cronk is not set up yet. Open it and enter this setup code: cronk_setup_…`. Open the address, enter the setup code, your email, a password and a name for your first Workspace, and choose **Set up**. The setup code works once; while nobody has set Cronk up, each start logs a new one.
 
@@ -48,11 +48,13 @@ You are signed in, and Cronk offers to connect GitHub.
 
 The GitHub App lets people sign in with GitHub, and lets Cronk read the Pull Requests of the Repositories it's installed on and hear about them through webhooks. One App serves the whole installation.
 
-On the **Connect GitHub** screen (or later, as an Admin, on the **GitHub** page), choose **Create GitHub App**. To own it from a GitHub organization rather than your own account, name the organization first. GitHub shows the App Cronk asks for, named after Cronk's address: allowed to read email addresses, and to read metadata, pull requests, checks and commit statuses (never to write), subscribed to pull request, pull request review, check run, check suite and status events, with its webhook pointing at Cronk. You may rename it. Confirm, and GitHub sends you back to Cronk, which stores the App's credentials and webhook secret.
+On the **Connect GitHub** screen (or later, as an Admin, on the **GitHub** page), choose **Create GitHub App**. To own it from a GitHub organization rather than your own account, name the organization first. GitHub shows the App Cronk asks for, named after Cronk's address: allowed to read email addresses, and to read metadata, pull requests, checks and commit statuses (never to write), subscribed to pull request, pull request review, check run, check suite, status and repository events (the last for renames and transfers), with its webhook pointing at Cronk. You may rename it. Confirm, and GitHub sends you back to Cronk, which stores the App's credentials and webhook secret.
 
 The **GitHub** page now names the App, and says it has everything Cronk needs. Sign out and back in with **Sign in with GitHub** to check it: the first time, GitHub links your account to your User by its verified primary email. Install the App from its page on GitHub on the accounts and organizations whose Repositories Cronk should read; the **GitHub** page lists the installations and their Repositories.
 
 **An App created for sign-in only**, before Cronk read Pull Requests, can't be changed by Cronk. As an Admin, the **GitHub** page asks GitHub what the App has and lists what it lacks: the permissions and events to add, and the webhook URL and secret to paste, with a link to the App's settings on GitHub. Add them there and reload the page. GitHub never shows a webhook secret, so the webhook stays listed until a delivery arrives signed with Cronk's; to check at once, redeliver one from the App's Advanced settings on GitHub. GitHub then asks the owner of each installation to accept the new permissions; the page lists the installations that haven't yet.
+
+GitHub doesn't retry a webhook delivery that failed, so on startup and every five minutes Cronk asks GitHub for the App's recent deliveries and has each failed one it hasn't applied sent again. GitHub keeps deliveries for three days: if Cronk or its tunnel is down longer than that, what GitHub sent meanwhile is lost.
 
 To skip it, choose **Skip for now**; email and password sign-in is enough for everything below.
 

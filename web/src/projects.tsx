@@ -18,6 +18,7 @@ import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
 import { PageTree } from "./documents.js";
 import { ProjectGlossary } from "./terms.js";
+import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
@@ -133,7 +134,7 @@ export function ProjectScreen({
     if (event.type === "reconnected") {
       loadProject();
       loadTickets();
-    } else if (event.projectId !== projectId) {
+    } else if (!("projectId" in event) || event.projectId !== projectId) {
       return;
     } else if (event.type === "statuses.changed" || event.type === "project.changed") {
       loadProject();
@@ -187,6 +188,7 @@ export function ProjectScreen({
       {view === "settings" && (
         <>
           <DelegationSettings project={project} onChange={setProject} />
+          <RepositoriesSettings project={project} />
           <Settings project={project} onChange={setProject} />
           <StepsSettings project={project} onChange={setProject} />
           <BriefPreview project={project} />

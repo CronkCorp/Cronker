@@ -121,6 +121,7 @@ const eventNames: Record<string, string> = {
   check_run: "Check run",
   check_suite: "Check suite",
   status: "Status",
+  repository: "Repository",
 };
 
 function PermissionList({ permissions }: { permissions: Record<string, string> }) {

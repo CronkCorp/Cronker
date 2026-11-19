@@ -32,6 +32,15 @@ export interface GitHubInstallation {
   repositories: { id: number; fullName: string }[];
 }
 
+/** A GitHub repository a Project lists as holding its code. */
+export interface Repository {
+  /** GitHub's id, which stays the same through renames and transfers. */
+  id: number;
+  fullName: string;
+  /** Whether a Project of another Workspace lists it under the same key, so its Pull Requests link there too. */
+  keyClash: boolean;
+}
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -280,6 +289,34 @@ export interface Comment {
   mentions: Mention[];
   /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
   questionId: string | null;
+  attachments: Attachment[];
+}
+
+/** What an Attachment is attached to. */
+export interface AttachmentOwner {
+  kind: "ticket" | "document" | "comment";
+  id: string;
+}
+
+/** A plain file attached to a Ticket, Document or Comment. Markdown refers to it as `attachment:<id>`. */
+export interface Attachment {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  on: AttachmentOwner;
+  actor: Actor;
+  createdAt: string;
+}
+
+/** Where an Attachment downloads from, which Markdown's `attachment:<id>` resolves to. */
+export function attachmentUrl(id: string): string {
+  return `/api/attachments/${encodeURIComponent(id)}/content`;
+}
+
+/** Whether a URL is where an Attachment downloads from. */
+export function isAttachmentUrl(url: string): boolean {
+  return /^\/api\/attachments\/[^/]+\/content$/.test(url);
 }
 
 /** Markdown a Run wrote on its Ticket. */
@@ -317,6 +354,7 @@ export interface Change {
     | "autonomousDelegation"
     | "verification"
     | "dismissed"
+    | "linkedDocument"
     | RelationKind;
   from: unknown;
   to: unknown;
@@ -447,8 +485,14 @@ export interface DocumentSummary {
   workspaceId: string;
   /** Null in the Workspace's page tree. */
   projectId: string | null;
+  /** The Ticket it is a Report on, listed with the Ticket instead of in a page tree; null in a page tree. */
+  ticketId: string | null;
+  /** The Run that wrote it, for a Report. */
+  runId: string | null;
+  /** Null for a Report. */
   parentId: string | null;
-  position: number;
+  /** Null for a Report. */
+  position: number | null;
   title: string;
   version: Version;
 }
@@ -463,6 +507,14 @@ export interface DocumentEdit {
   body?: string;
   parentId?: string | null;
   position?: number;
+}
+
+/** A Document linked to a Ticket, from its Project's page tree or the Workspace's. */
+export interface LinkedDocument {
+  id: string;
+  /** Null for a Document of the Workspace's page tree. */
+  projectId: string | null;
+  title: string;
 }
 
 /** Which page tree: a Project's, or the Workspace's. */
@@ -513,10 +565,16 @@ export interface ConnectRequest {
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // A file is sent as itself, with its media type; anything else as JSON.
+  const file = body instanceof File ? body : undefined;
   const response = await fetch(path, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: file
+      ? { "content-type": file.type || "application/octet-stream" }
+      : body === undefined
+        ? {}
+        : { "content-type": "application/json" },
+    body: file ?? (body === undefined ? undefined : JSON.stringify(body)),
     credentials: "same-origin",
   });
   if (response.status === 204) return undefined as T;
@@ -569,6 +627,11 @@ export const api = {
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
+  repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
+  addRepository: (projectId: string, id: number) =>
+    call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
+  removeRepository: (projectId: string, id: number) =>
+    call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>
@@ -641,6 +704,12 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
+  linkedDocuments: (ticketId: string) =>
+    call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
+  linkDocument: (ticketId: string, documentId: string) =>
+    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId }),
+  unlinkDocument: (ticketId: string, documentId: string) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/documents/${encodeURIComponent(documentId)}`),
   documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
   createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
     call<Document>("POST", treePath(tree), input),
@@ -658,6 +727,10 @@ export const api = {
   editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
+  attachments: (owner: AttachmentOwner) => call<Attachment[]>("GET", attachmentsPath(owner)),
+  attach: (owner: AttachmentOwner, file: File) =>
+    call<Attachment>("POST", `${attachmentsPath(owner)}?name=${encodeURIComponent(file.name)}`, file),
+  removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
@@ -671,6 +744,10 @@ function placePath(place: Place) {
 
 function term(id: string) {
   return `/api/terms/${encodeURIComponent(id)}`;
+}
+
+function attachmentsPath(owner: AttachmentOwner) {
+  return `/api/${owner.kind}s/${encodeURIComponent(owner.id)}/attachments`;
 }
 
 function doc(id: string) {

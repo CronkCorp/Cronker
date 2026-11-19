@@ -76,6 +76,7 @@ describe("MCP with an Agent token", () => {
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "add_block",
+      "attach_file",
       "comment",
       "compare_versions",
       "create_document",
@@ -86,6 +87,7 @@ describe("MCP with an Agent token", () => {
       "edit_ticket",
       "file_ticket",
       "finish",
+      "link_document",
       "list_document_versions",
       "list_documents",
       "list_term_versions",
@@ -94,6 +96,7 @@ describe("MCP with an Agent token", () => {
       "read_glossary",
       "read_term",
       "read_ticket",
+      "unlink_document",
       "write_report",
     ]);
   });
@@ -112,6 +115,17 @@ describe("MCP with an Agent token", () => {
     expect(json.relations.relations).toEqual([
       expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-2" }) }),
     ]);
+  });
+
+  test("an Agent reads a Ticket with its Linked Documents", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const document = await post(cookie, `/api/projects/${ticket.projectId}/documents`, { title: "Sign-in design" });
+    await post(cookie, `/api/tickets/${ticket.id}/documents`, { documentId: document.id });
+    const client = await connect(secret);
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design" }]);
   });
 
   test("an Agent lists Tickets, narrowed by Project and Status", async () => {
@@ -216,6 +230,11 @@ describe("MCP with an Agent token", () => {
 
     const written = await call(client, "write_report", { ticket: "CRONK-1", title: "Findings", body: "In the parser." });
     expect(written.isError).toBe(false);
+    // The Report is a Document on the Ticket, with Versions, read like any other.
+    const document = await call(client, "read_document", { document: written.json.id });
+    expect(document.json).toEqual(
+      expect.objectContaining({ ticketId: ticket.id, title: "Findings", version: expect.objectContaining({ number: 1 }) }),
+    );
     const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
     await call(client, "finish", { run: read.runs[0].id, outcome: "done" });
 
@@ -225,6 +244,27 @@ describe("MCP with an Agent token", () => {
     expect(later.json.reports).toEqual([
       expect.objectContaining({ runId: read.runs[0].id, title: "Findings", body: "In the parser." }),
     ]);
+  });
+
+  test("during its Run an Agent links and unlinks Documents on its Ticket", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: status("Triage") } });
+    const design = await post(cookie, `/api/projects/${project.id}/documents`, { title: "Sign-in design" });
+    const client = await connect(secret);
+
+    const linked = await call(client, "link_document", { ticket: "CRONK-1", document: design.id });
+    expect(linked).toEqual({ isError: false, json: { id: design.id, projectId: project.id, title: "Sign-in design" } });
+    const refused = await call(client, "link_document", { ticket: "CRONK-2", document: design.id });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
+
+    const unlinked = await call(client, "unlink_document", { ticket: "CRONK-1", document: design.id });
+    expect(unlinked.isError).toBe(false);
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(read.linkedDocuments).toEqual([]);
   });
 
   test("during its Run an Agent splits its Ticket and files a Discovered Ticket that blocks it", async () => {
@@ -345,6 +385,72 @@ describe("MCP with an Agent token", () => {
     ]);
     const viaApi = await (await cronk.request("GET", `/api/terms/${projectRun.json.id}`, { cookie })).json();
     expect(viaApi.avoid).toEqual(["session"]);
+  });
+
+  test("an Agent attaches files as base64 to a Document and its own Comment, and reads a Ticket's Attachments", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const document = await call(client, "create_document", { title: "Findings" });
+    const comment = await call(client, "comment", { ticket: "CRONK-1", body: "Screenshot attached." });
+    // Larger than a request's usual limit, as screenshots often are.
+    const screenshot = Buffer.alloc(2 * 1024 * 1024, 7);
+
+    const onDocument = await call(client, "attach_file", {
+      document: document.json.id,
+      name: "notes.txt",
+      mediaType: "text/plain",
+      contentBase64: Buffer.from("It works.").toString("base64"),
+    });
+    const onComment = await call(client, "attach_file", {
+      comment: comment.json.id,
+      name: "screen.png",
+      mediaType: "image/png",
+      contentBase64: screenshot.toString("base64"),
+    });
+    const onTicket = await call(client, "attach_file", {
+      ticket: "CRONK-1",
+      name: "x.txt",
+      mediaType: "text/plain",
+      contentBase64: "eA==",
+    });
+    const onAdasTicket = await post(cookie, `/api/tickets/${ticket.id}/comments`, { body: "Mine." });
+    const notTheirs = await call(client, "attach_file", { comment: onAdasTicket.id, name: "x.txt", contentBase64: "eA==" });
+
+    expect(onDocument).toEqual({
+      isError: false,
+      json: expect.objectContaining({ name: "notes.txt", size: 9, on: { kind: "document", id: document.json.id } }),
+    });
+    expect(onComment.json).toEqual(expect.objectContaining({ mediaType: "image/png", size: 2 * 1024 * 1024 }));
+    const downloaded = await cronk.request("GET", `/api/attachments/${onComment.json.id}/content`, { cookie });
+    expect(Buffer.from(await downloaded.arrayBuffer()).equals(screenshot)).toBe(true);
+    expect(onTicket).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
+    expect(notTheirs).toEqual({ isError: true, json: expect.objectContaining({ code: "not_comment_author" }) });
+    const read = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(read.json.attachments).toEqual([]);
+    expect(read.json.comments.find((c: { id: string }) => c.id === comment.json.id).attachments).toEqual([onComment.json]);
+  });
+
+  test("a file that isn't base64, goes to two places at once, or is over the limit is refused", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const document = await call(client, "create_document", { title: "Findings" });
+
+    const notBase64 = await call(client, "attach_file", { document: document.json.id, name: "x", contentBase64: "not base64!" });
+    const twoTargets = await call(client, "attach_file", {
+      document: document.json.id,
+      ticket: "CRONK-1",
+      name: "x",
+      contentBase64: "eA==",
+    });
+    const tooLarge = await call(client, "attach_file", {
+      document: document.json.id,
+      name: "huge.bin",
+      contentBase64: Buffer.alloc(25 * 1024 * 1024 + 1).toString("base64"),
+    });
+
+    expect(notBase64.json.code).toBe("invalid_base64");
+    expect(twoTargets.json.code).toBe("one_target");
+    expect(tooLarge.json).toEqual(expect.objectContaining({ code: "attachment_too_large", message: "An Attachment may be at most 25 MB." }));
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {
