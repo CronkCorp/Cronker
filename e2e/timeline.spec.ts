@@ -58,3 +58,29 @@ test("a failing check's send-back shows as Cronk's Comment labelled Sent back, l
   await expect(move).toHaveText(/^Cronk sent it back from In Review to Implement: the check test failed on cronkcorp\/cronker#212 \d\d:\d\d$/);
   await expect(move.getByRole("link", { name: "test" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/10");
 });
+
+test("a merge's Changes by Cronk read as one line naming who merged what, where it moved and how it completed", async ({ page, cronk }) => {
+  const { ticket, pullRequestEvent } = await inReview(cronk);
+  await pullRequestEvent("closed", { state: "closed", merged: true, merged_by: { login: "ada", id: 1 }, updated_at: "2026-01-01T12:00:00Z" });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await expect(timeline.getByRole("listitem").filter({ hasText: "merged" })).toHaveText(
+    /^Cronk completed it: @ada merged cronkcorp\/cronker#212 CRONK-1: rate-limit sign-in, moving it to Done as Unverified \d\d:\d\d$/,
+  );
+  await expect(timeline).not.toContainText("changed Verification");
+  await expect(timeline).not.toContainText("Cronk changed Status");
+});
+
+test("a skipped Step's move by Cronk reads as one line naming the Step, its Label rule and where it moved on to", async ({ page, cronk }) => {
+  const { ticket } = await inReview(cronk);
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await expect(timeline.getByRole("listitem").filter({ hasText: "skipped" })).toHaveText(
+    /^Cronk skipped the Code review Step \(skipped by no-review\), moving on by approve to In Review \d\d:\d\d$/,
+  );
+  await expect(timeline).not.toContainText("Cronk changed Status");
+});
