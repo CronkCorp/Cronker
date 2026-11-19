@@ -51,8 +51,15 @@ export const requiredPermissions: Readonly<Record<string, "read">> = {
   statuses: "read",
 };
 
-/** The webhook events the App subscribes to. */
-export const requiredEvents: readonly string[] = ["pull_request", "pull_request_review", "check_run", "check_suite", "status"];
+/** The webhook events the App subscribes to; `repository` reports renames and transfers. */
+export const requiredEvents: readonly string[] = [
+  "pull_request",
+  "pull_request_review",
+  "check_run",
+  "check_suite",
+  "status",
+  "repository",
+];
 
 export async function findApp(db: Db): Promise<GitHubApp | null> {
   const { rows } = await db.query<GitHubApp>(

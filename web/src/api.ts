@@ -32,6 +32,15 @@ export interface GitHubInstallation {
   repositories: { id: number; fullName: string }[];
 }
 
+/** A GitHub repository a Project lists as holding its code. */
+export interface Repository {
+  /** GitHub's id, which stays the same through renames and transfers. */
+  id: number;
+  fullName: string;
+  /** Whether a Project of another Workspace lists it under the same key, so its Pull Requests link there too. */
+  keyClash: boolean;
+}
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -544,6 +553,11 @@ export const api = {
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
+  repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
+  addRepository: (projectId: string, id: number) =>
+    call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
+  removeRepository: (projectId: string, id: number) =>
+    call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>

@@ -19,6 +19,12 @@ const cronk = await createCronk({ config });
 await cronk.listen();
 cronk.app.log.info(`Cronk is at ${config.publicUrl.origin}`);
 
+// On startup and every five minutes: GitHub redelivers the App's webhook deliveries that failed, such
+// as while Cronk or its tunnel was down, and that Cronk hasn't applied.
+const replayFailedDeliveries = () => cronk.replayFailedDeliveries().catch((error: unknown) => cronk.app.log.error(error));
+void replayFailedDeliveries();
+const everyFiveMinutes = setInterval(replayFailedDeliveries, 5 * 60_000);
+
 // Every minute: Runs nothing has named for their Workspace's lost-Run threshold become lost, and
 // rate-limited Runners whose pause has passed resume their queues.
 const everyMinute = setInterval(() => {
@@ -29,6 +35,7 @@ const everyMinute = setInterval(() => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     clearInterval(everyMinute);
+    clearInterval(everyFiveMinutes);
     void cronk.close().then(() => process.exit(0));
   });
 }
