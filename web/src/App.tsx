@@ -390,9 +390,9 @@ function SignedIn({
   } else if (current && (routedId || path === "/")) {
     page = <WorkspaceHome key={current.id} workspace={current} />;
   } else if (workspaces.length === 0 && path === "/") {
-    page = <EmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</EmptyState>;
+    page = <Elsewhere title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</Elsewhere>;
   } else {
-    page = <EmptyState title="Nothing is here.">The page may have moved, or you may not see it.</EmptyState>;
+    page = <Elsewhere title="Nothing is here.">The page may have moved, or you may not see it.</Elsewhere>;
   }
 
   return (
@@ -408,6 +408,12 @@ function SignedIn({
       {page}
     </Frame>
   );
+}
+
+/** A page that belongs to no sidebar item, such as one that isn't there. */
+function Elsewhere({ title, children }: { title: string; children: ReactNode }) {
+  usePlace(null);
+  return <EmptyState title={title}>{children}</EmptyState>;
 }
 
 function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) => void }) {
