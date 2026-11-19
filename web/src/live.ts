@@ -44,7 +44,8 @@ const streams = new Map<string, Stream>();
 const workspaceStream = (workspaceId: string) => `/api/workspaces/${encodeURIComponent(workspaceId)}/events`;
 const runnersStream = "/api/runners/events";
 
-function open(url: string): Stream {
+/** Opens the stream at `url`, or joins it if open, listening for its event `types`. */
+function open(url: string, types: string[]): Stream {
   let stream = streams.get(url);
   if (!stream) {
     const source = new EventSource(url);
@@ -61,7 +62,7 @@ function open(url: string): Stream {
       opened = true;
     });
     source.addEventListener("error", () => setState("reconnecting"));
-    for (const type of url === runnersStream ? runnerEventTypes : eventTypes) {
+    for (const type of types) {
       source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent | RunnerEvent));
     }
     stream = created;
@@ -78,8 +79,8 @@ function release(url: string, stream: Stream) {
   }
 }
 
-function listen(url: string, listener: Listener): () => void {
-  const stream = open(url);
+function listen(url: string, types: string[], listener: Listener): () => void {
+  const stream = open(url, types);
   stream.listeners.add(listener);
   return () => {
     stream.listeners.delete(listener);
@@ -87,45 +88,45 @@ function listen(url: string, listener: Listener): () => void {
   };
 }
 
-function useStreamState(url: string): LiveState {
+function useStreamState(url: string, types: string[]): LiveState {
   const [state, setState] = useState<LiveState>(() => streams.get(url)?.state ?? "live");
   useEffect(() => {
-    const stream = open(url);
+    const stream = open(url, types);
     setState(stream.state);
     stream.stateListeners.add(setState);
     return () => {
       stream.stateListeners.delete(setState);
       release(url, stream);
     };
-  }, [url]);
+  }, [url, types]);
   return state;
 }
 
 /** Whether the Workspace's stream is live or reconnecting, for the Live indicator. */
 export function useLiveState(workspaceId: string): LiveState {
-  return useStreamState(workspaceStream(workspaceId));
+  return useStreamState(workspaceStream(workspaceId), eventTypes);
 }
 
 /** Whether the User's own Runners' stream is live or reconnecting, for the Live indicator. */
 export function useRunnersLiveState(): LiveState {
-  return useStreamState(runnersStream);
+  return useStreamState(runnersStream, runnerEventTypes);
 }
 
-function useStreamEvents<E>(url: string | null, onEvent: (event: E) => void): void {
+function useStreamEvents<E>(url: string | null, types: string[], onEvent: (event: E) => void): void {
   const current = useRef(onEvent);
   current.current = onEvent;
-  useEffect(() => (url ? listen(url, (event) => current.current(event as E)) : undefined), [url]);
+  useEffect(() => (url ? listen(url, types, (event) => current.current(event as E)) : undefined), [url, types]);
 }
 
 /** Calls `onEvent` with each event of the Workspace's stream while the component is shown. */
 export function useLiveEvents(workspaceId: string, onEvent: (event: LiveEvent) => void): void {
   // Nothing streams without a Workspace, such as for a User who belongs to none.
-  useStreamEvents(workspaceId ? workspaceStream(workspaceId) : null, onEvent);
+  useStreamEvents(workspaceId ? workspaceStream(workspaceId) : null, eventTypes, onEvent);
 }
 
 /** Calls `onEvent` with each event of the User's own Runners' stream while the component is shown. */
 export function useRunnerEvents(onEvent: (event: RunnerEvent) => void): void {
-  useStreamEvents(runnersStream, onEvent);
+  useStreamEvents(runnersStream, runnerEventTypes, onEvent);
 }
 
 /**

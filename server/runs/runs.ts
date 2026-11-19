@@ -295,14 +295,16 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
         // A rate limit is no fault to fix: the Run is unrecorded and the Ticket waits, rather than showing as
         // couldn't-start. The Runner's queue pauses until the limit passes, so none of its waiting Tickets meet
         // the same limit meanwhile; the periodic check resumes it then (`resumePausedRunners`).
-        const slot = (await lockSlotOf(tx, runId))!;
+        const slot = await lockSlotOf(tx, runId);
         const { rowCount } = await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
         if (rowCount) await tx.query("update tickets set waits_for_run = true where id = $1", [ticketId]);
-        await tx.query("update runners set paused_until = greatest(paused_until, $2) where id = $1", [
-          slot.runnerId,
-          result.refusal.retryAt,
-        ]);
-        runnerChanged(context, tx, slot);
+        if (slot) {
+          await tx.query("update runners set paused_until = greatest(paused_until, $2) where id = $1", [
+            slot.runnerId,
+            result.refusal.retryAt,
+          ]);
+          runnerChanged(context, tx, slot);
+        }
       } else {
         await freeSlot(context, tx, runId);
         await tx.query(
