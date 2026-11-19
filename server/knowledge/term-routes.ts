@@ -5,7 +5,7 @@ import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { findProject, projectNotFound } from "../work/projects.js";
 import { knowledgePlaces } from "./places.js";
-import { createTerm, editTerm, findTerm, glossaryOf, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
+import { createTerm, deleteTerm, editTerm, findTerm, glossaryOf, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
 
 const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 const Definition = Type.String({ maxLength: 20_000, description: "Markdown." });
@@ -151,6 +151,23 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => versionsOf(db, await requireCaller(context, request), request.params.termId),
+    );
+
+    app.delete(
+      "/api/terms/:termId",
+      {
+        schema: {
+          tags,
+          summary: "Delete a Term",
+          description: "Deletes the Term with all its Versions. Only a User may; Agents are refused with `agent_not_allowed`.",
+          params: TermParams,
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await deleteTerm(context, await requireCaller(context, request), request.params.termId);
+        return reply.code(204).send(null);
+      },
     );
   };
 }

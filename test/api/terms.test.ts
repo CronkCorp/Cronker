@@ -206,3 +206,88 @@ describe("Project and Workspace Terms", () => {
   });
 });
 
+
+describe("deleting a Term", () => {
+  test("a User deletes a Term with its Versions", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const terms = `/api/projects/${project.id}/terms`;
+    const term = await ok("POST", terms, ada, { name: "Draft" });
+    await ok("POST", terms, ada, { name: "Run" });
+
+    const deleted = await call("DELETE", `/api/terms/${term.id}`, ada);
+
+    expect(deleted.status).toBe(204);
+    expect((await call("GET", `/api/terms/${term.id}`, ada)).status).toBe(404);
+    expect((await call("GET", `/api/terms/${term.id}/versions`, ada)).status).toBe(404);
+    expect((await ok("GET", terms, ada)).map((t: { name: string }) => t.name)).toEqual(["Run"]);
+    expect((await call("POST", terms, ada, { name: "draft" })).status).toBe(201);
+  });
+
+  test("an Agent creates and edits Terms but can't delete one", async () => {
+    const { ada, workspace, project, asAgent } = await workspaceWithProject();
+    const projectTerm = await ok("POST", `/api/projects/${project.id}/terms`, asAgent, { name: "Finding" });
+    const workspaceTerm = await ok("POST", `/api/workspaces/${workspace.id}/terms`, asAgent, { name: "Run" });
+    await ok("PATCH", `/api/terms/${workspaceTerm.id}`, asAgent, { baseVersion: 1, definition: "One agent execution." });
+
+    for (const term of [projectTerm, workspaceTerm]) {
+      const refused = await call("DELETE", `/api/terms/${term.id}`, asAgent);
+
+      expect(refused.status).toBe(403);
+      expect(refused.json.error).toEqual(
+        expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Term") }),
+      );
+      expect((await call("GET", `/api/terms/${term.id}`, ada)).status).toBe(200);
+    }
+  });
+});
+
+describe("Terms and Workspaces", () => {
+  test("nothing crosses Workspaces: another Workspace's Terms answer as not found", async () => {
+    const { ada, workspace, project } = await workspaceWithProject();
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Secret" });
+    await ok("POST", `/api/workspaces/${workspace.id}/terms`, ada, { name: "Run" });
+    const second = await ok("POST", "/api/workspaces", ada, { name: "Bob's Workspace" });
+    const bob = await addMember(cronk, ada.cookie, second.id, "bob@example.com");
+    const theirs = await ok("POST", `/api/workspaces/${second.id}/terms`, bob, { name: "Secret" });
+    const bobsAgent = await ok("POST", `/api/workspaces/${second.id}/agents`, bob, { name: "bob-bot" });
+    const { secret } = await ok("POST", `/api/agents/${bobsAgent.id}/tokens`, bob, { name: "laptop", access: "full" });
+    const asBobsAgent = { headers: { authorization: `Bearer ${secret}` } };
+
+    for (const as of [{ cookie: bob.cookie }, asBobsAgent]) {
+      for (const [method, path, body] of [
+        ["GET", `/api/terms/${term.id}`],
+        ["GET", `/api/terms/${term.id}/versions`],
+        ["PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "Mine now." }],
+        ["DELETE", `/api/terms/${term.id}`],
+        ["GET", `/api/projects/${project.id}/terms`],
+        ["POST", `/api/projects/${project.id}/terms`, { name: "Planted" }],
+        ["GET", `/api/projects/${project.id}/glossary`],
+        ["GET", `/api/workspaces/${workspace.id}/terms`],
+        ["POST", `/api/workspaces/${workspace.id}/terms`, { name: "Planted" }],
+      ] as const) {
+        const response = await call(method, path, as, body);
+        expect(response.status, `${method} ${path}`).toBe(404);
+      }
+    }
+    const versions = await ok("GET", `/api/terms/${term.id}/versions`, ada);
+    expect(versions.map((v: { number: number }) => v.number)).toEqual([1]);
+    expect((await ok("GET", `/api/workspaces/${second.id}/terms`, bob)).map((t: { id: string }) => t.id)).toEqual([theirs.id]);
+  });
+
+  test("an Agent's read-only token reads Terms but can't create or save them", async () => {
+    const { ada, project, agent } = await workspaceWithProject();
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Run" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
+    const reader = { headers: { authorization: `Bearer ${secret}` } };
+
+    expect((await ok("GET", `/api/terms/${term.id}`, reader)).name).toBe("Run");
+    expect((await ok("GET", `/api/projects/${project.id}/glossary`, reader)).length).toBe(1);
+    for (const [method, path, body] of [
+      ["POST", `/api/projects/${project.id}/terms`, { name: "Mine" }],
+      ["PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "Mine." }],
+    ] as const) {
+      const refused = await call(method, path, reader, body);
+      expect([refused.status, refused.json.error.code], `${method} ${path}`).toEqual([403, "read_only_token"]);
+    }
+  });
+});

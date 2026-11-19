@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
@@ -167,10 +168,10 @@ async function versionOf(db: Db | Tx, termId: string, number: number): Promise<T
 /** A Term's row, locked until the transaction ends, so writes to it queue up. */
 async function lockTerm(tx: Tx, viewer: Viewer, termId: string): Promise<(Glossary & { id: string; version: number }) | undefined> {
   if (!isUuid(termId)) return undefined;
-  const view = inView(viewer, "workspace_id", "$2");
+  const view = inView(viewer, "terms.workspace_id", "$2");
   const { rows } = await tx.query<Glossary & { id: string; version: number }>(
     `select id, workspace_id as "workspaceId", project_id as "projectId", version from terms
-     where id = $1 and ${view.sql} for update`,
+     where terms.id = $1 and ${view.sql} for update`,
     [termId, view.value],
   );
   return rows[0];
@@ -255,4 +256,19 @@ export async function glossaryOf(db: Db, project: { workspaceId: string; project
     [project.workspaceId, project.projectId],
   );
   return rows.map(present);
+}
+
+/** Deletes a Term with all its Versions; only a User may. */
+export async function deleteTerm({ db }: Context, actor: Caller, termId: string): Promise<void> {
+  await transaction(db, async (tx) => {
+    const term = await lockTerm(tx, actor, termId);
+    if (!term) throw termNotFound();
+    if (actor.kind === "agent") {
+      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Term.`, {
+        rule: "Only a User deletes a Term, so an agent can't remove knowledge.",
+        advice: `Leave the Term as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+      });
+    }
+    await tx.query("delete from terms where id = $1", [term.id]);
+  });
 }
