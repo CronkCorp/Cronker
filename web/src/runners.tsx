@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ProjectSummary, type Runner, type WorkspaceSummary } from "./api.js";
+import { api, type ProjectSummary, type Runner, type Trigger, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
+import { Actions, Banner, Button, clockTime, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
+import { ConfirmDialog } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
 /**
@@ -81,7 +82,7 @@ function RunnerSettings({
   projects: ProjectSummary[];
   onChanged: (runner: Runner) => void;
 }) {
-  const [error, setError] = useState<string | null>(null);
+  const [removingTrigger, setRemovingTrigger] = useState<Trigger | null>(null);
   const [limitSaved, setLimitSaved] = useState(false);
   const limit = useSubmit(async (form) => {
     setLimitSaved(false);
@@ -100,54 +101,49 @@ function RunnerSettings({
     );
     element.reset();
   });
-  const remove = async (triggerId: string) => {
-    setError(null);
-    try {
-      onChanged(await api.removeTrigger(runner.id, triggerId));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
   const projectName = (id: string | null) =>
     id === null ? "All Projects" : (projects.find((p) => p.id === id)?.name ?? "A Project you no longer see");
+  const pausedUntil = runner.pausedUntil ? new Date(runner.pausedUntil) : null;
 
   return (
-    <section aria-label={runner.name} className="panel runner">
-      <header className="agent-card-head">
+    <section aria-label={runner.name} className="panel runner-card">
+      <header className="runner-card-head">
         <h2>{runner.name}</h2>
         <Chip>
           <span className="mono">{runner.kind}</span>
         </Chip>
-        <span className="muted small">
-          {runner.running} of {runner.limit} running
+        <span className="runner-usage">
+          <strong>{runner.running}</strong> of <strong>{runner.limit}</strong> <span className="muted">running</span>
         </span>
       </header>
-      {runner.pausedUntil && (
+      {pausedUntil && (
         <Banner tone="warn" label="Paused">
           <p role="status">
-            Rate limited: its queue is paused until {new Date(runner.pausedUntil).toLocaleString()}. Tickets waiting for it
-            start once it resumes.
+            Rate limited: its queue is paused until{" "}
+            <time dateTime={pausedUntil.toISOString()} title={pausedUntil.toLocaleString()}>
+              {dayShown(pausedUntil, new Date())} {clockTime(pausedUntil)}
+            </time>
+            . Tickets waiting for it start once it resumes.
           </p>
         </Banner>
       )}
-      <form onSubmit={limit.onSubmit}>
+      <form onSubmit={limit.onSubmit} className="form-row runner-limit">
         <Field label="Runs at once">
           <input name="limit" type="number" min={1} max={100} required defaultValue={runner.limit} />
         </Field>
+        <Button type="submit" disabled={limit.busy}>
+          Save limit
+        </Button>
+        <Saved shown={limitSaved} />
         <FormError error={limit.error} />
-        <Actions>
-          <Button type="submit" disabled={limit.busy}>
-            Save limit
-          </Button>
-          <Saved shown={limitSaved} />
-        </Actions>
       </form>
       {runner.kind === "subscription" && (
-        <>
+        <div className="runner-triggers">
           <h3>Triggers</h3>
-          <FormError error={error} />
           {runner.triggers.length === 0 ? (
-            <p className="muted">No triggers yet: Runs on this Runner can't start until one is saved for their Step's model.</p>
+            <p className="muted small">
+              No triggers yet: Runs on this Runner can't start until one is saved for their Step's model.
+            </p>
           ) : (
             <table className="triggers">
               <thead>
@@ -155,7 +151,9 @@ function RunnerSettings({
                   <th>Model</th>
                   <th>Project</th>
                   <th>Trigger</th>
-                  <th />
+                  <th>
+                    <span className="sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -169,16 +167,18 @@ function RunnerSettings({
                       <code>{trigger.triggerId}</code>
                     </td>
                     <td className="cell-actions">
-                      <Button variant="ghost" size="small" onClick={() => remove(trigger.id)}>
-                        Remove
-                      </Button>
+                      <div>
+                        <Button variant="ghost" size="small" onClick={() => setRemovingTrigger(trigger)}>
+                          Remove
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           )}
-          <form onSubmit={save.onSubmit} aria-label="Save a trigger">
+          <form onSubmit={save.onSubmit} aria-label="Save a trigger" className="runner-trigger-form">
             <div className="form-row">
               <Field label="Model">
                 <input name="model" required autoComplete="off" placeholder="haiku" className="mono" />
@@ -210,7 +210,23 @@ function RunnerSettings({
               </Button>
             </Actions>
           </form>
-        </>
+          <ConfirmDialog
+            open={removingTrigger !== null}
+            onOpenChange={(open) => !open && setRemovingTrigger(null)}
+            title={
+              removingTrigger?.projectId
+                ? `Remove the ${removingTrigger.model} trigger for ${projectName(removingTrigger.projectId)}?`
+                : `Remove the ${removingTrigger?.model ?? ""} trigger?`
+            }
+            confirm="Remove"
+            onConfirm={async () => {
+              if (removingTrigger) onChanged(await api.removeTrigger(runner.id, removingTrigger.id));
+            }}
+          >
+            Its token is gone for good: saving this model again takes the token from claude.ai. Runs needing it can't
+            start until then.
+          </ConfirmDialog>
+        </div>
       )}
     </section>
   );

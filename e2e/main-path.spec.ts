@@ -35,9 +35,12 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await page.getByRole("link", { name: "claude-max" }).click();
   await page.getByLabel("Runner").selectOption("Fake");
   await expect(page.getByLabel("Runner").locator("option:checked")).toHaveText("Fake");
-  await page.getByLabel("Token name").fill("cloud");
-  await page.getByRole("button", { name: "Issue token" }).click();
-  const secret = await page.getByLabel("Token cloud").inputValue();
+  await page.getByRole("button", { name: "Manage tokens" }).click();
+  const tokens = page.getByRole("dialog", { name: "Tokens of claude-max" });
+  await tokens.getByLabel("Token name").fill("cloud");
+  await tokens.getByRole("button", { name: "Issue token" }).click();
+  const secret = await tokens.getByLabel("Token cloud").inputValue();
+  await tokens.getByRole("button", { name: "Close" }).click();
 
   // A Project and a Ticket on its board.
   await page.getByRole("button", { name: "Workspace: Ada's Workspace" }).click();

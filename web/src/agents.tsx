@@ -4,7 +4,8 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, workspaceCrumb } from "./ui/controls.js";
+import { Key, RunState } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Every Ticket of the Workspace, to count what each Agent is delegated and running. */
@@ -95,12 +96,8 @@ function AgentCard({
   onChanged: () => void;
 }) {
   const mine = agent.owner.id === user.id;
-  const [tokens, setTokens] = useState<AgentToken[] | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [removing, setRemoving] = useState(false);
-  useEffect(() => {
-    if (mine) api.tokens(agent.id).then(setTokens, () => setTokens(null));
-  }, [agent.id, mine]);
   const delegated = tickets.filter((t) => t.delegateId === agent.id);
   const running = delegated.filter((t) => t.lastRun?.state === "running");
   const page = `/workspaces/${workspace.id}/agents/${agent.id}`;
@@ -131,13 +128,19 @@ function AgentCard({
           <strong>{running.length}</strong> <span className="muted">running</span>
         </span>
       </div>
-      {mine && tokens && (
-        <p className="small">
-          {tokens.length === 0 ? "No tokens" : `${tokens.length} token${tokens.length === 1 ? "" : "s"}: ${tokens.map((t) => t.name).join(", ")}`}
-          {" · "}
-          <Link to={page}>Manage tokens</Link>
-        </p>
+      {running.length > 0 && (
+        <ul className="agent-runs" aria-label="Running Runs">
+          {running.map((ticket) => (
+            <li key={ticket.id}>
+              <Link to={`/tickets/${ticket.id}`}>
+                <Key>{ticket.key}</Key> <span className="agent-run-title">{ticket.title}</span>
+              </Link>
+              <RunState state="running" />
+            </li>
+          ))}
+        </ul>
       )}
+      {mine && <AgentTokens agent={agent} />}
       {renaming && <RenameAgent agent={agent} onClose={() => setRenaming(false)} onRenamed={onChanged} />}
       <ConfirmDialog
         open={removing}
@@ -180,13 +183,11 @@ function RenameAgent({ agent, onClose, onRenamed }: { agent: Agent; onClose: () 
   );
 }
 
-/** One of the User's own Agents: its Runner, and its tokens to issue and revoke; Rename and Remove in its "…" menu. */
+/** One of the User's own Agents: its Runner, and its tokens behind Manage tokens; Rename and Remove in its "…" menu. */
 export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummary; agentId: string }) {
   usePlace("agents");
   const [agent, setAgent] = useState<Agent | null>(null);
-  const [tokens, setTokens] = useState<AgentToken[] | null>(null);
   const [runners, setRunners] = useState<Runner[]>([]);
-  const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -195,26 +196,18 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
       (agents) => setAgent(agents.find((a) => a.id === agentId) ?? null),
       (e: Error) => setError(e.message),
     );
-    api.tokens(agentId).then(setTokens, (e: Error) => setError(e.message));
     api.runners().then(setRunners, (e: Error) => setError(e.message));
   }, [workspace.id, agentId]);
   useEffect(refresh, [refresh]);
 
-  const issue = useSubmit(async (form, element) => {
-    const access = field(form, "access") === "read" ? "read" : "full";
-    setIssued(await api.issueToken(agentId, { name: field(form, "name"), access }));
-    element.reset();
-    refresh();
-  });
-  const act = async (action: () => Promise<void>) => {
+  const setRunner = async (runnerId: string | null) => {
     setError(null);
     try {
-      await action();
+      setAgent(await api.setAgentRunner(agentId, runnerId));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
-  const mcpUrl = `${window.location.origin}/mcp`;
 
   return (
     <div className="page page-settings">
@@ -245,13 +238,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
         <Panel>
           <p className="muted small">How Cronk starts this Agent's Runs, spending your credentials.</p>
           <Field label="Runner" hint={<Link to="/runners">Set up your Runners</Link>}>
-            <select
-              value={agent.runnerId ?? ""}
-              onChange={(event) => {
-                const runnerId = event.target.value || null;
-                void act(async () => setAgent(await api.setAgentRunner(agentId, runnerId)));
-              }}
-            >
+            <select value={agent.runnerId ?? ""} onChange={(event) => void setRunner(event.target.value || null)}>
               <option value="">None: its Runs can't start</option>
               {runners.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -262,69 +249,11 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
           </Field>
         </Panel>
       )}
-      <Panel title="Tokens" id="tokens" description="An Agent connects with a token, such as from Claude Code on your laptop.">
-        <form onSubmit={issue.onSubmit}>
-          <div className="form-row">
-            <Field label="Token name">
-              <input name="name" required autoComplete="off" placeholder="laptop" />
-            </Field>
-            <Field label="Access">
-              <select name="access" defaultValue="full">
-                <option value="full">Full: read and comment</option>
-                <option value="read">Read-only</option>
-              </select>
-            </Field>
-          </div>
-          <FormError error={issue.error} />
-          <Actions>
-            <Button type="submit" variant="primary" disabled={issue.busy}>
-              Issue token
-            </Button>
-          </Actions>
-        </form>
-        {issued && (
-          <Banner tone="warn" label="Token issued">
-            <Field label={`Token ${issued.token.name}`}>
-              <input readOnly value={issued.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
-            </Field>
-            <p>
-              Copy it now: it is shown only once. Connect Claude Code with{" "}
-              <code>
-                claude mcp add --transport http cronk {mcpUrl} --header "Authorization: Bearer {issued.secret}"
-              </code>
-            </p>
-          </Banner>
-        )}
-        {tokens && tokens.length > 0 && (
-          <table>
-            <tbody>
-              {tokens.map((token) => (
-                <tr key={token.id}>
-                  <td>{token.name}</td>
-                  <td className="muted small">{token.access === "read" ? "Read-only" : "Full"}</td>
-                  <td>
-                    <RelativeTime at={token.createdAt} />
-                  </td>
-                  <td className="cell-actions">
-                    <Button
-                      size="small"
-                      onClick={() =>
-                        act(async () => {
-                          await api.revokeToken(agentId, token.id);
-                          if (issued?.token.id === token.id) setIssued(null);
-                          refresh();
-                        })
-                      }
-                    >
-                      Revoke
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Panel>
+      {agent && (
+        <Panel title="Tokens" id="tokens" description="An Agent connects with a token, such as from Claude Code on your laptop.">
+          <AgentTokens agent={agent} />
+        </Panel>
+      )}
       {agent && renaming && <RenameAgent agent={agent} onClose={() => setRenaming(false)} onRenamed={setAgent} />}
       {agent && (
         <ConfirmDialog
@@ -341,5 +270,170 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
         </ConfirmDialog>
       )}
     </div>
+  );
+}
+
+/** An Agent's tokens in one line, with Manage tokens opening the dialog that issues and revokes them. */
+function AgentTokens({ agent }: { agent: Agent }) {
+  const [tokens, setTokens] = useState<AgentToken[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [managing, setManaging] = useState(false);
+  const refresh = useCallback(() => {
+    api.tokens(agent.id).then(
+      (list) => {
+        setTokens(list);
+        setError(null);
+      },
+      (e: Error) => setError(e.message),
+    );
+  }, [agent.id]);
+  useEffect(refresh, [refresh]);
+  return (
+    <div className="agent-tokens">
+      <span className="small">
+        {tokens === null
+          ? "Tokens…"
+          : tokens.length === 0
+            ? "No tokens"
+            : `${tokens.length} token${tokens.length === 1 ? "" : "s"}: ${tokens.map((t) => t.name).join(", ")}`}
+      </span>
+      <Button variant="ghost" size="small" onClick={() => setManaging(true)}>
+        Manage tokens
+      </Button>
+      <FormError error={error} />
+      {managing && (
+        <ManageTokens agent={agent} tokens={tokens ?? []} onChanged={refresh} onClose={() => setManaging(false)} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Issues and revokes an Agent's tokens. A new token's secret shows once, with Copy, until the dialog closes;
+ * revoking asks first, since the Agent's connection breaks until a new token is pasted in.
+ */
+function ManageTokens({
+  agent,
+  tokens,
+  onChanged,
+  onClose,
+}: {
+  agent: Agent;
+  tokens: AgentToken[];
+  onChanged: () => void;
+  onClose: () => void;
+}) {
+  const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
+  const [revokingToken, setRevokingToken] = useState<AgentToken | null>(null);
+  const issue = useSubmit(async (form, element) => {
+    const access = field(form, "access") === "read" ? "read" : "full";
+    setIssued(await api.issueToken(agent.id, { name: field(form, "name"), access }));
+    element.reset();
+    onChanged();
+  });
+  const mcpUrl = `${window.location.origin}/mcp`;
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title={`Tokens of ${agent.name}`}
+      description="An Agent connects with a token, such as from Claude Code on your laptop."
+    >
+      {issued && (
+        <Banner tone="warn" label="Token issued">
+          <Field label={`Token ${issued.token.name}`}>
+            <div className="copy-row">
+              <input readOnly value={issued.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
+              <CopyButton text={issued.secret} />
+            </div>
+          </Field>
+          <p>
+            Copy it now: it is shown only once. Connect Claude Code with{" "}
+            <code>
+              claude mcp add --transport http cronk {mcpUrl} --header "Authorization: Bearer {issued.secret}"
+            </code>
+          </p>
+        </Banner>
+      )}
+      {tokens.length > 0 && (
+        <table className="tokens">
+          <tbody>
+            {tokens.map((token) => (
+              <tr key={token.id}>
+                <td>{token.name}</td>
+                <td className="muted small">{token.access === "read" ? "Read-only" : "Full"}</td>
+                <td className="muted small">
+                  <RelativeTime at={token.createdAt} />
+                </td>
+                <td className="cell-actions">
+                  <div>
+                    <Button variant="ghost" size="small" onClick={() => setRevokingToken(token)}>
+                      Revoke
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <form onSubmit={issue.onSubmit} aria-label="Issue a token">
+        <div className="form-row">
+          <Field label="Token name">
+            <input name="name" required autoComplete="off" placeholder="laptop" />
+          </Field>
+          <Field label="Access">
+            <select name="access" defaultValue="full">
+              <option value="full">Full: read and comment</option>
+              <option value="read">Read-only</option>
+            </select>
+          </Field>
+          <Button type="submit" variant="primary" disabled={issue.busy}>
+            Issue token
+          </Button>
+        </div>
+        <FormError error={issue.error} />
+      </form>
+      <DialogActions>
+        <DialogClose asChild>
+          <Button>Close</Button>
+        </DialogClose>
+      </DialogActions>
+      <ConfirmDialog
+        open={revokingToken !== null}
+        onOpenChange={(open) => !open && setRevokingToken(null)}
+        title={`Revoke ${revokingToken?.name ?? "token"}?`}
+        confirm="Revoke"
+        onConfirm={async () => {
+          if (!revokingToken) return;
+          await api.revokeToken(agent.id, revokingToken.id);
+          if (issued?.token.id === revokingToken.id) setIssued(null);
+          onChanged();
+        }}
+      >
+        Whatever connects with it stops working until it is given a new token.
+      </ConfirmDialog>
+    </Dialog>
+  );
+}
+
+/** Copies a secret to the clipboard and says so. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const copy = () => {
+    setCopied(false);
+    setError(null);
+    navigator.clipboard.writeText(text).then(
+      () => setCopied(true),
+      () => setError("Couldn't copy: select it and copy it yourself."),
+    );
+  };
+  return (
+    <>
+      <Button onClick={copy}>Copy</Button>
+      <Saved shown={copied}>Copied.</Saved>
+      <FormError error={error} />
+    </>
   );
 }

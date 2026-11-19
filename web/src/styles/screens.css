@@ -570,6 +570,10 @@
   color: var(--agent);
   font-weight: 500;
 }
+/* An Agent's name stays violet where it links to the Agent's page. */
+.actor-agent-name a {
+  color: inherit;
+}
 .entry-run .entry-line {
   color: var(--text);
 }
@@ -996,6 +1000,10 @@
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--space-3);
 }
+/* Cards in a row share their height; each keeps its own content at the top. */
+.agent-card {
+  align-content: start;
+}
 .agent-card-head {
   display: flex;
   align-items: center;
@@ -1016,8 +1024,89 @@
 .stat strong {
   font-size: 16px;
 }
-.triggers td:first-child {
-  font-family: var(--font-mono);
+.agent-runs {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.agent-runs li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.agent-runs a {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text);
+}
+.agent-run-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-runs .run-state {
+  margin-left: auto;
+  flex: none;
+}
+.runner-card {
+  gap: var(--space-4);
+}
+.runner-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.runner-card-head h2 {
+  font-size: 15px;
+}
+.runner-usage {
+  margin-left: auto;
+  font-size: 13px;
+}
+.runner-usage strong {
+  font-size: 16px;
+}
+.runner-limit > .field {
+  flex: 0 0 120px;
+}
+.runner-triggers {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.runner-trigger-form {
+  display: grid;
+  gap: var(--space-2);
+}
+.agent-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.agent-tokens > .small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.copy-row > input {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 
 /* Settings pages */
@@ -1035,7 +1124,8 @@
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
-.cell-actions {
+/* A table cell of row actions stays a cell, so its row's border runs under it too; its buttons sit in a row inside. */
+.cell-actions > div {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
