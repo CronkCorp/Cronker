@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
@@ -103,13 +103,32 @@ async function insertVersion(
   );
 }
 
-/** Creates a Term in the glossary at Version 1 by its Actor. */
+/**
+ * Runs a write that sets a Term's name, refusing a name another Term of the same glossary has, ignoring case.
+ * Rolls back the write's transaction when refused.
+ */
+async function withUniqueName<T>(glossary: Glossary, name: string, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    if (!violates(error, "terms_project_name_key") && !violates(error, "terms_workspace_name_key")) throw error;
+    const place = glossary.projectId ? "this Project" : "the Workspace";
+    throw new ApiError(409, "term_name_taken", `${place[0]!.toUpperCase()}${place.slice(1)} already has a Term named ${name}.`, {
+      rule: "A Term's name is unique ignoring case among its Project's Terms, or among the Workspace's.",
+      advice: `Edit the Term ${place} already has, or choose another name.`,
+    });
+  }
+}
+
+/** Creates a Term in the glossary at Version 1 by its Actor; refused if the glossary has its name, ignoring case. */
 export async function createTerm({ db, clock }: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<Term> {
   return transaction(db, async (tx) => {
     const now = clock.now();
-    const { rows } = await tx.query<{ id: string }>(
-      `insert into terms (workspace_id, project_id, name, version, created_at) values ($1, $2, $3, 1, $4) returning id`,
-      [glossary.workspaceId, glossary.projectId, input.name, now],
+    const { rows } = await withUniqueName(glossary, input.name, () =>
+      tx.query<{ id: string }>(
+        `insert into terms (workspace_id, project_id, name, version, created_at) values ($1, $2, $3, 1, $4) returning id`,
+        [glossary.workspaceId, glossary.projectId, input.name, now],
+      ),
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: glossary.workspaceId }, 1, input, actor, now);
@@ -163,7 +182,8 @@ export interface TermEdit extends Partial<TermContent> {
 }
 
 /**
- * Saves a Term as its next Version by the Actor, keeping what the edit leaves out. The save must be based on the
+ * Saves a Term as its next Version by the Actor, keeping what the edit leaves out; a new name is refused if another
+ * Term of its glossary has it, ignoring case. The save must be based on the
  * current Version: one based on an outdated Version is refused with the current one, so its Actor can see what
  * changed.
  */
@@ -191,7 +211,9 @@ export async function editTerm({ db, clock }: Context, actor: Caller, termId: st
       avoid: edit.avoid ?? current.avoid,
     };
     await insertVersion(tx, locked, number, content, actor, clock.now());
-    await tx.query("update terms set version = $2, name = $3 where id = $1", [locked.id, number, content.name]);
+    await withUniqueName(locked, content.name, () =>
+      tx.query("update terms set version = $2, name = $3 where id = $1", [locked.id, number, content.name]),
+    );
     return (await findTerm(tx, actor, locked.id))!;
   });
 }
@@ -205,4 +227,15 @@ export async function versionsOf(db: Db, viewer: Viewer, termId: string): Promis
     [term.id],
   );
   return rows.map(presentVersion);
+}
+
+/** The glossary's own Terms, by name ignoring case. */
+export async function termsOf(db: Db, glossary: Glossary): Promise<Term[]> {
+  const { rows } = await db.query<Row>(
+    `select ${columns} from ${fromTerms}
+     where terms.workspace_id = $1 and terms.project_id is not distinct from $2
+     order by lower(terms.name), terms.name`,
+    [glossary.workspaceId, glossary.projectId],
+  );
+  return rows.map(present);
 }

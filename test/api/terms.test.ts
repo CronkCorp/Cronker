@@ -138,3 +138,49 @@ describe("Terms", () => {
     ]);
   });
 });
+
+describe("Project and Workspace Terms", () => {
+  test("a Project's Terms and the Workspace's are listed apart, each by name ignoring case", async () => {
+    const { ada, workspace, project, asAgent } = await workspaceWithProject();
+    const projectTerms = `/api/projects/${project.id}/terms`;
+    const workspaceTerms = `/api/workspaces/${workspace.id}/terms`;
+    await ok("POST", projectTerms, ada, { name: "Ticket" });
+    await ok("POST", projectTerms, asAgent, { name: "board" });
+    await ok("POST", workspaceTerms, ada, { name: "Workspace" });
+    const user = await call("POST", workspaceTerms, asAgent, { name: "User" });
+
+    expect(user.status).toBe(201);
+    expect(user.json).toEqual(expect.objectContaining({ workspaceId: workspace.id, projectId: null }));
+    const names = async (path: string) => (await ok("GET", path, ada)).map((t: { name: string }) => t.name);
+    expect(await names(projectTerms)).toEqual(["board", "Ticket"]);
+    expect(await names(workspaceTerms)).toEqual(["User", "Workspace"]);
+  });
+
+  test("a name is unique ignoring case among a Project's Terms and among the Workspace's", async () => {
+    const { ada, workspace, project, asAgent } = await workspaceWithProject();
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const projectTerms = `/api/projects/${project.id}/terms`;
+    const workspaceTerms = `/api/workspaces/${workspace.id}/terms`;
+    await ok("POST", projectTerms, ada, { name: "Ticket" });
+    const run = await ok("POST", projectTerms, ada, { name: "Run" });
+    await ok("POST", workspaceTerms, ada, { name: "Agent" });
+
+    const refused = [
+      await call("POST", projectTerms, asAgent, { name: "ticket" }),
+      await call("POST", projectTerms, ada, { name: "  TICKET " }),
+      await call("PATCH", `/api/terms/${run.id}`, asAgent, { baseVersion: 1, name: "Ticket" }),
+      await call("POST", workspaceTerms, asAgent, { name: "AGENT" }),
+    ];
+
+    for (const response of refused) {
+      expect(response.status).toBe(409);
+      expect(response.json.error).toEqual(
+        expect.objectContaining({ code: "term_name_taken", rule: expect.any(String), advice: expect.any(String) }),
+      );
+    }
+    expect((await call("POST", `/api/projects/${other.id}/terms`, ada, { name: "ticket" })).status).toBe(201);
+    expect((await call("POST", workspaceTerms, ada, { name: "Ticket" })).status).toBe(201);
+    expect((await call("POST", projectTerms, ada, { name: "Agent" })).status).toBe(201);
+    expect((await ok("PATCH", `/api/terms/${run.id}`, ada, { baseVersion: 1, name: "RUN" })).name).toBe("RUN");
+  });
+});

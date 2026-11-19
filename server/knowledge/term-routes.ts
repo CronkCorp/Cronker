@@ -4,7 +4,7 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "./places.js";
-import { createTerm, editTerm, findTerm, Term, termNotFound, TermVersion, versionsOf } from "./terms.js";
+import { createTerm, editTerm, findTerm, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
 
 const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 const Definition = Type.String({ maxLength: 20_000, description: "Markdown." });
@@ -38,6 +38,22 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
       const { params } = place;
       const path = `${place.path}/terms`;
 
+      app.get(
+        path,
+        {
+          schema: {
+            tags,
+            summary: `${place.name[0]!.toUpperCase()}${place.name.slice(1)} own Terms`,
+            description:
+              "Its own Terms at their current Versions, by name ignoring case. A Project's own Terms leave out the " +
+              "Workspace's; its glossary shows both.",
+            params,
+            response: { 200: Type.Array(Term), 401: ErrorBody, 404: ErrorBody },
+          },
+        },
+        async (request) => termsOf(db, await place.find(request, await requireCaller(context, request))),
+      );
+
       app.post(
         path,
         {
@@ -46,7 +62,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             summary: `Create a Term in ${place.name} glossary`,
             description:
               "Creates the Term at Version 1 by its Actor. Its name is unique ignoring case among the Project's own " +
-              "Terms, or the Workspace's.",
+              "Terms, or the Workspace's: a taken one is refused with `term_name_taken`.",
             params,
             body: Type.Object({ name: Name, definition: Type.Optional(Definition), avoid: Type.Optional(Avoid) }),
             response: { 201: Term, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
@@ -85,7 +101,8 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags,
           summary: "Save a Term",
           description:
-            "Saves the Term as its next Version, by the caller, keeping what the save leaves out. `baseVersion` is the " +
+            "Saves the Term as its next Version, by the caller, keeping what the save leaves out; a new name another " +
+            "Term of its glossary has, ignoring case, is refused with `term_name_taken`. `baseVersion` is the " +
             "number of the Version the save is based on. A save based on an outdated Version is refused with " +
             "`outdated_version`, carrying the current Version as `current`.",
           params: TermParams,
