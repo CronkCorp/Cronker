@@ -54,6 +54,9 @@ test("a User creates an Agent, issues a token shown once with Copy, and revokes 
   expect((await asAgent()).status).toBe(200);
   await row.getByRole("button", { name: "Revoke" }).click();
   await confirm.getByRole("button", { name: "Revoke" }).click();
+  // The confirm dialog closes only once the revoke has landed. While it is open the tokens
+  // dialog is hidden from the accessibility tree, so the row would read as gone too early.
+  await expect(confirm).toBeHidden();
   await expect(row).toHaveCount(0);
   expect((await asAgent()).status).toBe(401);
 });
