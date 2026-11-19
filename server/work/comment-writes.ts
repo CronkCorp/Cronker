@@ -8,7 +8,7 @@ import type { Tx } from "../db.js";
 
 /**
  * Writes a Comment on the Ticket as the Actor, or as Cronk itself, telling the Workspace, and returns its id. `sentBack`
- * marks Cronk's Comment on a send-back.
+ * marks Cronk's Comment on a send-back, written at the time of the move it explains.
  */
 export async function insertComment(
   { clock, live }: Context,
@@ -17,7 +17,7 @@ export async function insertComment(
   actor: { kind: "user" | "agent"; id: string } | { kind: "cronk" },
   body: string,
   replyToId: string | null,
-  { sentBack = false }: { sentBack?: boolean } = {},
+  sentBack: { at: Date } | null = null,
 ): Promise<string> {
   const { rows } = await tx.query<{ id: string }>(
     `insert into comments (workspace_id, ticket_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at, sent_back)
@@ -29,8 +29,8 @@ export async function insertComment(
       actor.kind === "user" ? actor.id : null,
       actor.kind === "agent" ? actor.id : null,
       body,
-      clock.now(),
-      sentBack,
+      sentBack?.at ?? clock.now(),
+      sentBack !== null,
     ],
   );
   const commentId = rows[0]!.id;

@@ -819,7 +819,7 @@ describe("Failures sending work back", () => {
     expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
   });
 
-  test("a failing check records a sentBack Change by Cronk naming the Pull Request and the check, just before its move", async () => {
+  test("a failing check's send-back records a Change by Cronk naming the Pull Request and the check, just before its move", async () => {
     const { cookie, app, installation, cronker, ticket } = await inReview();
 
     await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
@@ -844,7 +844,7 @@ describe("Failures sending work back", () => {
     });
   });
 
-  test("each send-back from the same Pull Request records its own sentBack Change, requested changes naming the review", async () => {
+  test("each send-back from the same Pull Request records its own Change, requested changes naming the review", async () => {
     const { cookie, app, installation, cronker, ticket, pr, finishImplementing } = await inReview();
     await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
     await finishImplementing();

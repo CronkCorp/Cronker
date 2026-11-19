@@ -107,6 +107,7 @@ export async function sendBackForFailure(
     );
     if (!first) continue;
     sent = true;
+    let movedAt = context.clock.now();
     const decision = await moveByCronk(context, tx, ticket, {
       target: { kind: "sentBack", step: { statusId: stepStatusId, name: stepName } },
       by: { kind: "cronk" },
@@ -114,13 +115,14 @@ export async function sendBackForFailure(
       verification: "unverified",
       // Recorded at the move's time, ahead of the Change moving it.
       beforeMove: async (_decision, now) => {
+        movedAt = now;
         await recordChanges(tx, ticket, { kind: "cronk" }, now, [{ field: "sentBack", from: null, to: cause }]);
       },
     });
     const sentWhere = decision.outcome?.needsYou
       ? `That is past ${stepName}'s round limit, so ${ticket.key} comes to its Assignee instead.`
       : `Sent ${ticket.key} back to ${stepName}.`;
-    await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null, { sentBack: true });
+    await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null, { at: movedAt });
   }
   return sent;
 }

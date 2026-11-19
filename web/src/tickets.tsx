@@ -1131,22 +1131,6 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
   );
 }
 
-/** How far apart Cronk records a send-back's move and its Comment, at most. */
-const sendBackWindow = 5_000;
-
-/**
- * When Cronk sent the Ticket back for the failure its send-back Comment names, so the Comment reads right after that
- * move and before the Run the move started; Cronk writes the Comment a moment after both.
- */
-function movedBackAt(comment: Comment, changes: Change[]): string | undefined {
-  if (!comment.sentBack) return undefined;
-  const written = new Date(comment.createdAt).getTime();
-  return changes.findLast((c) => {
-    const at = new Date(c.at).getTime();
-    return c.field === "sentBack" && at <= written && written - at <= sendBackWindow;
-  })?.at;
-}
-
 /**
  * A Change Cronk made, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
  * where it moved on to, and a send-back the failing check or requested changes that sent the Ticket back, and where.
@@ -1253,7 +1237,7 @@ function Timeline({
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, kind: "run" as const, run })),
     ...comments
       .filter((c) => c.replyToId === null)
-      .map((comment) => ({ at: movedBackAt(comment, changes) ?? comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
+      .map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
   ].sort((a, b) => a.at.localeCompare(b.at) || tieOrder[a.kind] - tieOrder[b.kind]);
   const runOf = new Map(runs.map((run) => [run.id, run]));
@@ -1385,7 +1369,6 @@ function CommentThread({
   const replies = comments.filter((c) => c.replyToId === comment.id);
   const parent = comment.replyToId ? comments.find((c) => c.id === comment.replyToId) : undefined;
   const question = comment.questionId !== null;
-  const sentBack = comment.sentBack;
   // The first User's reply answers a Question.
   const answered = question && replies.some((r) => r.actor.kind === "user");
   const askedIn = question ? runs.find((r) => r.question === comment.body && r.questionBy === "agent") : undefined;
@@ -1396,11 +1379,11 @@ function CommentThread({
   };
   return (
     <article
-      aria-label={`${question ? "Question from" : sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
+      aria-label={`${question ? "Question from" : comment.sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
       className={`entry-body comment${depth > 0 ? " reply" : ""}${arrived.has(`comment:${comment.id}`) ? " arrived" : ""}`}
     >
       <p className="entry-head">
-        {depth === 0 && <KindLabel kind={question ? "Question" : sentBack ? "Sent back" : "Comment"} />}{" "}
+        {depth === 0 && <KindLabel kind={question ? "Question" : comment.sentBack ? "Sent back" : "Comment"} />}{" "}
         <Actor actor={actor} avatar={depth > 0} /> <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}
