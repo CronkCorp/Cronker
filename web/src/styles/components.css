@@ -468,24 +468,15 @@ textarea.markdown-source {
   border-color: var(--warn);
   color: var(--warn);
 }
-.chip-danger {
-  border-color: var(--danger);
-  color: var(--danger);
-}
 .chip-info {
   border-color: var(--info);
   color: var(--info);
-}
-.chip-agent {
-  background: var(--agent-soft);
-  color: var(--agent);
 }
 
 /* The 11px uppercase pills: Run states, Decision statuses and Pull Request states. */
 .run-state,
 .decision-status,
 .pr-state {
-  display: inline-block;
   padding: 0 7px;
   border: 1px solid var(--muted);
   border-radius: var(--radius-pill);
@@ -538,12 +529,22 @@ textarea.markdown-source {
   }
 }
 
-/* Kind labels */
-.kind-label {
+/* The 11px caps of the type scale: kind labels and the labels over groups (sidebar, menus, pickers, the Inbox's
+   groups, a timeline's days). */
+.kind-label,
+.menu-label,
+.picker-group-label,
+.sidebar-group-label,
+.inbox-group,
+.timeline-day {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+/* Kind labels */
+.kind-label {
   white-space: nowrap;
 }
 .kind-accent {
@@ -563,6 +564,11 @@ textarea.markdown-source {
 }
 .kind-muted {
   color: var(--muted);
+}
+
+.decision-status,
+.pr-state {
+  display: inline-block;
 }
 
 /* Decision statuses */
@@ -749,10 +755,6 @@ textarea.markdown-source {
 .menu-label {
   padding: 6px 10px 2px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .menu-separator {
   height: 1px;
@@ -880,10 +882,6 @@ textarea.markdown-source {
   display: block;
   padding: var(--space-1) var(--space-2) 0;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .picker-empty {
   padding: 6px 8px;

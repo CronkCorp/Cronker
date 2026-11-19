@@ -72,11 +72,11 @@ test("every colour the stylesheets set comes from a token", async ({ page, cronk
     const found: string[] = [];
     const visit = (rules: CSSRuleList) => {
       for (const rule of rules) {
-        if (rule instanceof CSSStyleRule && rule.selectorText === ":root") continue; // the tokens themselves
         if ("cssRules" in rule && !(rule instanceof CSSStyleRule)) visit((rule as CSSGroupingRule).cssRules);
         if (!("style" in rule)) continue;
         const style = (rule as CSSStyleRule).style;
         for (const property of style) {
+          if (property.startsWith("--")) continue; // the tokens themselves
           const value = style.getPropertyValue(property);
           const words = value.replace(/var\([^)]*\)/g, " ").match(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|o?lab|o?lch|color|color-mix|light-dark)\([^)]*\)|[a-z]+/gi) ?? [];
           for (const word of words) {
