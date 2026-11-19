@@ -1,5 +1,5 @@
 import { type Check, type PullRequest } from "./api.js";
-import { RelativeTime } from "./ui/controls.js";
+import { ExternalLink, RelativeTime } from "./ui/controls.js";
 import { Key, PullRequestState } from "./ui/labels.js";
 
 const marks: { state: Check["state"]; mark: string }[] = [
@@ -64,13 +64,7 @@ function ReviewState({ pullRequest: pr }: { pullRequest: PullRequest }) {
   const what = `${state === "approved" ? "Approved" : "Changes requested"} by @${reviewer}`;
   return (
     <span className="small">
-      {url ? (
-        <a href={url} target="_blank" rel="noreferrer">
-          {what}
-        </a>
-      ) : (
-        what
-      )}
+      <ExternalLink url={url}>{what}</ExternalLink>
     </span>
   );
 }
@@ -88,13 +82,7 @@ function SentBackBy({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["s
   return (
     <span className="small muted">
       Sent back:{" "}
-      {sentBack.url ? (
-        <a href={sentBack.url} target="_blank" rel="noreferrer">
-          {what}
-        </a>
-      ) : (
-        what
-      )}{" "}
+      <ExternalLink url={sentBack.url}>{what}</ExternalLink>{" "}
       <RelativeTime at={sentBack.at} />
     </span>
   );
@@ -135,13 +123,7 @@ export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[]
                   <span className={`check-${check.state}`} aria-hidden="true">
                     {checkWords[check.state]}
                   </span>{" "}
-                  {check.url ? (
-                    <a href={check.url} target="_blank" rel="noreferrer">
-                      {check.name}
-                    </a>
-                  ) : (
-                    check.name
-                  )}
+                  <ExternalLink url={check.url}>{check.name}</ExternalLink>
                   <span className="sr-only"> {check.state}</span>
                 </li>
               ))}

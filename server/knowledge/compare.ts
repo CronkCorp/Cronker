@@ -31,6 +31,13 @@ export function compareLines(before: string, after: string): ComparedLine[] {
   return [...a.slice(0, start).map(same), ...middle, ...a.slice(endA).map(same)];
 }
 
+/** Two lists of words compared one to a line, so an empty list compares as no lines rather than one empty line. */
+export function compareWords(before: string[], after: string[]): ComparedLine[] {
+  if (before.length === 0) return after.map((text) => ({ change: "added", text }));
+  if (after.length === 0) return before.map((text) => ({ change: "removed", text }));
+  return compareLines(before.join("\n"), after.join("\n"));
+}
+
 /** The longest common subsequence of lines, as a table of suffix lengths, walked from the start. */
 function middleOf(a: string[], b: string[]): ComparedLine[] {
   const removed = (text: string): ComparedLine => ({ change: "removed", text });

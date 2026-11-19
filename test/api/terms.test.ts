@@ -137,6 +137,65 @@ describe("Terms", () => {
       },
     ]);
   });
+
+  test("one of a Workspace Term's Versions is read by its number", async () => {
+    const { ada, user, workspace, asAgent } = await workspaceWithProject();
+    const term = await ok("POST", `/api/workspaces/${workspace.id}/terms`, ada, { name: "Brief", definition: "Instructions.", avoid: ["Prompt"] });
+    await ok("PATCH", `/api/terms/${term.id}`, asAgent, { baseVersion: 1, definition: "The instructions a Run starts from." });
+
+    const first = await ok("GET", `/api/terms/${term.id}/versions/1`, asAgent);
+
+    expect(first).toEqual({
+      number: 1,
+      name: "Brief",
+      definition: "Instructions.",
+      avoid: ["Prompt"],
+      actor: { kind: "user", id: user.id, name: "ada@example.com" },
+      savedAt: "2026-01-01T09:00:00.000Z",
+    });
+  });
+
+  test("two of a Project Term's Versions are compared: both, with their definitions and words to avoid line by line", async () => {
+    const { ada, project, asAgent } = await workspaceWithProject();
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, {
+      name: "Brief",
+      definition: "Instructions.\nOne per Run.",
+      avoid: ["Prompt", "task"],
+    });
+    await ok("PATCH", `/api/terms/${term.id}`, asAgent, { baseVersion: 1, name: "Run brief", avoid: ["Prompt", "system prompt"] });
+    await ok("PATCH", `/api/terms/${term.id}`, ada, { baseVersion: 2, definition: "Instructions.\nEach Run has its own." });
+
+    const compared = await ok("GET", `/api/terms/${term.id}/versions/compare?from=1&to=3`, asAgent);
+    const second = await ok("GET", `/api/terms/${term.id}/versions/2`, ada);
+
+    expect(compared.from).toEqual(expect.objectContaining({ number: 1, name: "Brief", definition: "Instructions.\nOne per Run." }));
+    expect(compared.to).toEqual(expect.objectContaining({ number: 3, name: "Run brief", avoid: ["Prompt", "system prompt"] }));
+    expect(second).toEqual(expect.objectContaining({ number: 2, name: "Run brief", definition: "Instructions.\nOne per Run." }));
+    expect(compared.lines).toEqual([
+      { change: "same", text: "Instructions." },
+      { change: "removed", text: "One per Run." },
+      { change: "added", text: "Each Run has its own." },
+    ]);
+    expect(compared.avoid).toEqual([
+      { change: "same", text: "Prompt" },
+      { change: "removed", text: "task" },
+      { change: "added", text: "system prompt" },
+    ]);
+  });
+
+  test("a Version the Term doesn't have is refused, read alone or compared", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Brief" });
+
+    const read = await call("GET", `/api/terms/${term.id}/versions/2`, ada);
+    const compared = await call("GET", `/api/terms/${term.id}/versions/compare?from=1&to=2`, ada);
+
+    expect(read.status).toBe(404);
+    expect(read.json.error).toEqual(expect.objectContaining({ code: "not_found", message: "The Term Brief has no Version 2." }));
+    expect(compared.status).toBe(404);
+    expect(compared.json.error.message).toBe("The Term Brief has no Version 2.");
+    expect((await call("GET", `/api/terms/${term.id}/versions/0`, ada)).status).toBe(400);
+  });
 });
 
 describe("Project and Workspace Terms", () => {
@@ -257,6 +316,8 @@ describe("Terms and Workspaces", () => {
       for (const [method, path, body] of [
         ["GET", `/api/terms/${term.id}`],
         ["GET", `/api/terms/${term.id}/versions`],
+        ["GET", `/api/terms/${term.id}/versions/1`],
+        ["GET", `/api/terms/${term.id}/versions/compare?from=1&to=1`],
         ["PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "Mine now." }],
         ["DELETE", `/api/terms/${term.id}`],
         ["GET", `/api/projects/${project.id}/terms`],

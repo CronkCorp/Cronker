@@ -491,11 +491,16 @@ export function buildMcpServer(api: Api): McpServer {
     "read_term",
     {
       title: "Read a Term",
-      description: "A Term at its current Version, whose number a save names as its `baseVersion`.",
-      inputSchema: { term: termArgument },
+      description:
+        "A Term at its current Version, whose number a save names as its `baseVersion`; or, given a Version's " +
+        "number, what that earlier Version said.",
+      inputSchema: {
+        term: termArgument,
+        version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+      },
       annotations: { readOnlyHint: true },
     },
-    ({ term }) => answer(() => get(termPath(term))),
+    ({ term, version }) => answer(() => get(version === undefined ? termPath(term) : `${termPath(term)}/versions/${version}`)),
   );
 
   server.registerTool(
@@ -507,6 +512,23 @@ export function buildMcpServer(api: Api): McpServer {
       annotations: { readOnlyHint: true },
     },
     ({ term }) => answer(() => get(`${termPath(term)}/versions`)),
+  );
+
+  server.registerTool(
+    "compare_term_versions",
+    {
+      title: "Compare two Versions of a Term",
+      description:
+        "Both Versions with their names, their definitions compared line by line and their words to avoid one by one: " +
+        "each line `same`, `removed` or `added`.",
+      inputSchema: {
+        term: termArgument,
+        from: z.number().int().min(1).describe("The earlier Version's number."),
+        to: z.number().int().min(1).describe("The later Version's number."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ term, from, to }) => answer(() => get(`${termPath(term)}/versions/compare?from=${from}&to=${to}`)),
   );
 
   server.registerTool(
@@ -675,6 +697,21 @@ export function buildMcpServer(api: Api): McpServer {
       annotations: { readOnlyHint: true },
     },
     ({ decision }) => answer(() => get(`${decisionPath(decision)}/versions`)),
+  );
+
+  server.registerTool(
+    "compare_decision_versions",
+    {
+      title: "Compare two Versions of a Decision",
+      description: "Both Versions, and their bodies compared line by line: each line `same`, `removed` or `added`.",
+      inputSchema: {
+        decision: decisionArgument,
+        from: z.number().int().min(1).describe("The earlier Version's number."),
+        to: z.number().int().min(1).describe("The later Version's number."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ decision, from, to }) => answer(() => get(`${decisionPath(decision)}/versions/compare?from=${from}&to=${to}`)),
   );
 
   server.registerTool(

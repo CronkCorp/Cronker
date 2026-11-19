@@ -125,6 +125,36 @@ test("a Term reads as a Document does, and each of its Versions opens to what it
   await expect(version.getByRole("article", { name: "Brief" })).toContainText("Avoid: Prompt");
 });
 
+test("a Term's Versions are listed with \"Pick two to see what changed\", and picking two shows their Diff naming both", async ({ page, cronk }) => {
+  await openTerm(page, cronk);
+  const versions = page.getByRole("region", { name: "Versions" });
+  await expect(versions).toContainText("Pick two to see what changed.");
+
+  await versions.getByLabel("Compare Version 1").check();
+  await versions.getByLabel("Compare Version 2").check();
+  const diff = page.getByRole("dialog", { name: "What changed" }).getByRole("region", { name: "Comparison" });
+  await expect(diff).toContainText(/^Version 1\s*→\s*Version 2/);
+  await expect(diff.getByRole("deletion")).toHaveText(["The instructions a Run starts from."]);
+  await expect(diff.getByRole("insertion")).toHaveText([
+    "The instructions a Run starts from: the preamble, the Step's text, the Ticket's key.",
+    "system prompt",
+  ]);
+});
+
+test("a renamed Term's Diff names both Versions by their names", async ({ page, cronk }) => {
+  await openTerm(page, cronk);
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Run brief");
+  await page.getByRole("button", { name: "Save as Version 3" }).click();
+  await expect(page.getByRole("heading", { name: "Run brief", level: 1 })).toBeVisible();
+
+  const versions = page.getByRole("region", { name: "Versions" });
+  await versions.getByLabel("Compare Version 1").check();
+  await versions.getByLabel("Compare Version 3").check();
+  const diff = page.getByRole("dialog", { name: "What changed" }).getByRole("region", { name: "Comparison" });
+  await expect(diff).toContainText(/^Version 1: Brief\s*→\s*Version 3: Run brief/);
+});
+
 test("a Term's editor shows its definition and words to avoid in a preview beside the Markdown, as a Document's does", async ({ page, cronk }) => {
   await openTerm(page, cronk);
   await page.getByRole("button", { name: "Edit" }).click();
