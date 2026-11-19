@@ -36,10 +36,10 @@ import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
-import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
-import { FieldPicker } from "./ui/picker.js";
+import { FieldPicker, Picker } from "./ui/picker.js";
 
 /**
  * A Ticket: its title, description and Attachments, one timeline of its Comments, Reports, Runs and Changes, and
@@ -301,9 +301,9 @@ export function TicketScreen({
           <CommentForm label="New Comment" button="Comment" placeholder="Comment… Markdown, and Ticket keys link" onSend={async (body) => addComment(await api.comment(ticket.id, { body }))} />
         </div>
         <aside className="side" aria-label="Details">
-          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save} />
-          {ticket.verification && (
-            <Verification
+          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
+            {ticket.verification && (
+              <Verification
               ticket={ticket}
               runs={runs}
               onAccept={() => apply(api.acceptTicket(ticket.id))}
@@ -313,9 +313,10 @@ export function TicketScreen({
                 await reopened;
                 loadComments();
               }}
-            />
-          )}
-          <RunCard ticket={ticket} runs={runs} agents={agents} statusModel={status?.step?.model ?? null} onRetried={() => apply(api.retry(ticket.id))} />
+              />
+            )}
+          </Fields>
+          <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
           <PullRequestRows pullRequests={pullRequests} />
           <Relations
             ticket={ticket}
@@ -410,6 +411,12 @@ function FieldForm({ label, id, children, onSave }: { label: string; id: string;
 
 const none = <span className="muted">None</span>;
 
+/** Autonomous Delegation as picked; a Ticket not yet delegated has neither and takes the Project's. */
+const autonomy = [
+  { value: "on", on: true, shown: "On", hint: "a Step may complete it" },
+  { value: "off", on: false, shown: "Off", hint: "each Step stops for a User" },
+];
+
 /** The Ticket's fields, each edited in place with a picker. */
 function Fields({
   ticket,
@@ -419,6 +426,7 @@ function Fields({
   user,
   labels,
   onSave,
+  children,
 }: {
   ticket: Ticket;
   project: Project;
@@ -428,6 +436,8 @@ function Fields({
   /** The Labels to offer. */
   labels: string[];
   onSave: (edit: TicketEdit) => Promise<void>;
+  /** Rows shown after Labels, such as Verification. */
+  children?: ReactNode;
 }) {
   const status = project.statuses.find((s) => s.id === ticket.statusId);
   const assignee = members.find((m) => m.user.id === ticket.assigneeId)?.user;
@@ -443,7 +453,7 @@ function Fields({
   };
   const offeredAgents = delegate && !own.some((a) => a.id === delegate.id) ? [...own, delegate] : own;
   return (
-    <Panel className="side-section fields">
+    <section aria-label="Fields" className="panel side-section fields">
       <FieldPicker
         label="Status"
         value={status ? <StatusPill kind={status.kind} name={status.name} model={status.step?.model} /> : none}
@@ -502,17 +512,24 @@ function Fields({
       {ticket.delegateId === null && own.length === 0 && (
         <p className="field-note">You have no Agent in this Workspace to delegate to.</p>
       )}
-      <label className="field-row">
-        <span className="field-row-label">Autonomous Delegation</span>
-        <span className="field-row-value">
-          <input
-            type="checkbox"
-            checked={ticket.autonomousDelegation === true}
-            onChange={(e) => void onSave({ autonomousDelegation: e.target.checked })}
-          />
-          <span className="muted small">{ticket.autonomousDelegation === null ? "The Project's, once delegated" : "A Step may complete it"}</span>
-        </span>
-      </label>
+      <FieldPicker
+        label="Autonomous Delegation"
+        value={autonomy.find((a) => a.on === ticket.autonomousDelegation)?.shown ?? <span className="muted">The Project's, once delegated</span>}
+        options={autonomy.map(({ value, shown, hint }) => ({
+          value,
+          label: shown,
+          content: (
+            <span>
+              {shown} <span className="muted small">· {hint}</span>
+            </span>
+          ),
+        }))}
+        selected={autonomy.filter((a) => a.on === ticket.autonomousDelegation).map((a) => a.value)}
+        onPick={(picked) => {
+          const on = autonomy.find((a) => a.value === picked)!.on;
+          if (on !== ticket.autonomousDelegation) void onSave({ autonomousDelegation: on });
+        }}
+      />
       <FieldPicker
         label="Labels"
         value={shownLabels.length ? shownLabels.map((label) => <Chip key={label}>{label}</Chip>) : none}
@@ -522,6 +539,7 @@ function Fields({
         onPick={(label) => saveLabels(shownLabels.includes(label) ? shownLabels.filter((l) => l !== label) : [...shownLabels, label])}
         onCreate={(label) => !shownLabels.includes(label) && saveLabels([...shownLabels, label])}
       />
+      {children}
       <FieldForm
         key={`due:${ticket.dueDate}`}
         label="Due date"
@@ -545,7 +563,7 @@ function Fields({
       >
         <input id="ticket-estimate" name="estimate" type="number" min={0} step="any" defaultValue={ticket.estimate ?? ""} className="field-inline" />
       </FieldForm>
-    </Panel>
+    </section>
   );
 }
 
@@ -598,7 +616,7 @@ function Verification({
         ? "leave it here for you to move"
         : "send it back to a Step whose Status has since been removed, which Cronk refuses";
   return (
-    <section aria-label="Verification" className="panel side-section verification">
+    <section aria-label="Verification" className="verification">
       <div className="field-row">
         <span className="field-row-label">Verification</span>
         {ticket.verification === "verified" ? <Chip tone="ok">Verified</Chip> : <Chip tone="info">Unverified</Chip>}
@@ -655,14 +673,14 @@ function RunCard({
   ticket,
   runs,
   agents,
-  statusModel,
+  step,
   onRetried,
 }: {
   ticket: Ticket;
   runs: Run[];
   agents: Agent[];
-  /** The model of the Step it waits for. */
-  statusModel: string | null;
+  /** The Step it waits for, named after its Status. */
+  step: { name: string; model: string } | null;
   onRetried: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -674,9 +692,13 @@ function RunCard({
       <section aria-label="Run" className="panel side-section run-card">
         <div className="run-card-head">
           <RunState state="waiting" reason={waitingReasons[ticket.waiting]} />
-          {statusModel && <ModelLabel model={statusModel} />}
         </div>
         {delegate && <Actor actor={{ kind: "agent", name: delegate.name }} />}
+        {step && (
+          <p className="small">
+            {step.name} <ModelLabel model={step.model} />
+          </p>
+        )}
         <p className="small muted">Waiting: {waitingReasons[ticket.waiting]}.</p>
       </section>
     );
@@ -725,6 +747,8 @@ const relationGroups: { kind: RelationKind; label: string }[] = [
   { kind: "relatesTo", label: "Relates to" },
 ];
 
+const relationLabel = (kind: RelationKind) => relationGroups.find((g) => g.kind === kind)!.label;
+
 function TicketLink({ ticket }: { ticket: TicketRef }) {
   return (
     <Link to={`/tickets/${ticket.id}`} className="ticket-link">
@@ -749,10 +773,11 @@ function Relations({
   onChanged: () => void;
 }) {
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Kept after adding, for adding several of one kind in a row.
+  const [kind, setKind] = useState<RelationKind>("blockedBy");
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     const ticketKey = field(form, "ticket").trim();
-    await api.relate(ticket.id, { kind: field(form, "kind") as RelationKind, ticketKey });
-    // Keeps the kind chosen, for adding several of one kind in a row.
+    await api.relate(ticket.id, { kind, ticketKey });
     (element.elements.namedItem("ticket") as HTMLInputElement).value = "";
     onChanged();
   });
@@ -826,13 +851,17 @@ function Relations({
       <FormError error={removeError} />
       <form onSubmit={onSubmit} className="side-form">
         <div className="side-form-row">
-          <select name="kind" defaultValue="blockedBy" aria-label="Relation">
-            {relationGroups.map(({ kind, label }) => (
-              <option key={kind} value={kind}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <Picker
+            label="Relation"
+            options={relationGroups.map(({ kind, label }) => ({ value: kind, label }))}
+            selected={[kind]}
+            onPick={(picked) => setKind(picked as RelationKind)}
+            trigger={
+              <Button size="small" aria-haspopup="listbox" aria-label={`Relation ${relationLabel(kind)}`}>
+                {relationLabel(kind)} <span aria-hidden="true">▾</span>
+              </Button>
+            }
+          />
           <input name="ticket" required list="relation-tickets" placeholder={`Key, such as ${ticket.key}`} aria-label="Ticket" className="mono" />
         </div>
         <datalist id="relation-tickets">
@@ -869,7 +898,6 @@ function LinkedDocuments({
   onChanged: () => void;
 }) {
   const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
-  const [unlinkError, setUnlinkError] = useState<string | null>(null);
   const [treesError, setTreesError] = useState<string | null>(null);
   // Page trees aren't live, so they are read again on opening the list and after each link.
   const loadTrees = useCallback(() => {
@@ -885,19 +913,21 @@ function LinkedDocuments({
     );
   }, [ticket.projectId, workspaceId]);
   useEffect(loadTrees, [loadTrees]);
-  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
-    await api.linkDocument(ticket.id, field(form, "document"));
-    element.reset();
-    loadTrees();
-    onChanged();
-  });
-  const unlink = async (documentId: string) => {
-    setUnlinkError(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  /** Links or unlinks one Document at a time, showing why it was refused. */
+  const change = async (save: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
     try {
-      await api.unlinkDocument(ticket.id, documentId);
+      await save();
+      loadTrees();
       onChanged();
     } catch (e) {
-      setUnlinkError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   };
   const isLinked = new Set(linked.map((d) => d.id));
@@ -912,45 +942,34 @@ function LinkedDocuments({
             <li key={document.id}>
               <Link to={`/documents/${document.id}`}>{document.title}</Link>
               {document.projectId === null && <span className="muted small"> Workspace</span>}{" "}
-              <Button variant="ghost" size="small" onClick={() => void unlink(document.id)}>
+              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => api.unlinkDocument(ticket.id, document.id))}>
                 Unlink
               </Button>
             </li>
           ))}
         </ul>
       )}
-      <FormError error={unlinkError} />
       <FormError error={treesError} />
-      <form onSubmit={onSubmit} className="side-form">
-        <select name="document" required defaultValue="" onFocus={loadTrees} aria-label="Link a Document">
-          <option value="" disabled>
-            Link a Document…
-          </option>
-          {offered &&
-            (
-              [
-                ["This Project", offered.project],
-                ["The Workspace", offered.workspace],
-              ] as const
-            ).map(
-              ([label, documents]) =>
-                documents.length > 0 && (
-                  <optgroup key={label} label={label}>
-                    {documents.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.title}
-                      </option>
-                    ))}
-                  </optgroup>
-                ),
-            )}
-        </select>
-        <div>
-          <Button type="submit" size="small" disabled={busy}>
-            Link
-          </Button>
-        </div>
-      </form>
+      <div>
+        <Picker
+          label="Link a Document"
+          onOpenChange={(open) => open && loadTrees()}
+          options={
+            offered
+              ? [
+                  ...offered.project.map((d) => ({ value: d.id, label: d.title, group: "This Project" })),
+                  ...offered.workspace.map((d) => ({ value: d.id, label: d.title, group: "The Workspace" })),
+                ]
+              : []
+          }
+          onPick={(id) => void change(() => api.linkDocument(ticket.id, id))}
+          trigger={
+            <Button size="small" aria-haspopup="listbox" disabled={busy}>
+              Link a Document…
+            </Button>
+          }
+        />
+      </div>
       <FormError error={error} />
     </section>
   );

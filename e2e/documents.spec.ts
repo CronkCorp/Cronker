@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { addMember, firstUser, setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, test } from "./fixtures.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
 
 /** Sets Cronk up with Ada and Bea in one Workspace, signs Ada in, and opens a Workspace Document Ada wrote. */
 async function openDocument(page: Page, cronk: StartedCronk, body: string) {
@@ -108,4 +108,36 @@ test("a Document reads with its Versions beside it, and picking two shows their 
   await expect(diff).toContainText(/^Version 1\s*→\s*Version 2/);
   await expect(diff.getByRole("deletion")).toHaveText("One Brief per Run.");
   await expect(diff.getByRole("insertion")).toHaveText("Each Run has its own Brief.");
+});
+
+test("a Ticket links a Document of its Project or the Workspace from a picker, and unlinks it", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const post = async (path: string, body: unknown) => (await cronk.request("POST", path, { cookie, body })).json();
+  const project = await post(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await post(`/api/projects/${project.id}/tickets`, { title: "Rate-limit sign-in" });
+  await post(`/api/projects/${project.id}/documents`, { title: "Security notes" });
+  await post(`/api/workspaces/${workspace.id}/documents`, { title: "How Runs start" });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+
+  const linked = page.getByRole("region", { name: "Linked Documents" });
+  await linked.getByRole("button", { name: "Link a Document" }).click();
+  const offered = page.getByRole("listbox", { name: "Link a Document" });
+  await expect(offered.getByRole("group", { name: "This Project" }).getByRole("option")).toHaveText(["Security notes"]);
+  await expect(offered.getByRole("group", { name: "The Workspace" }).getByRole("option")).toHaveText(["How Runs start"]);
+  // Typing filters; Enter links the first match.
+  await page.getByRole("combobox", { name: "Filter Link a Document" }).fill("runs");
+  await page.getByRole("combobox", { name: "Filter Link a Document" }).press("Enter");
+  await expect(linked.getByRole("list", { name: "Linked Documents" }).getByRole("link")).toHaveText(["How Runs start"]);
+  await expect(page.getByRole("region", { name: "Timeline" })).toContainText("linked the Document How Runs start");
+
+  // A linked Document is no longer offered.
+  await linked.getByRole("button", { name: "Link a Document" }).click();
+  await expect(offered.getByRole("option")).toHaveText(["Security notes"]);
+  await page.keyboard.press("Escape");
+
+  await linked.getByRole("button", { name: "Unlink" }).click();
+  await expect(linked.getByRole("list", { name: "Linked Documents" })).toHaveCount(0);
 });

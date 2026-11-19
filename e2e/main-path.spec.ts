@@ -90,9 +90,8 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   const ticketId = new URL(page.url()).pathname.split("/").pop();
   await pick(page, "Delegate", "claude-max");
   await expect(fieldPicker(page, "Delegate")).toContainText("claude-max");
-  const autonomous = page.getByLabel("Autonomous Delegation");
-  await autonomous.click();
-  await expect(autonomous).toBeChecked();
+  await pick(page, "Autonomous Delegation", "On");
+  await expect(fieldPicker(page, "Autonomous Delegation")).toHaveAccessibleName("Autonomous Delegation On");
   await pick(page, "Status", "Triage");
   const timeline = page.getByRole("region", { name: "Timeline" });
   const runs = (step: string, model: string) =>
