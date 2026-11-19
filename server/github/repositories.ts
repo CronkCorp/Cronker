@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { userViewer } from "../identity/viewers.js";
-import { findProject, projectNotFound } from "../work/projects.js";
+import { findProject, projectNotFound, type ProjectSummary } from "../work/projects.js";
 import type { Viewer } from "../identity/viewers.js";
 import { listInstallations } from "./installations.js";
 import type { EventHandler } from "./webhooks.js";
@@ -80,9 +80,25 @@ export async function addRepository(context: Context, userId: string, projectId:
       [project.id, project.workspaceId, covered.id, userId, now],
     );
     if (rowCount === 0) throw new ApiError(409, "repository_already_listed", `The Project already lists ${covered.fullName}.`);
-    context.live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+    await announceListChanged(context, tx, project, covered.id);
     return (await repositoriesListed(tx, project.id)).find((r) => r.id === covered.id)!;
   });
+}
+
+/**
+ * Tells the Project's Workspace its list changed, and the Workspace of each other Project
+ * listing the Repository under the same key that its own Project changed, since its warning
+ * comes or goes. That Workspace hears only of its own Project.
+ */
+async function announceListChanged({ live }: Context, tx: Tx, project: ProjectSummary, repositoryId: number): Promise<void> {
+  live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+  const { rows } = await tx.query<{ projectId: string; workspaceId: string }>(
+    `select projects.id as "projectId", projects.workspace_id as "workspaceId"
+     from project_repositories join projects on projects.id = project_repositories.project_id
+     where project_repositories.repository_id = $1 and projects.id <> $2 and lower(projects.key) = lower($3)`,
+    [repositoryId, project.id, project.key],
+  );
+  for (const { projectId, workspaceId } of rows) live.publish(tx, workspaceId, { type: "project.changed", projectId });
 }
 
 /** Removes a Repository from a Project's list. */
@@ -95,7 +111,12 @@ export async function removeRepository(context: Context, userId: string, project
       repositoryId,
     ]);
     if (rowCount === 0) throw new ApiError(404, "not_found", "The Project doesn't list that Repository.");
-    context.live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+    // A Repository no Project lists any more is forgotten, so nothing keeps its name up to date.
+    await tx.query(
+      "delete from repositories where id = $1 and not exists (select from project_repositories where repository_id = $1)",
+      [repositoryId],
+    );
+    await announceListChanged(context, tx, project, repositoryId);
   });
 }
 

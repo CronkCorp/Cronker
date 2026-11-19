@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -146,6 +147,20 @@ describe("Projects sharing a key on one Repository", () => {
     await cronk.request("DELETE", `/api/projects/${bea.project.id}/repositories/${cronker.id}`, { cookie: bea.cookie });
 
     expect(await repositoriesOf(project.id, cookie)).toEqual([{ id: cronker.id, fullName: "cronkcorp/cronker", keyClash: false }]);
+  });
+
+  test("the other Project's Workspace hears its Project changed as the clash comes and goes, and nothing about whose it is", async () => {
+    const { workspace, cookie, project, cronker } = await projectWithApp();
+    await post(cookie, `/api/projects/${project.id}/repositories`, { id: cronker.id });
+    const bea = await beasProject(cookie, "CRONK");
+    const stream = await openStream(cronk, cookie, workspace.id);
+
+    await post(bea.cookie, `/api/projects/${bea.project.id}/repositories`, { id: cronker.id });
+    expect(await stream.next()).toEqual({ type: "project.changed", data: { projectId: project.id } });
+
+    await cronk.request("DELETE", `/api/projects/${bea.project.id}/repositories/${cronker.id}`, { cookie: bea.cookie });
+    expect(await stream.next()).toEqual({ type: "project.changed", data: { projectId: project.id } });
+    stream.close();
   });
 
   test("Projects with different keys listing one Repository are not warned about", async () => {
