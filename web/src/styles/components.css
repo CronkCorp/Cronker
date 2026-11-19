@@ -522,6 +522,51 @@ textarea.markdown-source {
   border-style: dashed;
 }
 
+/* Pull Request states */
+.pr-state {
+  display: inline-block;
+  padding: 0 7px;
+  border: 1px solid var(--muted);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 17px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.pr-state-draft {
+  border-style: dashed;
+}
+.pr-state-open {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.pr-state-merged {
+  border-color: transparent;
+  background: var(--agent-soft);
+  color: var(--agent);
+}
+.pr-state-closed {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.checks {
+  display: inline-flex;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+.check-passed {
+  color: var(--ok);
+}
+.check-failed {
+  color: var(--danger);
+}
+.check-pending {
+  color: var(--warn);
+}
+
 /* Banners */
 .banner {
   display: grid;

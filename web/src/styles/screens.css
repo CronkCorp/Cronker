@@ -457,6 +457,33 @@
   font-size: 12px;
 }
 
+/* Pull Requests */
+.pr-rows li {
+  display: grid;
+  gap: 2px;
+}
+.pr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.pr-cards {
+  display: grid;
+  gap: var(--space-2);
+}
+.pr-card {
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+.pr-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
 /* Ticket */
 .ticket-main {
   gap: var(--space-5);

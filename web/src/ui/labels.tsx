@@ -121,3 +121,15 @@ export function DecisionStatusPill({ status }: { status: DecisionStatus }) {
 export function ModelLabel({ model }: { model: string }) {
   return <span className="model-label">{model}</span>;
 }
+
+/** A Ticket or Project key, such as CRONK-12, in the mono face at 12px muted. */
+export function Key({ children }: { children: ReactNode }) {
+  return <span className="ticket-key">{children}</span>;
+}
+
+const pullRequestStates = { draft: "Draft", open: "Open", merged: "Merged", closed: "Closed" } as const;
+
+/** A Pull Request's state as an 11px pill: Draft dashed muted, Open outlined ok, Merged agent-soft, Closed outlined danger. */
+export function PullRequestState({ state }: { state: keyof typeof pullRequestStates }) {
+  return <span className={`pr-state pr-state-${state}`}>{pullRequestStates[state]}</span>;
+}

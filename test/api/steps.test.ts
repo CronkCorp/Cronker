@@ -113,6 +113,14 @@ describe("the default board's Steps", () => {
     expect(status("Implement").step!.brief).toMatch(/implement/i);
     expect(status("Code review").step!.brief).toMatch(/review/i);
   });
+
+  test("the default Implement Brief says to push to the Ticket's open Pull Request rather than open another", async () => {
+    const { status } = await projectOnDefaultBoard();
+
+    expect(status("Implement").step!.brief).toContain(
+      "If the Ticket already has an open Pull Request, push to its branch instead of opening another.",
+    );
+  });
 });
 
 /** A Step for the Ready Status, sending Tickets on to Investigate or back to Backlog. */

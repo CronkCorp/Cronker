@@ -75,8 +75,9 @@ export function buildMcpServer(api: Api): McpServer {
       instructions:
         "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
         "each Project and of the Workspace, as Terms in their glossaries (a Project's glossary is its Terms over the " +
-        "Workspace's), and recorded choices as numbered Decisions of each Project and of the Workspace. You act as one " +
-        `Agent. ${rights}`,
+        "Workspace's), and recorded choices as numbered Decisions of each Project and of the Workspace; " +
+        "`export_knowledge` gives both as `GLOSSARY.md` and `docs/adr/` files to commit into your branch. You act as " +
+        `one Agent. ${rights}`,
     },
   );
 
@@ -124,7 +125,9 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "A Ticket of your Workspace with its fields, its Comments (oldest first), its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
-        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Linked Documents, " +
+        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, each with its " +
+        "state (open, draft, merged or closed), the checks on its latest commit and the Step that produced it; " +
+        "its Linked Documents, " +
         "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; and the " +
         "files attached to it, each Comment carrying its own. Markdown refers to an Attachment as `attachment:<id>`. " +
         "A Ticket outside your Workspace answers as not found.",
@@ -140,6 +143,7 @@ export function buildMcpServer(api: Api): McpServer {
           relations: await get(`/api/tickets/${found.id}/relations`),
           runs: await get(`/api/tickets/${found.id}/runs`),
           reports: await get(`/api/tickets/${found.id}/reports`),
+          pullRequests: await get(`/api/tickets/${found.id}/pull-requests`),
           linkedDocuments: await get(`/api/tickets/${found.id}/documents`),
           attachments: await get(`/api/tickets/${found.id}/attachments`),
         };
@@ -706,6 +710,23 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ decision, ...edit }) => answer(() => send("PATCH", decisionPath(decision), edit)),
+  );
+
+  server.registerTool(
+    "export_knowledge",
+    {
+      title: "Export Terms and Decisions",
+      description:
+        "The files to commit into your branch: `GLOSSARY.md`, then `docs/adr/NNNN-<slug>.md` for each Decision by " +
+        "number, each with its path and Markdown content. A Project's `GLOSSARY.md` is its glossary, its Terms over " +
+        "the Workspace's, alphabetical, and its Decisions are its own; with no Project given, the Workspace's own " +
+        "Terms and Decisions. Write each file at its path; Cronk never commits to a Repository itself.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(await placePath(project, "export"))),
   );
 
   server.registerTool(

@@ -7,6 +7,7 @@ import {
   type InboxItem,
   type Member,
   type Project,
+  type PullRequest,
   type Report,
   type Run,
   type User,
@@ -16,6 +17,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
+import { PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime } from "./ui/controls.js";
@@ -433,6 +435,7 @@ function ItemBody({
         <>
           <p className="detail-line">{summary(item)}.</p>
           <TicketStatus ticket={ticket} />
+          <TicketPullRequests ticketId={ticket.id} />
           <LatestReport ticketId={ticket.id} />
         </>
       );
@@ -557,6 +560,15 @@ function LatestReport({ ticketId }: { ticketId: string }) {
       </div>
     </div>
   );
+}
+
+/** The Ticket's Pull Requests, as rows, if it has any. */
+function TicketPullRequests({ ticketId }: { ticketId: string }) {
+  const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
+  useEffect(() => {
+    api.pullRequests(ticketId).then(setPullRequests, () => setPullRequests([]));
+  }, [ticketId]);
+  return <PullRequestRows pullRequests={pullRequests} />;
 }
 
 /** The Ticket's Status, as a pill. */

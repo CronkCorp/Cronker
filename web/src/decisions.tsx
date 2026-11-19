@@ -12,6 +12,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { Editor, VersionMeta, Versions } from "./documents.js";
+import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
@@ -53,9 +54,12 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
         title="Decisions"
         switcher={<ScopeSwitch workspace={workspace} project={project} kind="decisions" />}
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            New Decision
-          </Button>
+          <>
+            <ExportLink place={place} />
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              New Decision
+            </Button>
+          </>
         }
       />
       <FormError error={failure} />

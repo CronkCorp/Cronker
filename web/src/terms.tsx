@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Place, type ProjectSummary, type Term, type TermVersion, type Workspace } from "./api.js";
 import { VersionMeta } from "./documents.js";
+import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
@@ -74,9 +75,12 @@ function Glossary({
         title="Terms"
         switcher={<ScopeSwitch workspace={workspace} project={project} kind="glossary" />}
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            New Term
-          </Button>
+          <>
+            <ExportLink place={place} />
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              New Term
+            </Button>
+          </>
         }
       />
       <div className="filter-bar">

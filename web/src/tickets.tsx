@@ -10,6 +10,7 @@ import {
   labelRuleShown,
   type LabelRule,
   type LinkedDocument,
+  type PullRequest,
   type DocumentSummary,
   type Member,
   type Priority,
@@ -31,6 +32,7 @@ import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
+import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime } from "./ui/controls.js";
@@ -67,6 +69,7 @@ export function TicketScreen({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
   const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
+  const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +90,7 @@ export function TicketScreen({
   const latestRuns = useLatest();
   const latestRelations = useLatest();
   const latestLinkedDocuments = useLatest();
+  const latestPullRequests = useLatest();
   const latestProjectTickets = useLatest();
   const latestReportFiles = useLatest();
   const fail = (e: Error) => setFailure(e.message);
@@ -111,6 +115,10 @@ export function TicketScreen({
       setReportFiles,
     );
   }, [ticketId, latestReports, latestReportFiles]);
+  const loadPullRequests = useCallback(
+    () => latestPullRequests(api.pullRequests(ticketId), setPullRequests, fail),
+    [ticketId, latestPullRequests],
+  );
   const loadLinks = useCallback(() => {
     latestRelations(api.relations(ticketId), setRelations, fail);
     latestLinkedDocuments(api.linkedDocuments(ticketId), setLinkedDocuments, fail);
@@ -142,7 +150,8 @@ export function TicketScreen({
     loadReports();
     loadAttachments();
     loadLinks();
-  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks]);
+    loadPullRequests();
+  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -153,6 +162,7 @@ export function TicketScreen({
       loadTimeline();
       loadLinks();
     }
+    if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
     if (all || (thisTicket && event.type === "comment.added")) loadComments();
     if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) loadReports();
     // A Comment's Attachments come with the Comments.
@@ -267,6 +277,7 @@ export function TicketScreen({
               )}
             </section>
           )}
+          {status?.kind === "review" && <PullRequestCards pullRequests={pullRequests} />}
           <Attachments
             owner={{ kind: "ticket", id: ticket.id }}
             attachments={attachments}
@@ -304,6 +315,7 @@ export function TicketScreen({
             />
           )}
           <RunCard ticket={ticket} runs={runs} agents={agents} statusModel={status?.step?.model ?? null} onRetried={() => apply(api.retry(ticket.id))} />
+          <PullRequestRows pullRequests={pullRequests} />
           <Relations
             ticket={ticket}
             relations={relations}

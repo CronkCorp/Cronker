@@ -33,6 +33,7 @@ const implement = `Implement this Ticket's work.
 
 - Read the Ticket, its Comments and the Reports of earlier Runs, the investigation's above all.
 - Make the change on a branch named after the Ticket's key, with tests, and open a pull request whose title starts with the key.
+- If the Ticket already has an open Pull Request, push to its branch instead of opening another.
 - Leave a Comment on the Ticket linking the pull request and saying anything a reviewer should know.
 
 Finish with **done** once the pull request is open and its checks pass. Finish with **needs you** and a Question when you can't go on without a User.`;

@@ -314,6 +314,11 @@ export function attachmentUrl(id: string): string {
   return `/api/attachments/${encodeURIComponent(id)}/content`;
 }
 
+/** Where a Project's or the Workspace's Terms and Decisions download from, as a zip of `GLOSSARY.md` and `docs/adr/`. */
+export function exportUrl(place: Place): string {
+  return `${placePath(place)}/export.zip`;
+}
+
 /** Whether a URL is where an Attachment downloads from. */
 export function isAttachmentUrl(url: string): boolean {
   return /^\/api\/attachments\/[^/]+\/content$/.test(url);
@@ -515,6 +520,27 @@ export interface LinkedDocument {
   /** Null for a Document of the Workspace's page tree. */
   projectId: string | null;
   title: string;
+}
+
+/** A check on a Pull Request's latest commit: a check run, or a commit status by its context. */
+export interface Check {
+  name: string;
+  state: "pending" | "passed" | "failed" | "neutral";
+  url: string | null;
+}
+
+/** A Pull Request linked to a Ticket by its key in the Pull Request's branch or title. */
+export interface PullRequest {
+  id: number;
+  repository: string;
+  number: number;
+  title: string;
+  branch: string;
+  url: string;
+  state: "open" | "draft" | "merged" | "closed";
+  checks: Check[];
+  /** The Step of the Run running on the Ticket when GitHub reported it opened. */
+  producingStep: { runId: string; statusId: string | null; name: string } | null;
 }
 
 /** Which page tree: a Project's, or the Workspace's. */
@@ -739,6 +765,8 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
+  pullRequests: (ticketId: string) =>
+    call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkedDocuments: (ticketId: string) =>
     call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>

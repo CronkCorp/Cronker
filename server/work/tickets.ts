@@ -227,8 +227,8 @@ async function withMentions(db: Db | Tx, row: Row): Promise<Ticket> {
 
 const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;
 
-/** Ticket keys as written in Markdown, each once, in order of first mention. */
-const keysWritten = (markdown: string) => [...new Set([...markdown.matchAll(writtenKey)].map((m) => m[0]))];
+/** Ticket keys as written in Markdown or other text, each once, in order of first mention. */
+export const keysWritten = (markdown: string) => [...new Set([...markdown.matchAll(writtenKey)].map((m) => m[0]))];
 
 /** Ticket keys in Markdown that name Tickets of the Workspace, each once, in order of first mention. */
 export async function mentionsIn(db: Db | Tx, workspaceId: string, markdown: string): Promise<Mention[]> {
