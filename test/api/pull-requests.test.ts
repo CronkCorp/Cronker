@@ -1077,3 +1077,32 @@ describe("Failures sending work back", () => {
     expect(await commentsOf(ticket.id, cookie)).toEqual([]);
   });
 });
+
+describe("Send-back Comments written before they were marked", () => {
+  test("Cronk's earlier Comments, each a send-back, are marked as one; other Comments are not", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
+    const { workspace, user } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+    for (const [userId, body] of [
+      [null, "The check **test** failed on cronkcorp/cronker#7's latest commit `c1`. Sent CRONK-1 back to Implement."],
+      [user.id, "Looking into it."],
+    ]) {
+      await cronk.stage(
+        `insert into comments (workspace_id, ticket_id, actor_user_id, body, created_at) values ($1, $2, $3, $4, '2026-01-01T09:00:00Z')`,
+        [workspace.id, ticket.id, userId, body],
+      );
+    }
+
+    await cronk.upgrade();
+
+    const response = await cronk.request("GET", `/api/tickets/${ticket.id}/comments`, { cookie });
+    expect(response.status).toBe(200);
+    expect((await response.json()).map((c: { actor: { kind: string }; sentBack: boolean }) => [c.actor.kind, c.sentBack])).toEqual([
+      ["cronk", true],
+      ["user", false],
+    ]);
+  });
+});
