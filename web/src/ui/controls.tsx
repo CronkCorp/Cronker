@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
-import { useLiveState } from "../live.js";
+import { useLiveState, useRunnersLiveState, type LiveState } from "../live.js";
 import { Link } from "../router.js";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -233,7 +233,15 @@ export function RelativeTime({ at, clock = false }: { at: string; /** Clock time
 
 /** Whether a streaming view is current: "Live", or "Reconnecting…" while its stream is away. */
 export function LiveIndicator({ workspaceId }: { workspaceId: string }) {
-  const state = useLiveState(workspaceId);
+  return <LiveStatus state={useLiveState(workspaceId)} />;
+}
+
+/** The Live indicator of a view streaming the User's own Runners. */
+export function RunnersLiveIndicator() {
+  return <LiveStatus state={useRunnersLiveState()} />;
+}
+
+function LiveStatus({ state }: { state: LiveState }) {
   return (
     <span className={`live live-${state}`}>
       <span className="live-dot" aria-hidden="true" />

@@ -31,13 +31,24 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
     "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
 };
 
+/**
+ * What a User's own Runners' event stream tells them: which of their Runners changed, by id. A Runner belongs to
+ * a User, not a Workspace, so this goes to its Owner's stream and never to a Workspace's.
+ */
+export type RunnerEvent = { type: "runner.changed"; runnerId: string };
+
+export const runnerEventTypes: Record<RunnerEvent["type"], string> = {
+  "runner.changed": "A Run started or ended on one of your Runners, changing its count of running Runs, or its queue was paused for a rate limit or resumed.",
+};
+
 /** One open stream: whose it is, and how to write to it. */
 export interface Subscriber {
-  workspaceId: string;
+  /** The Workspace whose stream it is; null for its User's own Runners' stream. */
+  workspaceId: string | null;
   userId: string;
   /** The hash of the sign-in the stream was opened with. */
   signIn: string;
-  send(event: LiveEvent): void;
+  send(event: LiveEvent | RunnerEvent): void;
   end(): void;
 }
 
@@ -55,9 +66,18 @@ export class Live {
 
   /** Tells the Workspace's streams about the event once the transaction commits, and never if it rolls back. */
   publish(tx: Tx, workspaceId: string, event: LiveEvent): void {
+    this.sendAfterCommit(tx, (subscriber) => subscriber.workspaceId === workspaceId, event);
+  }
+
+  /** Tells the Runner's Owner's Runners streams about the event once the transaction commits. */
+  publishToOwner(tx: Tx, ownerId: string, event: RunnerEvent): void {
+    this.sendAfterCommit(tx, (subscriber) => subscriber.workspaceId === null && subscriber.userId === ownerId, event);
+  }
+
+  private sendAfterCommit(tx: Tx, to: (subscriber: Subscriber) => boolean, event: LiveEvent | RunnerEvent): void {
     afterCommit(tx, () => {
       for (const subscriber of this.subscribers) {
-        if (subscriber.workspaceId !== workspaceId) continue;
+        if (!to(subscriber)) continue;
         // The change has committed whatever happens to one stream, so a failing stream only ends.
         try {
           subscriber.send(event);
