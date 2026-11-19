@@ -34,6 +34,18 @@ const fromReports = `documents
   join runs on runs.id = documents.run_id
   join agents on agents.id = runs.agent_id`;
 
+/**
+ * SQL for the latest Report on the Ticket whose id is `ticketId` (a column or parameter of the enclosing query),
+ * as `{ id, title }` json, or null when it has none: what lists show of a Ticket's Reports.
+ */
+export const latestReportOf = (ticketId: string) =>
+  `(select json_build_object('id', documents.id, 'title', versions.title) from ${fromReports}
+    where documents.ticket_id = ${ticketId} order by documents.seq desc limit 1)`;
+
+/** A Report as lists show it, by its id and title. */
+export const ReportRef = Type.Object({ id: Type.String({ format: "uuid" }), title: Type.String({ description: "Its current Version's." }) });
+export type ReportRef = Static<typeof ReportRef>;
+
 const present = (row: Row): Report => ({ ...row, createdAt: row.createdAt.toISOString() });
 
 async function rowsOf(db: Db | Tx, where: string, param: string): Promise<Row[]> {

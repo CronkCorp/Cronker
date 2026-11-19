@@ -367,6 +367,7 @@ describe("the Inbox", () => {
           status: { id: status("Done"), name: "Done" },
           completedBy: { id: status("Code review"), name: "Code review" },
           completedWithoutStep: false,
+          report: null,
           since: "2026-01-01T09:00:00.000Z",
         },
       ],
