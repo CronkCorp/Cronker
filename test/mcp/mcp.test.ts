@@ -78,6 +78,7 @@ describe("MCP with an Agent token", () => {
       "add_block",
       "attach_file",
       "comment",
+      "compare_term_versions",
       "compare_versions",
       "create_document",
       "create_sub_ticket",
@@ -504,6 +505,27 @@ describe("MCP with an Agent token", () => {
     ]);
     const viaApi = await (await cronk.request("GET", `/api/terms/${projectRun.json.id}`, { cookie })).json();
     expect(viaApi.avoid).toEqual(["session"]);
+  });
+
+  test("an Agent reads one of a Term's Versions and compares two, and a missing Version is refused", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const term = await call(client, "create_term", { project: "CRONK", name: "Brief", definition: "Instructions.", avoid: ["Prompt"] });
+    await call(client, "edit_term", { term: term.json.id, baseVersion: 1, name: "Run brief", avoid: ["Prompt", "system prompt"] });
+
+    const first = await call(client, "read_term", { term: term.json.id, version: 1 });
+    const current = await call(client, "read_term", { term: term.json.id });
+    const compared = await call(client, "compare_term_versions", { term: term.json.id, from: 1, to: 2 });
+    const missing = await call(client, "read_term", { term: term.json.id, version: 3 });
+
+    expect(first.json).toEqual(expect.objectContaining({ number: 1, name: "Brief", avoid: ["Prompt"] }));
+    expect(current.json).toEqual(expect.objectContaining({ name: "Run brief", version: expect.objectContaining({ number: 2 }) }));
+    expect([compared.json.from.name, compared.json.to.name]).toEqual(["Brief", "Run brief"]);
+    expect(compared.json.avoid).toEqual([
+      { change: "same", text: "Prompt" },
+      { change: "added", text: "system prompt" },
+    ]);
+    expect(missing).toEqual({ isError: true, json: expect.objectContaining({ code: "not_found" }) });
   });
 
   test("an Agent attaches files as base64 to a Document and its own Comment, and reads a Ticket's Attachments", async () => {
