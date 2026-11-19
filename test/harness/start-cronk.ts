@@ -53,7 +53,7 @@ export interface StartedCronk {
    * wrote, which today's API can no longer write, before `upgrade()`.
    */
   stage(sql: string, params?: unknown[]): Promise<void>;
-  /** Restarts Cronk on the same address, applying the migrations `migrateBefore` held back. */
+  /** Restarts Cronk, at a new address, applying the migrations `migrateBefore` held back. */
   upgrade(): Promise<void>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
   command(...args: string[]): Promise<CommandResult>;
@@ -111,8 +111,9 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
   });
 
-  const port = await freePort();
-  const url = `http://127.0.0.1:${port}`;
+  // `upgrade()` restarts Cronk on a fresh port: another test may have taken the old one while it stood free.
+  let port = await freePort();
+  let url = `http://127.0.0.1:${port}`;
   const secretKey = options.noSecretKey ? undefined : randomBytes(32).toString("base64");
   const boot = async (migrateBefore?: string): Promise<Cronk> => {
     const started = await createCronk({
@@ -143,7 +144,9 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   }
 
   return {
-    url,
+    get url() {
+      return url;
+    },
     github,
     claude,
     runner,
@@ -162,6 +165,8 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async upgrade() {
       await cronk.close();
+      port = await freePort();
+      url = `http://127.0.0.1:${port}`;
       cronk = await boot();
     },
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
