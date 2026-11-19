@@ -124,7 +124,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags,
           summary: "A Document at its current Version",
-          params: Type.Object({ documentId: Type.String() }),
+          params: DocumentParams,
           response: { 200: Document, 401: ErrorBody, 404: ErrorBody },
         },
       },
@@ -147,7 +147,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "number of the Version it's based on. A save based on an outdated Version is refused with " +
             "`outdated_version`, carrying the current Version as `current`. A new parent or place moves it within " +
             "its page tree, making no Version; it can't move under itself or one of its own descendants.",
-          params: Type.Object({ documentId: Type.String() }),
+          params: DocumentParams,
           body: Type.Object({
             baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
             title: Type.Optional(Title),

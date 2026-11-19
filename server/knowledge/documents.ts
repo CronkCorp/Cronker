@@ -143,6 +143,9 @@ async function siblingCount(tx: Tx, tree: Tree, parentId: string | null, except:
   return rows[0]!.count;
 }
 
+/** How many Documents sit directly under the Document. */
+const childCount = (tx: Tx, document: Tree & { id: string }) => siblingCount(tx, document, document.id);
+
 /** Refuses a parent that isn't a Document of the same page tree. */
 async function requireParentInTree(tx: Tx, tree: Tree, parentId: string): Promise<void> {
   const { rowCount } = isUuid(parentId)
@@ -210,14 +213,10 @@ export async function createDocument(
 
 /**
  * Moves a Document under another parent of its page tree, or to the top, at a place among its new siblings or
- * last; or to another place among its siblings. Refused under itself or one of its own descendants.
+ * last; or to another place among its siblings. Refused under itself or one of its own descendants. Takes the
+ * Document locked with its page tree.
  */
-async function moveDocument(
-  tx: Tx,
-  document: Tree & { id: string; parentId: string | null; position: number },
-  to: { parentId?: string | null; position?: number },
-): Promise<void> {
-  await lockTree(tx, document);
+async function moveDocument(tx: Tx, document: Placed, to: { parentId?: string | null; position?: number }): Promise<void> {
   const parentId = to.parentId === undefined ? document.parentId : to.parentId;
   if (parentId) {
     await requireParentInTree(tx, document, parentId);
@@ -269,16 +268,25 @@ async function versionOf(db: Db | Tx, documentId: string, number: number): Promi
   return rows[0] && presentVersion(rows[0]);
 }
 
-/** The Document's row, locked until the transaction ends, so saves of it queue up. */
-async function lockDocument(tx: Tx, viewer: Viewer, documentId: string) {
+/** A Document as a write needs it: where it sits, and the number of its current Version. */
+type Placed = Tree & { id: string; version: number; parentId: string | null; position: number };
+
+/**
+ * The Document's row, locked until the transaction ends, so writes to it queue up. With `tree`, its page tree's
+ * lock is taken first: every write holding both takes the tree's before the row's, so none waits on the other.
+ */
+async function lockDocument(tx: Tx, viewer: Viewer, documentId: string, { tree = false } = {}): Promise<Placed | undefined> {
   if (!isUuid(documentId)) return undefined;
   const view = inView(viewer, "documents.workspace_id", "$2");
-  const { rows } = await tx.query<Tree & { id: string; version: number; parentId: string | null; position: number }>(
-    `select id, workspace_id as "workspaceId", project_id as "projectId", parent_id as "parentId", position, version
-     from documents where id = $1 and ${view.sql} for update`,
-    [documentId, view.value],
-  );
-  return rows[0];
+  const select = `select id, workspace_id as "workspaceId", project_id as "projectId", parent_id as "parentId", position,
+    version from documents where id = $1 and ${view.sql}`;
+  if (tree) {
+    // A Document never changes page tree, so the one read before locking is the one it is in.
+    const found = (await tx.query<Placed>(select, [documentId, view.value])).rows[0];
+    if (!found) return undefined;
+    await lockTree(tx, found);
+  }
+  return (await tx.query<Placed>(`${select} for update`, [documentId, view.value])).rows[0];
 }
 
 export interface DocumentEdit {
@@ -304,7 +312,8 @@ export async function editDocument(
   edit: DocumentEdit,
 ): Promise<Document> {
   return transaction(db, async (tx) => {
-    const document = await lockDocument(tx, actor, documentId);
+    const moving = edit.parentId !== undefined || edit.position !== undefined;
+    const document = await lockDocument(tx, actor, documentId, { tree: moving });
     if (!document) throw documentNotFound();
     if (edit.title !== undefined || edit.body !== undefined) {
       if (edit.baseVersion === undefined) {
@@ -318,7 +327,7 @@ export async function editDocument(
         throw new ApiError(
           409,
           "outdated_version",
-          `This save is based on Version ${edit.baseVersion}, but the Document is at Version ${current.number}.`,
+          `The Document is at Version ${current.number}, but this save is based on Version ${edit.baseVersion}.`,
           {
             rule: "A save based on an outdated Version is refused, so it never overwrites a change its Actor hasn't seen.",
             advice: "Merge your change into the current Version, given as `current`, and save again based on it.",
@@ -331,7 +340,7 @@ export async function editDocument(
       await insertVersion(tx, document, number, content, actor, clock.now());
       await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
     }
-    if (edit.parentId !== undefined || edit.position !== undefined) await moveDocument(tx, document, edit);
+    if (moving) await moveDocument(tx, document, edit);
     return (await findDocument(tx, actor, document.id))!;
   });
 }
@@ -381,7 +390,7 @@ export async function compareVersions(
  */
 export async function deleteDocument({ db }: Context, actor: Caller, documentId: string): Promise<void> {
   await transaction(db, async (tx) => {
-    const document = await lockDocument(tx, actor, documentId);
+    const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
     if (actor.kind === "agent") {
       throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Document.`, {
@@ -389,13 +398,16 @@ export async function deleteDocument({ db }: Context, actor: Caller, documentId:
         advice: `Leave the Document as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
       });
     }
-    await lockTree(tx, document);
-    const children = await siblingCount(tx, document, document.id);
+    const children = await childCount(tx, document);
     if (children > 0) {
       throw new ApiError(
         409,
         "document_has_children",
         `This Document has ${children} ${children === 1 ? "child" : "children"}; move or delete them first.`,
+        {
+          rule: "A Document with children isn't deleted, so nothing under it is lost with it.",
+          advice: "Move its children under another parent or to the top of the page tree, or delete them, first.",
+        },
       );
     }
     await tx.query("delete from documents where id = $1", [document.id]);

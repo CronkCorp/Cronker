@@ -348,3 +348,50 @@ describe("Project and Workspace page trees", () => {
     expect((await ok("GET", `/api/documents/${document.id}`, ada)).version.number).toBe(1);
   });
 });
+
+describe("Agents and Documents", () => {
+  test("an Agent's read-only token reads Documents but can't create, save or move them", async () => {
+    const { ada, project, agent } = await workspaceWithProject();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
+    const reader = { headers: { authorization: `Bearer ${secret}` } };
+
+    expect((await ok("GET", `/api/documents/${document.id}`, reader)).title).toBe("Plan");
+    for (const [method, path, body] of [
+      ["POST", `/api/projects/${project.id}/documents`, { title: "Mine" }],
+      ["PATCH", `/api/documents/${document.id}`, { baseVersion: 1, body: "Mine." }],
+      ["PATCH", `/api/documents/${document.id}`, { position: 0 }],
+    ] as const) {
+      const refused = await call(method, path, reader, body);
+      expect([refused.status, refused.json.error.code], `${method} ${path}`).toEqual([403, "read_only_token"]);
+    }
+  });
+});
+
+describe("writes to one page tree at once", () => {
+  test("deleting, moving, saving and creating Documents at the same time each succeed or are refused, never fail", async () => {
+    const { ada, project, asAgent } = await workspaceWithProject();
+    const tree = `/api/projects/${project.id}/documents`;
+    const documents = [];
+    for (let i = 0; i < 6; i++) documents.push(await ok("POST", tree, ada, { title: `Page ${i}` }));
+    const [first, second, third, fourth, fifth, sixth] = documents;
+
+    const responses = await Promise.all([
+      call("DELETE", `/api/documents/${first.id}`, ada),
+      call("POST", tree, asAgent, { title: "New", parentId: first.id, position: 0 }),
+      call("PATCH", `/api/documents/${second.id}`, asAgent, { position: 0 }),
+      call("POST", tree, asAgent, { title: "Top", position: 0 }),
+      call("DELETE", `/api/documents/${third.id}`, ada),
+      call("PATCH", `/api/documents/${fourth.id}`, ada, { parentId: third.id }),
+      call("PATCH", `/api/documents/${fifth.id}`, asAgent, { baseVersion: 1, body: "Saved." }),
+      call("PATCH", `/api/documents/${sixth.id}`, ada, { parentId: fifth.id, position: 0 }),
+      call("DELETE", `/api/documents/${fifth.id}`, ada),
+    ]);
+
+    for (const response of responses) expect(response.status, JSON.stringify(response.json)).toBeLessThan(500);
+    const after: { parentId: string | null; position: number }[] = await ok("GET", tree, ada);
+    const places = new Map<string | null, number[]>();
+    for (const d of after) places.set(d.parentId, [...(places.get(d.parentId) ?? []), d.position]);
+    for (const positions of places.values()) expect(positions).toEqual(positions.map((_, i) => i));
+  });
+});
