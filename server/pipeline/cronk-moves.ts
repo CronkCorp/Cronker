@@ -25,11 +25,13 @@ export interface MovedTicket {
 /** Where a move by Cronk sends the Ticket: by an Outcome of a Step, or straight to a Status. */
 export type CronkMoveTarget =
   | {
+      kind: "outcome";
       /** The Step whose Outcome it is, by its Status, with its name as shown in Cronk's Question. */
       step: { statusId: string; name: string };
       outcome: Outcome;
     }
   | {
+      kind: "status";
       statusId: string;
       /** The Status of the Step that produced the work, where Reopen sends a completed Ticket; null for none. */
       completedFrom: string | null;
@@ -46,10 +48,11 @@ export interface CronkMove {
   /** How a move to a Done Status completes the Ticket. */
   verification: "unverified" | "verified";
   /**
-   * Called once the rounds have decided the Outcome that applies, before the Ticket moves: Cronk's Question is
-   * set when it applied the Step's *needs you* Outcome past the round limit.
+   * Called once the rounds have decided the Outcome that applies, before the Ticket moves, at the time the move
+   * records: a finishing Run ends here. Cronk's Question is set when it applied the Step's *needs you* Outcome
+   * past the round limit.
    */
-  decided?: (decision: CronkMoveDecision) => Promise<void>;
+  beforeMove?: (decision: CronkMoveDecision, now: Date) => Promise<void>;
 }
 
 /** What a move by Cronk applied: the Outcome, null for a move straight to a Status, and Cronk's own Question, if it asked one. */
@@ -62,10 +65,11 @@ const times = (n: number) => (n === 1 ? "once" : `${n} times`);
 
 /** Moves the Ticket as Cronk, as `CronkMove` says. Call it in the transaction that locked the Ticket. */
 export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket, move: CronkMove): Promise<CronkMoveDecision> {
+  const now = context.clock.now();
   const statuses = await statusesOf(tx, ticket.projectId);
   const { target } = move;
-  const decision: CronkMoveDecision = { outcome: "outcome" in target ? target.outcome : null, question: null };
-  if ("outcome" in target) {
+  const decision: CronkMoveDecision = { outcome: target.kind === "outcome" ? target.outcome : null, question: null };
+  if (target.kind === "outcome") {
     const step = statuses.find((s) => s.id === target.step.statusId)?.step;
     // An Outcome counting as a round adds one for this Ticket and Step, until the count has reached the
     // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
@@ -91,16 +95,15 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
       }
     }
   }
-  await move.decided?.(decision);
+  await move.beforeMove?.(decision, now);
 
-  const now = context.clock.now();
   if (move.stopReason !== undefined) await stopRunningRun(context, tx, ticket.id, move.stopReason, now);
-  const to = decision.outcome?.statusId ?? (target as { statusId: string }).statusId;
+  const to = decision.outcome?.statusId ?? (target.kind === "status" ? target.statusId : ticket.statusId);
   if (to !== ticket.statusId) {
     await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticket.id, to, now]);
     // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
     await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
-    if (decision.outcome?.needsYou && "step" in target) {
+    if (decision.outcome?.needsYou && target.kind === "outcome") {
       await tx.query(
         `insert into needs_you (ticket_id, workspace_id, run_id, outcome, step_status_id, step_status_name, question)
          values ($1, $2, $3, $4, $5, $6, $7)`,
@@ -113,7 +116,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   }
   if (statuses.find((s) => s.id === to)!.kind === "done") {
     // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.
-    const completedFrom = "step" in target ? target.step.statusId : target.completedFrom;
+    const completedFrom = target.kind === "outcome" ? target.step.statusId : target.completedFrom;
     await tx.query("update tickets set verification = $2, completed_from_status_id = $3 where id = $1", [
       ticket.id,
       move.verification,

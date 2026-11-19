@@ -515,7 +515,7 @@ export async function finishRun(
   runId: string,
   input: { outcome: string; question?: string; report?: string },
 ): Promise<Run> {
-  const { db, clock } = context;
+  const { db } = context;
   return transaction(db, async (tx) => {
     const found = await findRunRow(tx, caller, runId);
     if (!found) throw runNotFound();
@@ -561,25 +561,25 @@ export async function finishRun(
 
     const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
     await moveByCronk(context, tx, ticket, {
-      target: { step: { statusId: run.statusId!, name: run.step.name }, outcome },
+      target: { kind: "outcome", step: { statusId: run.statusId!, name: run.step.name }, outcome },
       by: { kind: "agent", id: caller.id, runId: run.id },
       runId: run.id,
       // A Run completing its Ticket leaves it Unverified, until a User Accepts or Reopens it.
       verification: "unverified",
-      decided: async ({ outcome: applied, question: cronksQuestion }) => {
+      beforeMove: async ({ outcome: applied, question: cronksQuestion }, now) => {
         const question = cronksQuestion ?? input.question ?? null;
         const questionBy: QuestionBy | null = cronksQuestion !== null ? "cronk" : question === null ? null : "agent";
         await freeSlot(context, tx, run.id);
         await tx.query(
           `update runs set state = 'finished', outcome = $2, question = $3, question_by = $4, ended_at = $5 where id = $1`,
-          [run.id, applied!.name, question, questionBy, clock.now()],
+          [run.id, applied!.name, question, questionBy, now],
         );
         if (input.report !== undefined) {
           await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
         }
-        // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, stays with the
-        // Ticket's needs you.
-        if (applied!.needsYou && questionBy === "agent") await askQuestion(context, tx, ticket, asking, question!, clock.now());
+        // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, shows on the Run
+        // and with the Ticket's needs you in the Inbox.
+        if (applied!.needsYou && questionBy === "agent") await askQuestion(context, tx, ticket, asking, question!, now);
       },
     });
     return present((await findRunRow(tx, caller, run.id))!);
