@@ -648,9 +648,9 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
-  documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
+  documents: (tree: Tree) => call<DocumentSummary[]>("GET", scopePath(tree, "documents")),
   createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
-    call<Document>("POST", treePath(tree), input),
+    call<Document>("POST", scopePath(tree, "documents"), input),
   document: (id: string) => call<Document>("GET", doc(id)),
   editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
   deleteDocument: (id: string) => call<void>("DELETE", doc(id)),
@@ -670,10 +670,6 @@ export const api = {
     call<Comparison>("GET", `${decision(id)}/versions/compare?from=${from}&to=${to}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
-
-function treePath(tree: Tree) {
-  return scopePath(tree, "documents");
-}
 
 function scopePath(scope: Scope, what: string) {
   return scope.kind === "project" ? `/api/projects/${encodeURIComponent(scope.id)}/${what}` : `${ws(scope.id)}/${what}`;

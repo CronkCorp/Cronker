@@ -13,13 +13,14 @@ export interface Scope {
 }
 
 /**
- * The two places knowledge lives, each reached from its own path under `/api`: a Project's and the Workspace's.
+ * The two places knowledge lives, each reached by its own path: `/api/projects/:projectId/<segment>` and
+ * `/api/workspaces/:workspaceId/<segment>`.
  * `find` answers the scope the request names, if the caller sees it.
  */
-export function scopes({ db }: Context, path: string) {
+export function scopes({ db }: Context, segment: string) {
   return [
     {
-      path: `/api/projects/:projectId/${path}`,
+      path: `/api/projects/:projectId/${segment}`,
       params: Type.Object({ projectId: Type.String() }),
       name: "a Project's",
       async find(request: FastifyRequest, caller: Caller): Promise<Scope> {
@@ -29,7 +30,7 @@ export function scopes({ db }: Context, path: string) {
       },
     },
     {
-      path: `/api/workspaces/:workspaceId/${path}`,
+      path: `/api/workspaces/:workspaceId/${segment}`,
       params: Type.Object({ workspaceId: Type.String() }),
       name: "the Workspace's",
       async find(request: FastifyRequest, caller: Caller): Promise<Scope> {
