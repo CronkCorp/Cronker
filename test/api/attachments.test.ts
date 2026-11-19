@@ -28,8 +28,8 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
   return response.json;
 }
 
-/** Sends a file's bytes as the request body, as the web client does, named in the query. */
-async function upload(path: string, as: As, file: { name: string; type: string; bytes: Uint8Array | string }) {
+/** Attaches a file by sending its bytes as the request body, as the web client does, named in the query. */
+async function attach(path: string, as: As, file: { name: string; type: string; bytes: Uint8Array | string }) {
   const response = await fetch(new URL(`${path}?name=${encodeURIComponent(file.name)}`, cronk.url), {
     method: "POST",
     headers: { ...as.headers, ...(as.cookie ? { cookie: as.cookie } : {}), "content-type": file.type },
@@ -39,7 +39,7 @@ async function upload(path: string, as: As, file: { name: string; type: string; 
 }
 
 async function attached(path: string, as: As, file: { name: string; type: string; bytes: Uint8Array | string }) {
-  const response = await upload(path, as, file);
+  const response = await attach(path, as, file);
   expect(response.status, `POST ${path}: ${JSON.stringify(response.json)}`).toBe(201);
   return response.json;
 }
@@ -92,7 +92,7 @@ describe("the size limit", () => {
     await start({ attachmentLimitBytes: 1024 });
     const { ada, ticket } = await workspaceWithTicket();
 
-    const refused = await upload(`/api/tickets/${ticket.id}/attachments`, ada, {
+    const refused = await attach(`/api/tickets/${ticket.id}/attachments`, ada, {
       name: "huge.log",
       type: "text/plain",
       bytes: "x".repeat(1025),
@@ -124,7 +124,7 @@ describe("the size limit", () => {
     await start();
     const { ada, ticket } = await workspaceWithTicket();
 
-    const refused = await upload(`/api/tickets/${ticket.id}/attachments`, ada, {
+    const refused = await attach(`/api/tickets/${ticket.id}/attachments`, ada, {
       name: "huge.bin",
       type: "application/octet-stream",
       bytes: new Uint8Array(25 * 1024 * 1024 + 1),
@@ -207,8 +207,8 @@ describe("access follows what it's attached to", () => {
     for (const outsider of [grace, graceBot]) {
       expect((await download(attachment.id, outsider)).status).toBe(404);
       expect((await call("GET", `/api/tickets/${ticket.id}/attachments`, outsider)).status).toBe(404);
-      expect((await upload(`/api/tickets/${ticket.id}/attachments`, outsider, log)).status).toBe(404);
-      expect((await upload(`/api/documents/${document.id}/attachments`, outsider, log)).status).toBe(404);
+      expect((await attach(`/api/tickets/${ticket.id}/attachments`, outsider, log)).status).toBe(404);
+      expect((await attach(`/api/documents/${document.id}/attachments`, outsider, log)).status).toBe(404);
       expect((await call("DELETE", `/api/attachments/${attachment.id}`, outsider)).status).toBe(404);
     }
     expect(await ok("GET", `/api/tickets/${ticket.id}/attachments`, ada)).toEqual([attachment]);
@@ -272,26 +272,39 @@ describe("Attachments on a Comment", () => {
     expect(comments.map((c: { attachments: unknown }) => c.attachments)).toEqual([[onAdas], [onAgents]]);
   });
 
-  test("nobody attaches to, or removes from, another Actor's Comment", async () => {
+  test("nobody attaches to another Actor's Comment, and an Agent removes nothing from another's", async () => {
     await start();
     const { ada, asAgent, ticket } = await workspaceWithTicket();
     const adas = await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "See the log." });
     const agents = await ok("POST", `/api/tickets/${ticket.id}/comments`, asAgent, { body: "And mine." });
     const onAdas = await attached(`/api/comments/${adas.id}/attachments`, ada, log);
 
-    const byAgent = await upload(`/api/comments/${adas.id}/attachments`, asAgent, log);
-    const byAda = await upload(`/api/comments/${agents.id}/attachments`, ada, log);
+    const byAgent = await attach(`/api/comments/${adas.id}/attachments`, asAgent, log);
+    const byAda = await attach(`/api/comments/${agents.id}/attachments`, ada, log);
     const removedByAgent = await call("DELETE", `/api/attachments/${onAdas.id}`, asAgent);
 
-    for (const refused of [byAgent, byAda, removedByAgent]) {
+    for (const refused of [byAgent, byAda]) {
       expect(refused.status).toBe(403);
       expect(refused.json.error.code).toBe("not_comment_author");
     }
+    expect(removedByAgent.status).toBe(403);
+    expect(removedByAgent.json.error.code).toBe("agent_not_allowed");
     expect(byAgent.json.error).toEqual(expect.objectContaining({ rule: expect.any(String), advice: expect.any(String) }));
   });
 });
 
 describe("removing an Attachment", () => {
+  test("a User removes a file an Agent attached to its own Comment", async () => {
+    await start();
+    const { ada, asAgent, ticket } = await workspaceWithTicket();
+    const agents = await ok("POST", `/api/tickets/${ticket.id}/comments`, asAgent, { body: "Here is the dump." });
+    const attachment = await attached(`/api/comments/${agents.id}/attachments`, asAgent, log);
+
+    expect((await call("DELETE", `/api/attachments/${attachment.id}`, ada)).status).toBe(204);
+
+    expect(await ok("GET", `/api/comments/${agents.id}/attachments`, ada)).toEqual([]);
+  });
+
   test("a User removes an Attachment: it is no longer listed or downloaded, and its file is gone", async () => {
     await start();
     const { ada, ticket } = await workspaceWithTicket();
@@ -337,7 +350,7 @@ describe("an Agent's write rights", () => {
     await start();
     const { ticket, asAgent } = await workspaceWithTicket();
 
-    const refused = await upload(`/api/tickets/${ticket.id}/attachments`, asAgent, log);
+    const refused = await attach(`/api/tickets/${ticket.id}/attachments`, asAgent, log);
 
     expect(refused.status).toBe(403);
     expect(refused.json.error).toEqual(
@@ -355,9 +368,9 @@ describe("an Agent's write rights", () => {
 
     expect(await ok("GET", `/api/documents/${document.id}/attachments`, reader)).toEqual([attachment]);
     expect((await download(attachment.id, reader)).status).toBe(200);
-    expect((await upload(`/api/documents/${document.id}/attachments`, reader, log)).json.error.code).toBe("read_only_token");
+    expect((await attach(`/api/documents/${document.id}/attachments`, reader, log)).json.error.code).toBe("read_only_token");
     expect((await call("DELETE", `/api/attachments/${attachment.id}`, reader)).json.error.code).toBe("read_only_token");
-    expect((await upload(`/api/tickets/${ticket.id}/attachments`, reader, log)).status).toBe(403);
+    expect((await attach(`/api/tickets/${ticket.id}/attachments`, reader, log)).status).toBe(403);
   });
 });
 

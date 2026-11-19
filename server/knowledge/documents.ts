@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { forget } from "../attachments/attachments.js";
+import { forgetAttachments } from "../attachments/attachments.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -414,7 +414,7 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
     const attached = await tx.query<{ id: string }>("delete from attachments where document_id = $1 returning id", [
       document.id,
     ]);
-    afterCommit(tx, () => forget(context, attached.rows.map((row) => row.id)));
+    afterCommit(tx, () => forgetAttachments(context, attached.rows.map((row) => row.id)));
     await tx.query("delete from documents where id = $1", [document.id]);
     await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
   });

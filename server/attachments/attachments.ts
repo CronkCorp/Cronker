@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { Type, type Static } from "typebox";
+import { megabyte } from "../config.js";
 import type { Context } from "../context.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
@@ -65,20 +66,20 @@ interface FoundOwner extends Owner {
   workspaceId: string;
   /** The Ticket, and its Project, a Ticket or Comment Attachment shows with; none for a Document. */
   ticket: { id: string; projectId: string } | null;
-  /** The Project or Workspace page tree a Document Attachment shows with. */
-  documentId: string | null;
+  /** A Comment's author. */
+  author?: { kind: "user" | "agent"; id: string };
 }
 
 const ownerNames = { ticket: "Ticket", document: "Document", comment: "Comment" } as const;
 
 /** The Ticket, Document or Comment in the Viewer's view; refused as not found otherwise. */
-async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<FoundOwner & { actor?: { kind: string; id: string } }> {
+async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<FoundOwner> {
   const notFound = new ApiError(404, "not_found", `No such ${ownerNames[owner.kind]}.`);
   if (!isUuid(owner.id)) throw notFound;
   if (owner.kind === "ticket") {
     const ticket = await findTicketRow(db, viewer, owner.id);
     if (!ticket) throw ticketNotFound();
-    return { ...owner, workspaceId: ticket.workspaceId, ticket: { id: ticket.id, projectId: ticket.projectId }, documentId: null };
+    return { ...owner, workspaceId: ticket.workspaceId, ticket: { id: ticket.id, projectId: ticket.projectId } };
   }
   if (owner.kind === "document") {
     const view = inView(viewer, "documents.workspace_id", "$2");
@@ -87,13 +88,13 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
       [owner.id, view.value],
     );
     if (!rows[0]) throw notFound;
-    return { ...owner, workspaceId: rows[0].workspaceId, ticket: null, documentId: owner.id };
+    return { ...owner, workspaceId: rows[0].workspaceId, ticket: null };
   }
   const view = inView(viewer, "comments.workspace_id", "$2");
-  const { rows } = await db.query<{ workspaceId: string; ticketId: string; projectId: string; actor: { kind: string; id: string } }>(
+  const { rows } = await db.query<{ workspaceId: string; ticketId: string; projectId: string; author: FoundOwner["author"] }>(
     `select comments.workspace_id as "workspaceId", comments.ticket_id as "ticketId", tickets.project_id as "projectId",
        case when comments.actor_agent_id is null then json_build_object('kind', 'user', 'id', comments.actor_user_id)
-         else json_build_object('kind', 'agent', 'id', comments.actor_agent_id) end as actor
+         else json_build_object('kind', 'agent', 'id', comments.actor_agent_id) end as author
      from comments join tickets on tickets.id = comments.ticket_id
      where comments.id = $1 and ${view.sql}`,
     [owner.id, view.value],
@@ -104,20 +105,19 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
     ...owner,
     workspaceId: comment.workspaceId,
     ticket: { id: comment.ticketId, projectId: comment.projectId },
-    documentId: null,
-    actor: comment.actor,
+    author: comment.author,
   };
 }
 
 /**
- * Refuses a caller who may not change what's attached to the owner. Users may on any Ticket and Document, and on
- * their own Comments. Agents may on a Document, on their own Comments, and on a Ticket during their running Run on
- * it or while it is a Discovered Ticket they filed that waits for a User.
+ * Refuses a caller who may not attach to the owner. Users may to any Ticket and Document, and to their own
+ * Comments. Agents may to a Document, to their own Comments, and to a Ticket during their running Run on it or while
+ * it is a Discovered Ticket they filed that waits for a User.
  */
-async function checkMayWrite(tx: Tx, caller: Caller, owner: Awaited<ReturnType<typeof findOwner>>): Promise<void> {
-  if (owner.kind === "comment" && (owner.actor!.kind !== caller.kind || owner.actor!.id !== caller.id)) {
-    throw new ApiError(403, "not_comment_author", "Only a Comment's author changes what is attached to it.", {
-      rule: "An Actor attaches files to, and removes them from, only the Comments they wrote.",
+async function checkMayAttach(tx: Tx, caller: Caller, owner: FoundOwner): Promise<void> {
+  if (owner.kind === "comment" && (owner.author!.kind !== caller.kind || owner.author!.id !== caller.id)) {
+    throw new ApiError(403, "not_comment_author", "Only a Comment's author attaches files to it.", {
+      rule: "An Actor attaches files only to the Comments they wrote.",
       advice: "Write a Comment of your own and attach the file to it, or attach it to the Ticket during your Run on it.",
     });
   }
@@ -138,7 +138,6 @@ export function attachmentTooLarge(limitBytes: number): ApiError {
 
 /** A size as people read it: in MB or KB when it is a whole number of them, otherwise in bytes. */
 function describeSize(bytes: number): string {
-  const megabyte = 1024 * 1024;
   if (bytes % megabyte === 0) return `${bytes / megabyte} MB`;
   if (bytes % 1024 === 0) return `${bytes / 1024} KB`;
   return `${bytes} bytes`;
@@ -166,7 +165,7 @@ export async function addAttachment(
   try {
     return await transaction(db, async (tx) => {
       const found = await findOwner(tx, actor, owner);
-      await checkMayWrite(tx, actor, found);
+      await checkMayAttach(tx, actor, found);
       await attachments.put(id, file.bytes);
       await tx.query(
         `insert into attachments (id, workspace_id, ${ownerColumn[owner.kind]}, name, media_type, size, actor_user_id,
@@ -189,7 +188,7 @@ export async function addAttachment(
     });
   } catch (error) {
     // Nothing refers to bytes kept for a record that never committed.
-    await forget(context, [id]);
+    await forgetAttachments(context, [id]);
     throw error;
   }
 }
@@ -200,7 +199,7 @@ function publishChange({ live }: Context, tx: Tx, owner: FoundOwner): void {
     owner.workspaceId,
     owner.ticket
       ? { type: "attachments.changed", projectId: owner.ticket.projectId, ticketId: owner.ticket.id }
-      : { type: "attachments.changed", documentId: owner.documentId! },
+      : { type: "attachments.changed", documentId: owner.id },
   );
 }
 
@@ -253,28 +252,32 @@ export async function attachmentContent(
 ): Promise<{ attachment: Attachment; content: Readable }> {
   const attachment = await findAttachment(db, viewer, attachmentId);
   if (!attachment) throw attachmentNotFound();
-  return { attachment, content: attachments.get(attachment.id) };
+  const content = await attachments.get(attachment.id);
+  if (!content) throw new ApiError(404, "attachment_file_missing", `${attachment.name}'s file is missing from Cronk's storage.`);
+  return { attachment, content };
 }
 
 /**
- * Removes an Attachment, for a caller who may change what's attached to its Ticket, Document or Comment. An Agent
- * removes only the Attachments it added itself. Its bytes are forgotten once the removal commits.
+ * Removes an Attachment. Users remove any, so whatever an Agent attached can be taken down; an Agent removes only
+ * what it attached itself, to what it may still attach to. Its bytes are forgotten once the removal commits.
  */
 export async function removeAttachment(context: Context, actor: Caller, attachmentId: string): Promise<void> {
   await transaction(context.db, async (tx) => {
     const row = await findRow(tx, actor, attachmentId, { lock: true });
     if (!row) throw attachmentNotFound();
     const found = await findOwner(tx, actor, row.on);
-    await checkMayWrite(tx, actor, found);
-    if (actor.kind === "agent" && (row.actor.kind !== "agent" || row.actor.id !== actor.id)) {
-      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and removes only Attachments it added.`, {
-        rule: "An Agent removes only the Attachments it added itself, so it can't remove what others attached.",
-        advice: `Leave the Attachment as it is; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
-      });
+    if (actor.kind === "agent") {
+      if (row.actor.kind !== "agent" || row.actor.id !== actor.id) {
+        throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and removes only Attachments it added.`, {
+          rule: "An Agent removes only the Attachments it added itself, so it can't remove what others attached.",
+          advice: `Leave the Attachment as it is; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+        });
+      }
+      await checkMayAttach(tx, actor, found);
     }
     await tx.query("delete from attachments where id = $1", [row.id]);
     publishChange(context, tx, found);
-    afterCommit(tx, () => forget(context, [row.id]));
+    afterCommit(tx, () => forgetAttachments(context, [row.id]));
   });
 }
 
@@ -282,6 +285,6 @@ export async function removeAttachment(context: Context, actor: Caller, attachme
  * Forgets the bytes of Attachments whose records are gone. The removal has committed whatever happens here, so a
  * file that can't be deleted is left behind rather than failing it.
  */
-export async function forget({ attachments }: Context, ids: string[]): Promise<void> {
+export async function forgetAttachments({ attachments }: Context, ids: string[]): Promise<void> {
   await Promise.all(ids.map((id) => attachments.delete(id).catch(() => {})));
 }
