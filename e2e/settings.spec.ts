@@ -99,3 +99,26 @@ test("adding and removing a Repository says Saved.", async ({ page, cronk }) => 
   await expect(repositories.getByText("The Project lists no Repositories yet.")).toBeVisible();
   await expect(repositories.getByRole("status")).toHaveText("Saved.");
 });
+
+test("Workspace settings, Members and the GitHub page share the settings layout", async ({ page, cronk }) => {
+  const { workspace } = await signedIn(page, cronk);
+  const cookie = await signIn(cronk);
+  cronk.github.signedInAs = cronk.github.account("ada-gh");
+  await createGitHubApp(cronk, cookie);
+
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/settings`);
+  await expect(sections(page).getByRole("link")).toHaveText(["Name", "Lost Runs"]);
+  await page.getByLabel("Lost-Run threshold (minutes)").fill("45");
+  await page.getByRole("button", { name: "Save threshold" }).click();
+  await expect(page.getByRole("region", { name: "Lost Runs" }).getByRole("status")).toHaveText("Saved.");
+  await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/members`);
+  await expect(sections(page).getByRole("link")).toHaveText(["Add a member", "Members"]);
+  await page.getByLabel("Email").fill("bea@example.com");
+  await page.getByRole("button", { name: "Add by email" }).click();
+  await expect(sections(page).getByRole("link")).toHaveText(["Add a member", "Added, not joined yet", "Members"]);
+
+  await page.goto(`${cronk.url}/github`);
+  await expect(sections(page).getByRole("link")).toHaveText(["The App", "What the App needs", "Installations"]);
+});

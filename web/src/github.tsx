@@ -4,6 +4,7 @@ import { field, useSubmit } from "./forms.js";
 import { Centered, usePlace } from "./frame.js";
 import { Actions, Banner, Button, buttonClass, Field, FormError, PageHead, Panel } from "./ui/controls.js";
 import { returnAfterSignIn } from "./storage.js";
+import { SettingsLayout } from "./ui/settings.js";
 
 /** What the codes Cronk sends the browser back with mean, for whoever is signing in or creating the App. */
 const githubErrors: Record<string, string> = {
@@ -271,21 +272,29 @@ export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
       )}
       {app === undefined ? (
         <p className="muted">Loading…</p>
-      ) : app ? (
-        <>
-          <Panel title="The App" id="app">
-          <p>
-            This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, under the GitHub account {app.githubAccount}. People
-            sign in with GitHub through it, and Cronk reads the Pull Requests of the Repositories it's installed on.
-          </p>
-          </Panel>
-          {isAdmin && <AppChecklist />}
-          <Installations app={app} />
-        </>
       ) : (
-        <Panel title="The App" id="app" description="This installation has no GitHub App yet, so nobody can sign in with GitHub.">
-          {isAdmin ? <CreateAppForm submitLabel="Create GitHub App" /> : <p className="muted">An Admin can create it.</p>}
-        </Panel>
+        <SettingsLayout
+          sections={[
+            {
+              id: "app",
+              label: "The App",
+              children: app ? (
+                <Panel title="The App" id="app">
+                  <p>
+                    This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, under the GitHub account {app.githubAccount}. People
+                    sign in with GitHub through it, and Cronk reads the Pull Requests of the Repositories it's installed on.
+                  </p>
+                </Panel>
+              ) : (
+                <Panel title="The App" id="app" description="This installation has no GitHub App yet, so nobody can sign in with GitHub.">
+                  {isAdmin ? <CreateAppForm submitLabel="Create GitHub App" /> : <p className="muted">An Admin can create it.</p>}
+                </Panel>
+              ),
+            },
+            ...(app && isAdmin ? [{ id: "checklist", label: "What the App needs", children: <AppChecklist /> }] : []),
+            ...(app ? [{ id: "installations", label: "Installations", children: <Installations app={app} /> }] : []),
+          ]}
+        />
       )}
     </div>
   );

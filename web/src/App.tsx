@@ -27,6 +27,7 @@ import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
 import { Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved, workspaceCrumb } from "./ui/controls.js";
+import { SettingsLayout } from "./ui/settings.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 type Screen =
@@ -514,36 +515,54 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
     <div className="page page-settings">
       <PageHead crumbs={[workspaceCrumb(workspace)]} title="Settings" />
       <FormError error={failure} />
-      <Panel title="Name" id="workspace-name">
-        <form onSubmit={rename.onSubmit}>
-          <Field label="Workspace name">
-            <input name="name" required defaultValue={workspace.name} />
-          </Field>
-          <FormError error={rename.error} />
-          <Actions>
-            <Button type="submit" variant="primary" disabled={rename.busy}>
-              Rename
-            </Button>
-            <Saved shown={renamed} />
-          </Actions>
-        </form>
-      </Panel>
-      {settings && (
-        <Panel title="Lost Runs" id="lost-runs" description="A Run nothing has named for this long is lost, and waits in its Assignee's Inbox for Retry.">
-          <form onSubmit={changeSettings.onSubmit}>
-            <Field label="Lost-Run threshold (minutes)">
-              <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
-            </Field>
-            <FormError error={changeSettings.error} />
-            <Actions>
-              <Button type="submit" variant="primary" disabled={changeSettings.busy}>
-                Save threshold
-              </Button>
-              <Saved shown={savedThreshold} />
-            </Actions>
-          </form>
-        </Panel>
-      )}
+      <SettingsLayout
+        sections={[
+          {
+            id: "name",
+            label: "Name",
+            children: (
+              <Panel title="Name" id="workspace-name">
+                <form onSubmit={rename.onSubmit}>
+                  <Field label="Workspace name">
+                    <input name="name" required defaultValue={workspace.name} />
+                  </Field>
+                  <FormError error={rename.error} />
+                  <Actions>
+                    <Button type="submit" variant="primary" disabled={rename.busy}>
+                      Rename
+                    </Button>
+                    <Saved shown={renamed} />
+                  </Actions>
+                </form>
+              </Panel>
+            ),
+          },
+          ...(settings
+            ? [
+                {
+                  id: "lost-runs",
+                  label: "Lost Runs",
+                  children: (
+                    <Panel title="Lost Runs" id="lost-runs" description="A Run nothing has named for this long is lost, and waits in its Assignee's Inbox for Retry.">
+                      <form onSubmit={changeSettings.onSubmit}>
+                        <Field label="Lost-Run threshold (minutes)">
+                          <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
+                        </Field>
+                        <FormError error={changeSettings.error} />
+                        <Actions>
+                          <Button type="submit" variant="primary" disabled={changeSettings.busy}>
+                            Save threshold
+                          </Button>
+                          <Saved shown={savedThreshold} />
+                        </Actions>
+                      </form>
+                    </Panel>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
     </div>
   );
 }
@@ -605,129 +624,155 @@ function Members({
   return (
     <div className="page page-settings">
       <PageHead crumbs={[workspaceCrumb(workspace)]} title="Members" />
-      {workspace.isAdmin && (
-        <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
-          <div className="form-columns">
-            <form onSubmit={add.onSubmit}>
-              <Field label="Email">
-                <input name="email" type="email" required autoComplete="off" />
-              </Field>
-              <FormError error={add.error} />
-              <Actions>
-                <Button type="submit" variant="primary" disabled={add.busy}>
-                  Add by email
-                </Button>
-              </Actions>
-            </form>
-            <form onSubmit={addByGitHub.onSubmit}>
-              <Field label="GitHub login">
-                <input name="login" required autoComplete="off" />
-              </Field>
-              <FormError error={addByGitHub.error} />
-              <Actions>
-                <Button type="submit" variant="primary" disabled={addByGitHub.busy}>
-                  Add by GitHub login
-                </Button>
-              </Actions>
-            </form>
-          </div>
-          {notice}
-        </Panel>
-      )}
       <FormError error={error} />
-      {pending.length > 0 && (
-        <Panel title="Added, not joined yet" id="pending-adds" className="panel-table">
-          <table aria-labelledby="pending-adds-heading">
-            <tbody>
-              {pending.map((add) => (
-                <tr key={`${add.user.id} ${add.addedVia}`}>
-                  <td>
-                    <span className="actor">
-                      <Avatar actor={{ kind: "user", name: nameOf(add.user) }} />
-                      {nameOf(add.user)}
-                    </span>
-                  </td>
-                  <td className="muted small">
-                    {add.addedVia === "email"
-                      ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
-                      : "by GitHub login, joins at their next sign-in"}
-                  </td>
-                  <td className="cell-actions">
-                    <Button
-                      size="small"
-                      onClick={() =>
-                        act(async () => {
-                          await api.cancelPendingAdd(workspace.id, add.user.id);
-                          refresh();
-                        })
-                      }
-                    >
-                      Cancel add
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
-      )}
-      <Panel title="Members" id="members" className="panel-table">
-        {members === null ? (
-          <p className="muted">Loading…</p>
-        ) : (
-          <table aria-label="Members">
-            <tbody>
-              {members.map((member) => (
-                <tr key={member.user.id}>
-                  <td>
-                    <span className="actor">
-                      <Avatar actor={{ kind: "user", name: nameOf(member.user) }} />
-                      <span>
-                        {nameOf(member.user)}
-                        {member.user.githubLogin && member.user.email && <span className="muted"> @{member.user.githubLogin}</span>}
-                        {member.user.id === user.id && <span className="muted"> (you)</span>}
-                      </span>
-                    </span>
-                  </td>
-                  <td className="muted small">{member.isAdmin ? "Admin" : "Member"}</td>
-                  {workspace.isAdmin && (
-                    <td className="cell-actions">
-                      <Button
-                        size="small"
-                        onClick={() =>
-                          act(async () => {
-                            await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
-                            refresh();
-                            if (member.user.id === user.id) onChanged();
-                          })
-                        }
-                      >
-                        {member.isAdmin ? "Remove Admin" : "Make Admin"}
-                      </Button>
-                      <Menu label={`More for ${nameOf(member.user)}`}>
-                        <MenuItem
-                          onSelect={() =>
-                            void act(async () => {
-                              const link = await api.resetLink(workspace.id, member.user.id);
-                              setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
-                            })
-                          }
-                        >
-                          Reset link
-                        </MenuItem>
-                        <MenuItem tone="danger" onSelect={() => setRemoving(member)}>
-                          Remove from Workspace
-                        </MenuItem>
-                      </Menu>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {!workspace.isAdmin && notice}
-      </Panel>
+      <SettingsLayout
+        sections={[
+          ...(workspace.isAdmin
+            ? [
+                {
+                  id: "add-member",
+                  label: "Add a member",
+                  children: (
+                    <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
+                      <div className="form-columns">
+                        <form onSubmit={add.onSubmit}>
+                          <Field label="Email">
+                            <input name="email" type="email" required autoComplete="off" />
+                          </Field>
+                          <FormError error={add.error} />
+                          <Actions>
+                            <Button type="submit" variant="primary" disabled={add.busy}>
+                              Add by email
+                            </Button>
+                          </Actions>
+                        </form>
+                        <form onSubmit={addByGitHub.onSubmit}>
+                          <Field label="GitHub login">
+                            <input name="login" required autoComplete="off" />
+                          </Field>
+                          <FormError error={addByGitHub.error} />
+                          <Actions>
+                            <Button type="submit" variant="primary" disabled={addByGitHub.busy}>
+                              Add by GitHub login
+                            </Button>
+                          </Actions>
+                        </form>
+                      </div>
+                      {notice}
+                    </Panel>
+                  ),
+                },
+              ]
+            : []),
+          ...(pending.length > 0
+            ? [
+                {
+                  id: "pending-adds",
+                  label: "Added, not joined yet",
+                  children: (
+                    <Panel title="Added, not joined yet" id="pending-adds" className="panel-table">
+                      <table aria-labelledby="pending-adds-heading">
+                        <tbody>
+                          {pending.map((add) => (
+                            <tr key={`${add.user.id} ${add.addedVia}`}>
+                              <td>
+                                <span className="actor">
+                                  <Avatar actor={{ kind: "user", name: nameOf(add.user) }} />
+                                  {nameOf(add.user)}
+                                </span>
+                              </td>
+                              <td className="muted small">
+                                {add.addedVia === "email"
+                                  ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
+                                  : "by GitHub login, joins at their next sign-in"}
+                              </td>
+                              <td className="cell-actions">
+                                <Button
+                                  size="small"
+                                  onClick={() =>
+                                    act(async () => {
+                                      await api.cancelPendingAdd(workspace.id, add.user.id);
+                                      refresh();
+                                    })
+                                  }
+                                >
+                                  Cancel add
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </Panel>
+                  ),
+                },
+              ]
+            : []),
+          {
+            id: "members",
+            label: "Members",
+            children: (
+            <Panel title="Members" id="members" className="panel-table">
+              {members === null ? (
+                <p className="muted">Loading…</p>
+              ) : (
+                <table aria-label="Members">
+                  <tbody>
+                    {members.map((member) => (
+                      <tr key={member.user.id}>
+                        <td>
+                          <span className="actor">
+                            <Avatar actor={{ kind: "user", name: nameOf(member.user) }} />
+                            <span>
+                              {nameOf(member.user)}
+                              {member.user.githubLogin && member.user.email && <span className="muted"> @{member.user.githubLogin}</span>}
+                              {member.user.id === user.id && <span className="muted"> (you)</span>}
+                            </span>
+                          </span>
+                        </td>
+                        <td className="muted small">{member.isAdmin ? "Admin" : "Member"}</td>
+                        {workspace.isAdmin && (
+                          <td className="cell-actions">
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                act(async () => {
+                                  await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
+                                  refresh();
+                                  if (member.user.id === user.id) onChanged();
+                                })
+                              }
+                            >
+                              {member.isAdmin ? "Remove Admin" : "Make Admin"}
+                            </Button>
+                            <Menu label={`More for ${nameOf(member.user)}`}>
+                              <MenuItem
+                                onSelect={() =>
+                                  void act(async () => {
+                                    const link = await api.resetLink(workspace.id, member.user.id);
+                                    setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
+                                  })
+                                }
+                              >
+                                Reset link
+                              </MenuItem>
+                              <MenuItem tone="danger" onSelect={() => setRemoving(member)}>
+                                Remove from Workspace
+                              </MenuItem>
+                            </Menu>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {!workspace.isAdmin && notice}
+            </Panel>
+            ),
+          },
+        ]}
+      />
       {removing && (
         <ConfirmDialog
           open
