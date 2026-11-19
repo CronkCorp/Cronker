@@ -295,6 +295,7 @@ export function TicketScreen({
             runs={runs}
             comments={comments}
             reports={reports}
+            pullRequests={pullRequests}
             onAdded={addComment}
             onChanged={loadComments}
           />
@@ -1084,6 +1085,99 @@ function described(change: Change): string {
   return `changed ${fieldNames[field]} from ${shown(change, change.from)} to ${shown(change, change.to)}`;
 }
 
+/**
+ * Cronk's Changes recorded at the same moment as one that says why: a skipped Step's move on out of its Status,
+ * and a merge's move to a Done Status with the Verification it completed the Ticket as.
+ */
+function explainedBy(change: Change, changes: Change[], project: Project): Change[] {
+  if (change.actor.kind !== "cronk") return [];
+  const cronk = changes.filter((c) => c.actor.kind === "cronk" && c.at === change.at);
+  if (change.field === "stepSkipped") {
+    const skipped = (change.to as StepSkipped).status.id;
+    const moved = cronk.find((c) => c.field === "status" && (c.from as { id: string }).id === skipped);
+    return moved ? [moved] : [];
+  }
+  if (change.field !== "merged") return [];
+  const kindOf = (value: unknown) => project.statuses.find((s) => s.id === (value as { id: string }).id)?.kind;
+  return [
+    cronk.find((c) => c.field === "status" && kindOf(c.to) === "done"),
+    cronk.find((c) => c.field === "verification"),
+  ].filter((c) => c !== undefined);
+}
+
+/** The ids of Cronk's Changes that a merge or a skipped Step explains, shown in its line instead of their own. */
+function explainedByCronk(changes: Change[], project: Project): Set<string> {
+  return new Set(changes.flatMap((change) => explainedBy(change, changes, project)).map((c) => c.id));
+}
+
+/** How long after Cronk sends a Ticket back it records the move, at most. */
+const sendBackWindow = 5_000;
+
+/**
+ * A Change Cronk made, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
+ * where it moved on to, and a move of its own the failing check or requested changes that sent the Ticket back.
+ */
+function describedByCronk(change: Change, changes: Change[], project: Project, pullRequests: PullRequest[]): ReactNode {
+  const related = explainedBy(change, changes, project);
+  const moved = related.find((c) => c.field === "status");
+  if (change.field === "merged") {
+    const verification = related.find((c) => c.field === "verification")?.to;
+    return (
+      <>
+        {described(change)}
+        {moved && <>, moving it to {shown(moved, moved.to)}</>}
+        {verification === "verified" ? ", Verified by that merge" : verification === "unverified" ? " as Unverified" : ""}
+      </>
+    );
+  }
+  if (change.field === "stepSkipped") {
+    return (
+      <>
+        {described(change)}
+        {moved && <> to {shown(moved, moved.to)}</>}
+      </>
+    );
+  }
+  if (change.field !== "status") return described(change);
+  // Cronk moves a Ticket on its own only to send it back, as a failing check or requested changes do.
+  const at = new Date(change.at).getTime();
+  const cause = pullRequests.find(
+    (pr) => pr.sentBack && Math.abs(new Date(pr.sentBack.at).getTime() - at) <= sendBackWindow,
+  );
+  const failure = cause?.sentBack;
+  return (
+    <>
+      sent it back from {shown(change, change.from)} to {shown(change, change.to)}
+      {cause && failure && (
+        <>
+          :{" "}
+          {failure.kind === "check" ? (
+            <>
+              the check <LinkOut url={failure.url}>{failure.name}</LinkOut> failed on{" "}
+            </>
+          ) : (
+            <>
+              {failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} <LinkOut url={failure.url}>requested changes</LinkOut> on{" "}
+            </>
+          )}
+          <LinkOut url={cause.url}>{pullRequestName(cause)}</LinkOut>
+        </>
+      )}
+    </>
+  );
+}
+
+/** A link to GitHub when there is one, else the text alone. */
+function LinkOut({ url, children }: { url: string | null; children: ReactNode }) {
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  ) : (
+    <>{children}</>
+  );
+}
+
 function shown(change: Change, value: unknown): string {
   if (value === null || (Array.isArray(value) && value.length === 0)) return "none";
   if (change.field === "priority") return priorityLabel(value as Priority);
@@ -1116,6 +1210,7 @@ function Timeline({
   runs,
   comments,
   reports,
+  pullRequests,
   onAdded,
   onChanged,
 }: {
@@ -1128,12 +1223,17 @@ function Timeline({
   runs: Run[];
   comments: Comment[];
   reports: Report[];
+  /** The Ticket's Pull Requests, whose send-backs name why Cronk sent the Ticket back. */
+  pullRequests: PullRequest[];
   onAdded: (comment: Comment) => void;
   /** Something attached to a Comment changed. */
   onChanged: () => void;
 }) {
+  const explained = explainedByCronk(changes, project);
   const entries: Entry[] = [
-    ...changes.map((change) => ({ at: change.at, key: `change:${change.id}`, kind: "change" as const, change })),
+    ...changes
+      .filter((change) => !explained.has(change.id))
+      .map((change) => ({ at: change.at, key: `change:${change.id}`, kind: "change" as const, change })),
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, kind: "run" as const, run })),
     ...comments.filter((c) => c.replyToId === null).map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
@@ -1176,7 +1276,8 @@ function Timeline({
             <span className="ring" />
           </span>
           <p className="entry-line">
-            <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} /> {described(change)}
+            <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
+            {change.actor.kind === "cronk" ? describedByCronk(change, changes, project, pullRequests) : described(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,

@@ -40,7 +40,7 @@ async function inReview(cronk: StartedCronk) {
   return { ticket, deliver, pullRequestEvent };
 }
 
-test("a failing check's send-back shows as Cronk's Comment labelled Sent back, linking the check", async ({ page, cronk }) => {
+test("a failing check's send-back shows as Cronk's Comment labelled Sent back, linking the check, and Cronk's move names it", async ({ page, cronk }) => {
   const { ticket, deliver } = await inReview(cronk);
   await deliver("check_run", {
     action: "completed",
@@ -53,4 +53,8 @@ test("a failing check's send-back shows as Cronk's Comment labelled Sent back, l
   await expect(sentBack.getByText("Sent back", { exact: true })).toBeVisible();
   await expect(sentBack.getByRole("link", { name: "test" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/10");
   await expect(sentBack.getByRole("link", { name: "cronkcorp/cronker#212" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/pull/212");
+
+  const move = page.getByRole("region", { name: "Timeline" }).getByRole("listitem").filter({ hasText: "Cronk sent it back" });
+  await expect(move).toHaveText(/^Cronk sent it back from In Review to Implement: the check test failed on cronkcorp\/cronker#212 \d\d:\d\d$/);
+  await expect(move.getByRole("link", { name: "test" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/10");
 });
