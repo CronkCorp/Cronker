@@ -4,6 +4,7 @@ import {
   nameOf,
   priorities,
   type Agent,
+  type Attachment,
   type Change,
   type Comment,
   labelRuleShown,
@@ -22,6 +23,7 @@ import {
   type User,
   type Workspace,
 } from "./api.js";
+import { Attachments } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
@@ -47,6 +49,7 @@ export function TicketScreen({
   const [members, setMembers] = useState<Member[]>([]);
   const [comments, setComments] = useState<Comment[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -61,6 +64,7 @@ export function TicketScreen({
   const latestProject = useLatest();
   const latestComments = useLatest();
   const latestReports = useLatest();
+  const latestAttachments = useLatest();
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
   const latestRelations = useLatest();
@@ -70,6 +74,14 @@ export function TicketScreen({
     latestTimeline(api.timeline(ticketId), setTimeline);
     latestRuns(api.runs(ticketId), setRuns);
   }, [ticketId, latestTimeline, latestRuns]);
+  const loadAttachments = useCallback(
+    () => latestAttachments(api.attachments({ kind: "ticket", id: ticketId }), setAttachments, fail),
+    [ticketId, latestAttachments],
+  );
+  const loadComments = useCallback(
+    () => latestComments(api.comments(ticketId), setComments, fail),
+    [ticketId, latestComments],
+  );
   const loadRelations = useCallback(
     () => latestRelations(api.relations(ticketId), setRelations, fail),
     [ticketId, latestRelations],
@@ -95,8 +107,9 @@ export function TicketScreen({
     latestReports(api.reports(ticketId), setReports, fail);
     latestTimeline(api.timeline(ticketId), setTimeline, fail);
     latestRuns(api.runs(ticketId), setRuns, fail);
+    loadAttachments();
     loadRelations();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadRelations]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadRelations]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -109,6 +122,11 @@ export function TicketScreen({
     }
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
     if (all || (thisTicket && event.type === "report.added")) latestReports(api.reports(ticketId), setReports, fail);
+    // A Comment's Attachments come with the Comments.
+    if (all || (thisTicket && event.type === "attachments.changed")) {
+      loadAttachments();
+      loadComments();
+    }
     if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
       latestProject(api.project(project.id), setProject, fail);
     }
@@ -171,6 +189,12 @@ export function TicketScreen({
               <p className="muted">No description.</p>
             )}
           </section>
+          <Attachments
+            owner={{ kind: "ticket", id: ticket.id }}
+            attachments={attachments}
+            label="Attachments"
+            onChanged={loadAttachments}
+          />
           <Reports reports={reports} />
           <Relations
             ticket={ticket}
@@ -181,7 +205,7 @@ export function TicketScreen({
               loadTimeline();
             }}
           />
-          <Comments ticket={ticket} comments={comments} onAdded={addComment} />
+          <Comments ticket={ticket} user={user} comments={comments} onAdded={addComment} onChanged={loadComments} />
           <Timeline changes={timeline} runs={runs} />
         </div>
         <Fields
@@ -629,12 +653,17 @@ function When({ at }: { at: string }) {
 
 function Comments({
   ticket,
+  user,
   comments,
   onAdded,
+  onChanged,
 }: {
   ticket: Ticket;
+  user: User;
   comments: Comment[];
   onAdded: (comment: Comment) => void;
+  /** Something attached to a Comment changed. */
+  onChanged: () => void;
 }) {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const byId = new Map(comments.map((c) => [c.id, c]));
@@ -664,6 +693,14 @@ function Comments({
               {comment.questionId && <span className="badge">Question</span>}
             </div>
             <Markdown text={comment.body} mentions={comment.mentions} />
+            <Attachments
+              owner={{ kind: "comment", id: comment.id }}
+              attachments={comment.attachments}
+              label={`Attachments of ${comment.actor.name}'s Comment`}
+              // Files are attached to a Comment by its author.
+              canAttach={comment.actor.kind === "user" && comment.actor.id === user.id}
+              onChanged={onChanged}
+            />
             {replyingTo === comment.id ? (
               <CommentForm label="Reply" button="Send reply" onSend={(body) => send(body, comment.id)} />
             ) : (

@@ -280,6 +280,29 @@ export interface Comment {
   mentions: Mention[];
   /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
   questionId: string | null;
+  attachments: Attachment[];
+}
+
+/** What an Attachment is attached to. */
+export interface AttachmentOwner {
+  kind: "ticket" | "document" | "comment";
+  id: string;
+}
+
+/** A plain file attached to a Ticket, Document or Comment. Markdown refers to it as `attachment:<id>`. */
+export interface Attachment {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  on: AttachmentOwner;
+  actor: Actor;
+  createdAt: string;
+}
+
+/** Where an Attachment downloads from, which Markdown's `attachment:<id>` resolves to. */
+export function attachmentUrl(id: string): string {
+  return `/api/attachments/${encodeURIComponent(id)}/content`;
 }
 
 /** Markdown a Run wrote on its Ticket. */
@@ -482,10 +505,16 @@ export interface ConnectRequest {
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  // A file is sent as itself, with its media type; anything else as JSON.
+  const file = body instanceof File ? body : undefined;
   const response = await fetch(path, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: file
+      ? { "content-type": file.type || "application/octet-stream" }
+      : body === undefined
+        ? {}
+        : { "content-type": "application/json" },
+    body: file ?? (body === undefined ? undefined : JSON.stringify(body)),
     credentials: "same-origin",
   });
   if (response.status === 204) return undefined as T;
@@ -620,6 +649,10 @@ export const api = {
   version: (documentId: string, number: number) => call<VersionWithBody>("GET", `${doc(documentId)}/versions/${number}`),
   compareVersions: (documentId: string, from: number, to: number) =>
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
+  attachments: (owner: AttachmentOwner) => call<Attachment[]>("GET", attachmentsPath(owner)),
+  attach: (owner: AttachmentOwner, file: File) =>
+    call<Attachment>("POST", `${attachmentsPath(owner)}?name=${encodeURIComponent(file.name)}`, file),
+  removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
@@ -627,6 +660,10 @@ function treePath(tree: Tree) {
   return tree.kind === "project"
     ? `/api/projects/${encodeURIComponent(tree.id)}/documents`
     : `${ws(tree.id)}/documents`;
+}
+
+function attachmentsPath(owner: AttachmentOwner) {
+  return `/api/${owner.kind}s/${encodeURIComponent(owner.id)}/attachments`;
 }
 
 function doc(id: string) {

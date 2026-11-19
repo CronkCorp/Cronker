@@ -1,5 +1,5 @@
-import ReactMarkdown, { type Components } from "react-markdown";
-import type { Mention } from "./api.js";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
+import { attachmentUrl, type Mention } from "./api.js";
 import { Link } from "./router.js";
 
 /** A minimal view of the Markdown syntax tree, enough to find text outside links and code. */
@@ -41,9 +41,19 @@ function linkMentions(mentions: Mention[]) {
   };
 }
 
+/** Resolves `attachment:<id>` to where the Attachment downloads from; other URLs as react-markdown allows them. */
+function urlTransform(url: string): string {
+  const attachment = /^attachment:([0-9a-f-]{36})$/i.exec(url.trim());
+  return attachment ? attachmentUrl(attachment[1]!) : defaultUrlTransform(url);
+}
+
 const components: Components = {
   a: ({ href, children }) =>
-    href?.startsWith("/") ? (
+    href?.startsWith("/api/") ? (
+      <a href={href} download>
+        {children}
+      </a>
+    ) : href?.startsWith("/") ? (
       <Link to={href}>{children}</Link>
     ) : (
       <a href={href} target="_blank" rel="noreferrer">
@@ -52,11 +62,11 @@ const components: Components = {
     ),
 };
 
-/** Markdown as written by Users, without raw HTML, with Ticket keys as links. */
+/** Markdown as written by Users, without raw HTML, with Ticket keys as links and `attachment:` references resolved. */
 export function Markdown({ text, mentions }: { text: string; mentions: Mention[] }) {
   return (
     <div className="markdown">
-      <ReactMarkdown remarkPlugins={[linkMentions(mentions)]} components={components}>
+      <ReactMarkdown remarkPlugins={[linkMentions(mentions)]} components={components} urlTransform={urlTransform}>
         {text}
       </ReactMarkdown>
     </div>
