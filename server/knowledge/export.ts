@@ -31,24 +31,29 @@ function glossaryFile(terms: Term[]): ExportedFile {
   return { path: "GLOSSARY.md", content: ["# Glossary", ...entries].join("\n\n") + "\n" };
 }
 
-/** A Decision's file name: its number in four digits, then its title as lowercase ASCII words joined by hyphens. */
-function decisionFileName(decision: Pick<Decision, "number" | "title">): string {
-  const slug = decision.title
+/** Text as its ASCII letters and digits, accents dropped, each run of anything else one hyphen, none at either end. */
+export function hyphenate(text: string): string {
+  return text
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)
-    .replace(/-+$/, "");
-  return `${String(decision.number).padStart(4, "0")}-${slug || "decision"}.md`;
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** A Decision's number in four digits, as its file name starts. */
+const fourDigits = (decision: Pick<Decision, "number">) => String(decision.number).padStart(4, "0");
+
+/** A Decision's file name: its number in four digits, then its title as lowercase ASCII words joined by hyphens. */
+function decisionFileName(decision: Pick<Decision, "number" | "title">): string {
+  const slug = hyphenate(decision.title.toLowerCase()).slice(0, 60).replace(/-+$/, "");
+  return `${fourDigits(decision)}-${slug || "decision"}.md`;
 }
 
 /** A Decision as Markdown: its title, its status, naming the Decision replacing it while superseded, then its body. */
 function decisionFile(decision: Decision, byId: Map<string, Decision>): ExportedFile {
   const replacement = decision.supersededById ? byId.get(decision.supersededById) : undefined;
   const status = replacement
-    ? `superseded by [${String(replacement.number).padStart(4, "0")} ${replacement.title}](${decisionFileName(replacement)})`
+    ? `superseded by [${fourDigits(replacement)} ${replacement.title}](${decisionFileName(replacement)})`
     : decision.status;
   const parts = [`# ${decision.title}`, `Status: ${status}`];
   if (decision.body.trim()) parts.push(decision.body.trim());

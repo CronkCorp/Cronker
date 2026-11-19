@@ -1,9 +1,10 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
+import { disposition } from "../http/disposition.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
-import { Export, exportOf } from "./export.js";
+import { Export, exportOf, hyphenate } from "./export.js";
 import { knowledgePlaces } from "./places.js";
 import { zip } from "./zip.js";
 
@@ -51,10 +52,9 @@ export function exportRoutes(context: Context): FastifyPluginAsyncTypebox {
         async (request, reply) => {
           const found = await place.find(request, await requireCaller(context, request));
           const { files } = await exportOf(db, found);
-          const name = found.label.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "export";
           return reply
             .type("application/zip")
-            .header("content-disposition", `attachment; filename="${name}-knowledge.zip"`)
+            .header("content-disposition", disposition(`${hyphenate(found.label) || "export"}-knowledge.zip`))
             .send(zip(files));
         },
       );

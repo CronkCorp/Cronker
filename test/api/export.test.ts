@@ -141,7 +141,9 @@ describe("Exporting knowledge", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/zip");
-    expect(response.headers.get("content-disposition")).toBe('attachment; filename="CRONK-knowledge.zip"');
+    expect(response.headers.get("content-disposition")).toBe(
+      "attachment; filename=\"CRONK-knowledge.zip\"; filename*=UTF-8''CRONK-knowledge.zip",
+    );
     expect(unzip(Buffer.from(await response.arrayBuffer()))).toEqual(
       new Map([
         ["GLOSSARY.md", "# Glossary\n\n**Board**:\nThe Statuses as columns.\n"],
@@ -157,7 +159,9 @@ describe("Exporting knowledge", () => {
     const response = await cronk.request("GET", `/api/workspaces/${workspace.id}/export.zip`, ada);
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-disposition")).toBe('attachment; filename="Ada-s-Workspace-knowledge.zip"');
+    expect(response.headers.get("content-disposition")).toBe(
+      "attachment; filename=\"Ada-s-Workspace-knowledge.zip\"; filename*=UTF-8''Ada-s-Workspace-knowledge.zip",
+    );
     expect(unzip(Buffer.from(await response.arrayBuffer()))).toEqual(
       new Map([["GLOSSARY.md", "# Glossary\n\n**Ticket**:\nA unit of work.\n"]]),
     );
