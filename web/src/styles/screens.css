@@ -403,12 +403,12 @@
 .side-form input {
   font-size: 12px;
 }
+/* A Decision's side panel: each label over its value, which keeps its own width, so a status stays a pill. */
 .side-row {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 32px;
+  justify-items: start;
+  gap: 4px;
+  min-width: 0;
 }
 .fields {
   gap: 0;

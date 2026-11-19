@@ -218,13 +218,13 @@ export function DecisionScreen({
         crumbs={knowledgeCrumbs(workspace, project, <Link to={listPage(place)}>Decisions</Link>)}
         title={decision.title}
         large
-        meta={
+        eyebrow={
           <>
             <span className="mono">{numbered(decision.number)}</span>
             <DecisionStatusPill status={decision.status} />
-            <VersionMeta version={decision.version} />
           </>
         }
+        meta={<VersionMeta version={decision.version} />}
         actions={
           !editing && (
             <Button variant="primary" onClick={() => setEditing(true)}>
