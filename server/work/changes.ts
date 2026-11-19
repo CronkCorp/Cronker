@@ -1,12 +1,9 @@
 import { Type, type Static } from "typebox";
 import type { Db, Tx } from "../db.js";
-import { Actor, actorColumn } from "./actors.js";
+import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
 
 /** Who made a Change: a User, an Agent, or Cronk itself, such as when it moves a Ticket on past a skipped Step. */
-export const ChangedBy = Type.Union([
-  Actor,
-  Type.Object({ kind: Type.Literal("cronk"), name: Type.Literal("Cronk") }, { description: "Cronk itself." }),
-]);
+export const ChangedBy = ActorOrCronk;
 
 /**
  * What a Change changed. `created` marks the Ticket's creation. `parent` is this Ticket's parent; `subTicket`,
@@ -96,8 +93,7 @@ const json = (value: unknown) => (value === null ? null : JSON.stringify(value))
 export async function changesOf(db: Db, ticketId: string): Promise<Change[]> {
   const { rows } = await db.query<Omit<Change, "at"> & { at: Date }>(
     `select changes.id,
-       case when users.id is null and agents.id is null then json_build_object('kind', 'cronk', 'name', 'Cronk')
-         else ${actorColumn("users", "agents")} end as actor,
+       ${actorOrCronkColumn("users", "agents")} as actor,
        changes.at, changes.field,
        changes.from_value as from, changes.to_value as to, changes.run_id as "runId"
      from changes left join users on users.id = changes.actor_user_id

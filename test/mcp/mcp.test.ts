@@ -169,8 +169,71 @@ describe("MCP with an Agent token", () => {
         checks: [{ name: "test", state: "failed", url: null }],
         mergedBy: null,
         producingStep: null,
+        sentBack: null,
       },
     ]);
+  });
+
+  test("an Agent reads a Ticket a failing check sent back, with Cronk's Comment and what sent it back", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+    const cronker = installation.repositories[0]!;
+    await post(cookie, `/api/projects/${ticket.projectId}/repositories`, { id: cronker.id });
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    // Code review is skipped, so finishing Implement moves it to In Review.
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") },
+    });
+    const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
+    await cronk.github.deliver(app, "pull_request", {
+      action: "opened",
+      installation: { id: installation.id },
+      repository,
+      pull_request: {
+        id: 501,
+        number: 7,
+        title: "CRONK-1: read me",
+        state: "open",
+        draft: false,
+        merged: false,
+        html_url: "https://github.com/cronkcorp/cronker/pull/7",
+        head: { ref: "cronk-1", sha: "c1" },
+        updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    const client = await connect(secret);
+    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
+    expect((await call(client, "finish", { run: run.id, outcome: "done" })).isError).toBe(false);
+    await cronk.github.deliver(app, "check_run", {
+      action: "completed",
+      installation: { id: installation.id },
+      repository,
+      check_run: { id: 10, name: "test", head_sha: "c1", status: "completed", conclusion: "failure", html_url: "https://github.com/cronkcorp/cronker/runs/10" },
+    });
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.comments.at(-1)).toEqual(
+      expect.objectContaining({
+        actor: { kind: "cronk", name: "Cronk" },
+        body:
+          "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed on " +
+          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
+      }),
+    );
+    expect(json.pullRequests[0].sentBack).toEqual({
+      kind: "check",
+      name: "test",
+      sha: "c1",
+      url: "https://github.com/cronkcorp/cronker/runs/10",
+      at: "2026-01-01T09:00:00.000Z",
+    });
   });
 
   test("an Agent reads a Ticket with its Linked Documents", async () => {

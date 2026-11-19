@@ -21,3 +21,32 @@ export function useSubmit(action: (form: FormData, element: HTMLFormElement) => 
 }
 
 export const field = (form: FormData, name: string) => String(form.get(name) ?? "");
+
+/**
+ * Runs a settings page's saves one at a time, tracking whether one is busy, the error it ended with,
+ * and whether the last one saved, for "Saved." beside the buttons.
+ */
+export function useSave() {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const save = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await action();
+      setSaved(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** Forgets the last save's error and "Saved.", as when its draft is thrown away. */
+  const clear = () => {
+    setError(null);
+    setSaved(false);
+  };
+  return { error, busy, saved, save, clear };
+}

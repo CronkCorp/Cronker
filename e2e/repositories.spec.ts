@@ -27,7 +27,7 @@ test("add a Repository the App is installed on to a Project, turn Pull Request a
   await expect(repositories.getByLabel("Repository to add").getByRole("option")).toHaveText(["cronkcorp/website"]);
 
   // Pull Request automation is on until turned off, which sticks.
-  const automation = page.getByRole("region", { name: "Pull Request automation" }).getByLabel("Merges complete their Tickets");
+  const automation = page.getByRole("region", { name: "Pull Request automation" }).getByLabel("Merges complete their Tickets, and failures send them back");
   await expect(automation).toBeChecked();
   await automation.click();
   await expect(automation).not.toBeChecked();
