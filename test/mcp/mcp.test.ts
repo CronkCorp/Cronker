@@ -80,14 +80,19 @@ describe("MCP with an Agent token", () => {
       "compare_versions",
       "create_document",
       "create_sub_ticket",
+      "create_term",
       "edit_document",
+      "edit_term",
       "edit_ticket",
       "file_ticket",
       "finish",
       "list_document_versions",
       "list_documents",
+      "list_term_versions",
       "list_tickets",
       "read_document",
+      "read_glossary",
+      "read_term",
       "read_ticket",
       "write_report",
     ]);
@@ -302,6 +307,44 @@ describe("MCP with an Agent token", () => {
     ]);
     const read = await (await cronk.request("GET", `/api/documents/${setup.json.id}`, { cookie })).json();
     expect(read.title).toBe("Setting up");
+  });
+
+  test("an Agent creates, edits and reads Terms of a Project and the Workspace, and reads a Project's glossary", async () => {
+    const { cookie, agent, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const workspaceRun = await call(client, "create_term", { name: "Run", definition: "One agent execution.", avoid: ["job"] });
+    const ticket = await call(client, "create_term", { name: "Ticket", definition: "A unit of work." });
+    const projectRun = await call(client, "create_term", { project: "cronk", name: "run", definition: "Here: a session." });
+    expect([workspaceRun.isError, ticket.isError, projectRun.isError]).toEqual([false, false, false]);
+    expect(workspaceRun.json).toEqual(expect.objectContaining({ projectId: null, name: "Run", avoid: ["job"] }));
+    const taken = await call(client, "create_term", { project: "CRONK", name: "RUN" });
+    expect(taken).toEqual({ isError: true, json: expect.objectContaining({ code: "term_name_taken" }) });
+
+    const saved = await call(client, "edit_term", { term: projectRun.json.id, baseVersion: 1, avoid: ["session"] });
+    expect(saved.json.version).toEqual(expect.objectContaining({ number: 2, actor: { kind: "agent", id: agent.id, name: "claude-max" } }));
+    const outdated = await call(client, "edit_term", { term: projectRun.json.id, baseVersion: 1, definition: "Stale." });
+    expect(outdated.isError).toBe(true);
+    expect(outdated.json).toEqual(
+      expect.objectContaining({ code: "outdated_version", current: expect.objectContaining({ number: 2, avoid: ["session"] }) }),
+    );
+
+    const glossary = await call(client, "read_glossary", { project: "CRONK" });
+    expect(glossary.json.map((t: { name: string; definition: string }) => [t.name, t.definition])).toEqual([
+      ["run", "Here: a session."],
+      ["Ticket", "A unit of work."],
+    ]);
+    const workspaceTerms = await call(client, "read_glossary", {});
+    expect(workspaceTerms.json.map((t: { name: string }) => t.name)).toEqual(["Run", "Ticket"]);
+    const read = await call(client, "read_term", { term: projectRun.json.id });
+    expect(read.json).toEqual(expect.objectContaining({ name: "run", avoid: ["session"] }));
+    const versions = await call(client, "list_term_versions", { term: projectRun.json.id });
+    expect(versions.json.map((v: { number: number; avoid: string[] }) => [v.number, v.avoid])).toEqual([
+      [1, []],
+      [2, ["session"]],
+    ]);
+    const viaApi = await (await cronk.request("GET", `/api/terms/${projectRun.json.id}`, { cookie })).json();
+    expect(viaApi.avoid).toEqual(["session"]);
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {
