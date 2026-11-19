@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream, type OpenStream } from "../harness/stream.js";
@@ -64,10 +65,24 @@ describe("Tickets waiting for review", () => {
           kind: "review",
           ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", title: "Check the Inbox" }),
           status: { id: statusId("In Review"), name: "In Review" },
+          since: "2026-01-01T09:00:00.000Z",
         },
       ],
     });
     expect(await inbox(ada.cookie, workspace.id)).toEqual({ count: 0, items: [] });
+  });
+
+  test("a Ticket waiting for review carries the time it entered its Review Status", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const ticket = await createTicket(ada.cookie, project.id, "Check the time");
+    cronk.clock.advance(hours(2));
+    await editTicket(ada.cookie, ticket.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+    cronk.clock.advance(hours(1));
+    await editTicket(ada.cookie, ticket.id, { title: "Check the time again" });
+
+    expect((await inbox(ada.cookie, workspace.id)).items).toEqual([
+      expect.objectContaining({ kind: "review", since: "2026-01-01T11:00:00.000Z" }),
+    ]);
   });
 
   test("moving the Ticket out of its Review Status removes it from the Inbox at once", async () => {

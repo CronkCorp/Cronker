@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { hours } from "../harness/clock.js";
 import { addMember, createGitHubApp, setUp, signIn, signInWithGitHub } from "../harness/flows.js";
 import type { StandInApp, StandInInstallation, StandInRepository } from "../harness/github.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
@@ -454,6 +455,7 @@ describe("Merges", () => {
     const prs = [1, 2, 3].map((n) => ({ id: 500 + n, number: n, title: `CRONK-${n}`, branch: `b${n}` }));
 
     const beaAccount = { login: "bea", id: bea.account.id };
+    cronk.clock.advance(hours(2));
     await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(prs[0]!, { login: "mallory", id: 666 })));
     // Bea turned auto-merge on; GitHub names her as the merger.
     await deliver(
@@ -474,15 +476,16 @@ describe("Merges", () => {
     // No Run opened these Pull Requests, so no Step completed the Tickets.
     const unverified = inbox.items.filter((i: { kind: string }) => i.kind === "unverified");
     expect(
-      unverified.map((i: { ticket: { key: string }; completedBy: unknown; completedWithoutStep: boolean }) => [
+      unverified.map((i: { ticket: { key: string }; completedBy: unknown; completedWithoutStep: boolean; since: string }) => [
         i.ticket.key,
         i.completedBy,
         i.completedWithoutStep,
+        i.since,
       ]),
     ).toEqual([
-      ["CRONK-1", null, true],
-      ["CRONK-2", null, true],
-      ["CRONK-3", null, true],
+      ["CRONK-1", null, true, "2026-01-01T11:00:00.000Z"],
+      ["CRONK-2", null, true, "2026-01-01T11:00:00.000Z"],
+      ["CRONK-3", null, true, "2026-01-01T11:00:00.000Z"],
     ]);
   });
 

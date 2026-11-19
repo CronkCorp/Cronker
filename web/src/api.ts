@@ -403,6 +403,8 @@ export interface ReviewItem {
   kind: "review";
   ticket: TicketSummary;
   status: { id: string; name: string };
+  /** When it began waiting: when the Ticket entered its Review Status. */
+  since: string;
 }
 
 /** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
@@ -414,6 +416,8 @@ export interface UnverifiedItem {
   completedBy: { id: string; name: string } | null;
   /** Whether no Step produced the work, as with a merge of a Pull Request a User opened. */
   completedWithoutStep: boolean;
+  /** When it began waiting: when the Ticket was completed, by a Run or a merge, moving it to its Done Status. */
+  since: string;
 }
 
 /** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
@@ -428,6 +432,8 @@ export interface QuestionItem {
     step: { statusId: string | null; name: string };
     askedAt: string;
   };
+  /** When it began waiting: when the Run asked the Question. */
+  since: string;
 }
 
 /** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
@@ -439,6 +445,8 @@ export interface NeedsYouItem {
   step: { statusId: string | null; name: string };
   /** Cronk's own Question, when it applied needs you past the Step's round limit. */
   question?: string;
+  /** When it began waiting: when the needs you Outcome moved the Ticket. */
+  since: string;
 }
 
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */
@@ -446,6 +454,8 @@ export interface RunItem {
   kind: "run";
   ticket: TicketSummary;
   run: { id: string; state: "failed" | "lost" | "refused"; step: { statusId: string; name: string }; endReason: string | null };
+  /** When it began waiting: when the Run ended, or was refused. */
+  since: string;
 }
 
 /** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
@@ -453,6 +463,8 @@ export interface DiscoveredItem {
   kind: "discovered";
   ticket: TicketSummary;
   agent: { id: string; name: string };
+  /** When it began waiting: when the Agent filed the Ticket. */
+  since: string;
 }
 
 /** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
@@ -460,6 +472,8 @@ export interface ReassignItem {
   kind: "reassign";
   ticket: TicketSummary;
   formerAssignee: User;
+  /** When it began waiting: when the Assignee of the Ticket was removed from the Workspace. */
+  since: string;
 }
 
 export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem | ReassignItem;
