@@ -2,7 +2,7 @@
 
 How Cronk's web client looks and behaves. Read this before changing anything in the web client. Vocabulary follows `CONTEXT.md`. The UI holds no rules (`docs/testing.md`), so everything here is about presentation.
 
-This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are the old Cronk's prototypes: they show the look to aim for, but also concepts this rewrite dropped (Claims, Agent Sessions, Protected items, Suggestions, Triage). Where a screenshot and this text differ, the text wins.
+This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are of the web client itself, taken at 1280px when the styling pass ended, except the token sheets (`tokens-light.png`, `tokens-dark.png`), which are the old Cronk's prototype and still show its four Status categories. Where a screenshot and this text differ, the text wins.
 
 The web client follows this file since the styling pass at the end of milestone 2 (`docs/roadmap.md`). The tokens live in `web/src/styles/tokens.css`, the shared components in `web/src/ui/`, the frame in `web/src/frame.tsx`, and each screen's layout in `web/src/styles/screens.css`. New screens build on them.
 
@@ -21,21 +21,21 @@ The web client follows this file since the styling pass at the end of milestone 
 
 - **Frame:** a 232px left sidebar and a main column. The main column's content is at most 1120px wide, centred, with 24px vertical and 16px horizontal padding.
 - **Sidebar, top to bottom:**
-  - The Workspace name and mark, which switches Workspace.
+  - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace.
   - Inbox, with the number of waiting items as a red count.
   - Documents, Terms and Decisions (the Workspace's, or the current Project's).
   - **Projects**, each listed by key and name.
-  - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins.
-  - The signed-in User, which opens a menu: Password and Sign out.
+  - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins. Runners shows even without a Workspace, since a User's Runners belong to none.
+  - The signed-in User, tagged "Admin" for an Admin, which opens a menu: Password and Sign out.
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Password, New Workspace or a page that isn't there, marks none.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
-- **Page head:** breadcrumbs (13px, muted), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
+- **Page head:** breadcrumbs (13px, muted, with `--accent` links), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title, and a Document's, Term's or Decision's Version, who saved it and when on a muted line under it. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
 - **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, which used to sit on Members), so the sidebar's Settings has a page of its own.
 - **A Ticket's or Document's Project:** a page tells the frame which item it belongs to and which Project it is in (`usePlace`), and the sidebar's Documents, Terms and Decisions then lead to that Project's.
 
 ## Design tokens
 
-All colours are CSS custom properties on `:root` in the web client's stylesheet. Components use only tokens, never literal colours. The dark values apply under `prefers-color-scheme: dark`.
+All colours are CSS custom properties on `:root` in the web client's stylesheet. Components use only tokens, never literal colours; `e2e/styling.spec.ts` checks every rule the browser is served. The dark values apply under `prefers-color-scheme: dark`.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
@@ -51,7 +51,7 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 | `--agent` | `#6247c2` | `#a793f2` | Agent names, avatars, Reports, running Runs |
 | `--agent-soft` | `#e9e4fb` | `#2b2545` | Agent avatar and Run card backgrounds |
 | `--danger` / `-soft` | `#b93a2b` / `#f8e1dd` | `#ee7d6b` / `#3d211d` | Failed and lost Runs, errors, Urgent, destructive actions |
-| `--warn` / `-soft` | `#a35f00` / `#fbecd2` | `#e3a447` / `#3a2c15` | Questions, *needs you*, outdated-save warnings |
+| `--warn` / `-soft` | `#a35f00` / `#fbecd2` | `#e3a447` / `#3a2c15` | Questions, *needs you*, what to heed (Deleted elsewhere, a paused Runner) |
 | `--ok` / `-soft` | `#2c7a42` / `#dcefe1` | `#6cc284` / `#1c3324` | Live, finished Runs, Done, Verified, added diff lines |
 | `--info` / `-soft` | `#2a65ad` / `#dde9f7` | `#74a8ea` / `#1b2b40` | Review Statuses, Unverified, information banners |
 
@@ -59,10 +59,10 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 
 | Tokens | Values |
 |---|---|
-| Spacing | 4, 8, 12, 16, 24, 32 px. Lay groups out with `gap`, not margins. |
-| Radius | 4px for controls and chips inside text, 6px for buttons and inputs, 8px for panels and cards, 999px for pills |
+| Spacing | 4, 8, 12, 16, 24, 32 px between groups. Lay groups out with `gap`, not margins. Padding inside small controls, pills and avatars may take finer steps. |
+| Radius | 4px for marks inside text (model labels, Priority tags, code) and menu and picker options, 6px for buttons and inputs, 8px for panels and cards, 999px for pills (Labels and every state pill) |
 | Borders | 1px `--border`. A coloured 3px left border marks a selected list item, or one that needs the User, only. |
-| Shadow | Popovers and menus only (`--shadow`) |
+| Shadow | Popovers, menus and dialogs only (`--shadow`) |
 | Scrim | `--scrim` dims the page behind a dialog: `rgb(27 31 28 / 0.35)` light, `rgb(0 0 0 / 0.55)` dark |
 
 | Light | Dark |
@@ -82,14 +82,14 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Actor** (`<Actor>`): avatar plus name. An avatar's letters are drawn by CSS, so they stay out of the text around them. A User is round. An Agent is square and violet, followed by "for <Owner>" where the Owner isn't obvious. Cronk is muted text with its "C" avatar.
 - **Key** (`<Key>`) and **model label** (`<ModelLabel>`): a Ticket or Project key, or a model label, in the mono face; a key at 12px `--muted`.
 - **Status** (`<StatusPill>`): dot and name. **Priority** (`<PriorityTag>`): a small uppercase tag. Urgent is filled `--danger`, High is `--danger` on `--danger-soft`, Medium is `--warn` on `--warn-soft`, Low is muted, and None shows nothing.
-- **Label** (`<Chip>`): a neutral chip on `--surface-2`. A state marker takes a tone: `ok` ("Verified", "Answered") is filled `--ok-soft`; `warn` ("Waiting for an answer") and `danger` ("Failed") are outlined pills in that colour; `info` ("Unverified", "Overrides the Workspace Term") is the same outlined pill; `agent` marks what Agents did.
+- **Label** (`<Chip>`): a neutral pill on `--surface-2`. A state marker takes a tone: `ok` ("Verified", "Answered") is filled `--ok-soft`; `warn` ("Waiting for an answer") and `info` ("Unverified", "Overrides the Workspace Term") are outlined pills in that colour. The `danger` (outlined) and `agent` (`--agent` on `--agent-soft`) tones are there for markers no screen needs yet; a failed Run shows its Run state instead.
 - **Run state** (`<RunState>`): 11px uppercase pill. Running is `--agent` on `--agent-soft` with a pulsing dot, Finished outlined `--ok`, Failed and Lost outlined `--danger`, Stopped outlined `--muted`, Refused (*couldn't start*) outlined `--warn`, and Waiting (Runner full, rate-limited, or blocked by another Ticket) dashed `--muted` with the reason in its tooltip. Each pill also reads out "Run" and its reason, so it makes sense on its own.
-- **Banner** (`<Banner tone>`): a full-width box above an editor or detail. `info` (`--info-soft` with an `--info` border) says what to settle, such as a refused save. `warn` (`--warn-soft` with a `--warn` border) says what to heed, such as a Version saved meanwhile.
-- **Kind label** (`<KindLabel>`): 11px uppercase, coloured by kind. Comment `--accent`; Question and Needs you `--warn`; Failed, Lost and Error `--danger`; Report, Run and Decision `--agent`; To review and Unverified `--info`; Discovered `--warn`; Sent back (by Cronk) `--warn`.
+- **Banner** (`<Banner tone>`): a full-width box above an editor or detail. `info` (`--info-soft` with an `--info` border) says what to settle, such as a refused save ("Saved meanwhile") or what a Decision supersedes. `warn` (`--warn-soft` with a `--warn` border) says what to heed, such as Deleted elsewhere, Resolved elsewhere, a superseded Decision, a paused Runner or a token shown once.
+- **Kind label** (`<KindLabel>`): 11px uppercase, coloured by kind. Comment `--accent`; Question and Needs you `--warn`; Failed, Lost and Error `--danger`; Report, Run and Decision `--agent`; To review and Unverified `--info`; Discovered, Couldn't start and Sent back (by Cronk) `--warn`. Any other kind is `--muted`.
 - **Buttons** (`<Button variant>`, or `buttonClass` for a link or file picker that looks like one):
   - Primary is filled `--accent`, one per form or action bar. It comes first in forms and action bars, and last in the page head and in dialogs. A dialog's action row is right-aligned: the dismissing button, such as Cancel, first and the primary or danger button last.
   - Secondary is `--surface` with a border.
-  - Ghost is text in `--accent`, for Reply, Rename and the like.
+  - Ghost is text in `--accent`, for Reply, Dismiss, a form's Cancel and the like.
   - Danger is filled `--danger`, and only inside a confirming dialog.
   - A disabled button keeps its colours at 50% opacity with a `not-allowed` cursor.
   - Buttons size to their label and are never full width outside sign-in forms.
@@ -97,7 +97,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Settings layout** (`<SettingsLayout>`): every settings page (Project settings, the Workspace's Settings, Members and GitHub) lists its sections in a 180px column beside them, named "Settings sections". Every section stays on the page: a link in the list brings its section into view, and the section in view is marked like a selected list item (`--accent-soft`, with an `--accent` left border). Below 760px the list wraps above the sections.
 - **Pickers** (`<FieldPicker>`): Ticket fields are edited in place. Clicking the value opens a popover list with type-to-filter; once something is typed, Enter picks the first match, and a picker that takes new values (Labels) offers the typed text. Bare `<select>` rows are not used for this. The same list (`<Picker>`) opens from a button for other choices on the Ticket, such as Link a Document… (its options grouped under This Project and The Workspace) and the kind of a Relation to add.
 - **Times** (`<RelativeTime>`):
-  - Relative under an hour ("12 min ago").
+  - "just now" under a minute, then relative under an hour ("12 min ago").
   - Then clock time for today ("10:18") and "yesterday".
   - Then day and time ("14 Nov 09:52"), with the year only when it differs from the current one.
   - The exact time is always in `title`.
@@ -112,19 +112,19 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Project
 
-- **Page head:** the title, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Project settings), and New Ticket as the only primary action, last.
+- **Page head:** the title, the Live indicator, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Project settings), and New Ticket as the only primary action, last. Under it, a row of filters: Status, Assignee, Priority and Label.
 - **Project settings:** in the settings layout, one section each for Statuses and their Steps (with the Brief preview), Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories and Pull Request automation. A Step the User opened stays open after saving.
 - **List rows:** Status dot, key, title, Labels, Priority tag, the running Run's state when there is one, and the Delegate's and Assignee's avatars, each named in its tooltip ("Delegate: claude-laptop").
-- **Board:** open columns share the main column's width. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A 1280px screen shows every Status without sideways scrolling. A column's name wraps rather than being cut off, with its Step's model label on a line under it. Cards show the key with the Priority beside it, then the title, Labels, the avatars, and a Run state pill while a Run is running, waiting or has gone wrong.
+- **Board:** open columns share the main column's width. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A 1280px screen shows every Status without sideways scrolling. A column's name wraps rather than being cut off, with its Step's model label on a line under it. Cards show the key with the Priority beside it, then the title, then Labels and a Run state pill (while a Run is running, waiting or has gone wrong) with the avatars at the right.
 
 ### Inbox
 
 ![Inbox](ui/inbox.png)
 
 - **Layout:** a split view. The list on the left (360px) is grouped **Questions**, **Needs you**, **Runs gone wrong**, **To review**, **Unverified** and **Discovered**, each with a count, and the selected item opens on the right.
-- **List items:** each shows its kind label, Ticket key, time, Ticket title and a two-line snippet of the Question, or the Report's title. An item needing an answer has a `--warn` left border, a failed or lost Run a `--danger` one.
+- **List items:** each shows its kind label, Ticket key, time, Ticket title and a two-line snippet: the Question, the Report's title, or else a line saying why it waits. A Question or *needs you* item, or a Run that couldn't start, has a `--warn` left border, a failed or lost Run a `--danger` one. **Needs you** also holds Tickets whose Assignee left the Workspace, with a picker for a new one.
 - **Detail pane:**
-  - **A Question** shows the Agent, the Step that asked and the full Question, with an answer box underneath. "Post answer" says the answer sends the Ticket back to that Step.
+  - **A Question** shows the Agent, the Step that asked and the full Question, with an answer box underneath. "Post answer" says the answer sends the Ticket back to that Step; Dismiss, in the ghost style, sets it aside.
   - **A failed, lost or refused Run** shows what happened and why, the Run's session link, and **Retry** (primary).
   - **An Unverified completion** shows the Report and **Accept** (primary) and **Reopen…**, which asks for a required Comment.
   - **A Ticket to review** shows its Status, its Pull Requests and its latest Report rendered inline, with a link to the Ticket.
@@ -141,16 +141,17 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ![Ticket](ui/ticket.png)
 
-- **Main column:** the title, the description and its Attachments, then one **timeline**, and the Comment box at the end.
+- **Page head:** the key in the mono face before the title, then the Live indicator and Edit.
+- **Main column:** the description and its Attachments, then one **timeline** under its own heading, and the Comment box at the end.
 - **Side panel (280px, sticky):**
   - Status, Priority, Assignee, Delegate, Autonomous Delegation (On, Off, or the Project's once delegated) and Labels, each edited in place, then Due date and Estimate. An agent's completion adds a Verification row among them: an Unverified chip with Accept and Reopen…, or Verified.
   - The **Run card**, in `--agent-soft`, while a Run is running or waiting: the Agent, the Step and its model label, the Run state, when it started and its session link (a waiting Run has not started, so it shows why it waits instead). A Run gone wrong shows here with Retry, in `--danger-soft`. It is hidden otherwise.
   - Pull Requests, Parent, Sub-Tickets, Relations, Linked Documents (with Link and Unlink) and Files.
-- **Below 900px** the side panel moves above the timeline.
+- **Below 900px** the side panel moves above the main column, as on a Document's, Term's or Decision's page.
 - **Timeline entries**, oldest first, each with an avatar in the gutter:
   - **Comment:** the body in a bordered bubble, with replies indented under it. A Question is a Comment from the Agent in a `--warn-soft` box with its answer box. A send-back by Cronk is a Comment labelled `SENT BACK`, naming the failing checks (each linking to GitHub) or the review.
   - **Report:** a card with an `--agent` border, its title and an "Open Report" link. The body shows at body size, its headings scaled down to 14px.
-  - **Run:** a single line with the Run state pill, the Step, the Agent and the Outcome it chose ("Implement · claude-laptop · done → Code review").
+  - **Run:** a single line with the Run state pill, the Step, the Agent, the model label and the Outcome it chose ("Implement · claude-laptop · opus · done → Code review").
   - **Change:** a single muted line with a small ring in the gutter, such as "claude-laptop changed Status from Implement to Code review in its Implement Run". Cronk's own Changes name the reason in one line, folding in the move and Verification recorded with it: "Cronk completed it: @ada merged cronkcorp/cronker#212 Rate-limit sign-in, moving it to Done, Verified by that merge", "Cronk skipped the Code review Step (skipped by no-review), moving on by approve to In Review", or "Cronk sent it back from In Review to Implement: the check test failed on cronkcorp/cronker#212", linking the check or review.
   - **Order:** what was recorded together reads cause before effect: a move, then the `SENT BACK` Comment Cronk wrote about it, then a Report, then the Run the move started.
 - **Replying:** Comments and Questions offer Reply; Runs, Reports and Changes don't.
@@ -164,8 +165,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 | ![Pull Requests in the side panel](ui/ticket-pull-requests-side.png) | ![Pull Requests in the main column](ui/ticket-pull-requests-main.png) |
 
 - **Side panel:** a **Pull Requests** group after the Run card, one row per Pull Request: number, title, state pill, check counts and review state: "Merged by @ada" once merged, else "Changes requested by @bea" or "Approved by @bea", linking the review. The review state counts each reviewer's latest review, whatever the Ticket's Status and whoever opened the Pull Request: changes any reviewer still requests show over approvals, and a dismissed review no longer counts. A failing check that sent the Ticket back shows below as "Sent back: ✗ test failed".
-- **Main column**, for a Ticket in a Review Status: under the description, a **Code to review** heading over a card per Pull Request with the branch (`cronk-12-sign-in-limit → main`), its author and review state, and every check with ✓, ✗ or ● and its state in words (passed, failed, running), failing checks first.
-- The screenshots show a Refresh button and a Link a Pull Request… action from the old Cronk; this rewrite links by key only and updates by webhook, so neither exists.
+- **Main column**, for a Ticket in a Review Status: under the description, a **Code to review** heading over a card per Pull Request with its branch (`cronk-12-sign-in-limit`), the Step that produced it and its review state, and every check with ✓, ✗, ● or – and its state in words (passed, failed, running, neutral), failing checks first.
+- Pull Requests link by the Ticket's key and update by webhook, so there is no Refresh or Link a Pull Request… action.
 
 #### Attachments on a Ticket
 
@@ -181,7 +182,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 ![Document, edit](ui/document-edit.png)
 
 - **Read:** the body in a panel with a 720px measure, the Document's Attachments under it, and its Versions in a side list; picking two shows their Diff.
-- **Edit:** the title field, then the Markdown source (mono) beside a live preview rendered by the same pipeline as the read view; they stack on phones. The save button names the Version it will create. The screenshot's toolbar comes with the rich editor, later.
+- **Edit:** the title field, then the Markdown source (mono) beside a live preview rendered by the same pipeline as the read view; they stack on phones. The save button names the Version it will create, with Cancel beside it. A formatting toolbar comes with the rich editor, later.
 - **A refused save** keeps the draft under an `--info` banner naming who saved which Version, with a Diff of their changes against the draft, so the User can fold them in and save again.
 - **Dropping or pasting files** into the source attaches each and puts `![<name>](attachment:<id>)` at the cursor.
 
@@ -194,20 +195,21 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Terms page:** reads like a glossary. The page head holds a Workspace / Project scope switch, then Export and **New Term**. A filter box matches names and words to avoid.
 - **Each Term:** the name, "Overrides the Workspace Term" in `--info` where it does (on a Workspace Term, "Replaced in CRONK"), its scope and Version. Then the definition, and "Avoid:" with the words struck through.
 - **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside the Term's Versions, each of which opens to what it said; picking two shows their Diff, the definition's lines and then, under "Avoid:", the words to avoid. The editor holds the Name, the definition's Markdown beside its preview, and the words to avoid, with "Save as Version N" first.
-- The screenshots' groups, Protected marks and Suggestion counts belong to the old Cronk.
 
 ### Decisions
 
-![Decisions](ui/decisions.png)
+| Register | A Decision |
+|---|---|
+| ![Decisions](ui/decisions.png) | ![A Decision](ui/decision.png) |
 
 - **Register:** the page head holds the same scope switch, then **Export** and **New Decision**. Below it, status filter chips with counts, and a table of number, title, status and date. A superseded Decision carries "→ 0007" after its title.
-- **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value. Only Users see the status actions.
+- **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value, then its Versions. Only Users see the status actions: a Change status select with Save status, in that panel.
 
 ### Agents and Runners
 
-- **Agents:** one card per Agent with its avatar, name, how many Tickets are delegated to it and how many of its Runs are running, each running Run by its Ticket's key and title with the Run state, its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
+- **Agents:** one card per Agent with its avatar, name, how many Tickets are delegated to it and how many of its Runs are running, each running Run by its Ticket's key and title with the Run state, and, on the User's own Agents, its tokens in one line with **Manage tokens** and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
 - **Manage tokens** opens a dialog that lists the Agent's tokens and issues new ones. A new token's secret shows once, with **Copy**, until the dialog closes. Revoke asks first in a confirming dialog, since whatever connects with the token stops working. The Agent's own page, where its Runner is chosen, shows the same line.
-- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face. Removing a trigger asks first, since its token is gone for good. The page streams the User's own Runners, so the count and the pause stay current while it is open.
+- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and a table of its triggers by model label (in the mono face) and Project, each with a ghost Remove. Removing a trigger asks first, since its token is gone for good. Set up a Runner is a panel under the cards. The page streams the User's own Runners, so the count and the pause stay current while it is open.
 
 ### Workspace settings, Members and GitHub
 
