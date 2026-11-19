@@ -205,6 +205,11 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Agents:** one card per Agent with its avatar, name, the Tickets delegated to it and its running Runs, its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
 - **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face.
 
+### Signed-out pages and the consent screen
+
+- **Centred cards outside the frame:** sign-in, setup and its Connect GitHub step, the one-time link pages (joining a Workspace, setting a password) and the OAuth consent screen. The password page is signed in, so it stays in the frame. Each shows Cronk's mark above a card at most 400px wide holding the `h1` and the form.
+- **Sign in** and **Sign in with GitHub** span the card: the only full-width buttons in Cronk. Every other button sizes to its label, and a form's buttons share an action row with the primary first, such as the consent screen's Connect, then Don't connect.
+
 ## Live updates
 
 Server-sent events keep open views current. Every screen treats them the same way:

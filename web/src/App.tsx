@@ -162,9 +162,11 @@ function SetupScreen({ onDone }: { onDone: () => void }) {
           <input name="workspaceName" required />
         </Field>
         <FormError error={error} />
-        <Button type="submit" variant="primary" className="button-wide" disabled={busy}>
-          Set up
-        </Button>
+        <Actions>
+          <Button type="submit" variant="primary" disabled={busy}>
+            Set up
+          </Button>
+        </Actions>
       </form>
     </Centered>
   );
@@ -253,9 +255,11 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
           </Field>
         )}
         <FormError error={error} />
-        <Button type="submit" variant="primary" className="button-wide" disabled={busy}>
-          {joining ? "Join" : "Set password"}
-        </Button>
+        <Actions>
+          <Button type="submit" variant="primary" disabled={busy}>
+            {joining ? "Join" : "Set password"}
+          </Button>
+        </Actions>
       </form>
     </Centered>
   );

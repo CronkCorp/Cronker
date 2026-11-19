@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, type ConnectRequest } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Centered } from "./frame.js";
-import { Button, FormError } from "./ui/controls.js";
+import { Actions, Button, FormError } from "./ui/controls.js";
 
 /**
  * The consent screen of Cronk's OAuth server: a connector, such as claude.ai's, asks to
@@ -63,7 +63,7 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
       {request.agents.length === 0 ? (
         <FormError error="You have no Agents yet. Create one on a Workspace's Agents page, then start connecting again." />
       ) : (
-        <form onSubmit={approve.onSubmit}>
+        <form id="connect-approve" onSubmit={approve.onSubmit}>
           <fieldset className="consent-agents">
             <legend className="field-label">Act as</legend>
             {request.agents.map((agent, index) => (
@@ -75,18 +75,21 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
               </label>
             ))}
           </fieldset>
-          <FormError error={approve.error} />
-          <Button type="submit" variant="primary" className="button-wide" disabled={approve.busy || leaving}>
-            Connect
-          </Button>
         </form>
       )}
-      <form onSubmit={deny.onSubmit}>
-        <FormError error={deny.error} />
-        <Button type="submit" className="button-wide" disabled={deny.busy || leaving}>
+      {/* Its button sits in the action row beside Connect, which belongs to the form above. */}
+      <form id="connect-deny" hidden onSubmit={deny.onSubmit} />
+      <FormError error={approve.error ?? deny.error} />
+      <Actions>
+        {request.agents.length > 0 && (
+          <Button type="submit" form="connect-approve" variant="primary" disabled={approve.busy || leaving}>
+            Connect
+          </Button>
+        )}
+        <Button type="submit" form="connect-deny" disabled={deny.busy || leaving}>
           Don't connect
         </Button>
-      </form>
+      </Actions>
       <p className="muted small">
         Removing the Agent, or revoking the token named {name} among its tokens, disconnects {name}.
       </p>
