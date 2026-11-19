@@ -134,6 +134,11 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
                   "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it on the Ticket already.",
               }),
             ),
+            pullRequestAutomation: Type.Optional(
+              Type.Boolean({
+                description: "Whether a merged Pull Request completes the Tickets it links in this Project; off, merges only update its state.",
+              }),
+            ),
           }),
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },

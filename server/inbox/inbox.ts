@@ -71,15 +71,19 @@ export const RunItem = Type.Object({
 
 const StatusRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
 
-/** A Ticket a Run completed, Unverified until its Assignee Accepts or Reopens it. */
+/** A Ticket a Run or a merge completed, Unverified until its Assignee Accepts or Reopens it. */
 export const UnverifiedItem = Type.Object({
   kind: Type.Literal("unverified"),
   ticket: TicketSummary,
   status: Type.Object(StatusRef.properties, { description: "The Done Status the Run completed it to." }),
   completedBy: Type.Union([StatusRef, Type.Null()], {
-    description: "The Step that completed it, by its Status, where Reopen sends it; null once that Status is removed.",
+    description:
+      "The Step that completed it (or produced the merged Pull Request), by its Status, where Reopen sends it; null once that Status is removed, or when no Step did.",
   }),
-  since: Since("when the Run completed the Ticket, moving it to its Done Status"),
+  completedWithoutStep: Type.Boolean({
+    description: "Whether no Step produced the work, as with a merge of a Pull Request a User opened: Reopen then leaves it where it is.",
+  }),
+  since: Since("when the Ticket was completed, by a Run or a merge, moving it to its Done Status"),
 });
 
 /** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
@@ -116,13 +120,14 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     statusEnteredAt: Date;
     inReview: boolean;
     completedBy: { id: string; name: string } | null;
+    completedWithoutStep: boolean;
     handedBack: { outcome: string; step: { statusId: string | null; name: string }; question?: string } | null;
   };
   const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
        tickets.status_entered_at as "statusEnteredAt", statuses.kind = 'review' as "inReview",
        case when completed_by.id is not null then json_build_object('id', completed_by.id, 'name', completed_by.name)
-         end as "completedBy",
+         end as "completedBy", tickets.completed_without_step as "completedWithoutStep",
        case when needs_you.ticket_id is not null then json_build_object(
          'outcome', needs_you.outcome,
          'step', json_build_object('statusId', needs_you.step_status_id, 'name', needs_you.step_status_name)
@@ -137,7 +142,8 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      order by projects.key, tickets.number`,
     [workspaceId, userId, questions.map((q) => q.ticketId)],
   );
-  const summary = ({ statusName: _s, statusEnteredAt: _e, inReview: _r, completedBy: _c, handedBack: _h, ...row }: Row) => ticketSummary(row);
+  const summary = ({ statusName: _s, statusEnteredAt: _e, inReview: _r, completedBy: _c, completedWithoutStep: _w, handedBack: _h, ...row }: Row) =>
+    ticketSummary(row);
   const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
   /** The Ticket, the Status it waits in, and when it entered it. */
   const inStatus = (row: Row) => ({
@@ -154,7 +160,9 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     ...rows.flatMap((row): InboxItem[] => (row.handedBack ? [{ kind: "needsYou", ...inStatus(row), ...row.handedBack }] : [])),
     ...rows.flatMap((row): InboxItem[] => (row.inReview ? [{ kind: "review", ...inStatus(row) }] : [])),
     ...rows.flatMap((row): InboxItem[] =>
-      row.verification === "unverified" ? [{ kind: "unverified", ...inStatus(row), completedBy: row.completedBy }] : [],
+      row.verification === "unverified"
+        ? [{ kind: "unverified", ...inStatus(row), completedBy: row.completedBy, completedWithoutStep: row.completedWithoutStep }]
+        : [],
     ),
   ];
   // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents,

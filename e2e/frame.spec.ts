@@ -40,3 +40,68 @@ test("the sidebar holds the main links, and at phone width becomes a strip with 
   await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "Agents" })).toBeHidden();
 });
+
+test("every page opens with breadcrumbs and its title, and a sidebar page marks its own item", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
+
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill("ada@example.com");
+  await page.getByLabel("Password").fill("correct horse battery");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+  const crumbs = page.getByRole("main").getByRole("navigation", { name: "Breadcrumbs" });
+
+  await expect(page.getByRole("heading", { name: "Ada's Workspace", level: 1 })).toBeVisible();
+  await expect(crumbs).toBeVisible();
+
+  for (const [link, title] of [
+    [/^Inbox/, "Inbox"],
+    ["Documents", "Documents"],
+    ["Terms", "Terms"],
+    ["Decisions", "Decisions"],
+    ["CRONK Cronker", "Cronker"],
+    ["Agents", "Agents"],
+    ["Runners", "Runners"],
+    ["Members", "Members"],
+    ["GitHub", "GitHub"],
+    ["Settings", "Settings"],
+  ] as const) {
+    await sidebar.getByRole("link", { name: link }).click();
+    await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
+    await expect(crumbs).toBeVisible();
+    await expect(sidebar.locator("[aria-current=page]")).toHaveCount(1);
+    await expect(sidebar.getByRole("link", { name: link })).toHaveAttribute("aria-current", "page");
+  }
+
+  await sidebar.getByRole("button", { name: "ada@example.com" }).click();
+  await page.getByRole("menuitem", { name: "Password" }).click();
+  await expect(page.getByRole("heading", { name: "Password", level: 1 })).toBeVisible();
+  await expect(crumbs).toBeVisible();
+
+  await sidebar.getByRole("button", { name: /^Workspace:/ }).click();
+  await page.getByRole("menuitem", { name: "New Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "New Workspace", level: 1 })).toBeVisible();
+  await expect(crumbs).toBeVisible();
+  await expect(sidebar.locator("[aria-current=page]")).toHaveCount(0);
+});
+
+test("a page that isn't there marks no sidebar item", async ({ page, cronk }) => {
+  await setUp(cronk);
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill("ada@example.com");
+  await page.getByLabel("Password").fill("correct horse battery");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+  await sidebar.getByRole("link", { name: "Agents" }).click();
+  await expect(sidebar.getByRole("link", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+
+  // Followed without a reload, as an old link inside Cronk would be.
+  await page.evaluate(() => {
+    window.history.pushState(null, "", "/nowhere");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page.getByText("Nothing is here.")).toBeVisible();
+  await expect(sidebar.locator("[aria-current=page]")).toHaveCount(0);
+});

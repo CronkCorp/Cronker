@@ -393,10 +393,23 @@ describe("Runners and Agents", () => {
     expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has subscription, fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
-      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, pausedUntil: null, triggers: [], createdAt: expect.any(String) },
+      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, running: 0, pausedUntil: null, triggers: [], createdAt: expect.any(String) },
     ]);
     const notOwn = await call("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: "00000000-0000-0000-0000-000000000000" });
     expect(notOwn.json.error.code).toBe("unknown_runner");
+  });
+
+  test("a Runner says how many of its Runs are running, and the count falls when one finishes", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    expect(await ok("GET", "/api/runners", ada)).toEqual([expect.objectContaining({ limit: 2, running: 0 })]);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    expect(await ok("GET", "/api/runners", ada)).toEqual([expect.objectContaining({ limit: 2, running: 1 })]);
+
+    const [run] = await runsOf(ticket.id, ada);
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    expect(await ok("GET", "/api/runners", ada)).toEqual([expect.objectContaining({ limit: 2, running: 0 })]);
   });
 });
 

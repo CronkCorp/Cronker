@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { hours } from "../harness/clock.js";
+import { addMember, createGitHubApp, setUp, signIn, signInWithGitHub } from "../harness/flows.js";
 import type { StandInApp, StandInInstallation, StandInRepository } from "../harness/github.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
@@ -40,6 +41,10 @@ interface PullRequestFields {
   state?: "open" | "closed";
   draft?: boolean;
   merged?: boolean;
+  /** The GitHub account that merged it; GitHub's merge queue merges as its own bot. */
+  mergedBy?: { login: string; id: number; type?: string };
+  /** Set while auto-merge is on, naming who turned it on. */
+  autoMerge?: { enabled_by: { login: string; id: number } };
   updatedAt?: string;
 }
 
@@ -61,6 +66,8 @@ function pullRequestEvent(
       state: pr.state ?? "open",
       draft: pr.draft ?? false,
       merged: pr.merged ?? false,
+      merged_by: pr.mergedBy ? { type: "User", ...pr.mergedBy } : null,
+      auto_merge: pr.autoMerge ?? null,
       html_url: `https://github.com/${repository.fullName}/pull/${pr.number}`,
       head: { ref: pr.branch, sha: pr.sha ?? "aaaa" },
       updated_at: pr.updatedAt ?? "2026-01-01T09:00:00Z",
@@ -101,6 +108,7 @@ describe("Pull Requests linking to Tickets", () => {
       url: "https://github.com/cronkcorp/cronker/pull/7",
       state: "open",
       checks: [],
+      mergedBy: null,
       producingStep: null,
     };
     expect(await pullRequestsOf(first.id, cookie)).toEqual([shown]);
@@ -395,3 +403,232 @@ describe("The producing Step", () => {
     expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, producingStep: null }]);
   });
 });
+
+describe("Merges", () => {
+  const ticketOf = async (ticketId: string, cookie: string) =>
+    (await cronk.request("GET", `/api/tickets/${ticketId}`, { cookie })).json();
+  const statusNamed = (project: { statuses: { id: string; name: string }[] }, name: string) =>
+    project.statuses.find((s) => s.name === name)!.id;
+
+  /** Bea, added to the Workspace by her GitHub login, joins by signing in with GitHub. */
+  async function beaJoins(workspaceId: string, cookie: string) {
+    const account = cronk.github.account("bea", "bea@example.com");
+    const added = await cronk.request("POST", `/api/workspaces/${workspaceId}/members/github`, { cookie, body: { login: "bea" } });
+    expect(added.status).toBe(201);
+    const { cookie: beaCookie } = await signInWithGitHub(cronk, account);
+    return { account, cookie: beaCookie! };
+  }
+
+  const merged = (pr: PullRequestFields, mergedBy: PullRequestFields["mergedBy"], fields: Partial<PullRequestFields> = {}) => ({
+    ...pr,
+    state: "closed" as const,
+    merged: true,
+    mergedBy,
+    updatedAt: "2026-01-01T12:00:00Z",
+    ...fields,
+  });
+
+  test("a merge by a User of the Workspace completes each linked Ticket as Verified, in the Project's first Done Status", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Merge me" });
+    // A second Done Status after the first: the first one on the board is where merges go.
+    await post(cookie, `/api/projects/${project.id}/statuses`, { name: "Shipped", kind: "done" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
+  });
+
+  test("a merge by anyone else, by auto-merge or by a merge queue completes the Ticket as Unverified, waiting in the Assignee's Inbox", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const ada = (await (await cronk.request("GET", "/api/me", { cookie })).json()).user;
+    const tickets = [];
+    for (const title of ["Outsider", "Auto-merge", "Merge queue"]) {
+      const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title });
+      await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { assigneeId: ada.id } });
+      tickets.push(ticket);
+    }
+    const prs = [1, 2, 3].map((n) => ({ id: 500 + n, number: n, title: `CRONK-${n}`, branch: `b${n}` }));
+
+    const beaAccount = { login: "bea", id: bea.account.id };
+    cronk.clock.advance(hours(2));
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(prs[0]!, { login: "mallory", id: 666 })));
+    // Bea turned auto-merge on; GitHub names her as the merger.
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("closed", installation, cronker, merged(prs[1]!, beaAccount, { autoMerge: { enabled_by: beaAccount } })),
+    );
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("closed", installation, cronker, merged(prs[2]!, { login: "github-merge-queue[bot]", id: 9919, type: "Bot" })),
+    );
+
+    for (const ticket of tickets) {
+      expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "unverified" });
+    }
+    const inbox = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/inbox`, { cookie })).json();
+    // No Run opened these Pull Requests, so no Step completed the Tickets.
+    const unverified = inbox.items.filter((i: { kind: string }) => i.kind === "unverified");
+    expect(
+      unverified.map((i: { ticket: { key: string }; completedBy: unknown; completedWithoutStep: boolean; since: string }) => [
+        i.ticket.key,
+        i.completedBy,
+        i.completedWithoutStep,
+        i.since,
+      ]),
+    ).toEqual([
+      ["CRONK-1", null, true, "2026-01-01T11:00:00.000Z"],
+      ["CRONK-2", null, true, "2026-01-01T11:00:00.000Z"],
+      ["CRONK-3", null, true, "2026-01-01T11:00:00.000Z"],
+    ]);
+  });
+
+  test("a merge leaves a Ticket already in a Done or Canceled Status alone", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const done = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Done already" });
+    const canceled = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Canceled" });
+    // Done here is the board's second Done Status, not the first, which a merge would move it to.
+    const shipped = (await post(cookie, `/api/projects/${project.id}/statuses`, { name: "Shipped", kind: "done" })).statuses.find(
+      (s: { name: string }) => s.name === "Shipped",
+    ).id;
+    await cronk.request("PATCH", `/api/tickets/${done.id}`, { cookie, body: { statusId: shipped } });
+    await cronk.request("PATCH", `/api/tickets/${canceled.id}`, { cookie, body: { statusId: statusNamed(project, "Canceled") } });
+    const timelineLength = async (id: string) => (await (await cronk.request("GET", `/api/tickets/${id}/timeline`, { cookie })).json()).length;
+    const before = [await timelineLength(done.id), await timelineLength(canceled.id)];
+
+    const pr = { id: 501, number: 7, title: "CRONK-1 CRONK-2", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "mallory", id: 666 })));
+
+    expect(await ticketOf(done.id, cookie)).toMatchObject({ statusId: shipped, verification: null });
+    expect(await ticketOf(canceled.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Canceled"), verification: null });
+    expect([await timelineLength(done.id), await timelineLength(canceled.id)]).toEqual(before);
+  });
+
+  test("the first merge completes every Ticket it links, whatever their other Pull Requests and unfinished Sub-Tickets", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const parent = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Parent" });
+    const other = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Other" });
+    const subTicket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Unfinished", parentId: parent.id });
+    // Another Pull Request of the parent stays open.
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 500, number: 6, title: "CRONK-1 part one", branch: "a" }));
+    const pr = { id: 501, number: 7, title: "CRONK-1 and CRONK-2", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "mallory", id: 666 })));
+
+    const done = statusNamed(project, "Done");
+    expect(await ticketOf(parent.id, cookie)).toMatchObject({ statusId: done, verification: "unverified" });
+    expect(await ticketOf(other.id, cookie)).toMatchObject({ statusId: done, verification: "unverified" });
+    expect(await ticketOf(subTicket.id, cookie)).toMatchObject({ statusId: subTicket.statusId, verification: null });
+  });
+
+  test("a merge stops a Run running on the Ticket, as a move by a User does, and the Change names the Pull Request and its merger", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Being implemented" });
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: statusNamed(project, "Implement") } });
+    const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "mallory", id: 666 })));
+
+    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
+    expect(run).toMatchObject({ state: "stopped", endReason: "@mallory merged cronkcorp/cronker#7, completing CRONK-1." });
+    expect(cronk.runner.stops.map((s) => s.runId)).toEqual([run.id]);
+    const changes = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
+    const byCronk = changes.filter((c: { actor: { kind: string } }) => c.actor.kind === "cronk");
+    expect(byCronk.map((c: { field: string; from: unknown; to: unknown }) => [c.field, c.from, c.to])).toEqual([
+      [
+        "merged",
+        null,
+        {
+          pullRequest: { id: 501, repository: "cronkcorp/cronker", number: 7, title: "CRONK-1: make it so", url: "https://github.com/cronkcorp/cronker/pull/7" },
+          mergedBy: "mallory",
+        },
+      ],
+      ["status", { id: statusNamed(project, "Implement"), name: "Implement" }, { id: statusNamed(project, "Done"), name: "Done" }],
+      ["verification", null, "unverified"],
+    ]);
+  });
+
+  test("Reopening an Unverified Ticket a merge completed sends it back to the producing Step's Status, or leaves it where it is without one", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const implement = statusNamed(project, "Implement");
+    const produced = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Opened by a Run" });
+    await cronk.request("PATCH", `/api/tickets/${produced.id}`, { cookie, body: { delegateId: agent.id, statusId: implement } });
+    const byHand = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Opened by a User" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "a" }));
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 502, number: 8, title: "CRONK-2", branch: "b" }));
+    const mallory = { login: "mallory", id: 666 };
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged({ id: 501, number: 7, title: "CRONK-1", branch: "a" }, mallory)));
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged({ id: 502, number: 8, title: "CRONK-2", branch: "b" }, mallory)));
+
+    // Each says what completed it and where Reopen sends it.
+    const completionOf = async (id: string) => (await cronk.request("GET", `/api/tickets/${id}/completion`, { cookie })).json();
+    const mergeOf = (number: number) => ({
+      pullRequest: { id: 500 + number - 6, repository: "cronkcorp/cronker", number, title: `CRONK-${number - 6}`, url: `https://github.com/cronkcorp/cronker/pull/${number}` },
+      mergedBy: "mallory",
+    });
+    expect(await completionOf(produced.id)).toEqual({ merge: mergeOf(7), reopen: { kind: "back", status: { id: implement, name: "Implement" } } });
+    expect(await completionOf(byHand.id)).toEqual({ merge: mergeOf(8), reopen: { kind: "stays" } });
+
+    const reopen = (id: string) =>
+      cronk.request("POST", `/api/tickets/${id}/reopen`, { cookie, body: { comment: "Not quite." } });
+    expect((await reopen(produced.id)).status).toBe(200);
+    expect((await reopen(byHand.id)).status).toBe(200);
+
+    expect(await ticketOf(produced.id, cookie)).toMatchObject({ statusId: implement, verification: null });
+    expect(await ticketOf(byHand.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: null });
+    // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
+    const runs = await (await cronk.request("GET", `/api/tickets/${produced.id}/runs`, { cookie })).json();
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["stopped", "running"]);
+  });
+
+  test("with Pull Request automation turned off, a merge completes nothing and only updates the Pull Request's state", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    expect(project.pullRequestAutomation).toBe(true);
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Left alone" });
+    const turnedOff = await cronk.request("PATCH", `/api/projects/${project.id}`, { cookie, body: { pullRequestAutomation: false } });
+    expect(turnedOff.status).toBe(200);
+    expect(await turnedOff.json()).toMatchObject({ pullRequestAutomation: false });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: ticket.statusId, verification: null });
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, state: "merged", mergedBy: "bea" }]);
+  });
+
+  test("only the delivery of the merge completes: a later delivery about the merged Pull Request leaves a reopened Ticket alone", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Reopened" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "mallory", id: 666 })));
+    const reopened = await cronk.request("POST", `/api/tickets/${ticket.id}/reopen`, { cookie, body: { comment: "Not done." } });
+    expect(reopened.status).toBe(200);
+    const implement = statusNamed(project, "Implement");
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { statusId: implement } });
+
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("edited", installation, cronker, merged(pr, { login: "mallory", id: 666 }, { title: "CRONK-1 renamed", updatedAt: "2026-01-01T13:00:00Z" })),
+    );
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: implement, verification: null });
+  });
+});
+
