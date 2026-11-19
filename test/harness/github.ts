@@ -6,7 +6,8 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers (listed, or one by id), and sending the App's webhook deliveries signed with its secret.
+ * installation covers (listed, or one by id), and sending the App's webhook deliveries signed with its secret,
+ * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
  * Whoever is "signed in to GitHub" in the browser is `signedInAs`; tests set it. Times,
@@ -70,6 +71,26 @@ export interface DeliveryOptions {
   id?: string;
   /** The secret to sign with: the App's own by default, `null` for no signature at all. */
   secret?: string | null;
+  /**
+   * How the delivery fails, as GitHub records it: `unreachable` never reaches Cronk (it or its
+   * tunnel is down), `timed out` reaches Cronk but GitHub gives up waiting for its answer.
+   */
+  fails?: "unreachable" | "timed out";
+}
+
+/** One attempt at a delivery, as the App's delivery log on GitHub lists it. */
+export interface DeliveryAttempt {
+  /** The attempt's own id, which a redelivery is asked for by. */
+  id: number;
+  /** The delivery's `X-GitHub-Delivery` id, the same for each attempt at it. */
+  guid: string;
+  event: string;
+  redelivery: boolean;
+  /** The HTTP status Cronk answered with, or 0 if GitHub got no answer. */
+  statusCode: number;
+  sentAt: Date;
+  /** What GitHub sent, to send it again. */
+  payload: unknown;
 }
 
 export interface StandInGitHub {
@@ -96,6 +117,12 @@ export interface StandInGitHub {
    * name, a delivery id and the body's `X-Hub-Signature-256`. Returns Cronk's answer.
    */
   deliver(app: StandInApp, event: string, payload: unknown, options?: DeliveryOptions): Promise<Response>;
+  /** Every attempt at each App's deliveries, by App id, oldest first; GitHub lists them newest first. */
+  deliveries: Map<number, DeliveryAttempt[]>;
+  /** The attempts made because the App asked GitHub to redeliver, oldest first. */
+  redeliveries(app: StandInApp): DeliveryAttempt[];
+  /** Answers the App's next redelivery request with 422, as GitHub does for a delivery it no longer keeps. */
+  refuseNextRedelivery(): void;
   stop(): Promise<void>;
 }
 
@@ -167,6 +194,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   const oauthCodes = new Map<string, { app: StandInApp; account: GitHubAccount; redirectUri: string }>();
   const accessTokens = new Map<string, GitHubAccount>();
   const installationTokens = new Map<string, IssuedToken>();
+  let refuseRedelivery = false;
 
   const github: StandInGitHub = {
     url: "",
@@ -197,22 +225,59 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       return installation;
     },
     tokensIssued: [],
-    async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret } = {}) {
-      if (!app.webhookUrl) throw new Error(`the App ${app.slug} has no webhook URL`);
-      const body = JSON.stringify(payload);
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-        "user-agent": "GitHub-Hookshot/stand-in",
-        "x-github-event": event,
-        "x-github-delivery": id,
-        "x-github-hook-installation-target-type": "integration",
-        "x-github-hook-installation-target-id": String(app.id),
-      };
-      if (secret !== null) headers["x-hub-signature-256"] = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
-      return fetch(app.webhookUrl, { method: "POST", headers, body });
+    async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
+      return send(app, { guid: id, event, payload, redelivery: false }, secret, fails);
+    },
+    deliveries: new Map(),
+    redeliveries: (app) => (github.deliveries.get(app.id) ?? []).filter((d) => d.redelivery),
+    refuseNextRedelivery() {
+      refuseRedelivery = true;
     },
     stop: async () => {},
   };
+
+  /** Sends a delivery to the App's webhook URL, signed, and records the attempt in its delivery log. */
+  async function send(
+    app: StandInApp,
+    delivery: Pick<DeliveryAttempt, "guid" | "event" | "payload" | "redelivery">,
+    secret: string | null,
+    fails?: DeliveryOptions["fails"],
+  ): Promise<Response> {
+    if (!app.webhookUrl) throw new Error(`the App ${app.slug} has no webhook URL`);
+    const log = github.deliveries.get(app.id) ?? [];
+    github.deliveries.set(app.id, log);
+    const { guid, event, payload, redelivery } = delivery;
+    const attempt: DeliveryAttempt = { id: nextId++, guid, event, payload, redelivery, statusCode: 0, sentAt: clock.now() };
+    log.push(attempt);
+    if (fails === "unreachable") return new Response(null, { status: 502 });
+    const body = JSON.stringify(payload);
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+      "user-agent": "GitHub-Hookshot/stand-in",
+      "x-github-event": event,
+      "x-github-delivery": guid,
+      "x-github-hook-installation-target-type": "integration",
+      "x-github-hook-installation-target-id": String(app.id),
+    };
+    if (secret !== null) headers["x-hub-signature-256"] = `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+    const response = await fetch(app.webhookUrl, { method: "POST", headers, body });
+    if (fails !== "timed out") attempt.statusCode = response.status;
+    return response;
+  }
+
+  const deliveryJson = (d: DeliveryAttempt) => ({
+    id: d.id,
+    guid: d.guid,
+    delivered_at: d.sentAt.toISOString(),
+    redelivery: d.redelivery,
+    duration: 0.1,
+    status: d.statusCode >= 200 && d.statusCode < 300 ? "OK" : d.statusCode === 0 ? "timed out" : `Invalid HTTP Response: ${d.statusCode}`,
+    status_code: d.statusCode,
+    event: d.event,
+    action: null,
+    installation_id: null,
+    repository_id: null,
+  });
 
   const installationJson = (i: StandInInstallation) => ({
     id: i.id,
@@ -369,6 +434,22 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       if (request.method === "GET" && path === "/app/installations") {
         const { items, link } = page(url, github.installations.filter((i) => i.app === app));
         return json(response, 200, items.map(installationJson), link ? { link } : {});
+      }
+      if (request.method === "GET" && path === "/app/hook/deliveries") {
+        const { items, link } = page(url, [...(github.deliveries.get(app.id) ?? [])].reverse());
+        return json(response, 200, items.map(deliveryJson), link ? { link } : {});
+      }
+      const attempts = /^\/app\/hook\/deliveries\/(\d+)\/attempts$/.exec(path);
+      if (request.method === "POST" && attempts) {
+        const delivery = github.deliveries.get(app.id)?.find((d) => String(d.id) === attempts[1]);
+        if (!delivery) return json(response, 404, { message: "Not Found" });
+        if (refuseRedelivery) {
+          refuseRedelivery = false;
+          return json(response, 422, { message: "Validation Failed" });
+        }
+        // GitHub answers at once and redelivers soon after; the stand-in redelivers first, so a test needn't wait.
+        await send(app, { ...delivery, redelivery: true }, app.webhookSecret);
+        return json(response, 202, {});
       }
       const tokenFor = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(path);
       if (request.method === "POST" && tokenFor) {

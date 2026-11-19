@@ -42,6 +42,8 @@ export interface StartedCronk {
   checkForLostRuns(): Promise<void>;
   /** Resumes the queues of Runners whose rate limit has passed, as the server does every minute; move the clock first. */
   resumePausedRunners(): Promise<void>;
+  /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every five minutes. */
+  replayFailedDeliveries(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -132,6 +134,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),
     resumePausedRunners: () => cronk.resumePausedRunners(),
+    replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     logs,
     setupCode() {
       const line = logs.find((l) => typeof l.setupCode === "string");

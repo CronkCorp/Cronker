@@ -10,6 +10,7 @@ import type { Context } from "./context.js";
 import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { InstallationTokens } from "./github/installations.js";
+import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
@@ -30,6 +31,8 @@ export interface Cronk {
   checkForLostRuns(): Promise<void>;
   /** Resumes the queues of rate-limited Runners whose pause has passed. */
   resumePausedRunners(): Promise<void>;
+  /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied. */
+  replayFailedDeliveries(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -58,6 +61,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
       },
       checkForLostRuns: () => checkForLostRuns(context),
       resumePausedRunners: () => resumePausedRunners(context),
+      replayFailedDeliveries: () => replayFailedDeliveries(context),
       async close() {
         await app.close();
         await endPool(db);

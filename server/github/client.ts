@@ -199,3 +199,27 @@ export async function repositoryById({ github }: Config, token: string, id: numb
   if (response.status === 404 || response.status === 403) return undefined;
   return jsonOf<{ id: number; full_name: string }>(response, "/repositories");
 }
+
+/** One attempt at one of the App's webhook deliveries, as GitHub's delivery log lists it. */
+export interface DeliveryAttemptOnGitHub {
+  /** The attempt's id, which a redelivery is asked for by. */
+  id: number;
+  /** The delivery's `X-GitHub-Delivery` id, the same for each attempt at it. */
+  guid: string;
+  event: string;
+  /** The HTTP status Cronk answered with, or 0 if GitHub got no answer. */
+  status_code: number;
+}
+
+/** Every attempt at the App's webhook deliveries GitHub still keeps (three days), newest first. */
+export async function appDeliveries({ github }: Config, jwt: string): Promise<DeliveryAttemptOnGitHub[]> {
+  const first = under(github.apiUrl, "/app/hook/deliveries");
+  return allPages(first, jwt, "/app/hook/deliveries", (body) => body as DeliveryAttemptOnGitHub[]);
+}
+
+/** Asks GitHub to send a delivery again, by the id of one attempt at it. */
+export async function redeliver({ github }: Config, jwt: string, attemptId: number): Promise<void> {
+  const url = under(github.apiUrl, `/app/hook/deliveries/${attemptId}/attempts`);
+  const response = await call(url, { method: "POST", headers: { authorization: `Bearer ${jwt}` } });
+  if (!response.ok) throw unavailable(`The redelivery request answered ${response.status}`);
+}
