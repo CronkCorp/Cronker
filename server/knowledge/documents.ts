@@ -85,12 +85,13 @@ async function lockTree(tx: Tx, tree: Tree): Promise<void> {
   ]);
 }
 
-async function insertVersion(
+/** Records a Version of the Document, numbered, by its Actor. */
+export async function insertVersion(
   tx: Tx,
   document: { id: string; workspaceId: string },
   number: number,
   content: { title: string; body: string },
-  actor: Caller,
+  actor: { kind: "user" | "agent"; id: string },
   now: Date,
 ): Promise<void> {
   await tx.query(
@@ -117,7 +118,7 @@ export async function treeOf(db: Db, tree: Tree): Promise<DocumentSummary[]> {
   const { rows } = await db.query<Row>(
     `with recursive ordered (id, path) as (
        select id, array[position] from documents
-       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null
+       where workspace_id = $1 and project_id is not distinct from $2 and parent_id is null and ticket_id is null
        union all
        select documents.id, ordered.path || documents.position
        from documents join ordered on documents.parent_id = ordered.id
@@ -137,7 +138,7 @@ async function siblingCount(tx: Tx, tree: Tree, parentId: string | null, except:
   const { rows } = await tx.query<{ count: number }>(
     `select count(*)::int as count from documents
      where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
-       and id is distinct from $4`,
+       and ticket_id is null and id is distinct from $4`,
     [tree.workspaceId, tree.projectId, parentId, except],
   );
   return rows[0]!.count;
@@ -150,7 +151,8 @@ const childCount = (tx: Tx, document: Tree & { id: string }) => siblingCount(tx,
 async function requireParentInTree(tx: Tx, tree: Tree, parentId: string): Promise<void> {
   const { rowCount } = isUuid(parentId)
     ? await tx.query(
-        "select 1 from documents where id = $1 and workspace_id = $2 and project_id is not distinct from $3",
+        `select 1 from documents
+         where id = $1 and workspace_id = $2 and project_id is not distinct from $3 and ticket_id is null`,
         [parentId, tree.workspaceId, tree.projectId],
       )
     : { rowCount: 0 };
@@ -177,7 +179,7 @@ async function shiftSiblings(
   await tx.query(
     `update documents set position = position + $5
      where workspace_id = $1 and project_id is not distinct from $2 and parent_id is not distinct from $3
-       and position >= $4 and id is distinct from $6`,
+       and ticket_id is null and position >= $4 and id is distinct from $6`,
     [tree.workspaceId, tree.projectId, parentId, from, by, except],
   );
 }

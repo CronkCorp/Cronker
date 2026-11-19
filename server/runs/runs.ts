@@ -9,7 +9,7 @@ import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
-import { recordReport } from "../work/reports.js";
+import { recordReport } from "../knowledge/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
 import { moveByCronk } from "../pipeline/cronk-moves.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
