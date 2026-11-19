@@ -218,13 +218,13 @@ export function DecisionScreen({
         crumbs={knowledgeCrumbs(workspace, project, <Link to={listPage(place)}>Decisions</Link>)}
         title={decision.title}
         large
-        meta={
+        eyebrow={
           <>
             <span className="mono">{numbered(decision.number)}</span>
             <DecisionStatusPill status={decision.status} />
-            <VersionMeta version={decision.version} />
           </>
         }
+        meta={<VersionMeta version={decision.version} />}
         actions={
           !editing && (
             <Button variant="primary" onClick={() => setEditing(true)}>
@@ -294,6 +294,7 @@ export function DecisionScreen({
                 </div>
               )}
               <StatusForm
+                key={decision.version.number}
                 decision={decision}
                 others={others.filter((d) => d.id !== decision.id)}
                 onChanged={saved}
@@ -333,13 +334,16 @@ function StatusForm({
   onOutdated: () => void;
 }) {
   const [status, setStatus] = useState<DecisionStatus>(decision.status);
-  const { error, busy, onSubmit } = useSubmit(async (form) => {
+  // Held here, not left to the picker, so it shows the Decision replacing this one even when the list arrives later.
+  const [replacement, setReplacement] = useState(decision.supersededById ?? "");
+  const unchanged = status === decision.status && (status !== "superseded" || replacement === decision.supersededById);
+  const { error, busy, onSubmit } = useSubmit(async () => {
     try {
       onChanged(
         await api.editDecision(decision.id, {
           baseVersion: decision.version.number,
           status,
-          ...(status === "superseded" ? { supersededById: field(form, "supersededById") || null } : {}),
+          ...(status === "superseded" ? { supersededById: replacement || null } : {}),
         }),
       );
     } catch (e) {
@@ -351,7 +355,7 @@ function StatusForm({
     }
   });
   return (
-    <form onSubmit={onSubmit} key={decision.version.number}>
+    <form onSubmit={onSubmit}>
       <Field label="Change status">
         <select value={status} onChange={(e) => setStatus(e.target.value as DecisionStatus)}>
           {decisionStatuses.map((s) => (
@@ -363,7 +367,7 @@ function StatusForm({
       </Field>
       {status === "superseded" && (
         <Field label="Replaced by">
-          <select name="supersededById" required defaultValue={decision.supersededById ?? ""}>
+          <select required value={replacement} onChange={(e) => setReplacement(e.target.value)}>
             <option value="" disabled>
               Choose a Decision
             </option>
@@ -377,7 +381,7 @@ function StatusForm({
       )}
       <FormError error={error} />
       <Actions>
-        <Button type="submit" disabled={busy || (status === decision.status && status !== "superseded")}>
+        <Button type="submit" disabled={busy || unchanged}>
           Save status
         </Button>
       </Actions>

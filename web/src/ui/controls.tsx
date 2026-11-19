@@ -99,6 +99,7 @@ export function workspaceCrumb(workspace: { id: string; name: string }): Crumb {
 export function PageHead({
   crumbs,
   title,
+  eyebrow,
   meta,
   switcher,
   actions,
@@ -106,6 +107,8 @@ export function PageHead({
 }: {
   crumbs?: Crumb[];
   title: ReactNode;
+  /** A line over the title, such as a Decision's number and status. */
+  eyebrow?: ReactNode;
   /** A line under the title. */
   meta?: ReactNode;
   switcher?: ReactNode;
@@ -124,6 +127,7 @@ export function PageHead({
           ))}
         </nav>
       )}
+      {eyebrow && <div className="page-head-eyebrow">{eyebrow}</div>}
       <div className="page-head-row">
         <h1 className={large ? "title-large" : undefined}>{title}</h1>
         {(switcher || actions) && (

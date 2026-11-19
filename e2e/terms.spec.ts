@@ -1,3 +1,6 @@
+import type { Page } from "@playwright/test";
+import { addMember, firstUser, setUp, signIn } from "../test/harness/flows.js";
+import type { StartedCronk } from "../test/harness/start-cronk.js";
 import { expect, test } from "./fixtures.js";
 
 test("create Workspace and Project Terms, see the Project's glossary replace same-named ones, edit and delete a Term", async ({
@@ -66,7 +69,7 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "Definition", exact: true }).fill("In this Project: one Claude Code session on a Ticket.");
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("In this Project: one Claude Code session on a Ticket.")).toBeVisible();
+  await expect(page.getByRole("article", { name: "run" })).toContainText("In this Project: one Claude Code session on a Ticket.");
   await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(2);
 
   await page.goto(`${projectUrl}/glossary`);
@@ -81,4 +84,57 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
   await page.getByRole("menuitem", { name: "Delete Term" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect(glossary.getByRole("heading", { level: 2 })).toHaveText(["Run", "Ticket"]);
+});
+
+/** Sets Cronk up, signs Ada in, and opens a Workspace Term Ada defined and Bea then saved again. */
+async function openTerm(page: Page, cronk: StartedCronk) {
+  const { workspace } = await setUp(cronk);
+  const adaCookie = await signIn(cronk);
+  const bea = await addMember(cronk, adaCookie, workspace.id, "bea@example.com");
+  const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/terms`, {
+    cookie: adaCookie,
+    body: { name: "Brief", definition: "The instructions a Run starts from.", avoid: ["Prompt"] },
+  });
+  const term = await created.json();
+  await cronk.request("PATCH", `/api/terms/${term.id}`, {
+    cookie: bea.cookie,
+    body: { baseVersion: 1, definition: "The instructions a Run starts from: the preamble, the Step's text, the Ticket's key.", avoid: ["Prompt", "system prompt"] },
+  });
+
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill(firstUser.email);
+  await page.getByLabel("Password").fill(firstUser.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await page.goto(`${cronk.url}/terms/${term.id}`);
+  await expect(page.getByRole("heading", { name: "Brief", level: 1 })).toBeVisible();
+}
+
+test("a Term reads as a Document does, and each of its Versions opens to what it said", async ({ page, cronk }) => {
+  await openTerm(page, cronk);
+  const term = page.getByRole("article", { name: "Brief" });
+  await expect(term).toContainText("the preamble, the Step's text, the Ticket's key.");
+  await expect(term).toContainText("Avoid: Prompt, system prompt");
+
+  const versions = page.getByRole("region", { name: "Versions" });
+  await expect(versions.getByRole("listitem")).toHaveText([/Version 2.*bea@example\.com/, /Version 1.*ada@example\.com/]);
+  await versions.getByRole("button", { name: "Version 1" }).click();
+  const version = page.getByRole("dialog", { name: "Version 1: Brief" });
+  await expect(version).toContainText("ada@example.com");
+  await expect(version.getByRole("article", { name: "Brief" })).toContainText("The instructions a Run starts from.");
+  await expect(version.getByRole("article", { name: "Brief" })).toContainText("Avoid: Prompt");
+});
+
+test("a Term's editor shows its definition and words to avoid in a preview beside the Markdown, as a Document's does", async ({ page, cronk }) => {
+  await openTerm(page, cronk);
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("textbox", { name: "Definition", exact: true }).fill("The instructions a Run starts from, **in full**.");
+  await page.getByLabel("Words to avoid").fill("Prompt, instructions");
+  const preview = page.getByRole("region", { name: "Preview" });
+  await expect(preview.getByRole("strong")).toHaveText("in full");
+  await expect(preview).toContainText("Avoid: Prompt, instructions");
+
+  await page.getByRole("button", { name: "Save as Version 3" }).click();
+  await expect(page.getByRole("article", { name: "Brief" })).toContainText("The instructions a Run starts from, in full.");
+  await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(3);
 });

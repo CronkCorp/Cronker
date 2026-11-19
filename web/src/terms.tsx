@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Place, type ProjectSummary, type Term, type TermVersion, type Workspace } from "./api.js";
-import { VersionMeta } from "./documents.js";
+import { DocumentBody, VersionMeta } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
@@ -267,31 +267,24 @@ export function TermScreen({
           )
         }
       />
-      <div className="page-split">
-        <div className="page">
-          {editing ? (
-            <Editor
-              term={term}
-              onSaved={(next) => {
-                setTerm(next);
-                setEditing(false);
-              }}
-              onRebased={load}
-              onCancel={() => setEditing(false)}
-            />
-          ) : (
-            <article className="panel" aria-label={term.name}>
-              <div className="prose">
-                {term.definition.trim() ? <Markdown text={term.definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
-                <Avoid words={term.avoid} />
-              </div>
-            </article>
-          )}
+      {editing ? (
+        <Editor
+          term={term}
+          onSaved={(next) => {
+            setTerm(next);
+            setEditing(false);
+          }}
+          onRebased={load}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <div className="page-split">
+          <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
+          <aside className="side" aria-label="Term details">
+            <Versions key={term.version.number} term={term} />
+          </aside>
         </div>
-        <aside className="side" aria-label="Term details">
-          <Versions key={term.version.number} term={term} />
-        </aside>
-      </div>
+      )}
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -338,7 +331,7 @@ function Editor({
     }
   });
   return (
-    <form onSubmit={onSubmit} className="panel">
+    <form onSubmit={onSubmit} className="editor">
       {current && (
         <Banner tone="info" label="Saved meanwhile">
           <p>
@@ -363,18 +356,25 @@ function Editor({
         </Banner>
       )}
       <Field label="Name">
-        <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
+        <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} className="title-input" />
       </Field>
-      <Field label="Definition">
-        <textarea value={definition} rows={6} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
-      </Field>
+      <div className="editor-panes">
+        <Field label="Definition">
+          <textarea value={definition} rows={12} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
+        </Field>
+        <section aria-label="Preview" className="editor-preview">
+          <span className="field-label">Preview</span>
+          <TermBody definition={definition} avoid={wordsToAvoid(avoid)} />
+        </section>
+      </div>
       <Field label="Words to avoid" hint="Separated by commas.">
         <input value={avoid} onChange={(e) => setAvoid(e.target.value)} />
       </Field>
       {!current && <FormError error={error} />}
       <Actions>
-        <Button type="submit" variant="primary" disabled={busy}>
-          Save as Version {base + 1}
+        {/* Until the draft is based on the Version saved meanwhile, a save would only be refused again. */}
+        <Button type="submit" variant="primary" disabled={busy || current !== null}>
+          Save as Version {(current?.number ?? base) + 1}
         </Button>
         <Button variant="ghost" onClick={onCancel}>
           Cancel
@@ -384,9 +384,27 @@ function Editor({
   );
 }
 
-/** The Term's Versions, newest first, each opening to what it said. */
+/** A Term as it reads, drawn as a Document's body is: its definition, then the words to avoid. Named, it is an article. */
+function TermBody({ name, definition, avoid }: { name?: string; definition: string; avoid: string[] }) {
+  return (
+    <DocumentBody
+      body={definition}
+      label={name}
+      after={<Avoid words={avoid} />}
+      empty={
+        <div className="prose">
+          <p className="muted">No definition yet.</p>
+          <Avoid words={avoid} />
+        </div>
+      }
+    />
+  );
+}
+
+/** The Term's Versions, newest first, in a side list as a Document's are: each opens to what it said. */
 function Versions({ term }: { term: Term }) {
   const [versions, setVersions] = useState<TermVersion[] | null>(null);
+  const [shown, setShown] = useState<TermVersion | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
     api.termVersions(term.id).then(setVersions, (e: Error) => setFailure(e.message));
@@ -399,22 +417,25 @@ function Versions({ term }: { term: Term }) {
       <ol className="version-list">
         {[...versions].reverse().map((version) => (
           <li key={version.number}>
-            <details className="version-details">
-              <summary>
-                Version {version.number}{" "}
-                <span className="version-by">
-                  <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
-                </span>
-              </summary>
-              <div className="version-body">
-                <strong>{version.name}</strong>
-                <Markdown text={version.definition} mentions={[]} />
-                <Avoid words={version.avoid} />
-              </div>
-            </details>
+            <span className="version-item">
+              <Button variant="ghost" size="small" onClick={() => setShown(version)}>
+                Version {version.number}
+              </Button>
+              <span className="version-by">
+                <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
+              </span>
+            </span>
           </li>
         ))}
       </ol>
+      <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.name}` : ""} wide>
+        {shown && (
+          <>
+            <VersionMeta version={shown} />
+            <TermBody name={shown.name} definition={shown.definition} avoid={shown.avoid} />
+          </>
+        )}
+      </Dialog>
     </section>
   );
 }
