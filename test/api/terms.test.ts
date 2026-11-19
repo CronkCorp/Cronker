@@ -183,4 +183,26 @@ describe("Project and Workspace Terms", () => {
     expect((await call("POST", projectTerms, ada, { name: "Agent" })).status).toBe(201);
     expect((await ok("PATCH", `/api/terms/${run.id}`, ada, { baseVersion: 1, name: "RUN" })).name).toBe("RUN");
   });
+
+  test("a Project's glossary shows its Terms over the Workspace's, replacing those of the same name", async () => {
+    const { ada, workspace, project, asAgent } = await workspaceWithProject();
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const workspaceTerms = `/api/workspaces/${workspace.id}/terms`;
+    await ok("POST", workspaceTerms, ada, { name: "Ticket", definition: "A unit of work." });
+    await ok("POST", workspaceTerms, ada, { name: "Run", definition: "One agent execution." });
+    await ok("POST", workspaceTerms, ada, { name: "Agent", definition: "A non-human account." });
+    await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "run", definition: "Here: one Claude session." });
+    await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Board", definition: "The Statuses as columns." });
+    await ok("POST", `/api/projects/${other.id}/terms`, ada, { name: "Ticket", definition: "Elsewhere's Ticket." });
+
+    const glossary = await ok("GET", `/api/projects/${project.id}/glossary`, asAgent);
+
+    expect(glossary.map((t: { name: string; definition: string; projectId: string | null }) => [t.name, t.definition, t.projectId])).toEqual([
+      ["Agent", "A non-human account.", null],
+      ["Board", "The Statuses as columns.", project.id],
+      ["run", "Here: one Claude session.", project.id],
+      ["Ticket", "A unit of work.", null],
+    ]);
+  });
 });
+

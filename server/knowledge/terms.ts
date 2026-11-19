@@ -239,3 +239,20 @@ export async function termsOf(db: Db, glossary: Glossary): Promise<Term[]> {
   );
   return rows.map(present);
 }
+
+/**
+ * A Project's glossary: its own Terms over the Workspace's, each Project Term replacing a Workspace Term of the same
+ * name ignoring case; by name ignoring case.
+ */
+export async function glossaryOf(db: Db, project: { workspaceId: string; projectId: string }): Promise<Term[]> {
+  const { rows } = await db.query<Row>(
+    `select ${columns} from ${fromTerms}
+     where terms.workspace_id = $1
+       and (terms.project_id = $2
+         or (terms.project_id is null and not exists (
+           select 1 from terms own where own.project_id = $2 and lower(own.name) = lower(terms.name))))
+     order by lower(terms.name), terms.name`,
+    [project.workspaceId, project.projectId],
+  );
+  return rows.map(present);
+}

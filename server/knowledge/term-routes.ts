@@ -3,8 +3,9 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
+import { findProject, projectNotFound } from "../work/projects.js";
 import { knowledgePlaces } from "./places.js";
-import { createTerm, editTerm, findTerm, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
+import { createTerm, editTerm, findTerm, glossaryOf, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
 
 const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 const Definition = Type.String({ maxLength: 20_000, description: "Markdown." });
@@ -76,6 +77,26 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       );
     }
+
+    app.get(
+      "/api/projects/:projectId/glossary",
+      {
+        schema: {
+          tags,
+          summary: "A Project's glossary",
+          description:
+            "The Project's own Terms over the Workspace's, by name ignoring case: a Project Term replaces a Workspace " +
+            "Term of the same name, ignoring case. Each Term's `projectId` says whose it is.",
+          params: Type.Object({ projectId: Type.String() }),
+          response: { 200: Type.Array(Term), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const project = await findProject(db, await requireCaller(context, request), request.params.projectId);
+        if (!project) throw projectNotFound();
+        return glossaryOf(db, { workspaceId: project.workspaceId, projectId: project.id });
+      },
+    );
 
     app.get(
       "/api/terms/:termId",
