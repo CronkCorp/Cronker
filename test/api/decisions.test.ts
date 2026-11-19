@@ -395,4 +395,19 @@ describe("Decisions", () => {
     const saved = await call("PATCH", `/api/decisions/${decision.id}`, reader, { baseVersion: 1, body: "Mine." });
     expect([recorded.json.error.code, saved.json.error.code]).toEqual(["read_only_token", "read_only_token"]);
   });
+
+  test("a save that changes nothing makes no Version", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use Postgres", body: "One." });
+
+    const same = await ok("PATCH", `/api/decisions/${decision.id}`, ada, {
+      baseVersion: 1,
+      title: "Use Postgres",
+      body: "One.",
+      status: "proposed",
+    });
+
+    expect(same.version.number).toBe(1);
+    expect((await ok("GET", `/api/decisions/${decision.id}/versions`, ada)).length).toBe(1);
+  });
 });

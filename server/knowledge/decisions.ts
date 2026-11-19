@@ -132,10 +132,10 @@ async function insertVersion(
 }
 
 /** A Decision's status, and the Decision replacing it while superseded. */
-type Standing = Pick<Content, "status" | "supersededById">;
+type StatusWithReplacement = Pick<Content, "status" | "supersededById">;
 
 /** Refuses an Agent changing a Decision's status or what supersedes it, which only a User does. */
-function requireStatusRight(actor: Caller, from: Standing, to: Standing): void {
+function requireStatusRight(actor: Caller, from: StatusWithReplacement, to: StatusWithReplacement): void {
   if (actor.kind !== "agent" || (from.status === to.status && from.supersededById === to.supersededById)) return;
   throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User changes a Decision's status.`, {
     rule: "Agents propose Decisions and edit their text; only a User changes a Decision's status.",
@@ -148,7 +148,10 @@ function requireStatusRight(actor: Caller, from: Standing, to: Standing): void {
  * none otherwise. Refused when superseded names no replacing Decision, when another status names one, and when
  * the replacing Decision isn't another of the same Project, or of the Workspace's own for one of the Workspace's.
  */
-function standingOf(current: Standing | null, edit: { status?: DecisionStatus; supersededById?: string | null }): Standing {
+function statusAsked(
+  current: StatusWithReplacement | null,
+  edit: { status?: DecisionStatus; supersededById?: string | null },
+): StatusWithReplacement {
   const status = edit.status ?? current?.status ?? "proposed";
   if (status !== "superseded") {
     if (edit.supersededById) {
@@ -171,8 +174,12 @@ function standingOf(current: Standing | null, edit: { status?: DecisionStatus; s
 }
 
 /** Refuses a replacing Decision that is the Decision itself, or not another of its own Project or the Workspace's. */
-async function requireReplacementInScope(tx: Tx, decision: Scope & { id: string | null }, standing: Standing) {
-  const replacement = standing.supersededById;
+async function requireReplacementInScope(
+  tx: Tx,
+  decision: Scope & { id: string | null },
+  asked: StatusWithReplacement,
+): Promise<void> {
+  const replacement = asked.supersededById;
   if (!replacement) return;
   if (replacement === decision.id) {
     throw new ApiError(409, "superseding_decision_itself", "A Decision can't supersede itself.", {
@@ -212,11 +219,11 @@ export async function createDecision(
   scope: Scope,
   input: { title: string; body: string; status?: DecisionStatus; supersededById?: string | null },
 ): Promise<Decision> {
-  const standing = standingOf(null, input);
-  requireStatusRight(actor, { status: "proposed", supersededById: null }, standing);
+  const asked = statusAsked(null, input);
+  requireStatusRight(actor, { status: "proposed", supersededById: null }, asked);
   return transaction(db, async (tx) => {
     await lockScope(tx, scope);
-    await requireReplacementInScope(tx, { ...scope, id: null }, standing);
+    await requireReplacementInScope(tx, { ...scope, id: null }, asked);
     const now = clock.now();
     const { rows } = await tx.query<{ id: string }>(
       `insert into decisions (workspace_id, project_id, number, version, created_at)
@@ -226,7 +233,7 @@ export async function createDecision(
       [scope.workspaceId, scope.projectId, now],
     );
     const id = rows[0]!.id;
-    const content: Content = { title: input.title, body: input.body, ...standing };
+    const content: Content = { title: input.title, body: input.body, ...asked };
     await insertVersion(tx, { id, workspaceId: scope.workspaceId }, 1, content, actor, now);
     return (await findDecision(tx, actor, id))!;
   });
@@ -298,8 +305,9 @@ export interface DecisionEdit {
 }
 
 /**
- * Saves a Decision as its next Version by the Actor. A save must be based on the current Version: one based on an
- * outdated Version is refused with the current one, so its Actor can see what changed.
+ * Saves a Decision as its next Version by the Actor; a save that changes nothing makes no Version. A save must be
+ * based on the current Version: one based on an outdated Version is refused with the current one, so its Actor can
+ * see what changed.
  */
 export async function editDecision(
   { db, clock }: Context,
@@ -311,8 +319,8 @@ export async function editDecision(
     const decision = await lockDecision(tx, actor, decisionId);
     if (!decision) throw decisionNotFound();
     const current = (await versionOf(tx, decision.id, decision.version))!;
-    const standing = standingOf(current, edit);
-    requireStatusRight(actor, current, standing);
+    const asked = statusAsked(current, edit);
+    requireStatusRight(actor, current, asked);
     if (edit.baseVersion === undefined) {
       throw new ApiError(400, "base_version_needed", "A save names the Version it's based on, as `baseVersion`.", {
         rule: "A save names the Version it's based on, so it never overwrites a change its Actor hasn't seen.",
@@ -331,9 +339,13 @@ export async function editDecision(
         { current },
       );
     }
-    await requireReplacementInScope(tx, decision, standing);
+    await requireReplacementInScope(tx, decision, asked);
     const number = current.number + 1;
-    const content: Content = { title: edit.title ?? current.title, body: edit.body ?? current.body, ...standing };
+    const content: Content = { title: edit.title ?? current.title, body: edit.body ?? current.body, ...asked };
+    const unchanged = (Object.keys(content) as (keyof Content)[]).every((key) =>
+      key === "title" ? content.title.trim() === current.title : content[key] === current[key],
+    );
+    if (unchanged) return (await findDecision(tx, actor, decision.id))!;
     await insertVersion(tx, decision, number, content, actor, clock.now());
     await tx.query("update decisions set version = $2 where id = $1", [decision.id, number]);
     return (await findDecision(tx, actor, decision.id))!;
