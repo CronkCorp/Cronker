@@ -601,7 +601,7 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
     <Panel
       title="Pull Request automation"
       id="pull-request-automation"
-      description="A merged Pull Request completes the Tickets it links: Verified when a User of this Workspace merged it, otherwise Unverified. Turned off, merges only update the Pull Request's state."
+      description="A merged Pull Request completes the Tickets it links: Verified when a User of this Workspace merged it, otherwise Unverified. A failing check or a review requesting changes sends a Ticket in a Review Status back to the Step that opened the Pull Request. Turned off, merges and failures only update the Pull Request's state."
     >
       <label className="check">
         <input
@@ -610,7 +610,7 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
           disabled={busy}
           onChange={(e) => void toggle({ pullRequestAutomation: e.target.checked })}
         />
-        Merges complete their Tickets
+        Merges complete their Tickets, and failures send them back
       </label>
       <FormError error={error} />
     </Panel>

@@ -43,6 +43,30 @@ export const ProducingStep = Type.Object({
 });
 export type ProducingStep = Static<typeof ProducingStep>;
 
+export const SentBack = Type.Union(
+  [
+    Type.Object({
+      kind: Type.Literal("check"),
+      name: Type.String({ description: "The failed check run's name, or the commit status's context." }),
+      sha: Type.String({ description: "The commit it failed on, then the Pull Request's latest." }),
+      url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows it, if it says." }),
+      at: Type.String({ format: "date-time" }),
+    }),
+    Type.Object({
+      kind: Type.Literal("review"),
+      reviewer: Type.Union([Type.String(), Type.Null()], { description: "The login of the GitHub account that requested changes." }),
+      url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows the review, if it says." }),
+      at: Type.String({ format: "date-time" }),
+    }),
+  ],
+  {
+    description:
+      "What last sent this Ticket back to its producing Step from this Pull Request: a failing check on its latest commit, " +
+      "or a review requesting changes.",
+  },
+);
+export type SentBack = Static<typeof SentBack>;
+
 export const PullRequest = Type.Object({
   id: Type.Integer({ description: "GitHub's id for the Pull Request." }),
   repository: Type.String({ description: "Its Repository's `owner/name` as GitHub last reported it with the Pull Request." }),
@@ -62,6 +86,7 @@ export const PullRequest = Type.Object({
     description:
       "The Step of the Run that was running on this Ticket when GitHub reported the Pull Request opened, or null if none was, as when a User opened it.",
   }),
+  sentBack: Type.Union([SentBack, Type.Null()], { description: "Null until a failure on it sends the Ticket back." }),
 });
 export type PullRequest = Static<typeof PullRequest>;
 
@@ -69,13 +94,21 @@ export type PullRequest = Static<typeof PullRequest>;
 export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): Promise<PullRequest[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  const { rows } = await db.query<Omit<PullRequest, "id" | "checks"> & { id: string; repositoryId: string; sha: string }>(
+  const { rows } = await db.query<Omit<PullRequest, "id" | "checks" | "sentBack"> & {
+    id: string;
+    repositoryId: string;
+    sha: string;
+    sentBack: SentBack | null;
+  }>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId", pull_requests.head_sha as sha,
        pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.title,
        pull_requests.branch, pull_requests.url, pull_requests.state, pull_requests.merged_by_login as "mergedBy",
        case when runs.id is null then null
          else json_build_object('runId', runs.id, 'statusId', runs.status_id, 'name', runs.status_name) end
-         as "producingStep"
+         as "producingStep",
+       (select sent_back.what || jsonb_build_object('at', sent_back.sent_at) from sent_back
+        where sent_back.pull_request_id = pull_requests.id and sent_back.ticket_id = pull_request_links.ticket_id
+        order by sent_back.seq desc limit 1) as "sentBack"
      from pull_request_links
      join pull_requests on pull_requests.id = pull_request_links.pull_request_id
      left join runs on runs.id = pull_request_links.producing_run_id
@@ -88,7 +121,13 @@ export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): 
     rows.map((r) => ({ repositoryId: r.repositoryId, sha: r.sha })),
   );
   // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
-  return rows.map(({ id, repositoryId, sha, ...row }, i) => ({ id: Number(id), ...row, checks: checks[i]! }));
+  return rows.map(({ id, repositoryId, sha, sentBack, ...row }, i) => ({
+    id: Number(id),
+    ...row,
+    checks: checks[i]!,
+    // jsonb carries the time as Postgres writes it; the API writes every time the same way.
+    sentBack: sentBack && { ...sentBack, at: new Date(sentBack.at).toISOString() },
+  }));
 }
 
 /** The checks on each of several commits, by name. */

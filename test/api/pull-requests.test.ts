@@ -163,6 +163,7 @@ describe("Pull Requests linking to Tickets", () => {
       checks: [],
       mergedBy: null,
       producingStep: null,
+      sentBack: null,
     };
     expect(await pullRequestsOf(first.id, cookie)).toEqual([shown]);
     expect(await pullRequestsOf(second.id, cookie)).toEqual([shown]);
@@ -809,5 +810,93 @@ describe("Failures sending work back", () => {
         "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c2`. " +
         "That is past Implement's round limit, so CRONK-1 comes to its Assignee instead.",
     ]);
+  });
+
+  test("many failing checks on one commit send the Ticket back once, and so does a review delivered again", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status, finishImplementing } = await inReview();
+    for (let id = 10; id < 13; id++) {
+      await deliver(app, "check_run", checkRunEvent(installation, cronker, { id, name: `check ${id}`, sha: "c1", status: "completed", conclusion: "failure" }));
+    }
+    // The next round comes back for review without pushing; more of the same commit's checks fail.
+    await finishImplementing();
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 13, name: "check 13", sha: "c1", status: "completed", conclusion: "failure" }));
+    await deliver(app, "status", statusEvent(installation, cronker, { id: 20, context: "ci/build", sha: "c1", state: "failure" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+
+    const review = reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" });
+    await deliver(app, "pull_request_review", review);
+    await finishImplementing();
+    // GitHub sends the same review again under a new delivery id.
+    await deliver(app, "pull_request_review", review);
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments.map((c: { body: string }) => c.body.split(" on ")[0])).toEqual([
+      "The check [**check 10**](https://github.com/cronkcorp/cronker/runs/10) failed",
+      "@bea [requested changes](https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72)",
+    ]);
+  });
+
+  const failing = (installation: StandInInstallation, repository: StandInRepository, sha: string) =>
+    checkRunEvent(installation, repository, { id: 10, name: "test", sha, status: "completed", conclusion: "failure" });
+
+  test("a Pull Request no Run opened sends nothing back", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Ada's own" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "b", sha: "c1" }));
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: statusNamed(project, "In Review") });
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "b", sha: "c1" }, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("a Ticket outside a Review Status is not sent back", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: status("Backlog") });
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Backlog") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("with Pull Request automation off, failures only show on the Pull Request", async () => {
+    const { cookie, app, installation, project, cronker, ticket, pr, status } = await inReview();
+    await ok("PATCH", `/api/projects/${project.id}`, cookie, { pullRequestAutomation: false });
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ checks: [{ name: "test", state: "failed" }], sentBack: null }]);
+  });
+
+  test("reading the Ticket's Pull Requests shows what last sent it back", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, finishImplementing } = await inReview();
+    cronk.clock.advance(hours(1));
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    expect((await pullRequestsOf(ticket.id, cookie))[0].sentBack).toEqual({
+      kind: "check",
+      name: "test",
+      sha: "c1",
+      url: "https://github.com/cronkcorp/cronker/runs/10",
+      at: "2026-01-01T10:00:00.000Z",
+    });
+    await finishImplementing();
+
+    cronk.clock.advance(hours(1));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect((await pullRequestsOf(ticket.id, cookie))[0].sentBack).toEqual({
+      kind: "review",
+      reviewer: "bea",
+      url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
+      at: "2026-01-01T11:00:00.000Z",
+    });
   });
 });

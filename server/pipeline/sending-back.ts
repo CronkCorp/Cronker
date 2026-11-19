@@ -41,6 +41,12 @@ export interface FailedPullRequest {
 
 const causeOf = (failure: Failure) => (failure.kind === "check" ? `commit:${failure.sha}` : `review:${failure.id}`);
 
+/** The failure as reading the Ticket shows it, without the time it sent the Ticket back. */
+const shown = (failure: Failure) =>
+  failure.kind === "check"
+    ? { kind: failure.kind, name: failure.name, sha: failure.sha, url: failure.url }
+    : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
+
 const linked = (text: string, url: string | null) => (url ? `[${text}](${url})` : text);
 
 function describe(failure: Failure, pullRequest: FailedPullRequest): string {
@@ -81,7 +87,7 @@ export async function sendBackForFailure(
     const now = context.clock.now();
     await tx.query(
       `insert into sent_back (pull_request_id, ticket_id, workspace_id, cause, what, sent_at) values ($1, $2, $3, $4, $5, $6)`,
-      [pullRequest.id, ticket.id, ticket.workspaceId, causeOf(failure), JSON.stringify(failure), now],
+      [pullRequest.id, ticket.id, ticket.workspaceId, causeOf(failure), JSON.stringify(shown(failure)), now],
     );
     const decision = await moveByCronk(context, tx, ticket, {
       target: { kind: "sentBack", step: { statusId: stepStatusId, name: stepName } },
