@@ -5,6 +5,7 @@ import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { findProject, projectNotFound } from "../work/projects.js";
 import { knowledgePlaces } from "./places.js";
+import { OutdatedVersionBody } from "./versions.js";
 import { createTerm, deleteTerm, editTerm, findTerm, glossaryOf, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
 
 const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
@@ -16,13 +17,7 @@ const Avoid = Type.Array(Type.String({ minLength: 1, maxLength: 200, pattern: "\
 const tags = ["Terms"];
 const TermParams = Type.Object({ termId: Type.String() });
 
-/** A save refused for being based on an outdated Version, with the current Version to merge into. */
-const OutdatedVersionBody = Type.Object({
-  error: Type.Object({
-    ...ErrorBody.properties.error.properties,
-    current: Type.Optional(Type.Object(TermVersion.properties, { description: "The Term's current Version." })),
-  }),
-});
+
 
 /** Trims the name and each word to avoid, as they are kept. */
 const tidy = <T extends { name?: string; avoid?: string[] }>(input: T): T => ({
@@ -133,7 +128,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             definition: Type.Optional(Definition),
             avoid: Type.Optional(Avoid),
           }),
-          response: { 200: Term, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody },
+          response: { 200: Term, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Term", TermVersion) },
         },
       },
       async (request) => editTerm(context, await requireCaller(context, request), request.params.termId, tidy(request.body)),

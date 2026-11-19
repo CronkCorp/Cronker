@@ -474,7 +474,7 @@ export interface Comparison {
   lines: { change: "same" | "removed" | "added"; text: string }[];
 }
 
-/** A glossary entry naming one concept, kept by a Project or by the Workspace. */
+/** A Term naming one concept, with its definition and the words to avoid, kept by a Project or by the Workspace. */
 export interface Term {
   id: string;
   workspaceId: string;

@@ -7,15 +7,16 @@ import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
-import type { Tree } from "./documents.js";
+import type { Place } from "./places.js";
+import { outdatedVersion } from "./versions.js";
 
 /**
- * Terms: glossary entries naming one concept each, kept by a Project or by the Workspace. Each save makes a Version
+ * Terms: each names one concept, with its definition and the words to avoid, kept by a Project or by the Workspace. Each save makes a Version
  * recording its Actor; the Term shows its current Version.
  */
 
 /** Which glossary a Term is in: a Project's own, or the Workspace's when `projectId` is null. */
-export type Glossary = Tree;
+export type Glossary = Place;
 
 const content = {
   name: Type.String(),
@@ -113,10 +114,10 @@ async function withUniqueName<T>(glossary: Glossary, name: string, write: () => 
     return await write();
   } catch (error) {
     if (!violates(error, "terms_project_name_key") && !violates(error, "terms_workspace_name_key")) throw error;
-    const place = glossary.projectId ? "this Project" : "the Workspace";
-    throw new ApiError(409, "term_name_taken", `${place[0]!.toUpperCase()}${place.slice(1)} already has a Term named ${name}.`, {
+    const holder = glossary.projectId ? "this Project" : "the Workspace";
+    throw new ApiError(409, "term_name_taken", `A Term named ${name} is already one of ${holder}'s, ignoring case.`, {
       rule: "A Term's name is unique ignoring case among its Project's Terms, or among the Workspace's.",
-      advice: `Edit the Term ${place} already has, or choose another name.`,
+      advice: `Edit the Term ${holder} already has, or choose another name.`,
     });
   }
 }
@@ -194,16 +195,7 @@ export async function editTerm({ db, clock }: Context, actor: Caller, termId: st
     if (!locked) throw termNotFound();
     const current = (await versionOf(tx, locked.id, locked.version))!;
     if (edit.baseVersion !== current.number) {
-      throw new ApiError(
-        409,
-        "outdated_version",
-        `The Term is at Version ${current.number}, but this save is based on Version ${edit.baseVersion}.`,
-        {
-          rule: "A save based on an outdated Version is refused, so it never overwrites a change its Actor hasn't seen.",
-          advice: "Merge your change into the current Version, given as `current`, and save again based on it.",
-        },
-        { current },
-      );
+      throw outdatedVersion("Term", current, edit.baseVersion);
     }
     const number = current.number + 1;
     const content = {
@@ -245,7 +237,7 @@ export async function termsOf(db: Db, glossary: Glossary): Promise<Term[]> {
  * A Project's glossary: its own Terms over the Workspace's, each Project Term replacing a Workspace Term of the same
  * name ignoring case; by name ignoring case.
  */
-export async function glossaryOf(db: Db, project: { workspaceId: string; projectId: string }): Promise<Term[]> {
+export async function glossaryOf(db: Db, project: Glossary & { projectId: string }): Promise<Term[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromTerms}
      where terms.workspace_id = $1

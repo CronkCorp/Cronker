@@ -328,12 +328,15 @@ export function buildMcpServer(api: Api): McpServer {
 
   const documentArgument = z.string().min(1).describe("The Document's id.");
 
-  /** The path of a Project's knowledge, by the Project's key, or of the Workspace's when none is given. */
-  async function placePath(project: string | undefined, knowledge: "documents" | "terms" | "glossary") {
+  /**
+   * The path of a Project's knowledge, by the Project's key, or of the Workspace's when none is given; the
+   * Workspace's may be reached by another name than the Project's.
+   */
+  async function placePath(project: string | undefined, knowledge: string, workspaceKnowledge = knowledge) {
     if (project) {
       return `/api/projects/${(await projectByKey(project, ", or leave the Project out for the Workspace's")).id}/${knowledge}`;
     }
-    return `/api/workspaces/${(await ownWorkspace()).id}/${knowledge === "glossary" ? "terms" : knowledge}`;
+    return `/api/workspaces/${(await ownWorkspace()).id}/${workspaceKnowledge}`;
   }
 
   const documentPath = (document: string) => `/api/documents/${encodeURIComponent(document)}`;
@@ -460,7 +463,8 @@ export function buildMcpServer(api: Api): McpServer {
       annotations: { readOnlyHint: true },
     },
     ({ project }) =>
-      answer(async () => get(await placePath(project, "glossary"))),
+      // A Project's glossary layers its Terms over the Workspace's; the Workspace's is its own Terms.
+      answer(async () => get(await placePath(project, "glossary", "terms"))),
   );
 
   server.registerTool(

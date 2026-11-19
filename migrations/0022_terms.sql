@@ -1,5 +1,6 @@
--- Terms: glossary entries of a Project, or of the Workspace when it has no Project. A name is unique ignoring case
--- among the Project's Terms, or among the Workspace's own; `name` is the current Version's, kept here for that.
+-- Terms: each names one concept, kept by a Project, or by the Workspace when it has no Project. A name is unique
+-- ignoring case among the Project's Terms, or among the Workspace's own; `name` is the current Version's, kept here
+-- for that.
 create table terms (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces (id),

@@ -20,6 +20,7 @@ import {
   VersionWithBody,
 } from "./documents.js";
 import { knowledgePlaces } from "./places.js";
+import { OutdatedVersionBody } from "./versions.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
@@ -34,13 +35,6 @@ const Position = Type.Integer({
   description: "A place among its siblings, counting from 0; last when left out or past the end.",
 });
 
-/** A save refused for being based on an outdated Version, with the current Version to merge into. */
-const OutdatedVersionBody = Type.Object({
-  error: Type.Object({
-    ...ErrorBody.properties.error.properties,
-    current: Type.Optional(Type.Object(VersionWithBody.properties, { description: "The Document's current Version." })),
-  }),
-});
 
 export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
@@ -131,7 +125,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             parentId: Type.Optional(ParentId),
             position: Type.Optional(Position),
           }),
-          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody },
+          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Document", VersionWithBody) },
         },
       },
       async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),
