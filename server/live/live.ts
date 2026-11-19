@@ -11,7 +11,9 @@ export type LiveEvent =
   | { type: "ticket.created"; projectId: string; ticketId: string }
   | { type: "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
-  | { type: "report.added"; projectId: string; ticketId: string; reportId: string };
+  | { type: "report.added"; projectId: string; ticketId: string; reportId: string }
+  | { type: "attachments.changed"; projectId: string; ticketId: string }
+  | { type: "attachments.changed"; documentId: string };
 
 export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.created": "A Project was created, with its Statuses.",
@@ -21,6 +23,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
   "comment.added": "A Comment was added to a Ticket.",
   "report.added": "A Run wrote a Report on a Ticket.",
+  "attachments.changed":
+    "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
 };
 
 /** One open stream: whose it is, and how to write to it. */

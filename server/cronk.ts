@@ -3,6 +3,7 @@ import type { Socket } from "node:net";
 import type { Writable } from "node:stream";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import pg from "pg";
+import { directoryStorage } from "./attachments/storage.js";
 import { buildApp } from "./app.js";
 import { systemClock, type Clock } from "./clock.js";
 import type { Config } from "./config.js";
@@ -43,7 +44,15 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
   });
   try {
     await migrate(db);
-    const context: Context = { config, db, clock, live: new Live(), runners: {}, installationTokens: new InstallationTokens(clock) };
+    const context: Context = {
+      config,
+      db,
+      clock,
+      live: new Live(),
+      runners: {},
+      installationTokens: new InstallationTokens(clock),
+      attachments: directoryStorage(config.attachments.directory),
+    };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);

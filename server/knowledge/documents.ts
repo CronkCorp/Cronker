@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { forget } from "../attachments/attachments.js";
+import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
@@ -385,11 +386,11 @@ export async function compareVersions(
 }
 
 /**
- * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
+ * Deletes a Document with all its Versions and Attachments; only a User may. Refused while it has children: they are moved or
  * deleted first. Its siblings after it close the gap.
  */
-export async function deleteDocument({ db }: Context, actor: Caller, documentId: string): Promise<void> {
-  await transaction(db, async (tx) => {
+export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
+  await transaction(context.db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
     if (actor.kind === "agent") {
@@ -410,6 +411,10 @@ export async function deleteDocument({ db }: Context, actor: Caller, documentId:
         },
       );
     }
+    const attached = await tx.query<{ id: string }>("delete from attachments where document_id = $1 returning id", [
+      document.id,
+    ]);
+    afterCommit(tx, () => forget(context, attached.rows.map((row) => row.id)));
     await tx.query("delete from documents where id = $1", [document.id]);
     await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
   });

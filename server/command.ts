@@ -1,4 +1,5 @@
 import { systemClock } from "./clock.js";
+import { directoryStorage } from "./attachments/storage.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { createPool, migrate } from "./db.js";
 import { InstallationTokens } from "./github/installations.js";
@@ -35,7 +36,7 @@ async function main(args: string[]): Promise<number> {
   const db = createPool(config.databaseUrl);
   try {
     await migrate(db);
-    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live(), runners: {}, installationTokens: new InstallationTokens(systemClock) }, email);
+    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live(), runners: {}, installationTokens: new InstallationTokens(systemClock), attachments: directoryStorage(config.attachments.directory) }, email);
     console.log(`Pass this link to ${user.email}. It sets a new password, works once and expires ${link.expiresAt}:`);
     console.log(link.url);
     return 0;

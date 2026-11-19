@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createCronk, type Cronk } from "../../server/cronk.js";
@@ -48,6 +51,8 @@ export interface StartedCronk {
   request(method: string, path: string, options?: RequestOptions): Promise<Response>;
   /** Terminates Cronk's idle database connections from an admin connection, as a Postgres restart would; returns how many. */
   terminateIdleDatabaseConnections(): Promise<number>;
+  /** The files in the directory Cronk keeps Attachments in. */
+  attachmentFiles(): Promise<string[]>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
   command(...args: string[]): Promise<CommandResult>;
   stop(): Promise<void>;
@@ -65,6 +70,8 @@ export interface StartCronkOptions {
   webRoot?: string;
   /** Start without `CRONK_SECRET_KEY`, so nothing can be stored encrypted. */
   noSecretKey?: boolean;
+  /** The size limit of each Attachment, in bytes; 25 MB, the default, when left out. */
+  attachmentLimitBytes?: number;
 }
 
 const commandScript = fileURLToPath(new URL("../../server/command.ts", import.meta.url));
@@ -99,6 +106,8 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
   });
 
+  const attachmentsDirectory = await mkdtemp(join(tmpdir(), "cronk-attachments-"));
+  const removeAttachments = () => rm(attachmentsDirectory, { recursive: true, force: true });
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
   let cronk: Cronk;
@@ -113,6 +122,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
         secretKey: options.noSecretKey ? undefined : randomBytes(32).toString("base64"),
         github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
         claudeApiUrl: new URL(claude.apiUrl),
+        attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
       },
       clock,
       logStream,
@@ -120,7 +130,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     });
     await cronk.listen();
   } catch (error) {
-    await Promise.all([database.drop(), github.stop(), claude.stop()]);
+    await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
     throw error;
   }
 
@@ -139,6 +149,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       return line.setupCode as string;
     },
     terminateIdleDatabaseConnections: () => database.terminateIdleConnections(),
+    attachmentFiles: async () => (await readdir(attachmentsDirectory).catch(() => [])).sort(),
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
       const all: Record<string, string> = { ...headers };
       if (body !== undefined) all["content-type"] = "application/json";
@@ -162,7 +173,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async stop() {
       await cronk.close();
-      await Promise.all([database.drop(), github.stop(), claude.stop()]);
+      await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
     },
   };
 }

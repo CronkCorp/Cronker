@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 /** Cronk's configuration, read only from environment variables. */
 export interface Config {
   /** The public HTTPS address Cronk is reached at, e.g. `https://cronk.example.com`. */
@@ -13,7 +15,15 @@ export interface Config {
   github: { url: URL; apiUrl: URL };
   /** Where the Claude API is, whose scheduled-task fire endpoint the subscription Runner calls (`https://api.anthropic.com`). */
   claudeApiUrl: URL;
+  /** Where Attachments are kept, and how large each may be. */
+  attachments: { directory: string; limitBytes: number };
 }
+
+/** An Attachment may be this large unless configured otherwise: 25 MB. */
+export const defaultAttachmentLimitMb = 25;
+
+/** A megabyte as Attachment limits count it. */
+export const megabyte = 1024 * 1024;
 
 export class ConfigError extends Error {}
 
@@ -60,6 +70,11 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { webRoot?: string 
     throw new ConfigError("CRONK_SECRET_KEY must be at least 32 characters, such as the output of `openssl rand -base64 32`");
   }
 
+  const limitMb = Number(env.CRONK_ATTACHMENT_LIMIT_MB?.trim() || defaultAttachmentLimitMb);
+  if (!Number.isFinite(limitMb) || limitMb <= 0) {
+    throw new ConfigError("CRONK_ATTACHMENT_LIMIT_MB must be a number of megabytes above 0, such as 25");
+  }
+
   return {
     publicUrl,
     databaseUrl: required(env, "DATABASE_URL"),
@@ -72,5 +87,9 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { webRoot?: string 
       apiUrl: httpUrl(env, "CRONK_GITHUB_API_URL", "https://api.github.com"),
     },
     claudeApiUrl: httpUrl(env, "CRONK_CLAUDE_API_URL", "https://api.anthropic.com"),
+    attachments: {
+      directory: resolve(env.CRONK_ATTACHMENTS_DIR?.trim() || "data/attachments"),
+      limitBytes: Math.floor(limitMb * megabyte),
+    },
   };
 }
