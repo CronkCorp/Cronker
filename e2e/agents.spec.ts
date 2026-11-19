@@ -43,10 +43,11 @@ test("a User creates an Agent, issues a token shown once with Copy, and revokes 
   await tokens.getByRole("button", { name: "Close" }).click();
   await expect(card).toContainText("1 token: laptop");
   await card.getByRole("button", { name: "Manage tokens" }).click();
+  const row = tokens.getByRole("row", { name: /laptop/ });
+  await expect(row).toHaveCount(1);
   await expect(tokens.getByLabel("Token laptop")).toHaveCount(0);
 
   // Revoking asks first; Cancel keeps the token working.
-  const row = tokens.getByRole("row", { name: /laptop/ });
   await row.getByRole("button", { name: "Revoke" }).click();
   const confirm = page.getByRole("dialog", { name: "Revoke laptop?" });
   await confirm.getByRole("button", { name: "Cancel" }).click();
