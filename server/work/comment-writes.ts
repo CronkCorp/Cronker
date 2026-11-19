@@ -6,12 +6,12 @@ import type { Tx } from "../db.js";
  * `runs.ts`, which `tickets.ts` imports as it loads.
  */
 
-/** Writes a Comment on the Ticket as the Actor, telling the Workspace, and returns its id. */
+/** Writes a Comment on the Ticket as the Actor, or as Cronk itself, telling the Workspace, and returns its id. */
 export async function insertComment(
   { clock, live }: Context,
   tx: Tx,
   ticket: { id: string; workspaceId: string; projectId: string },
-  actor: { kind: "user" | "agent"; id: string },
+  actor: { kind: "user" | "agent"; id: string } | { kind: "cronk" },
   body: string,
   replyToId: string | null,
 ): Promise<string> {

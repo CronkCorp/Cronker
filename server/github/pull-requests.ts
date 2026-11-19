@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
+import { sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
 
@@ -247,7 +248,8 @@ const statusStates: Record<string, CheckState> = { pending: "pending", success: 
 /**
  * Keeps one check of a commit, unless Cronk knows a later one of that name: a newer check run
  * or status by GitHub's id, or a later stage of the same check run. Commits of Repositories no
- * Project lists are ignored. The Pull Requests whose latest commit it is are announced.
+ * Project lists are ignored. The Pull Requests whose latest commit it is are announced, and a
+ * failed check sends the Tickets an open one links back to work.
  */
 async function recordCheck(
   context: Context,
@@ -265,10 +267,22 @@ async function recordCheck(
     [check.repositoryId, check.sha, check.kind, check.name, check.sourceId, check.state, check.stage, check.url],
   );
   if (!rowCount) return;
-  const { rows } = await tx.query<{ id: string }>("select id from pull_requests where repository_id = $1 and head_sha = $2", [
-    check.repositoryId,
-    check.sha,
-  ]);
+  const { rows } = await tx.query<{ id: string; repository: string; number: number; url: string; open: boolean }>(
+    `select id, repository_full_name as repository, number, url, state in ('open', 'draft') as open
+     from pull_requests where repository_id = $1 and head_sha = $2 order by id`,
+    [check.repositoryId, check.sha],
+  );
+  if (check.state === "failed") {
+    for (const { id, repository, number, url, open } of rows) {
+      if (!open) continue;
+      await sendBackForFailure(context, tx, { id: Number(id), repository, number, url }, {
+        kind: "check",
+        name: check.name,
+        sha: check.sha,
+        url: check.url,
+      });
+    }
+  }
   await announce(context, tx, rows.map((r) => Number(r.id)));
 }
 

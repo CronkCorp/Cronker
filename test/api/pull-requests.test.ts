@@ -75,6 +75,39 @@ function pullRequestEvent(
   };
 }
 
+/** A `check_run` delivery as GitHub sends it, with only the fields Cronk reads. */
+const checkRunEvent = (
+  installation: StandInInstallation,
+  repository: StandInRepository,
+  run: { id: number; name: string; sha: string; status: string; conclusion?: string },
+) => ({
+  action: run.status === "completed" ? "completed" : "created",
+  installation: { id: installation.id },
+  repository: { id: repository.id, full_name: repository.fullName },
+  check_run: {
+    id: run.id,
+    name: run.name,
+    head_sha: run.sha,
+    status: run.status,
+    conclusion: run.conclusion ?? null,
+    html_url: `https://github.com/${repository.fullName}/runs/${run.id}`,
+  },
+});
+/** A `status` delivery as GitHub sends it, with only the fields Cronk reads. */
+const statusEvent = (
+  installation: StandInInstallation,
+  repository: StandInRepository,
+  status: { id: number; context: string; sha: string; state: string; targetUrl?: string },
+) => ({
+  installation: { id: installation.id },
+  repository: { id: repository.id, full_name: repository.fullName },
+  id: status.id,
+  sha: status.sha,
+  context: status.context,
+  state: status.state,
+  target_url: status.targetUrl ?? null,
+});
+
 async function deliver(app: StandInApp, event: string, payload: unknown) {
   const delivered = await cronk.github.deliver(app, event, payload);
   expect(delivered.status, await delivered.clone().text()).toBe(200);
@@ -268,37 +301,6 @@ describe("A Pull Request's state", () => {
 
 
 describe("A Pull Request's checks", () => {
-  const checkRunEvent = (
-    installation: StandInInstallation,
-    repository: StandInRepository,
-    run: { id: number; name: string; sha: string; status: string; conclusion?: string },
-  ) => ({
-    action: run.status === "completed" ? "completed" : "created",
-    installation: { id: installation.id },
-    repository: { id: repository.id, full_name: repository.fullName },
-    check_run: {
-      id: run.id,
-      name: run.name,
-      head_sha: run.sha,
-      status: run.status,
-      conclusion: run.conclusion ?? null,
-      html_url: `https://github.com/${repository.fullName}/runs/${run.id}`,
-    },
-  });
-  const statusEvent = (
-    installation: StandInInstallation,
-    repository: StandInRepository,
-    status: { id: number; context: string; sha: string; state: string },
-  ) => ({
-    installation: { id: installation.id },
-    repository: { id: repository.id, full_name: repository.fullName },
-    id: status.id,
-    sha: status.sha,
-    context: status.context,
-    state: status.state,
-    target_url: null,
-  });
-
   test("shows the check runs and commit statuses on its latest commit, the latest of each", async () => {
     const { cookie, app, installation, project, cronker } = await projectWithRepository();
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Checked" });
@@ -632,3 +634,50 @@ describe("Merges", () => {
   });
 });
 
+
+describe("Failures sending work back", () => {
+  const statusNamed = (project: { statuses: { id: string; name: string }[] }, name: string) =>
+    project.statuses.find((s) => s.name === name)!.id;
+  const ok = async (method: string, path: string, cookie: string, body?: unknown) => {
+    const response = await cronk.request(method, path, { cookie, body });
+    expect(response.status, await response.clone().text()).toBeLessThan(300);
+    return response.json();
+  };
+
+  /**
+   * A delegated Ticket whose Implement Run opened Pull Request 501 (`CRONK-1`, branch `b`, latest commit `c1`), then
+   * moved by Ada to In Review, a Review Status.
+   */
+  async function inReview() {
+    const setup = await projectWithRepository();
+    const { workspace, cookie, app, installation, project, cronker } = setup;
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await ok("PATCH", `/api/agents/${agent.id}`, cookie, { runnerId: runner.id });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { delegateId: agent.id, statusId: statusNamed(project, "Implement") });
+    const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b", sha: "c1" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: statusNamed(project, "In Review") });
+    const status = (name: string) => statusNamed(project, name);
+    return { ...setup, ticket, pr, status };
+  }
+
+  const ticketOf = async (ticketId: string, cookie: string) => ok("GET", `/api/tickets/${ticketId}`, cookie);
+  const commentsOf = async (ticketId: string, cookie: string) => ok("GET", `/api/tickets/${ticketId}/comments`, cookie);
+
+  test("a failed check run on the latest commit sends the Ticket back to the producing Step's Status, with a Comment from Cronk linking it", async () => {
+    const { cookie, app, installation, cronker, ticket, status } = await inReview();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments).toHaveLength(1);
+    expect(comments[0].actor).toEqual({ kind: "cronk", name: "Cronk" });
+    expect(comments[0].body).toContain("https://github.com/cronkcorp/cronker/runs/10");
+    // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
+    expect(runs.map((r: { state: string; statusName: string }) => r.state)).toEqual(["stopped", "running"]);
+  });
+});

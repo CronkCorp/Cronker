@@ -8,7 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
 import { answerQuestion } from "../runs/questions.js";
 import { insertComment } from "./comment-writes.js";
-import { Actor, actorColumn } from "./actors.js";
+import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
 import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
 
 export const Comment = Type.Object({
@@ -16,7 +16,7 @@ export const Comment = Type.Object({
   ticketId: Type.String({ format: "uuid" }),
   replyToId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
   body: Type.String({ description: "Markdown." }),
-  actor: Actor,
+  actor: ActorOrCronk,
   createdAt: Type.String({ format: "date-time" }),
   mentions: Type.Array(Mention, { description: "Ticket keys the body mentions." }),
   attachments: Type.Array(Attachment, { description: "The files attached to the Comment, oldest first." }),
@@ -29,7 +29,7 @@ export type Comment = Static<typeof Comment>;
 type Row = Omit<Comment, "createdAt" | "mentions" | "attachments"> & { createdAt: Date };
 
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.reply_to_id as "replyToId", comments.body,
-  ${actorColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId"`;
+  ${actorOrCronkColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId"`;
 
 async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promise<Row[]> {
   const { rows } = await db.query<Row>(
