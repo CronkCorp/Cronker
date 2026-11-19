@@ -11,11 +11,10 @@ import {
   type ProjectSummary,
   type Workspace,
 } from "./api.js";
-import { Editor, VersionMeta, Versions } from "./documents.js";
+import { DocumentBody, Editor, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
-import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
@@ -277,15 +276,11 @@ export function DecisionScreen({
         />
       ) : (
         <div className="page-split">
-          <article className="panel" aria-label={decision.title}>
-            {decision.body.trim() ? (
-              <div className="prose">
-                <Markdown text={decision.body} mentions={[]} />
-              </div>
-            ) : (
-              <EmptyState title="Nothing written yet.">Edit records the context, the decision and what follows from it.</EmptyState>
-            )}
-          </article>
+          <DocumentBody
+            body={decision.body}
+            label={decision.title}
+            empty={<EmptyState title="Nothing written yet.">Edit records the context, the decision and what follows from it.</EmptyState>}
+          />
           <aside className="side" aria-label="Decision details">
             <Panel className="side-section">
               <div className="side-row">
