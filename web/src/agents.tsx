@@ -324,7 +324,7 @@ function ManageTokens({
   onClose: () => void;
 }) {
   const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
-  const [revoking, setRevoking] = useState<AgentToken | null>(null);
+  const [revokingToken, setRevokingToken] = useState<AgentToken | null>(null);
   const issue = useSubmit(async (form, element) => {
     const access = field(form, "access") === "read" ? "read" : "full";
     setIssued(await api.issueToken(agent.id, { name: field(form, "name"), access }));
@@ -367,7 +367,7 @@ function ManageTokens({
                 </td>
                 <td className="cell-actions">
                   <div>
-                    <Button variant="ghost" size="small" onClick={() => setRevoking(token)}>
+                    <Button variant="ghost" size="small" onClick={() => setRevokingToken(token)}>
                       Revoke
                     </Button>
                   </div>
@@ -400,14 +400,14 @@ function ManageTokens({
         </DialogClose>
       </DialogActions>
       <ConfirmDialog
-        open={revoking !== null}
-        onOpenChange={(open) => !open && setRevoking(null)}
-        title={`Revoke ${revoking?.name ?? "token"}?`}
+        open={revokingToken !== null}
+        onOpenChange={(open) => !open && setRevokingToken(null)}
+        title={`Revoke ${revokingToken?.name ?? "token"}?`}
         confirm="Revoke"
         onConfirm={async () => {
-          if (!revoking) return;
-          await api.revokeToken(agent.id, revoking.id);
-          if (issued?.token.id === revoking.id) setIssued(null);
+          if (!revokingToken) return;
+          await api.revokeToken(agent.id, revokingToken.id);
+          if (issued?.token.id === revokingToken.id) setIssued(null);
           onChanged();
         }}
       >

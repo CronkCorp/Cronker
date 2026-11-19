@@ -203,8 +203,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Agents and Runners
 
-- **Agents:** one card per Agent with its avatar, name, the Tickets delegated to it and its running Runs (each by its Ticket's key and title, with the Run state), its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
-- **Manage tokens** opens a dialog that lists the Agent's tokens and issues new ones. A new token's secret shows once, with **Copy**, until the dialog closes. Revoke asks first in a confirming dialog, since whatever connects with the token stops working. The Agent's own page (its Runner) shows the same line.
+- **Agents:** one card per Agent with its avatar, name, how many Tickets are delegated to it and how many of its Runs are running, each running Run by its Ticket's key and title with the Run state, its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
+- **Manage tokens** opens a dialog that lists the Agent's tokens and issues new ones. A new token's secret shows once, with **Copy**, until the dialog closes. Revoke asks first in a confirming dialog, since whatever connects with the token stops working. The Agent's own page, where its Runner is chosen, shows the same line.
 - **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face. Removing a trigger asks first, since its token is gone for good. The page streams the User's own Runners, so the count and the pause stay current while it is open.
 
 ### Workspace settings, Members and GitHub

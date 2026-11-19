@@ -82,7 +82,7 @@ function RunnerSettings({
   projects: ProjectSummary[];
   onChanged: (runner: Runner) => void;
 }) {
-  const [removing, setRemoving] = useState<Trigger | null>(null);
+  const [removingTrigger, setRemovingTrigger] = useState<Trigger | null>(null);
   const [limitSaved, setLimitSaved] = useState(false);
   const limit = useSubmit(async (form) => {
     setLimitSaved(false);
@@ -168,7 +168,7 @@ function RunnerSettings({
                     </td>
                     <td className="cell-actions">
                       <div>
-                        <Button variant="ghost" size="small" onClick={() => setRemoving(trigger)}>
+                        <Button variant="ghost" size="small" onClick={() => setRemovingTrigger(trigger)}>
                           Remove
                         </Button>
                       </div>
@@ -211,16 +211,16 @@ function RunnerSettings({
             </Actions>
           </form>
           <ConfirmDialog
-            open={removing !== null}
-            onOpenChange={(open) => !open && setRemoving(null)}
+            open={removingTrigger !== null}
+            onOpenChange={(open) => !open && setRemovingTrigger(null)}
             title={
-              removing?.projectId
-                ? `Remove the ${removing.model} trigger for ${projectName(removing.projectId)}?`
-                : `Remove the ${removing?.model ?? ""} trigger?`
+              removingTrigger?.projectId
+                ? `Remove the ${removingTrigger.model} trigger for ${projectName(removingTrigger.projectId)}?`
+                : `Remove the ${removingTrigger?.model ?? ""} trigger?`
             }
             confirm="Remove"
             onConfirm={async () => {
-              if (removing) onChanged(await api.removeTrigger(runner.id, removing.id));
+              if (removingTrigger) onChanged(await api.removeTrigger(runner.id, removingTrigger.id));
             }}
           >
             Its token is gone for good: saving this model again takes the token from claude.ai. Runs needing it can't
