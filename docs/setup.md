@@ -54,6 +54,8 @@ The **GitHub** page now names the App, and says it has everything Cronk needs. S
 
 **An App created for sign-in only**, before Cronk read Pull Requests, can't be changed by Cronk. As an Admin, the **GitHub** page asks GitHub what the App has and lists what it lacks: the permissions and events to add, and the webhook URL and secret to paste, with a link to the App's settings on GitHub. Add them there and reload the page. GitHub never shows a webhook secret, so the webhook stays listed until a delivery arrives signed with Cronk's; to check at once, redeliver one from the App's Advanced settings on GitHub. GitHub then asks the owner of each installation to accept the new permissions; the page lists the installations that haven't yet.
 
+GitHub doesn't retry a webhook delivery that failed, so on startup and every five minutes Cronk asks GitHub for the App's recent deliveries and has each failed one it hasn't applied sent again. GitHub keeps deliveries for three days: if Cronk or its tunnel is down longer than that, what GitHub sent meanwhile is lost.
+
 To skip it, choose **Skip for now**; email and password sign-in is enough for everything below.
 
 ## 4. Create a Project and an Agent
