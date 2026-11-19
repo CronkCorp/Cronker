@@ -4,7 +4,7 @@ How Cronk's web client looks and behaves. Read this before changing anything in 
 
 This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are the old Cronk's prototypes: they show the look to aim for, but also concepts this rewrite dropped (Claims, Agent Sessions, Protected items, Suggestions, Triage). Where a screenshot and this text differ, the text wins.
 
-The web client doesn't follow this file yet. The styling pass at the end of milestone 2 (`docs/roadmap.md`) brings it in line: first the foundation (tokens, faces, components, the frame), then each screen. Until then, new screens use the tokens and components once they exist, and leave old screens to that pass.
+The web client doesn't fully follow this file yet. The styling pass at the end of milestone 2 (`docs/roadmap.md`) brings it in line: first the foundation (tokens, faces, components, the frame), then each screen. The tokens, the faces, the type scale and `<Button>` are in place; until the rest is, new screens use the tokens and components that exist, and leave old screens to that pass.
 
 ## Principles
 
@@ -78,6 +78,7 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog, tabs), each wrapped once (`Popover`, `Menu`, `Dialog` and `ConfirmDialog`, `Tabs`) and styled by our classes. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
 
 - **Actor** (`<Actor>`): avatar plus name. A User is round. An Agent is square and violet, followed by "for <Owner>" where the Owner isn't obvious. Cronk is muted text with its "C" avatar.
+- **Key** (`<Key>`) and **model label** (`<ModelLabel>`): a Ticket or Project key, or a model label, in the mono face; a key at 12px `--muted`.
 - **Status** (`<StatusPill>`): dot and name. **Priority** (`<PriorityTag>`): a small uppercase tag. Urgent is filled `--danger`, High is `--danger` on `--danger-soft`, Medium is `--warn` on `--warn-soft`, Low is muted, and None shows nothing.
 - **Label** (`<Chip>`): a neutral chip on `--surface-2`. A state marker takes a tone: `ok` ("Verified", "Answered") is filled `--ok-soft`; `warn` ("Waiting for an answer") and `danger` ("Failed") are outlined pills in that colour; `info` ("Unverified", "Overrides the Workspace Term") is the same outlined pill; `agent` marks what Agents did.
 - **Run state** (`<RunState>`): 11px uppercase pill. Running is `--agent` on `--agent-soft` with a pulsing dot, Finished outlined `--ok`, Failed and Lost outlined `--danger`, Stopped outlined `--muted`, Refused (*couldn't start*) outlined `--warn`, and Waiting (Runner full or rate-limited) dashed `--muted` with the reason in its tooltip.

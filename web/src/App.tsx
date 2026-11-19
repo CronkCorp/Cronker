@@ -24,6 +24,7 @@ import { Link, navigate, replace, usePath } from "./router.js";
 import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
+import { Button } from "./button.js";
 
 type Screen =
   | { kind: "loading" }
@@ -70,7 +71,8 @@ export function App() {
     return (
       <Centered title="Cronk can't be reached">
         <p role="alert">{failure}</p>
-        <button
+        <Button
+          variant="primary"
           type="button"
           onClick={() => {
             setFailure(null);
@@ -79,7 +81,7 @@ export function App() {
           }}
         >
           Try again
-        </button>
+        </Button>
       </Centered>
     );
   }
@@ -169,9 +171,9 @@ function SetupScreen({ onDone }: { onDone: () => void }) {
           <input name="workspaceName" required />
         </label>
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Set up
-        </button>
+        </Button>
       </form>
     </Centered>
   );
@@ -195,9 +197,9 @@ function SignInScreen({ notice, returnTo, onSignedIn }: { notice?: string; retur
           <input name="password" type="password" required autoComplete="current-password" />
         </label>
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Sign in
-        </button>
+        </Button>
       </form>
       <p className="or">
         <GitHubSignIn returnTo={returnTo} />
@@ -262,9 +264,9 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
           </label>
         )}
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           {joining ? "Join" : "Set password"}
-        </button>
+        </Button>
       </form>
     </Centered>
   );
@@ -471,9 +473,9 @@ function SignedIn({
         <span className="spacer" />
         <Link to="/password">{nameOf(user)}</Link>
         <form onSubmit={onSubmit}>
-          <button type="submit" disabled={busy}>
+          <Button variant="ghost" type="submit" disabled={busy}>
             Sign out
-          </button>
+          </Button>
         </form>
       </header>
       <main>
@@ -498,9 +500,9 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
           <input name="name" required />
         </label>
         {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Create Workspace
-        </button>
+        </Button>
       </form>
     </section>
   );
@@ -528,9 +530,9 @@ function ChangePassword() {
         </label>
         {error && <p role="alert">{error}</p>}
         {done && <p role="status">Password changed. Your other sign-ins have ended.</p>}
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Change password
-        </button>
+        </Button>
       </form>
     </section>
   );
@@ -618,9 +620,9 @@ function Members({
               <input name="name" required defaultValue={workspace.name} />
             </label>
             {rename.error && <p role="alert">{rename.error}</p>}
-            <button type="submit" disabled={rename.busy}>
+            <Button variant="ghost" type="submit" disabled={rename.busy}>
               Rename
-            </button>
+            </Button>
           </form>
           {settings && (
             <form onSubmit={changeSettings.onSubmit}>
@@ -629,9 +631,9 @@ function Members({
                 <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
               </label>
               {changeSettings.error && <p role="alert">{changeSettings.error}</p>}
-              <button type="submit" disabled={changeSettings.busy}>
+              <Button variant="primary" type="submit" disabled={changeSettings.busy}>
                 Save threshold
-              </button>
+              </Button>
             </form>
           )}
           <form onSubmit={add.onSubmit}>
@@ -640,9 +642,9 @@ function Members({
               <input name="email" type="email" required autoComplete="off" />
             </label>
             {add.error && <p role="alert">{add.error}</p>}
-            <button type="submit" disabled={add.busy}>
+            <Button variant="primary" type="submit" disabled={add.busy}>
               Add by email
-            </button>
+            </Button>
           </form>
           <form onSubmit={addByGitHub.onSubmit}>
             <label>
@@ -650,9 +652,9 @@ function Members({
               <input name="login" required autoComplete="off" />
             </label>
             {addByGitHub.error && <p role="alert">{addByGitHub.error}</p>}
-            <button type="submit" disabled={addByGitHub.busy}>
+            <Button variant="primary" type="submit" disabled={addByGitHub.busy}>
               Add by GitHub login
-            </button>
+            </Button>
           </form>
         </div>
       )}
@@ -672,7 +674,8 @@ function Members({
                       : "by GitHub login, joins at their next sign-in"}
                   </td>
                   <td className="actions">
-                    <button
+                    <Button
+                      variant="secondary"
                       type="button"
                       onClick={() =>
                         act(async () => {
@@ -682,7 +685,7 @@ function Members({
                       }
                     >
                       Cancel add
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -706,7 +709,8 @@ function Members({
                 <td>{member.isAdmin ? "Admin" : ""}</td>
                 {workspace.isAdmin && (
                   <td className="actions">
-                    <button
+                    <Button
+                      variant="secondary"
                       type="button"
                       onClick={() =>
                         act(async () => {
@@ -717,8 +721,9 @@ function Members({
                       }
                     >
                       {member.isAdmin ? "Remove Admin" : "Make Admin"}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="secondary"
                       type="button"
                       onClick={() =>
                         act(async () => {
@@ -728,8 +733,9 @@ function Members({
                       }
                     >
                       Reset link
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="secondary"
                       type="button"
                       onClick={() =>
                         act(async () => {
@@ -740,7 +746,7 @@ function Members({
                       }
                     >
                       Remove from Workspace
-                    </button>
+                    </Button>
                   </td>
                 )}
               </tr>

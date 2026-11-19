@@ -1,175 +1,507 @@
+/*
+ * The web client's stylesheet. Colours, faces, the type scale, spacing, radii and borders follow
+ * docs/ui.md: every colour is a token on :root, with its dark value under prefers-color-scheme.
+ */
+
 :root {
-  --bg: #fafafa;
-  --fg: #1d1d1f;
-  --muted: #6b6b70;
-  --line: #d9d9de;
-  --accent: #3b5bdb;
-  --warn: #c92a2a;
-  --ok: #2b8a3e;
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #f3f4f1;
+  --surface: #ffffff;
+  --surface-2: #e9ece6;
+  --border: #d5dad2;
+  --text: #1b1f1c;
+  --muted: #5c655f;
+  --accent: #116466;
+  --accent-soft: #d7ebe9;
+  --on-accent: #ffffff;
+  --agent: #6247c2;
+  --agent-soft: #e9e4fb;
+  --danger: #b93a2b;
+  --danger-soft: #f8e1dd;
+  --warn: #a35f00;
+  --warn-soft: #fbecd2;
+  --ok: #2c7a42;
+  --ok-soft: #dcefe1;
+  --info: #2a65ad;
+  --info-soft: #dde9f7;
+
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-chip: 4px;
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --radius-pill: 999px;
+
+  color-scheme: light;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17171a;
-    --fg: #ececf1;
-    --muted: #9a9aa3;
-    --line: #34343a;
-    --accent: #7b93ff;
-    --warn: #ff8787;
-    --ok: #69db7c;
+    --bg: #121513;
+    --surface: #1a1e1b;
+    --surface-2: #232825;
+    --border: #2e3430;
+    --text: #e2e6e1;
+    --muted: #98a29b;
+    --accent: #4fb2aa;
+    --accent-soft: #1d3634;
+    --on-accent: #0c1514;
+    --agent: #a793f2;
+    --agent-soft: #2b2545;
+    --danger: #ee7d6b;
+    --danger-soft: #3d211d;
+    --warn: #e3a447;
+    --warn-soft: #3a2c15;
+    --ok: #6cc284;
+    --ok-soft: #1c3324;
+    --info: #74a8ea;
+    --info-soft: #1b2b40;
+    color-scheme: dark;
   }
 }
+
+/* Type scale: 24/600 titles, 20/600 h1, 16/600 h2, 14/600 h3, 14 body, 13 meta and controls, 12 small. */
+
 body {
   margin: 0;
   background: var(--bg);
-  color: var(--fg);
+  color: var(--text);
 }
-.centered {
-  max-width: 24rem;
-  margin: 10vh auto;
-  padding: 0 16px;
+h1,
+h2,
+h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-weight: 600;
 }
-form {
-  display: grid;
-  gap: 0.75rem;
+h1 {
+  font-size: 20px;
 }
-label {
-  display: grid;
-  gap: 0.25rem;
-  color: var(--muted);
-  font-size: 0.9rem;
+h1.title {
+  font-size: 24px;
 }
-input {
-  font: inherit;
-  padding: 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
+h2 {
+  font-size: 16px;
 }
-button {
-  font: inherit;
-  padding: 0.5rem 0.9rem;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: white;
-  cursor: pointer;
+h3 {
+  font-size: 14px;
 }
-a.button {
-  display: inline-block;
-  padding: 0.5rem 0.9rem;
-  border-radius: 6px;
-  background: var(--fg);
-  color: var(--bg);
-  text-decoration: none;
+p {
+  margin: var(--space-2) 0;
 }
-button.secondary {
-  background: transparent;
-  color: var(--accent);
-  padding: 0;
-}
-.or {
-  text-align: center;
-}
-button:disabled {
-  opacity: 0.6;
-}
-[role="alert"] {
-  color: #d9480f;
-}
-.shell header {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 16px;
-  border-bottom: 1px solid var(--line);
-}
-.shell header form {
-  display: block;
-}
-.spacer {
-  flex: 1;
-}
-.shell main {
-  padding: 0 16px;
+small {
+  font-size: 12px;
 }
 a {
   color: var(--accent);
 }
-header a {
-  color: inherit;
-  text-decoration: none;
+code,
+pre,
+kbd,
+.mono {
+  font-family: var(--font-mono);
+}
+code {
+  font-size: 12px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+}
+pre code {
+  padding: 0;
+  background: none;
+}
+pre {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  font-size: 12px;
+  overflow-x: auto;
+}
+/* A Ticket or Project key. */
+.key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
 }
 .muted {
   color: var(--muted);
   font-weight: normal;
 }
-select {
-  font: inherit;
-  padding: 0.45rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-form.inline {
+
+/* Buttons (button.tsx). */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  text-decoration: none;
+  cursor: pointer;
+}
+.button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.button.secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+.button.ghost {
+  padding: 0 var(--space-1);
+  background: transparent;
+  color: var(--accent);
+}
+.button.danger {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+form > .button,
+fieldset > .button {
+  justify-self: start;
+}
+.centered form > .button {
+  justify-self: stretch;
+}
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Forms: the label above its field in 12px muted, fields on --surface with the accent focus ring. */
+
+form {
+  display: grid;
+  gap: var(--space-3);
+}
+label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 12px;
+}
+input,
+select,
+textarea {
+  box-sizing: border-box;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 3px var(--accent);
+}
+input[type="checkbox"],
+input[type="radio"] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+input[type="checkbox"]:focus,
+input[type="radio"]:focus {
+  box-shadow: none;
+}
+input[type="file"] {
+  padding: var(--space-1);
+}
+input[type="file"]::file-selector-button {
+  margin-right: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+/* Every text area takes Markdown, so it uses the mono face. */
+textarea {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+fieldset {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+}
+legend {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font-size: 12px;
+}
+label.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: 13px;
+}
+[role="alert"] {
+  color: var(--danger);
+  font-size: 13px;
+}
+/* Each error sits under its form, after the form's buttons, whatever its place in the markup. */
+form > [role="alert"] {
+  order: 1;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
+}
+[role="status"] {
+  color: var(--muted);
+  font-size: 13px;
+}
+form.inline,
+div.inline,
+li.inline {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
-.projects {
-  padding-left: 1.2rem;
-}
-.tabs {
+.actions {
   display: flex;
-  gap: 1rem;
-  margin-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
-.tabs a {
-  padding: 0.4rem 0;
-  text-decoration: none;
+
+/* Signed-out pages. */
+
+.centered {
+  max-width: 24rem;
+  margin: 10vh auto;
+  padding: 0 var(--space-4);
+}
+.centered form {
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+.or {
+  text-align: center;
   color: var(--muted);
 }
+
+/* The frame. */
+
+.shell header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+}
+.shell header form {
+  display: block;
+}
+.shell header a {
+  color: inherit;
+  text-decoration: none;
+}
+.shell header nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.shell header nav .count {
+  margin-left: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.spacer {
+  flex: 1;
+}
+.shell main {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4);
+}
+@media (max-width: 600px) {
+  .shell header {
+    flex-wrap: wrap;
+  }
+}
+.narrow {
+  max-width: 24rem;
+}
+.github-page {
+  max-width: 40rem;
+}
+.projects {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+/* Tables. */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 48rem;
+}
+td {
+  padding: var(--space-2) var(--space-2) var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+td.actions {
+  justify-content: flex-end;
+}
+
+/* Workspace administration. */
+
+.admin-forms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+.admin-forms form {
+  min-width: 14rem;
+}
+.issued-link {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 40rem;
+}
+.issued-link small {
+  color: var(--muted);
+}
+
+/* A Project: its view tabs, board and list. */
+
+.tabs {
+  display: flex;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.tabs a {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  text-decoration: none;
+}
 .tabs a[aria-current="page"] {
-  color: var(--fg);
-  border-bottom: 2px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-4);
 }
 .board {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--space-3);
   overflow-x: auto;
-  padding-bottom: 1rem;
+  padding-bottom: var(--space-4);
 }
 .lane {
   flex: 0 0 14rem;
   min-height: 50vh;
-  padding: 0 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-2);
+}
+.lane.target {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .lane h2,
 .list h2 {
-  font-size: 1rem;
-  margin: 0.75rem 0 0;
+  margin: var(--space-3) 0 0;
 }
 .lane p {
-  margin: 0.25rem 0;
-  font-size: 0.85rem;
+  margin: var(--space-1) 0;
+  font-size: 13px;
 }
 .list > section {
+  display: block;
+  padding: var(--space-1) 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+.list-heading {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.25rem 0 0.5rem;
-  border-bottom: 1px solid var(--line);
+  gap: var(--space-2);
 }
-.statuses {
+.ticket-item {
+  display: block;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  cursor: grab;
+}
+.ticket-item small {
+  display: block;
+  margin-top: var(--space-1);
+}
+.list .ticket-item {
+  cursor: pointer;
+}
+
+/* Project settings: Statuses and their Steps. */
+
+.statuses,
+.steps,
+.outcomes {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-2);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -177,118 +509,34 @@ form.inline {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-}
-.steps {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0;
-  list-style: none;
+  gap: var(--space-2);
 }
 .steps details {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
 }
 .steps summary {
   cursor: pointer;
 }
 .steps .step {
-  margin-top: 0.75rem;
-}
-.outcomes {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0;
-  list-style: none;
+  margin-top: var(--space-3);
 }
 .outcomes li {
   flex-wrap: wrap;
   align-items: center;
 }
-div.inline,
-li.inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 0.5rem;
-}
-fieldset {
-  display: grid;
-  gap: 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-fieldset > button {
-  justify-self: start;
-}
-legend {
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-label.check {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
 .brief pre {
   white-space: pre-wrap;
-  padding: 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
 }
-.statuses li button[aria-label^="Move"] {
-  padding: 0.5rem 0.7rem;
-}
-textarea {
-  font: inherit;
-  padding: 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg);
-  resize: vertical;
-}
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0.75rem 0 1rem;
-}
-.lane.target {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.ticket-item {
-  display: block;
-  margin: 0.5rem 0;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  text-decoration: none;
-  cursor: grab;
-}
-.ticket-item small {
-  display: block;
-  margin-top: 0.25rem;
-}
-.list > section {
-  display: block;
-}
-.list-heading {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-}
-.list .ticket-item {
-  cursor: pointer;
-}
+
+/* A Ticket. */
+
 .ticket-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16rem;
-  gap: 1.5rem;
+  gap: var(--space-5);
   align-items: start;
 }
 @media (max-width: 720px) {
@@ -298,173 +546,56 @@ textarea {
 }
 .fields {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-3);
 }
 .description,
 .reports,
 .comments,
-.timeline {
-  margin-top: 1.25rem;
-}
-.reports h2,
-.comments h2,
-.timeline h2 {
-  font-size: 1rem;
+.timeline,
+.relations {
+  margin-top: var(--space-5);
 }
 .reports h3 {
-  font-size: 0.95rem;
-  margin: 0 0 0.25rem;
+  margin: 0 0 var(--space-1);
 }
 .comment {
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 0.5rem;
-  border-left: 2px solid var(--line);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
 }
 .comment-meta {
-  font-size: 0.9rem;
-}
-button.link {
-  padding: 0;
-  background: none;
-  color: var(--accent);
-}
-.timeline ol {
-  padding-left: 1.2rem;
-  font-size: 0.9rem;
-}
-.markdown code {
-  font-size: 0.9em;
-}
-.markdown img {
-  max-width: 100%;
-}
-.attachments {
-  margin: 0.5rem 0;
-  font-size: 0.9rem;
-}
-.attachments ul {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 0.5rem;
-}
-.attachments li {
-  overflow-wrap: anywhere;
-}
-.attachments code {
-  font-size: 0.85em;
-}
-.attachments .attach input {
-  display: block;
-  margin-top: 0.25rem;
-}
-.shell header nav {
-  display: flex;
-  gap: 1rem;
-}
-.shell header nav .count {
-  margin-left: 0.35rem;
-  padding: 0 0.4rem;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--bg);
-  font-size: 0.8rem;
-}
-ul.inbox {
-  list-style: none;
-  padding: 0;
-  max-width: 48rem;
-}
-ul.inbox li {
-  display: grid;
-  gap: 0.15rem;
-  padding: 0.6rem 0;
-  border-bottom: 1px solid var(--line);
-}
-ul.inbox small {
-  color: var(--muted);
-}
-blockquote.question {
-  margin: 0.25rem 0;
-  padding-left: 0.75rem;
-  border-left: 2px solid var(--accent);
+  font-size: 13px;
 }
 .comment-meta .badge {
-  margin-left: 0.35rem;
-  padding: 0 0.4rem;
-  border-radius: 999px;
-  border: 1px solid var(--accent);
-  color: var(--accent);
-  font-size: 0.8rem;
+  margin-left: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-pill);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
-ul.inbox li button {
-  justify-self: start;
-}
-.narrow {
-  max-width: 24rem;
-}
-.github-page {
-  max-width: 40rem;
-}
-.admin-forms {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 1.5rem;
-  margin-bottom: 1rem;
-}
-.admin-forms form {
-  min-width: 14rem;
-}
-.issued-link {
-  display: grid;
-  gap: 0.25rem;
-  max-width: 40rem;
-  margin: 1rem 0;
-}
-.issued-link small {
-  color: var(--muted);
-}
-table {
-  border-collapse: collapse;
-  width: 100%;
-  max-width: 48rem;
-}
-td {
-  padding: 0.5rem 0.5rem 0.5rem 0;
-  border-bottom: 1px solid var(--line);
-}
-td.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-@media (max-width: 600px) {
-  .shell header {
-    flex-wrap: wrap;
-  }
-}
-
-.relations {
-  margin-top: 1.25rem;
-}
-.relations h2 {
-  font-size: 1rem;
+.timeline ol {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 13px;
 }
 .relations h3 {
-  font-size: 0.9rem;
-  margin: 0.75rem 0 0.25rem;
+  margin: var(--space-3) 0 var(--space-1);
 }
 .relations ul {
   margin: 0;
-  padding-left: 1.2rem;
+  padding-left: var(--space-4);
 }
 .relation-form {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: var(--space-2);
   align-items: end;
-  margin-top: 0.75rem;
 }
 /* A Ticket's latest Run on its card, and Run states on the timeline. */
 .run-marker,
@@ -473,7 +604,7 @@ td.actions {
 }
 .run-marker.running,
 .run-state.running {
-  color: var(--accent);
+  color: var(--agent);
 }
 .run-marker.runnerSlot,
 .run-marker.runnerPaused,
@@ -482,42 +613,116 @@ td.actions {
 }
 .run-marker.failed,
 .run-marker.lost,
-.run-marker.refused,
 .run-state.failed,
-.run-state.lost,
+.run-state.lost {
+  color: var(--danger);
+}
+.run-marker.refused,
 .run-state.refused {
   color: var(--warn);
 }
 .verification {
-  border: 1px solid var(--line);
-  border-left: 4px solid var(--accent);
-  border-radius: 6px;
-  padding: 0.5rem 1rem 0.75rem;
-  margin-bottom: 1.5rem;
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
 }
 .verification.verified {
-  border-left-color: var(--muted);
+  border-left-color: var(--border);
 }
-.verification .actions {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
+
+/* The Inbox. */
+
+ul.inbox {
+  max-width: 48rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+ul.inbox li {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+ul.inbox small {
+  color: var(--muted);
+}
+ul.inbox li > .button {
+  justify-self: start;
+}
+blockquote.question {
+  margin: var(--space-1) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-panel);
+  background: var(--warn-soft);
+}
+
+/* Markdown, Attachments and Documents. */
+
+.markdown {
+  overflow-wrap: anywhere;
+}
+.markdown h4 {
+  font-size: 14px;
+}
+.markdown ul,
+.markdown ol {
+  margin-bottom: 0;
+  padding-left: var(--space-5);
+}
+.markdown blockquote {
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+}
+.markdown img {
+  max-width: 100%;
+}
+.document > .markdown,
+.decision > .markdown {
+  max-width: 720px;
+  font-size: 15px;
+  line-height: 1.65;
+}
+.attachments {
+  font-size: 13px;
+}
+.attachments ul {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+.attachments li {
+  overflow-wrap: anywhere;
+}
+.attachments .attach input {
+  display: block;
+  margin-top: var(--space-1);
 }
 .page-tree ul {
-  margin: 0.25rem 0;
-  padding-left: 1.25rem;
+  margin: var(--space-1) 0;
+  padding-left: var(--space-5);
 }
 .page-tree > ul {
   padding-left: 0;
   list-style: none;
 }
 .page-tree li {
-  margin: 0.2rem 0;
+  margin: var(--space-1) 0;
+}
+.page-tree form {
+  margin-top: var(--space-4);
 }
 .editor-panes {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1rem;
+  gap: var(--space-4);
   align-items: start;
 }
 @media (max-width: 720px) {
@@ -527,19 +732,19 @@ td.actions {
 }
 .editor-panes textarea {
   width: 100%;
-  box-sizing: border-box;
-  font-family: ui-monospace, monospace;
-}
-.editor-panes h2,
-.versions h2 {
-  font-size: 1rem;
 }
 .conflict,
 .version,
 .comparison {
-  margin: 1rem 0;
-  padding: 0.5rem 0.75rem;
-  border-left: 2px solid var(--line);
+  margin: var(--space-4) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+}
+.conflict {
+  border-color: var(--info);
+  background: var(--info-soft);
 }
 .conflict pre,
 .comparison pre {
@@ -547,93 +752,95 @@ td.actions {
   overflow-wrap: anywhere;
 }
 .comparison .added {
-  color: var(--ok);
+  background: var(--ok-soft);
 }
 .comparison .removed {
-  color: var(--warn);
+  background: var(--danger-soft);
   text-decoration: line-through;
 }
 .document .move,
 .versions {
-  margin-top: 1.25rem;
-}
-.page-tree form {
-  margin-top: 1rem;
-}
-.glossary .term {
-  margin: 0.75rem 0;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--line);
-}
-.glossary .term h2 {
-  font-size: 1.05rem;
-  margin: 0;
-}
-.glossary .term p {
-  margin: 0.25rem 0;
-}
-.term-form {
-  display: grid;
-  gap: 0.5rem;
-  max-width: 40rem;
-  margin-top: 1rem;
-}
-.term-form h2 {
-  font-size: 1rem;
-  margin: 0;
-}
-.term-form label {
-  display: grid;
-  gap: 0.25rem;
-}
-.term-form textarea {
-  width: 100%;
-  box-sizing: border-box;
-}
-.term-form > button {
-  justify-self: start;
+  margin-top: var(--space-5);
 }
 .versions details pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Terms. */
+
+.glossary .term {
+  display: grid;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.term-form {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 40rem;
+  margin-top: var(--space-4);
+}
+.term-form textarea {
+  width: 100%;
+}
+
+/* Repositories. */
+
 ul.repositories {
-  list-style: none;
+  margin: 0;
   padding: 0;
+  list-style: none;
 }
 ul.repositories li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 ul.repositories .warning {
   flex-basis: 100%;
-  margin: 0;
   color: var(--warn);
 }
+
+/* Decisions. */
+
 .decision-list table {
-  margin-bottom: 1rem;
+  margin-bottom: var(--space-4);
 }
 .decision-status {
   display: inline-block;
-  padding: 0.1rem 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 0.875rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--muted);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: middle;
 }
-.decision-status.accepted {
-  border-color: var(--ok);
-  color: var(--ok);
-}
-.decision-status.rejected {
+.decision-status.proposed {
   border-color: var(--warn);
   color: var(--warn);
 }
+.decision-status.accepted {
+  border-color: var(--ok-soft);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.decision-status.superseded {
+  border-color: var(--info);
+  color: var(--info);
+}
+.decision-status.deprecated {
+  border-style: dashed;
+}
 .decision .status-form,
 .decision .versions {
-  margin-top: 1.25rem;
+  margin-top: var(--space-5);
 }
 /* A Ticket's Pull Requests, in the side panel above its fields. */
 .side {

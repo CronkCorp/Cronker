@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError, type GitHubInstallation, type Project, type Repository } from "./api.js";
 import { field } from "./forms.js";
 import { useLatest } from "./live.js";
+import { Button } from "./button.js";
+import { Key } from "./labels.js";
 
 /**
  * The Repositories a Project lists as holding its code, added from those the GitHub App's
@@ -61,18 +63,19 @@ export function RepositoriesSettings({ project }: { project: Project }) {
           {repositories.map((repository) => (
             <li key={repository.id}>
               <span>{repository.fullName}</span>
-              <button
+              <Button
+                variant="secondary"
                 type="button"
                 aria-label={`Remove ${repository.fullName}`}
                 disabled={busy}
                 onClick={() => void change(() => api.removeRepository(project.id, repository.id))}
               >
                 Remove
-              </button>
+              </Button>
               {repository.keyClash && (
                 <p role="note" className="warning">
-                  A Project of another Workspace also lists {repository.fullName} under the key {project.key}, so a Pull Request
-                  naming a key such as {project.key}-12 links to Tickets in both Projects. Which Project isn't shown, since it
+                  A Project of another Workspace also lists {repository.fullName} under the key <Key>{project.key}</Key>, so a Pull Request
+                  naming a key such as <Key>{project.key}-12</Key> links to Tickets in both Projects. Which Project isn't shown, since it
                   isn't in this Workspace.
                 </p>
               )}
@@ -105,9 +108,9 @@ export function RepositoriesSettings({ project }: { project: Project }) {
               ))}
             </select>
           </label>
-          <button type="submit" disabled={busy}>
+          <Button variant="primary" type="submit" disabled={busy}>
             Add Repository
-          </button>
+          </Button>
         </form>
       )}
     </section>

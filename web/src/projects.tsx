@@ -21,6 +21,8 @@ import { PageTree } from "./documents.js";
 import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
+import { Button } from "./button.js";
+import { Key } from "./labels.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
 
@@ -55,7 +57,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
           <ul className="projects">
             {projects.map((project) => (
               <li key={project.id}>
-                <Link to={`/projects/${project.id}`}>{project.name}</Link> <span className="muted">{project.key}</span>
+                <Link to={`/projects/${project.id}`}>{project.name}</Link> <Key>{project.key}</Key>
               </li>
             ))}
           </ul>
@@ -70,15 +72,16 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
           Key
           <input
             name="key"
+            className="mono"
             required
             pattern="[A-Za-z][A-Za-z0-9]{1,9}"
             title="2 to 10 letters and digits, starting with a letter"
             autoComplete="off"
           />
         </label>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Create Project
-        </button>
+        </Button>
       </form>
       {error && <p role="alert">{error}</p>}
     </>
@@ -150,7 +153,7 @@ export function ProjectScreen({
   return (
     <>
       <h1>
-        {project.name} <span className="muted">{project.key}</span>
+        {project.name} <Key>{project.key}</Key>
       </h1>
       <nav className="tabs" aria-label="Project views">
         <Link to={base} current={view === "board"}>
@@ -221,9 +224,9 @@ function NewTicket({ project, onCreated }: { project: Project; onCreated: () => 
         New Ticket title
         <input name="title" required maxLength={300} />
       </label>
-      <button type="submit" disabled={busy}>
+      <Button variant="primary" type="submit" disabled={busy}>
         Create Ticket
-      </button>
+      </Button>
       {error && <p role="alert">{error}</p>}
     </form>
   );
@@ -313,7 +316,7 @@ function TicketItem({
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <span className="muted">{ticket.key}</span> <span>{ticket.title}</span>
+      <Key>{ticket.key}</Key> <span>{ticket.title}</span>
       {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
       {ticket.waiting ? (
         <small className={`run-marker ${ticket.waiting}`}> {waitingMarkers[ticket.waiting]}</small>
@@ -541,9 +544,9 @@ function Settings({ project, onChange }: { project: Project; onChange: (project:
           New Status kind
           <KindSelect name="kind" defaultValue="active" />
         </label>
-        <button type="submit" disabled={busy}>
+        <Button variant="primary" type="submit" disabled={busy}>
           Add Status
-        </button>
+        </Button>
       </form>
     </section>
   );
@@ -587,9 +590,9 @@ function StatusRow({
           maxLength={100}
           onChange={(e) => setName(e.target.value)}
         />
-        <button type="submit" disabled={busy || name === status.name} aria-label={`Rename ${status.name}`}>
+        <Button variant="ghost" type="submit" disabled={busy || name === status.name} aria-label={`Rename ${status.name}`}>
           Rename
-        </button>
+        </Button>
       </form>
       <KindSelect
         aria-label={`Kind of ${status.name}`}
@@ -597,15 +600,15 @@ function StatusRow({
         disabled={busy}
         onChange={(e) => void onKind(e.target.value as StatusKind)}
       />
-      <button type="button" disabled={busy || first} aria-label={`Move ${status.name} up`} onClick={() => onMove(-1)}>
+      <Button variant="secondary" type="button" disabled={busy || first} aria-label={`Move ${status.name} up`} onClick={() => onMove(-1)}>
         ↑
-      </button>
-      <button type="button" disabled={busy || last} aria-label={`Move ${status.name} down`} onClick={() => onMove(1)}>
+      </Button>
+      <Button variant="secondary" type="button" disabled={busy || last} aria-label={`Move ${status.name} down`} onClick={() => onMove(1)}>
         ↓
-      </button>
-      <button type="button" disabled={busy} aria-label={`Remove ${status.name}`} onClick={() => onRemove()}>
+      </Button>
+      <Button variant="secondary" type="button" disabled={busy} aria-label={`Remove ${status.name}`} onClick={() => onRemove()}>
         Remove
-      </button>
+      </Button>
     </li>
   );
 }

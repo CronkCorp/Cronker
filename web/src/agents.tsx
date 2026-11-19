@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type Agent, type AgentToken, type Runner, type User, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Link, navigate } from "./router.js";
+import { Button } from "./button.js";
 
 /** The Workspace's Agents: everyone's are listed, and a User changes only their own. */
 export function Agents({ user, workspace }: { user: User; workspace: WorkspaceSummary }) {
@@ -31,9 +32,9 @@ export function Agents({ user, workspace }: { user: User; workspace: WorkspaceSu
             <input name="name" required autoComplete="off" placeholder="claude-max" />
           </label>
           {create.error && <p role="alert">{create.error}</p>}
-          <button type="submit" disabled={create.busy}>
+          <Button variant="primary" type="submit" disabled={create.busy}>
             Create Agent
-          </button>
+          </Button>
         </form>
       </div>
       {error && <p role="alert">{error}</p>}
@@ -114,9 +115,9 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
               <input name="name" required defaultValue={agent.name} />
             </label>
             {rename.error && <p role="alert">{rename.error}</p>}
-            <button type="submit" disabled={rename.busy}>
+            <Button variant="ghost" type="submit" disabled={rename.busy}>
               Rename
-            </button>
+            </Button>
           </form>
           <label>
             Runner
@@ -151,9 +152,9 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
               </select>
             </label>
             {issue.error && <p role="alert">{issue.error}</p>}
-            <button type="submit" disabled={issue.busy}>
+            <Button variant="primary" type="submit" disabled={issue.busy}>
               Issue token
-            </button>
+            </Button>
           </form>
         </div>
       )}
@@ -180,7 +181,8 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
                 <td>{token.access === "read" ? "Read-only" : "Full"}</td>
                 <td>{new Date(token.createdAt).toLocaleDateString()}</td>
                 <td className="actions">
-                  <button
+                  <Button
+                    variant="secondary"
                     type="button"
                     onClick={() =>
                       act(async () => {
@@ -191,7 +193,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
                     }
                   >
                     Revoke
-                  </button>
+                  </Button>
                 </td>
               </tr>
             ))}
@@ -200,7 +202,8 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
       )}
       {agent && (
         <p>
-          <button
+          <Button
+            variant="secondary"
             type="button"
             onClick={() =>
               act(async () => {
@@ -210,7 +213,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
             }
           >
             Remove Agent
-          </button>
+          </Button>
         </p>
       )}
     </section>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type GitHubApp, type GitHubChecklist, type GitHubInstallation, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { returnAfterSignIn } from "./storage.js";
+import { Button, buttonClass } from "./button.js";
 
 /** What the codes Cronk sends the browser back with mean, for whoever is signing in or creating the App. */
 const githubErrors: Record<string, string> = {
@@ -56,7 +57,7 @@ export function GitHubSignIn({ label = "Sign in with GitHub", returnTo }: { labe
   if (!app) return null;
   return (
     <a
-      className="button"
+      className={buttonClass("secondary")}
       href="/api/github/sign-in"
       onClick={() => {
         // GitHub sends the browser back to `/`; carry on from here once signed in.
@@ -79,9 +80,9 @@ function CreateAppForm({ submitLabel }: { submitLabel: string }) {
         <input name="organization" autoComplete="off" pattern="[A-Za-z0-9\-]+" />
       </label>
       {error && <p role="alert">{error}</p>}
-      <button type="submit" disabled={busy}>
+      <Button variant="primary" type="submit" disabled={busy}>
         {submitLabel}
-      </button>
+      </Button>
     </form>
   );
 }
@@ -97,9 +98,9 @@ export function GitHubSetupStep({ onSkip }: { onSkip: () => void }) {
       </p>
       <CreateAppForm submitLabel="Create GitHub App" />
       <p>
-        <button type="button" className="secondary" onClick={onSkip}>
+        <Button variant="ghost" type="button" onClick={onSkip}>
           Skip for now
-        </button>
+        </Button>
       </p>
     </main>
   );
