@@ -145,7 +145,7 @@ function RunnerSettings({
               No triggers yet: Runs on this Runner can't start until one is saved for their Step's model.
             </p>
           ) : (
-            <table className="triggers">
+            <table>
               <thead>
                 <tr>
                   <th>Model</th>

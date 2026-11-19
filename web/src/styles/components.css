@@ -472,11 +472,11 @@ textarea.markdown-source {
   color: var(--agent);
 }
 
-/* Run states */
-.run-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+/* The 11px uppercase pills: Run states, Decision statuses and Pull Request states. */
+.run-state,
+.decision-status,
+.pr-state {
+  display: inline-block;
   padding: 0 7px;
   border: 1px solid var(--muted);
   border-radius: var(--radius-pill);
@@ -487,6 +487,13 @@ textarea.markdown-source {
   line-height: 17px;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* Run states */
+.run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 .run-state-running {
   border-color: transparent;
@@ -550,19 +557,6 @@ textarea.markdown-source {
 }
 
 /* Decision statuses */
-.decision-status {
-  display: inline-block;
-  padding: 0 7px;
-  border: 1px solid var(--muted);
-  border-radius: var(--radius-pill);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 17px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
 .decision-status-proposed {
   border-color: var(--warn);
   color: var(--warn);
@@ -581,19 +575,6 @@ textarea.markdown-source {
 }
 
 /* Pull Request states */
-.pr-state {
-  display: inline-block;
-  padding: 0 7px;
-  border: 1px solid var(--muted);
-  border-radius: var(--radius-pill);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  line-height: 17px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
 .pr-state-draft {
   border-style: dashed;
 }

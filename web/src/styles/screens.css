@@ -70,6 +70,9 @@
   width: 80px;
   flex: none;
 }
+.tree-row {
+  padding-left: calc(var(--space-4) + var(--depth, 0) * 20px);
+}
 .people {
   display: inline-flex;
   gap: 4px;

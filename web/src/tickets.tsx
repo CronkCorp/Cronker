@@ -1273,7 +1273,7 @@ function Timeline({
       const { change } = entry;
       const run = change.runId ? runOf.get(change.runId) : undefined;
       rows.push(
-        <li key={entry.key} className={`entry entry-change${isNew ? " arrived" : ""}`}>
+        <li key={entry.key} className={`entry${isNew ? " arrived" : ""}`}>
           <span className="gutter">
             <span className="ring" />
           </span>
