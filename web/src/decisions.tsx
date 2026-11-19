@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
+  ApiError,
   type Decision,
   type DecisionStatus,
   decisionStatuses,
@@ -172,7 +173,15 @@ export function DecisionScreen({
             </button>
           </div>
           {decision.body.trim() ? <Markdown text={decision.body} mentions={[]} /> : <p className="muted">Empty.</p>}
-          <StatusForm decision={decision} others={others.filter((d) => d.id !== decision.id)} onChanged={saved} />
+          <StatusForm
+            decision={decision}
+            others={others.filter((d) => d.id !== decision.id)}
+            onChanged={saved}
+            onOutdated={() => {
+              load();
+              setVersionsShown((n) => n + 1);
+            }}
+          />
         </>
       )}
       <Versions
@@ -192,21 +201,32 @@ function StatusForm({
   decision,
   others,
   onChanged,
+  onOutdated,
 }: {
   decision: Decision;
   /** The other Decisions of its Project, or of the Workspace's own. */
   others: DecisionSummary[];
   onChanged: (next: Decision) => void;
+  /** Someone saved the Decision since it was shown; the screen shows its current Version again. */
+  onOutdated: () => void;
 }) {
   const [status, setStatus] = useState<DecisionStatus>(decision.status);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
-    onChanged(
-      await api.editDecision(decision.id, {
-        baseVersion: decision.version.number,
-        status,
-        ...(status === "superseded" ? { supersededById: field(form, "supersededById") || null } : {}),
-      }),
-    );
+    try {
+      onChanged(
+        await api.editDecision(decision.id, {
+          baseVersion: decision.version.number,
+          status,
+          ...(status === "superseded" ? { supersededById: field(form, "supersededById") || null } : {}),
+        }),
+      );
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "outdated_version") {
+        onOutdated();
+        throw new Error(`${e.message} It now shows the current Version: check it, then change the status again.`);
+      }
+      throw e;
+    }
   });
   return (
     <>
