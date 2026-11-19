@@ -21,7 +21,7 @@ import { PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
-import { KindLabel, RunState, StatusPill } from "./ui/labels.js";
+import { Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker } from "./ui/picker.js";
 
@@ -115,6 +115,10 @@ function summary(item: InboxItem): string {
       return `${nameOf(item.formerAssignee)} was removed from the Workspace: assign it to someone`;
   }
 }
+
+/** An item's snippet in the list: the Question, or the Report's title on a Ticket to review or verify, else its summary. */
+const snippet = (item: InboxItem) =>
+  (item.kind === "review" || item.kind === "unverified") && item.report ? `Report: ${item.report.title}` : summary(item);
 
 /** Whether an item waits on an answer or a fix: a coloured left border marks it. */
 const tone = (item: InboxItem) =>
@@ -268,11 +272,11 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
                           <button type="button" onClick={() => select(key, true)}>
                             <span className="inbox-item-head">
                               <KindLabel kind={kindOf(item)} />
-                              <span className="ticket-key">{item.ticket.key}</span>
+                              <Key>{item.ticket.key}</Key>
                               <RelativeTime at={item.since} />
                             </span>
                             <span className="inbox-item-title">{item.ticket.title}</span>
-                            <span className="inbox-item-snippet">{isResolved ? "Resolved elsewhere" : summary(item)}</span>
+                            <span className="inbox-item-snippet">{isResolved ? "Resolved elsewhere" : snippet(item)}</span>
                           </button>
                         </li>
                       );
@@ -360,9 +364,9 @@ function Detail({
   return (
     <div className="detail">
       <p className="detail-head">
-        <KindLabel kind={kindOf(item)} /> <span className="ticket-key">{ticket.key}</span>{" "}
-        <Link to={`/tickets/${ticket.id}`}>
-          {ticket.key} {ticket.title}
+        <KindLabel kind={kindOf(item)} />
+        <Link to={`/tickets/${ticket.id}`} className="detail-ticket">
+          <Key>{ticket.key}</Key> {ticket.title}
         </Link>
       </p>
       {resolved && (
