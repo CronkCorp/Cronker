@@ -5,6 +5,7 @@ A simpler rewrite of Cronk (`CronkCorp/Cronk`): a self-hosted platform where hum
 - `CONTEXT.md`: the vocabulary. Use its terms and avoid the listed synonyms.
 - `docs/adr/`: decisions that are hard to reverse.
 - `docs/roadmap.md`: what is settled, the milestones, and what is left out for now.
+- `docs/ui.md`: how the web client looks. Read it before changing the web client.
 
 The old Cronk's code and docs are a reference to copy from; where this repo's docs differ, this repo wins.
 
