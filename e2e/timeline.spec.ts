@@ -37,7 +37,7 @@ async function inReview(cronk: StartedCronk) {
   await pullRequestEvent("opened");
   const [run] = await call(`/api/tickets/${ticket.id}/runs`, undefined, "GET");
   await call(`/api/runs/${run.id}/finish`, { outcome: "done" }, "POST", secret);
-  return { ticket, deliver, pullRequestEvent };
+  return { ticket, deliver, pullRequestEvent, call, secret };
 }
 
 test("a failing check's send-back shows as Cronk's Comment labelled Sent back, linking the check, and Cronk's move names it", async ({ page, cronk }) => {
@@ -83,4 +83,45 @@ test("a skipped Step's move by Cronk reads as one line naming the Step, its Labe
     /^Cronk skipped the Code review Step \(skipped by no-review\), moving on by approve to In Review \d\d:\d\d$/,
   );
   await expect(timeline).not.toContainText("Cronk changed Status");
+});
+
+test("the timeline reads cause before effect: Cronk's move, its Sent back Comment, then the Run it started", async ({ page, cronk }) => {
+  const { ticket, deliver } = await inReview(cronk);
+  await deliver("check_run", {
+    action: "completed",
+    check_run: { id: 10, name: "test", head_sha: "c1", status: "completed", conclusion: "failure", html_url: null },
+  });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const entries = page.getByRole("region", { name: "Timeline" }).getByRole("listitem");
+  await expect(entries.last()).toContainText("Run running");
+  const texts = await entries.allTextContents();
+  const sentBackAt = texts.findIndex((t) => t.startsWith("Sent back"));
+  expect(texts.findIndex((t) => t.startsWith("Cronk sent it back"))).toBe(sentBackAt - 1);
+  expect(texts.findLastIndex((t) => t.includes("Run running"))).toBeGreaterThan(sentBackAt);
+});
+
+test("the timeline separates its days, and only Comments and Questions offer Reply", async ({ page, cronk }) => {
+  const { ticket, deliver, call, secret } = await inReview(cronk);
+  cronk.clock.advance(24 * 60 * 60 * 1000);
+  await deliver("check_run", {
+    action: "completed",
+    check_run: { id: 10, name: "test", head_sha: "c1", status: "completed", conclusion: "failure", html_url: null },
+  });
+  // The Run the send-back started writes a Report.
+  await call(`/api/tickets/${ticket.id}/reports`, { title: "Findings", body: "## Cause\n\nNo limit." }, "POST", secret);
+  await call(`/api/tickets/${ticket.id}/comments`, { body: "Looking into it." });
+
+  await page.clock.setFixedTime(cronk.clock.now());
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const days = timeline.getByRole("listitem").filter({ hasText: /^(Today|Yesterday|\d+ \w{3})$/ });
+  await expect(days).toHaveText(["Yesterday", "Today"]);
+
+  await expect(timeline.getByRole("button", { name: "Reply" })).toHaveCount(2);
+  await expect(timeline.getByRole("article", { name: "Comment by ada@example.com" }).getByRole("button", { name: "Reply" })).toBeVisible();
+  await expect(timeline.getByRole("article", { name: "Sent back by Cronk" }).getByRole("button", { name: "Reply" })).toBeVisible();
+  await expect(timeline.getByRole("article", { name: "Findings" }).getByRole("button", { name: "Reply" })).toHaveCount(0);
 });

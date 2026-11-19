@@ -1110,8 +1110,21 @@ function explainedByCronk(changes: Change[], project: Project): Set<string> {
   return new Set(changes.flatMap((change) => explainedBy(change, changes, project)).map((c) => c.id));
 }
 
-/** How long after Cronk sends a Ticket back it records the move, at most. */
+/** How far apart Cronk records a send-back, its move and its Comment, at most. */
 const sendBackWindow = 5_000;
+
+/**
+ * When Cronk moved the Ticket back for the failure its Comment names, so the Comment reads right after that move
+ * and before the Run the move started; Cronk writes the Comment a moment after both.
+ */
+function sentBackAt(comment: Comment, changes: Change[]): string | undefined {
+  if (comment.actor.kind !== "cronk") return undefined;
+  const written = new Date(comment.createdAt).getTime();
+  return changes.findLast((c) => {
+    const at = new Date(c.at).getTime();
+    return c.actor.kind === "cronk" && c.field === "status" && at <= written && written - at <= sendBackWindow;
+  })?.at;
+}
 
 /**
  * A Change Cronk made, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
@@ -1197,6 +1210,12 @@ type Entry =
   | { at: string; key: string; kind: "comment"; comment: Comment }
   | { at: string; key: string; kind: "report"; report: Report };
 
+/**
+ * Entries recorded at the same moment read cause before effect: a move, then the Comment Cronk wrote about it,
+ * then a Report, then the Run the move started.
+ */
+const tieOrder: Record<Entry["kind"], number> = { change: 0, comment: 1, report: 2, run: 3 };
+
 /** Whether the page is scrolled to its end, where new entries may scroll it on. */
 const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 48;
 
@@ -1235,9 +1254,11 @@ function Timeline({
       .filter((change) => !explained.has(change.id))
       .map((change) => ({ at: change.at, key: `change:${change.id}`, kind: "change" as const, change })),
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, kind: "run" as const, run })),
-    ...comments.filter((c) => c.replyToId === null).map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
+    ...comments
+      .filter((c) => c.replyToId === null)
+      .map((comment) => ({ at: sentBackAt(comment, changes) ?? comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
+  ].sort((a, b) => a.at.localeCompare(b.at) || tieOrder[a.kind] - tieOrder[b.kind]);
   const runOf = new Map(runs.map((run) => [run.id, run]));
   const arrived = useArrivals([...entries.map((e) => e.key), ...comments.map((c) => `comment:${c.id}`)], loaded);
 
@@ -1261,7 +1282,7 @@ function Timeline({
     if (thisDay !== day) {
       day = thisDay;
       rows.push(
-        <li key={`day:${entry.key}`} className="timeline-day" aria-hidden="true">
+        <li key={`day:${entry.key}`} className="timeline-day">
           <span>{thisDay}</span>
         </li>,
       );
