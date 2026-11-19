@@ -88,6 +88,7 @@ export interface DeliveryAttempt {
   redelivery: boolean;
   /** The HTTP status Cronk answered with, or 0 if GitHub got no answer. */
   statusCode: number;
+  sentAt: Date;
   /** What GitHub sent, to send it again. */
   payload: unknown;
 }
@@ -120,6 +121,8 @@ export interface StandInGitHub {
   deliveries: Map<number, DeliveryAttempt[]>;
   /** The attempts made because the App asked GitHub to redeliver, oldest first. */
   redeliveries(app: StandInApp): DeliveryAttempt[];
+  /** Answers the App's next redelivery request with 422, as GitHub does for a delivery it no longer keeps. */
+  refuseNextRedelivery(): void;
   stop(): Promise<void>;
 }
 
@@ -191,6 +194,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   const oauthCodes = new Map<string, { app: StandInApp; account: GitHubAccount; redirectUri: string }>();
   const accessTokens = new Map<string, GitHubAccount>();
   const installationTokens = new Map<string, IssuedToken>();
+  let refuseRedelivery = false;
 
   const github: StandInGitHub = {
     url: "",
@@ -226,6 +230,9 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     },
     deliveries: new Map(),
     redeliveries: (app) => (github.deliveries.get(app.id) ?? []).filter((d) => d.redelivery),
+    refuseNextRedelivery() {
+      refuseRedelivery = true;
+    },
     stop: async () => {},
   };
 
@@ -240,7 +247,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     const log = github.deliveries.get(app.id) ?? [];
     github.deliveries.set(app.id, log);
     const { guid, event, payload, redelivery } = delivery;
-    const attempt: DeliveryAttempt = { id: nextId++, guid, event, payload, redelivery, statusCode: 0 };
+    const attempt: DeliveryAttempt = { id: nextId++, guid, event, payload, redelivery, statusCode: 0, sentAt: clock.now() };
     log.push(attempt);
     if (fails === "unreachable") return new Response(null, { status: 502 });
     const body = JSON.stringify(payload);
@@ -261,7 +268,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   const deliveryJson = (d: DeliveryAttempt) => ({
     id: d.id,
     guid: d.guid,
-    delivered_at: clock.now().toISOString(),
+    delivered_at: d.sentAt.toISOString(),
     redelivery: d.redelivery,
     duration: 0.1,
     status: d.statusCode >= 200 && d.statusCode < 300 ? "OK" : d.statusCode === 0 ? "timed out" : `Invalid HTTP Response: ${d.statusCode}`,
@@ -436,6 +443,10 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       if (request.method === "POST" && attempts) {
         const delivery = github.deliveries.get(app.id)?.find((d) => String(d.id) === attempts[1]);
         if (!delivery) return json(response, 404, { message: "Not Found" });
+        if (refuseRedelivery) {
+          refuseRedelivery = false;
+          return json(response, 422, { message: "Validation Failed" });
+        }
         // GitHub answers at once and redelivers soon after; the stand-in redelivers first, so a test needn't wait.
         await send(app, { ...delivery, redelivery: true }, app.webhookSecret);
         return json(response, 202, {});

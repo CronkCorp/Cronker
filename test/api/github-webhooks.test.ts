@@ -144,4 +144,15 @@ describe("webhooks: replaying failed deliveries", () => {
 
     await expect(cronk.replayFailedDeliveries()).resolves.toBeUndefined();
   });
+
+  test("a redelivery GitHub refuses doesn't keep the other failed deliveries from being redelivered", async () => {
+    const app = await withApp();
+    await cronk.github.deliver(app, "ping", ping, { id: "older", fails: "unreachable" });
+    await cronk.github.deliver(app, "ping", ping, { id: "newer", fails: "unreachable" });
+    cronk.github.refuseNextRedelivery();
+
+    await expect(cronk.replayFailedDeliveries()).rejects.toThrow();
+
+    expect(cronk.github.redeliveries(app).map((d) => [d.guid, d.statusCode])).toEqual([["older", 200]]);
+  });
 });

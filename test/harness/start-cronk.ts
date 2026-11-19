@@ -42,7 +42,7 @@ export interface StartedCronk {
   checkForLostRuns(): Promise<void>;
   /** Resumes the queues of Runners whose rate limit has passed, as the server does every minute; move the clock first. */
   resumePausedRunners(): Promise<void>;
-  /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every few minutes. */
+  /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every five minutes. */
   replayFailedDeliveries(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */

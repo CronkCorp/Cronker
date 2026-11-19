@@ -10,9 +10,7 @@ import { appDeliveries, redeliver } from "./client.js";
  * anything else is done with it, then applied once: its delivery id is recorded in the same
  * transaction that applies it, so a delivery GitHub sends again changes nothing. The id isn't
  * signed, so handlers must still change nothing for a signed body seen before under another.
- *
- * GitHub doesn't retry a delivery that failed, so Cronk asks for those itself
- * (`replayFailedDeliveries`), on startup and every five minutes.
+ * A failed delivery is asked for again by `replayFailedDeliveries`.
  */
 
 export interface Delivery {
@@ -84,7 +82,10 @@ export async function receiveDelivery(
 /**
  * GitHub doesn't retry a delivery that failed, so one sent while Cronk or its tunnel was down
  * would be missed. This asks GitHub for the App's recent deliveries and has each failed one
- * redelivered. GitHub keeps deliveries three days; nothing replays a longer outage.
+ * redelivered. GitHub keeps deliveries three days; nothing replays a longer outage. A delivery
+ * Cronk refused, such as one signed before its webhook secret was pasted into the App's
+ * settings, isn't applied, so it is asked for again on each pass until it applies or GitHub
+ * drops it.
  */
 export async function replayFailedDeliveries(context: Context): Promise<void> {
   if (!(await findApp(context.db))) return;
@@ -96,9 +97,14 @@ export async function replayFailedDeliveries(context: Context): Promise<void> {
   ]);
   // Deliveries applied, or asked for again in this pass: a delivery has an attempt for each time GitHub sent it.
   const done = new Set(rows.map((r) => r.id));
+  // One redelivery GitHub refuses, such as of a delivery it stopped keeping since listing it, doesn't stop the rest.
+  let refused: unknown;
   for (const attempt of failed) {
     if (done.has(attempt.guid)) continue;
     done.add(attempt.guid);
-    await redeliver(context.config, jwt, attempt.id);
+    await redeliver(context.config, jwt, attempt.id).catch((error: unknown) => {
+      refused ??= error;
+    });
   }
+  if (refused) throw refused;
 }
