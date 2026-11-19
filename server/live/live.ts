@@ -12,6 +12,7 @@ export type LiveEvent =
   | { type: "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
   | { type: "report.added"; projectId: string; ticketId: string; reportId: string }
+  | { type: "report.changed"; projectId: string; ticketId: string; reportId: string }
   | { type: "attachments.changed"; projectId: string; ticketId: string }
   | { type: "attachments.changed"; documentId: string };
 
@@ -23,6 +24,7 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
   "comment.added": "A Comment was added to a Ticket.",
   "report.added": "A Run wrote a Report on a Ticket.",
+  "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
   "attachments.changed":
     "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
 };

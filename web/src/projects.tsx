@@ -17,6 +17,7 @@ import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
 import { PageTree } from "./documents.js";
+import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
@@ -182,6 +183,7 @@ export function ProjectScreen({
       {view === "settings" && (
         <>
           <DelegationSettings project={project} onChange={setProject} />
+          <RepositoriesSettings project={project} />
           <Settings project={project} onChange={setProject} />
           <StepsSettings project={project} onChange={setProject} />
           <BriefPreview project={project} />

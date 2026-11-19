@@ -11,6 +11,7 @@ import type { Context } from "./context.js";
 import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { InstallationTokens } from "./github/installations.js";
+import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
@@ -22,6 +23,8 @@ export interface CronkOptions {
   logStream?: Writable;
   /** Further kinds of Runner Users may set up, by name, beside the built-in `subscription`. */
   runnerKinds?: Record<string, RunnerKind>;
+  /** Stops migrating short of this migration and those after it; only a test of that migration sets it. */
+  migrateBefore?: string;
 }
 
 export interface Cronk {
@@ -31,11 +34,19 @@ export interface Cronk {
   checkForLostRuns(): Promise<void>;
   /** Resumes the queues of rate-limited Runners whose pause has passed. */
   resumePausedRunners(): Promise<void>;
+  /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied. */
+  replayFailedDeliveries(): Promise<void>;
   close(): Promise<void>;
 }
 
 /** Migrates the database, issues a setup code if the installation is fresh, and builds the app. */
-export async function createCronk({ config, clock = systemClock, logStream, runnerKinds = {} }: CronkOptions): Promise<Cronk> {
+export async function createCronk({
+  config,
+  clock = systemClock,
+  logStream,
+  runnerKinds = {},
+  migrateBefore,
+}: CronkOptions): Promise<Cronk> {
   // Until the app (and its logger) exists, which is while migrating, a dropped connection goes to stderr.
   let log: FastifyBaseLogger | undefined;
   const db = createPool(config.databaseUrl, (error) => {
@@ -43,7 +54,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
     else reportDroppedConnection(error);
   });
   try {
-    await migrate(db);
+    await migrate(db, { before: migrateBefore });
     const context: Context = {
       config,
       db,
@@ -67,6 +78,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
       },
       checkForLostRuns: () => checkForLostRuns(context),
       resumePausedRunners: () => resumePausedRunners(context),
+      replayFailedDeliveries: () => replayFailedDeliveries(context),
       async close() {
         await app.close();
         await endPool(db);

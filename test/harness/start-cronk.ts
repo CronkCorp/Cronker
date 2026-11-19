@@ -45,6 +45,8 @@ export interface StartedCronk {
   checkForLostRuns(): Promise<void>;
   /** Resumes the queues of Runners whose rate limit has passed, as the server does every minute; move the clock first. */
   resumePausedRunners(): Promise<void>;
+  /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every five minutes. */
+  replayFailedDeliveries(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -53,6 +55,13 @@ export interface StartedCronk {
   terminateIdleDatabaseConnections(): Promise<number>;
   /** The files in the directory Cronk keeps Attachments in. */
   attachmentFiles(): Promise<string[]>;
+  /**
+   * Runs SQL against this Cronk's database. Only a test of a migration uses it, to stage rows an earlier Cronk
+   * wrote, which today's API can no longer write, before `upgrade()`.
+   */
+  stage(sql: string, params?: unknown[]): Promise<void>;
+  /** Restarts Cronk, at a new address, applying the migrations `migrateBefore` held back. */
+  upgrade(): Promise<void>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
   command(...args: string[]): Promise<CommandResult>;
   stop(): Promise<void>;
@@ -72,6 +81,11 @@ export interface StartCronkOptions {
   noSecretKey?: boolean;
   /** The size limit of each Attachment, in bytes; 25 MB, the default, when left out. */
   attachmentLimitBytes?: number;
+  /**
+   * Starts Cronk on a database migrated short of this migration (a file name in `migrations/`) and those after
+   * it, for a test of that migration: it stages what an earlier Cronk wrote with `stage()`, then calls `upgrade()`.
+   */
+  migrateBefore?: string;
 }
 
 const commandScript = fileURLToPath(new URL("../../server/command.ts", import.meta.url));
@@ -91,7 +105,7 @@ async function freePort(): Promise<number> {
 }
 
 export async function startCronk(options: StartCronkOptions = {}): Promise<StartedCronk> {
-  const database = await createTestDatabase();
+  const database = await createTestDatabase({ empty: options.migrateBefore !== undefined });
   const clock = options.clock ?? new TestClock();
   const github = await startStandInGitHub(clock);
   const claude = await startStandInClaude();
@@ -108,18 +122,19 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
 
   const attachmentsDirectory = await mkdtemp(join(tmpdir(), "cronk-attachments-"));
   const removeAttachments = () => rm(attachmentsDirectory, { recursive: true, force: true });
-  const port = await freePort();
-  const url = `http://127.0.0.1:${port}`;
-  let cronk: Cronk;
-  try {
-    cronk = await createCronk({
+  // `upgrade()` restarts Cronk on a fresh port: another test may have taken the old one while it stood free.
+  let port = await freePort();
+  let url = `http://127.0.0.1:${port}`;
+  const secretKey = options.noSecretKey ? undefined : randomBytes(32).toString("base64");
+  const boot = async (migrateBefore?: string): Promise<Cronk> => {
+    const started = await createCronk({
       config: {
         publicUrl: new URL(url),
         databaseUrl: database.url,
         host: "127.0.0.1",
         port,
         webRoot: options.webRoot,
-        secretKey: options.noSecretKey ? undefined : randomBytes(32).toString("base64"),
+        secretKey,
         github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
         claudeApiUrl: new URL(claude.apiUrl),
         attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
@@ -127,21 +142,30 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       clock,
       logStream,
       runnerKinds: { fake: runner.kind },
+      migrateBefore,
     });
-    await cronk.listen();
+    await started.listen();
+    return started;
+  };
+  let cronk: Cronk;
+  try {
+    cronk = await boot(options.migrateBefore);
   } catch (error) {
     await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
     throw error;
   }
 
   return {
-    url,
+    get url() {
+      return url;
+    },
     github,
     claude,
     runner,
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),
     resumePausedRunners: () => cronk.resumePausedRunners(),
+    replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     logs,
     setupCode() {
       const line = logs.find((l) => typeof l.setupCode === "string");
@@ -150,6 +174,15 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     terminateIdleDatabaseConnections: () => database.terminateIdleConnections(),
     attachmentFiles: async () => (await readdir(attachmentsDirectory).catch(() => [])).sort(),
+    async stage(sql, params) {
+      await database.query(sql, params);
+    },
+    async upgrade() {
+      await cronk.close();
+      port = await freePort();
+      url = `http://127.0.0.1:${port}`;
+      cronk = await boot();
+    },
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
       const all: Record<string, string> = { ...headers };
       if (body !== undefined) all["content-type"] = "application/json";

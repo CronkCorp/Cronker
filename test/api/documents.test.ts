@@ -52,6 +52,8 @@ describe("Documents", () => {
       id: created.json.id,
       workspaceId: workspace.id,
       projectId: project.id,
+      ticketId: null,
+      runId: null,
       parentId: null,
       position: 0,
       title: "Architecture",

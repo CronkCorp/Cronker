@@ -34,7 +34,11 @@ export function createPool(connectionString: string, onIdleError: (error: Error)
   return pool;
 }
 
-export async function migrate(pool: pg.Pool): Promise<void> {
+/**
+ * Applies the migrations not yet applied, in file-name order. With `before`, stops short of that migration and
+ * those after it, as a test of that migration needs.
+ */
+export async function migrate(pool: pg.Pool, { before }: { before?: string } = {}): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("select pg_advisory_lock(hashtext('cronk_migrate'))");
@@ -45,6 +49,7 @@ export async function migrate(pool: pg.Pool): Promise<void> {
       (await client.query<{ name: string }>("select name from schema_migrations")).rows.map((r) => r.name),
     );
     for (const migration of await migrationFiles()) {
+      if (before !== undefined && migration.name >= before) break;
       if (applied.has(migration.name)) continue;
       await client.query("begin");
       try {

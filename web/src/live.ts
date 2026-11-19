@@ -10,14 +10,14 @@ export type LiveEvent =
   | { type: "project.changed" | "statuses.changed"; projectId: string }
   | { type: "ticket.created" | "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
-  | { type: "report.added"; projectId: string; ticketId: string; reportId: string }
+  | { type: "report.added" | "report.changed"; projectId: string; ticketId: string; reportId: string }
   /** A file was attached to or removed from a Ticket or one of its Comments, or a Document. */
   | { type: "attachments.changed"; projectId: string; ticketId: string }
   | { type: "attachments.changed"; documentId: string }
   /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
   | { type: "reconnected" };
 
-const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "attachments.changed"];
+const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed"];
 
 type Listener = (event: LiveEvent) => void;
 

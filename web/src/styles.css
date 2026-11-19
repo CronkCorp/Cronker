@@ -560,3 +560,19 @@ td.actions {
 .page-tree form {
   margin-top: 1rem;
 }
+ul.repositories {
+  list-style: none;
+  padding: 0;
+}
+ul.repositories li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+ul.repositories .warning {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--warn);
+}

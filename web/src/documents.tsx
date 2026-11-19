@@ -85,7 +85,10 @@ export function WorkspaceDocuments({ workspace }: { workspace: Workspace }) {
 const versionLine = (version: { number: number; actor: { name: string }; savedAt: string }) =>
   `Version ${version.number} by ${version.actor.name}, ${new Date(version.savedAt).toLocaleString()}`;
 
-/** A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. */
+/**
+ * A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. A
+ * Report is listed with its Ticket instead, so it leads back there and doesn't move.
+ */
 export function DocumentScreen({
   workspace,
   documentId,
@@ -136,10 +139,14 @@ export function DocumentScreen({
   const tree: Tree = document.projectId
     ? { kind: "project", id: document.projectId }
     : { kind: "workspace", id: document.workspaceId };
+  // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
+  const home = document.ticketId
+    ? { path: `/tickets/${document.ticketId}`, name: "Report on its Ticket" }
+    : { path: treePage(tree), name: tree.kind === "project" ? "Project Documents" : "Workspace Documents" };
   return (
     <article className="document">
       <p>
-        <Link to={treePage(tree)}>{tree.kind === "project" ? "Project Documents" : "Workspace Documents"}</Link>
+        <Link to={home.path}>{home.name}</Link>
       </p>
       <h1>{document.title}</h1>
       <p className="muted">{versionLine(document.version)}</p>
@@ -170,8 +177,8 @@ export function DocumentScreen({
             label="Attachments"
             onChanged={loadAttachments}
           />
-          <Move document={document} tree={tree} onMoved={setDocument} />
-          <Delete document={document} onDeleted={() => navigate(treePage(tree))} />
+          {!document.ticketId && <Move document={document} tree={tree} onMoved={setDocument} />}
+          <Delete document={document} onDeleted={() => navigate(home.path)} />
         </>
       )}
       <Versions key={versionsShown} document={document} />

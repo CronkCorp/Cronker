@@ -65,17 +65,32 @@ function ensureTemplate(): Promise<string> {
 
 export interface TestDatabase {
   url: string;
+  /** Runs SQL against this database from an admin connection, for staging what only an earlier Cronk wrote. */
+  query(sql: string, params?: unknown[]): Promise<pg.QueryResult>;
   /** Terminates every idle connection to this database from an admin connection, as a Postgres restart would. */
   terminateIdleConnections(): Promise<number>;
   drop(): Promise<void>;
 }
 
-export async function createTestDatabase(): Promise<TestDatabase> {
-  const template = await ensureTemplate();
+/** A disposable database copied from the migrated template, or, with `empty`, one Cronk migrates itself. */
+export async function createTestDatabase({ empty = false } = {}): Promise<TestDatabase> {
   const name = `cronk_test_${randomBytes(6).toString("hex")}`;
-  await withAdmin((client) => client.query(`create database "${name}" template "${template}"`));
+  if (empty) await withAdmin((client) => client.query(`create database "${name}"`));
+  else {
+    const template = await ensureTemplate();
+    await withAdmin((client) => client.query(`create database "${name}" template "${template}"`));
+  }
   return {
     url: urlFor(name),
+    async query(sql, params) {
+      const client = new pg.Client({ connectionString: urlFor(name) });
+      await client.connect();
+      try {
+        return await client.query(sql, params);
+      } finally {
+        await client.end();
+      }
+    },
     terminateIdleConnections: () =>
       withAdmin(async (client) => {
         const { rowCount } = await client.query(

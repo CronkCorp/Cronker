@@ -55,7 +55,7 @@ describe("upgrading the GitHub App", () => {
     expect(listed).toEqual({
       settingsUrl: `${cronk.github.url}/settings/apps/${app.slug}`,
       missingPermissions: { metadata: "read", pull_requests: "read", checks: "read", statuses: "read" },
-      missingEvents: ["pull_request", "pull_request_review", "check_run", "check_suite", "status"],
+      missingEvents: ["pull_request", "pull_request_review", "check_run", "check_suite", "status", "repository"],
       webhook: { url: `${cronk.url}/api/github/webhooks`, secret: expect.stringMatching(/.{32,}/) },
       installationsNotAccepted: [],
     });
@@ -71,7 +71,7 @@ describe("upgrading the GitHub App", () => {
 
     // The Admin edits the App's settings on GitHub.
     app.permissions = { ...app.permissions, metadata: "read", pull_requests: "read", checks: "read", statuses: "read" };
-    app.events = ["pull_request", "pull_request_review", "check_run", "check_suite", "status"];
+    app.events = ["pull_request", "pull_request_review", "check_run", "check_suite", "status", "repository"];
     app.webhookUrl = webhook.url;
     app.webhookSecret = webhook.secret;
 
