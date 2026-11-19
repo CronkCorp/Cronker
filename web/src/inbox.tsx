@@ -20,7 +20,7 @@ import { Markdown } from "./markdown.js";
 import { PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime } from "./ui/controls.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { KindLabel, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker } from "./ui/picker.js";
@@ -235,7 +235,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
 
   return (
     <div className="page">
-      <PageHead crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]} title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
+      <PageHead crumbs={[workspaceCrumb(workspace)]} title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
       <FormError error={failure} />
       {inbox &&
         (shown.length === 0 ? (

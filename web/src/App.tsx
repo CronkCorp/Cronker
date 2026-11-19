@@ -26,7 +26,7 @@ import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
+import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved, workspaceCrumb } from "./ui/controls.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 type Screen =
@@ -390,9 +390,9 @@ function SignedIn({
   } else if (current && (routedId || path === "/")) {
     page = <WorkspaceHome key={current.id} workspace={current} />;
   } else if (workspaces.length === 0 && path === "/") {
-    page = <Elsewhere title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</Elsewhere>;
+    page = <PlacelessEmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</PlacelessEmptyState>;
   } else {
-    page = <Elsewhere title="Nothing is here.">The page may have moved, or you may not see it.</Elsewhere>;
+    page = <PlacelessEmptyState title="Nothing is here.">The page may have moved, or you may not see it.</PlacelessEmptyState>;
   }
 
   return (
@@ -410,8 +410,8 @@ function SignedIn({
   );
 }
 
-/** A page that belongs to no sidebar item, such as one that isn't there. */
-function Elsewhere({ title, children }: { title: string; children: ReactNode }) {
+/** An empty page that belongs to no sidebar item, such as one that isn't there; the sidebar marks none. */
+function PlacelessEmptyState({ title, children }: { title: string; children: ReactNode }) {
   usePlace(null);
   return <EmptyState title={title}>{children}</EmptyState>;
 }
@@ -508,7 +508,7 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
   });
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]} title="Settings" />
+      <PageHead crumbs={[workspaceCrumb(workspace)]} title="Settings" />
       <FormError error={failure} />
       <Panel title="Name" id="workspace-name">
         <form onSubmit={rename.onSubmit}>
@@ -600,7 +600,7 @@ function Members({
 
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]} title="Members" />
+      <PageHead crumbs={[workspaceCrumb(workspace)]} title="Members" />
       {workspace.isAdmin && (
         <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
           <div className="form-columns">
