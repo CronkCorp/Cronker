@@ -1,11 +1,8 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
-import type { FastifyRequest } from "fastify";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ApiError, ErrorBody } from "../http/errors.js";
-import { requireCaller, type Caller } from "../identity/callers.js";
-import { findWorkspace } from "../workspaces/workspaces.js";
-import { findProject, projectNotFound } from "../work/projects.js";
+import { ErrorBody } from "../http/errors.js";
+import { requireCaller } from "../identity/callers.js";
 import {
   compareVersions,
   Comparison,
@@ -18,11 +15,12 @@ import {
   findDocument,
   readVersion,
   treeOf,
-  type Tree,
   Version,
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
+import { knowledgePlaces } from "./places.js";
+import { OutdatedVersionBody } from "./versions.js";
 import { linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
@@ -38,41 +36,13 @@ const Position = Type.Integer({
   description: "A place among its siblings, counting from 0; last when left out or past the end.",
 });
 
-/** A save refused for being based on an outdated Version, with the current Version to merge into. */
-const OutdatedVersionBody = Type.Object({
-  error: Type.Object({
-    ...ErrorBody.properties.error.properties,
-    current: Type.Optional(Type.Object(VersionWithBody.properties, { description: "The Document's current Version." })),
-  }),
-});
 
 export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
 
   return async (app) => {
     // A Project's page tree and the Workspace's are reached the same way, each from its own path.
-    const trees = [
-      {
-        path: "/api/projects/:projectId/documents",
-        params: Type.Object({ projectId: Type.String() }),
-        name: "a Project's",
-        async find(request: FastifyRequest, caller: Caller): Promise<Tree> {
-          const project = await findProject(db, caller, (request.params as { projectId: string }).projectId);
-          if (!project) throw projectNotFound();
-          return { workspaceId: project.workspaceId, projectId: project.id };
-        },
-      },
-      {
-        path: "/api/workspaces/:workspaceId/documents",
-        params: Type.Object({ workspaceId: Type.String() }),
-        name: "the Workspace's",
-        async find(request: FastifyRequest, caller: Caller): Promise<Tree> {
-          const workspace = await findWorkspace(db, caller, (request.params as { workspaceId: string }).workspaceId);
-          if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
-          return { workspaceId: workspace.id, projectId: null };
-        },
-      },
-    ];
+    const trees = knowledgePlaces(db).map((place) => ({ ...place, path: `${place.path}/documents` }));
     for (const tree of trees) {
       const { params } = tree;
 
@@ -157,7 +127,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             parentId: Type.Optional(ParentId),
             position: Type.Optional(Position),
           }),
-          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody },
+          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Document", VersionWithBody) },
         },
       },
       async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),

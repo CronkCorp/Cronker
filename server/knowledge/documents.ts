@@ -10,6 +10,8 @@ import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
+import type { Place } from "./places.js";
+import { outdatedVersion } from "./versions.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace, or, as a Report,
@@ -50,10 +52,7 @@ export const Document = Type.Object({
 export type Document = Static<typeof Document>;
 
 /** Which page tree a Document is in: a Project's, or the Workspace's when `projectId` is null. */
-export interface Tree {
-  workspaceId: string;
-  projectId: string | null;
-}
+export type Tree = Place;
 
 type Row = Omit<Document, "version"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
 
@@ -360,16 +359,7 @@ export async function editDocument(
       }
       const current = (await versionOf(tx, document.id, document.version))!;
       if (edit.baseVersion !== current.number) {
-        throw new ApiError(
-          409,
-          "outdated_version",
-          `The Document is at Version ${current.number}, but this save is based on Version ${edit.baseVersion}.`,
-          {
-            rule: "A save based on an outdated Version is refused, so it never overwrites a change its Actor hasn't seen.",
-            advice: "Merge your change into the current Version, given as `current`, and save again based on it.",
-          },
-          { current },
-        );
+        throw outdatedVersion("Document", current, edit.baseVersion);
       }
       const number = current.number + 1;
       const content = { title: edit.title ?? current.title, body: edit.body ?? current.body };

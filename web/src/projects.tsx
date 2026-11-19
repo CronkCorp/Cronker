@@ -17,6 +17,7 @@ import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
 import { PageTree } from "./documents.js";
+import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 
@@ -83,11 +84,11 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
 }
 
-type View = "board" | "list" | "settings" | "documents";
+type View = "board" | "list" | "settings" | "documents" | "glossary";
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** A Project of the Workspace on screen, as a board, as a list, its page tree of Documents, or its settings. */
+/** A Project of the Workspace on screen, as a board, as a list, its page tree of Documents, its glossary, or its settings. */
 export function ProjectScreen({
   workspace,
   projectId,
@@ -160,11 +161,15 @@ export function ProjectScreen({
         <Link to={`${base}/documents`} current={view === "documents"}>
           Documents
         </Link>
+        <Link to={`${base}/glossary`} current={view === "glossary"}>
+          Glossary
+        </Link>
         <Link to={`${base}/settings`} current={view === "settings"}>
           Settings
         </Link>
       </nav>
       {view === "documents" && <PageTree tree={{ kind: "project", id: project.id }} />}
+      {view === "glossary" && <ProjectGlossary projectId={project.id} />}
       {(view === "board" || view === "list") && (
         <>
           <NewTicket project={project} onCreated={loadTickets} />

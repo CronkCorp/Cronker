@@ -60,13 +60,13 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents " +
-  "(only Users delete them), attaching files to Documents and to their own Comments. During your running Run on a " +
-  "Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it " +
-  "into Sub-Tickets, write Reports on it, link Documents to it and unlink them, and finish the Run. A Ticket you file " +
-  "outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User delegates, moves or " +
-  "dismisses it you may edit it, title included, and add blocks from it. Anything else is refused with the rule and " +
-  "what to do instead.";
+  "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
+  "attaching files to Documents and to their own Comments, and create and save Terms (only Users delete Documents " +
+  "and Terms). During your running Run on a Ticket you may also edit its description, Priority, Labels, due date " +
+  "and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents to it and unlink " +
+  "them, and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
+  "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add blocks from " +
+  "it. Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -74,7 +74,8 @@ export function buildMcpServer(api: Api): McpServer {
     {
       instructions:
         "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
-        `each Project and of the Workspace. You act as one Agent. ${rights}`,
+        "each Project and of the Workspace, and as Terms in their glossaries: a Project's glossary is its Terms over " +
+        `the Workspace's. You act as one Agent. ${rights}`,
     },
   );
 
@@ -341,10 +342,15 @@ export function buildMcpServer(api: Api): McpServer {
 
   const documentArgument = z.string().min(1).describe("The Document's id.");
 
-  /** The path of a page tree: the Project's with that key, or the Workspace's when none is given. */
-  async function treePath(project: string | undefined) {
-    if (project) return `/api/projects/${(await projectByKey(project, ", or leave the Project out for the Workspace's")).id}/documents`;
-    return `/api/workspaces/${(await ownWorkspace()).id}/documents`;
+  /**
+   * The path of a Project's knowledge, by the Project's key, or of the Workspace's when none is given; the
+   * Workspace's may be reached by another name than the Project's.
+   */
+  async function placePath(project: string | undefined, knowledge: string, workspaceKnowledge = knowledge) {
+    if (project) {
+      return `/api/projects/${(await projectByKey(project, ", or leave the Project out for the Workspace's")).id}/${knowledge}`;
+    }
+    return `/api/workspaces/${(await ownWorkspace()).id}/${workspaceKnowledge}`;
   }
 
   const documentPath = (document: string) => `/api/documents/${encodeURIComponent(document)}`;
@@ -362,7 +368,7 @@ export function buildMcpServer(api: Api): McpServer {
       },
       annotations: { readOnlyHint: true },
     },
-    ({ project }) => answer(async () => get(await treePath(project))),
+    ({ project }) => answer(async () => get(await placePath(project, "documents"))),
   );
 
   server.registerTool(
@@ -424,7 +430,7 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ project, parent, ...input }) =>
-      answer(async () => send("POST", await treePath(project), { ...input, parentId: parent })),
+      answer(async () => send("POST", await placePath(project, "documents"), { ...input, parentId: parent })),
   );
 
   server.registerTool(
@@ -450,6 +456,90 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
+  );
+
+  const termArgument = z.string().min(1).describe("The Term's id.");
+  const termPath = (term: string) => `/api/terms/${encodeURIComponent(term)}`;
+  const avoidArgument = z.array(z.string().min(1)).describe("Words to avoid in the Term's place.");
+
+  server.registerTool(
+    "read_glossary",
+    {
+      title: "Read a glossary",
+      description:
+        "A Project's glossary: its Terms over the Workspace's, a Project Term replacing a Workspace Term of the same " +
+        "name ignoring case; or, when no Project is given, the Workspace's Terms. Each Term has its name, definition, " +
+        "the words to avoid, its current Version and `projectId`, null for the Workspace's. Use its names, and avoid " +
+        "the words it lists, in what you write.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's Terms when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) =>
+      // A Project's glossary layers its Terms over the Workspace's; the Workspace's is its own Terms.
+      answer(async () => get(await placePath(project, "glossary", "terms"))),
+  );
+
+  server.registerTool(
+    "read_term",
+    {
+      title: "Read a Term",
+      description: "A Term at its current Version, whose number a save names as its `baseVersion`.",
+      inputSchema: { term: termArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ term }) => answer(() => get(termPath(term))),
+  );
+
+  server.registerTool(
+    "list_term_versions",
+    {
+      title: "List a Term's Versions",
+      description: "Each Version of a Term, oldest first: what it said, the Actor who saved it and when.",
+      inputSchema: { term: termArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ term }) => answer(() => get(`${termPath(term)}/versions`)),
+  );
+
+  server.registerTool(
+    "create_term",
+    {
+      title: "Create a Term",
+      description:
+        "Creates a Term in a Project, or in the Workspace when no Project is given, at Version 1 by your Agent. Its " +
+        "name is unique ignoring case among the Project's own Terms, or the Workspace's: a taken one is refused with " +
+        "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
+        name: z.string().min(1),
+        definition: z.string().optional().describe("Markdown."),
+        avoid: avoidArgument.optional(),
+      },
+    },
+    ({ project, ...input }) =>
+      answer(async () => send("POST", await placePath(project, "terms"), input)),
+  );
+
+  server.registerTool(
+    "edit_term",
+    {
+      title: "Save a Term",
+      description:
+        "Saves a Term as its next Version, by your Agent, keeping what you leave out, based on the Version you read: " +
+        "give its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, " +
+        "carrying the current Version as `current`: merge your change into it and save again based on it. Only Users " +
+        "delete Terms.",
+      inputSchema: {
+        term: termArgument,
+        baseVersion: z.number().int().min(1).describe("The number of the Version your save is based on."),
+        name: z.string().min(1).optional(),
+        definition: z.string().optional().describe("The whole new definition, in Markdown."),
+        avoid: avoidArgument.optional().describe("The whole new list of words to avoid."),
+      },
+    },
+    ({ term, ...edit }) => answer(() => send("PATCH", termPath(term), edit)),
   );
 
   server.registerTool(
