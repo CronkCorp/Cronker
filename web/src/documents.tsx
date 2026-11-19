@@ -267,8 +267,8 @@ function Move({ document, tree, onMoved }: { document: Document; tree: Tree; onM
           </select>
         </label>
         <label>
-          Place
-          <input name="position" type="number" min={0} defaultValue={document.position} />
+          Place among its siblings
+          <input name="position" type="number" min={0} placeholder="Last" />
         </label>
         <button type="submit" className="secondary" disabled={busy}>
           Move
