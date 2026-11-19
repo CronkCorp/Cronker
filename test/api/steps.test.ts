@@ -274,7 +274,7 @@ describe("Agents and Steps", () => {
         code: "agent_not_allowed",
         message: expect.any(String),
         rule:
-          "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, and create and save Terms; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
+          "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }

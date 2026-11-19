@@ -15,6 +15,7 @@ import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
 import { ConnectError, ConnectScreen } from "./connect.js";
 import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
+import { DecisionScreen, WorkspaceDecisions } from "./decisions.js";
 import { DocumentScreen, WorkspaceDocuments } from "./documents.js";
 import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxLink, InboxScreen } from "./inbox.js";
@@ -286,11 +287,12 @@ function SignedIn({
     await api.signOut();
     onSignedOut();
   });
-  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|agents|inbox|documents|glossary)(?:\/([^/]+))?)?\/?$/.exec(path);
-  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary))?\/?$/.exec(path);
+  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|agents|inbox|documents|glossary|decisions)(?:\/([^/]+))?)?\/?$/.exec(path);
+  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary|decisions))?\/?$/.exec(path);
   const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
   const termPath = /^\/terms\/([^/]+)\/?$/.exec(path);
+  const decisionPath = /^\/decisions\/([^/]+)\/?$/.exec(path);
   const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
 
   // The Workspace on screen: the one in the path, else the last one shown (pages such as a
@@ -329,7 +331,7 @@ function SignedIn({
         key={`${current.id} ${projectPath[1]}`}
         workspace={current}
         projectId={projectPath[1]!}
-        view={(projectPath[2] as "list" | "settings" | "documents" | "glossary" | undefined) ?? "board"}
+        view={(projectPath[2] as "list" | "settings" | "documents" | "glossary" | "decisions" | undefined) ?? "board"}
         onOtherWorkspace={(workspaceId) => {
           if (!workspaces.some((w) => w.id === workspaceId)) return false;
           setSelectedId(workspaceId);
@@ -377,8 +379,23 @@ function SignedIn({
         }}
       />
     );
+  } else if (current && decisionPath) {
+    page = (
+      <DecisionScreen
+        key={`${current.id} ${decisionPath[1]}`}
+        workspace={current}
+        decisionId={decisionPath[1]!}
+        onOtherWorkspace={(workspaceId) => {
+          if (!workspaces.some((w) => w.id === workspaceId)) return false;
+          setSelectedId(workspaceId);
+          return true;
+        }}
+      />
+    );
   } else if (current && workspacePath?.[2] === "glossary" && !workspacePath[3]) {
     page = <WorkspaceGlossary key={current.id} workspace={current} />;
+  } else if (current && workspacePath?.[2] === "decisions" && !workspacePath[3]) {
+    page = <WorkspaceDecisions key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "documents" && !workspacePath[3]) {
     page = <WorkspaceDocuments key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "inbox" && !workspacePath[3]) {
@@ -438,6 +455,11 @@ function SignedIn({
           {current && (
             <Link to={`/workspaces/${current.id}/glossary`} current={workspacePath?.[2] === "glossary"}>
               Glossary
+            </Link>
+          )}
+          {current && (
+            <Link to={`/workspaces/${current.id}/decisions`} current={workspacePath?.[2] === "decisions"}>
+              Decisions
             </Link>
           )}
           {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}

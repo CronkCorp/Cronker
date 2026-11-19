@@ -82,7 +82,7 @@ export function WorkspaceDocuments({ workspace }: { workspace: Workspace }) {
   );
 }
 
-const versionLine = (version: { number: number; actor: { name: string }; savedAt: string }) =>
+export const versionLine = (version: { number: number; actor: { name: string }; savedAt: string }) =>
   `Version ${version.number} by ${version.actor.name}, ${new Date(version.savedAt).toLocaleString()}`;
 
 /**
@@ -152,7 +152,8 @@ export function DocumentScreen({
       <p className="muted">{versionLine(document.version)}</p>
       {editing ? (
         <Editor
-          document={document}
+          saved={document}
+          save={(edit) => api.editDocument(document.id, edit)}
           onSaved={(next) => {
             saved(next);
             setEditing(false);
@@ -181,34 +182,45 @@ export function DocumentScreen({
           <Delete document={document} onDeleted={() => navigate(home.path)} />
         </>
       )}
-      <Versions key={versionsShown} document={document} />
+      <Versions
+        key={versionsShown}
+        source={{
+          list: () => api.versions(document.id),
+          read: (number) => api.version(document.id, number),
+          compare: (from, to) => api.compareVersions(document.id, from, to),
+        }}
+      />
     </article>
   );
 }
 
 /**
- * The Markdown text area with its preview. A save names the Version it's based on; one based on an outdated
- * Version is refused with the current one, shown beside the draft so its changes can be merged in by hand.
+ * The Markdown text area with its preview, for a Document or a Decision. A save names the Version it's based on;
+ * one based on an outdated Version is refused with the current one, shown beside the draft so its changes can be
+ * merged in by hand.
  */
-function Editor({
-  document,
+export function Editor<T>({
+  saved,
+  save,
   onSaved,
   onRebased,
   onCancel,
 }: {
-  document: Document;
-  onSaved: (next: Document) => void;
-  /** The draft is now based on the Document's current Version, which the screen shows again. */
+  /** What is edited, as last saved. */
+  saved: { title: string; body: string; version: { number: number } };
+  save: (edit: { baseVersion: number; title: string; body: string }) => Promise<T>;
+  onSaved: (next: T) => void;
+  /** The draft is now based on the current Version, which the screen shows again. */
   onRebased: () => void;
   onCancel: () => void;
 }) {
-  const [title, setTitle] = useState(document.title);
-  const [body, setBody] = useState(document.body);
-  const [base, setBase] = useState(document.version.number);
+  const [title, setTitle] = useState(saved.title);
+  const [body, setBody] = useState(saved.body);
+  const [base, setBase] = useState(saved.version.number);
   const [current, setCurrent] = useState<VersionWithBody | null>(null);
   const { error, busy, onSubmit } = useSubmit(async () => {
     try {
-      onSaved(await api.editDocument(document.id, { baseVersion: base, title, body }));
+      onSaved(await save({ baseVersion: base, title, body }));
     } catch (e) {
       if (e instanceof ApiError && e.code === "outdated_version") setCurrent(e.body.current as VersionWithBody);
       throw e;
@@ -325,23 +337,32 @@ function Delete({ document, onDeleted }: { document: Document; onDeleted: () => 
   );
 }
 
-/** The Document's Versions, oldest first: read any one, or compare two. */
-function Versions({ document }: { document: Document }) {
+/** Where a Document's or Decision's Versions come from. */
+export interface VersionSource {
+  list: () => Promise<Version[]>;
+  read: (number: number) => Promise<VersionWithBody>;
+  compare: (from: number, to: number) => Promise<Comparison>;
+}
+
+/** A Document's or Decision's Versions, oldest first: read any one, or compare two. */
+export function Versions({ source }: { source: VersionSource }) {
   const [versions, setVersions] = useState<Version[] | null>(null);
   const [shown, setShown] = useState<VersionWithBody | null>(null);
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // A new source each render is the same Versions; the screen remounts this to show a new one.
+  const sourceRef = useRef(source);
   useEffect(() => {
-    api.versions(document.id).then(setVersions, (e: Error) => setFailure(e.message));
-  }, [document.id]);
+    sourceRef.current.list().then(setVersions, (e: Error) => setFailure(e.message));
+  }, []);
 
   const read = (number: number) => {
     setComparison(null);
-    api.version(document.id, number).then(setShown, (e: Error) => setFailure(e.message));
+    sourceRef.current.read(number).then(setShown, (e: Error) => setFailure(e.message));
   };
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     setShown(null);
-    setComparison(await api.compareVersions(document.id, Number(field(form, "from")), Number(field(form, "to"))));
+    setComparison(await sourceRef.current.compare(Number(field(form, "from")), Number(field(form, "to"))));
   });
 
   if (failure) return <p role="alert">{failure}</p>;

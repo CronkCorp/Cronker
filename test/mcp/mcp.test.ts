@@ -82,16 +82,21 @@ describe("MCP with an Agent token", () => {
       "create_document",
       "create_sub_ticket",
       "create_term",
+      "edit_decision",
       "edit_document",
       "edit_term",
       "edit_ticket",
       "file_ticket",
       "finish",
       "link_document",
+      "list_decision_versions",
+      "list_decisions",
       "list_document_versions",
       "list_documents",
       "list_term_versions",
       "list_tickets",
+      "propose_decision",
+      "read_decision",
       "read_document",
       "read_glossary",
       "read_term",
@@ -451,6 +456,37 @@ describe("MCP with an Agent token", () => {
     expect(notBase64.json.code).toBe("invalid_base64");
     expect(twoTargets.json.code).toBe("one_target");
     expect(tooLarge.json).toEqual(expect.objectContaining({ code: "attachment_too_large", message: "An Attachment may be at most 25 MB." }));
+  });
+
+  test("an Agent proposes Decisions in a Project and the Workspace, edits their text and reads their Versions", async () => {
+    const { cookie, agent, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const postgres = await call(client, "propose_decision", { project: "cronk", title: "Use Postgres", body: "It's boring." });
+    const fastify = await call(client, "propose_decision", { project: "CRONK", title: "Use Fastify" });
+    const english = await call(client, "propose_decision", { title: "Write in English" });
+    expect(postgres.json).toEqual(expect.objectContaining({ number: 1, status: "proposed", projectId: expect.any(String) }));
+    expect([fastify.json.number, english.json.number, english.json.projectId]).toEqual([2, 1, null]);
+
+    const saved = await call(client, "edit_decision", { decision: postgres.json.id, baseVersion: 1, body: "It's boring.\nIt works." });
+    expect(saved.json.version).toEqual(expect.objectContaining({ number: 2, actor: { kind: "agent", id: agent.id, name: "claude-max" } }));
+    const outdated = await call(client, "edit_decision", { decision: postgres.json.id, baseVersion: 1, body: "Stale." });
+    expect(outdated).toEqual({ isError: true, json: expect.objectContaining({ code: "outdated_version" }) });
+
+    const listed = await call(client, "list_decisions", { project: "cronk" });
+    expect(listed.json.map((d: { number: number; title: string }) => [d.number, d.title])).toEqual([
+      [1, "Use Postgres"],
+      [2, "Use Fastify"],
+    ]);
+    expect((await call(client, "list_decisions", {})).json.map((d: { title: string }) => d.title)).toEqual(["Write in English"]);
+    const first = await call(client, "read_decision", { decision: postgres.json.id, version: 1 });
+    expect(first.json).toEqual(expect.objectContaining({ number: 1, body: "It's boring." }));
+    const versions = await call(client, "list_decision_versions", { decision: postgres.json.id });
+    expect(versions.json.map((v: { number: number }) => v.number)).toEqual([1, 2]);
+
+    await cronk.request("PATCH", `/api/decisions/${postgres.json.id}`, { cookie, body: { baseVersion: 2, status: "accepted" } });
+    const current = await call(client, "read_decision", { decision: postgres.json.id });
+    expect(current.json).toEqual(expect.objectContaining({ status: "accepted", body: "It's boring.\nIt works." }));
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

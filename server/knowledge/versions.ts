@@ -6,8 +6,8 @@ import { ApiError, ErrorBody } from "../http/errors.js";
  * with the current one, so its Actor can see what changed.
  */
 
-/** Refuses a save of the Document or Term based on `base`, carrying its `current` Version. */
-export function outdatedVersion(kind: "Document" | "Term", current: { number: number }, base: number): ApiError {
+/** Refuses a save of the Document, Term or Decision based on `base`, carrying its `current` Version. */
+export function outdatedVersion(kind: "Document" | "Term" | "Decision", current: { number: number }, base: number): ApiError {
   return new ApiError(
     409,
     "outdated_version",
@@ -21,7 +21,7 @@ export function outdatedVersion(kind: "Document" | "Term", current: { number: nu
 }
 
 /** The body of a save refused for being based on an outdated Version, with the current Version to merge into. */
-export function OutdatedVersionBody(kind: "Document" | "Term", version: TObject<TProperties>) {
+export function OutdatedVersionBody(kind: "Document" | "Term" | "Decision", version: TObject<TProperties>) {
   return Type.Object({
     error: Type.Object({
       ...ErrorBody.properties.error.properties,

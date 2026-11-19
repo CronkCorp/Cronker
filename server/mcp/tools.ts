@@ -61,9 +61,9 @@ const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CR
 
 const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
-  "attaching files to Documents and to their own Comments, and create and save Terms (only Users delete Documents " +
-  "and Terms). During your running Run on a Ticket you may also edit its description, Priority, Labels, due date " +
-  "and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents to it and unlink " +
+  "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
+  "and Terms), and propose Decisions and edit their text (only Users change a Decision's status). During your " +
+  "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents to it and unlink " +
   "them, and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add blocks from " +
   "it. Anything else is refused with the rule and what to do instead.";
@@ -74,8 +74,9 @@ export function buildMcpServer(api: Api): McpServer {
     {
       instructions:
         "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
-        "each Project and of the Workspace, and as Terms in their glossaries: a Project's glossary is its Terms over " +
-        `the Workspace's. You act as one Agent. ${rights}`,
+        "each Project and of the Workspace, as Terms in their glossaries (a Project's glossary is its Terms over the " +
+        "Workspace's), and recorded choices as numbered Decisions of each Project and of the Workspace. You act as one " +
+        `Agent. ${rights}`,
     },
   );
 
@@ -622,6 +623,89 @@ export function buildMcpServer(api: Api): McpServer {
         const file = { bytes: Buffer.from(content, "base64"), mediaType: mediaType?.trim() || "application/octet-stream" };
         return send("POST", `${path}/attachments?name=${encodeURIComponent(name)}`, undefined, file);
       }),
+  );
+
+  const decisionArgument = z.string().min(1).describe("The Decision's id.");
+  const decisionPath = (decision: string) => `/api/decisions/${encodeURIComponent(decision)}`;
+
+  server.registerTool(
+    "list_decisions",
+    {
+      title: "List Decisions",
+      description:
+        "A Project's Decisions, or the Workspace's own when no Project is given, by number, without their bodies: " +
+        "each with its status (proposed, accepted, rejected, deprecated or superseded) and, when superseded, the " +
+        "Decision replacing it (`supersededById`). Read one with `read_decision`.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(await placePath(project, "decisions"))),
+  );
+
+  server.registerTool(
+    "read_decision",
+    {
+      title: "Read a Decision",
+      description:
+        "A Decision of your Workspace with its Markdown body, at its current Version, whose number a save names as its " +
+        "`baseVersion`; or, given a Version's number, that earlier Version.",
+      inputSchema: {
+        decision: decisionArgument,
+        version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ decision, version }) =>
+      answer(() => get(version === undefined ? decisionPath(decision) : `${decisionPath(decision)}/versions/${version}`)),
+  );
+
+  server.registerTool(
+    "list_decision_versions",
+    {
+      title: "List a Decision's Versions",
+      description: "Each Version of a Decision, oldest first: its number, title, status, the Actor who saved it and when.",
+      inputSchema: { decision: decisionArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ decision }) => answer(() => get(`${decisionPath(decision)}/versions`)),
+  );
+
+  server.registerTool(
+    "propose_decision",
+    {
+      title: "Propose a Decision",
+      description:
+        "Records a choice and its reasoning as a proposed Decision of a Project, or of the Workspace when no Project " +
+        "is given, numbered next there, at Version 1 by your Agent. Only a User accepts, rejects or otherwise changes " +
+        "its status.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+        title: z.string().min(1),
+        body: z.string().optional().describe("Markdown: the context, the choice and its consequences."),
+      },
+    },
+    ({ project, ...input }) => answer(async () => send("POST", await placePath(project, "decisions"), input)),
+  );
+
+  server.registerTool(
+    "edit_decision",
+    {
+      title: "Save a Decision's text",
+      description:
+        "A new title or body saves a Decision as its next Version, by your Agent, based on the Version you read: give " +
+        "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
+        "the current Version as `current`: merge your change into it and save again based on it. Accepted Decisions " +
+        "stay editable. Only Users change a Decision's status, and nobody deletes one.",
+      inputSchema: {
+        decision: decisionArgument,
+        baseVersion: z.number().int().min(1).describe("The number of the Version your save is based on."),
+        title: z.string().min(1).optional(),
+        body: z.string().optional().describe("The whole new body, in Markdown."),
+      },
+    },
+    ({ decision, ...edit }) => answer(() => send("PATCH", decisionPath(decision), edit)),
   );
 
   server.registerTool(

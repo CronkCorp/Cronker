@@ -557,6 +557,41 @@ export interface TermContent {
 /** Where knowledge is kept: a Project, or the Workspace. */
 export type Place = Tree;
 
+export const decisionStatuses = ["proposed", "accepted", "rejected", "deprecated", "superseded"] as const;
+export type DecisionStatus = (typeof decisionStatuses)[number];
+
+/** One saved state of a Decision: its text and status, recording the Actor who saved it. */
+export interface DecisionVersion extends Version {
+  status: DecisionStatus;
+  supersededById: string | null;
+}
+
+/** A Decision as its list shows it, without its body. */
+export interface DecisionSummary {
+  id: string;
+  workspaceId: string;
+  /** Null for the Workspace's own. */
+  projectId: string | null;
+  number: number;
+  title: string;
+  status: DecisionStatus;
+  /** The Decision replacing it, while superseded. */
+  supersededById: string | null;
+  version: DecisionVersion;
+}
+
+export interface Decision extends DecisionSummary {
+  body: string;
+}
+
+export interface DecisionEdit {
+  baseVersion: number;
+  title?: string;
+  body?: string;
+  status?: DecisionStatus;
+  supersededById?: string | null;
+}
+
 /** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
 export interface ConnectRequest {
   client: { id: string; name: string | null };
@@ -731,6 +766,16 @@ export const api = {
   attach: (owner: AttachmentOwner, file: File) =>
     call<Attachment>("POST", `${attachmentsPath(owner)}?name=${encodeURIComponent(file.name)}`, file),
   removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
+  decisions: (place: Place) => call<DecisionSummary[]>("GET", `${placePath(place)}/decisions`),
+  createDecision: (place: Place, input: { title: string; body?: string }) =>
+    call<Decision>("POST", `${placePath(place)}/decisions`, input),
+  decision: (id: string) => call<Decision>("GET", decision(id)),
+  editDecision: (id: string, edit: DecisionEdit) => call<Decision>("PATCH", decision(id), edit),
+  decisionVersions: (id: string) => call<DecisionVersion[]>("GET", `${decision(id)}/versions`),
+  decisionVersion: (id: string, number: number) =>
+    call<DecisionVersion & { body: string }>("GET", `${decision(id)}/versions/${number}`),
+  compareDecisionVersions: (id: string, from: number, to: number) =>
+    call<Comparison>("GET", `${decision(id)}/versions/compare?from=${from}&to=${to}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
@@ -748,6 +793,10 @@ function term(id: string) {
 
 function attachmentsPath(owner: AttachmentOwner) {
   return `/api/${owner.kind}s/${encodeURIComponent(owner.id)}/attachments`;
+}
+
+function decision(id: string) {
+  return `/api/decisions/${encodeURIComponent(id)}`;
 }
 
 function doc(id: string) {
