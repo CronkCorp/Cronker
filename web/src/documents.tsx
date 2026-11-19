@@ -82,7 +82,10 @@ export function WorkspaceDocuments({ workspace }: { workspace: Workspace }) {
 const versionLine = (version: { number: number; actor: { name: string }; savedAt: string }) =>
   `Version ${version.number} by ${version.actor.name}, ${new Date(version.savedAt).toLocaleString()}`;
 
-/** A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. */
+/**
+ * A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. A
+ * Report is listed with its Ticket instead, so it leads back there and doesn't move.
+ */
 export function DocumentScreen({
   workspace,
   documentId,
@@ -124,7 +127,11 @@ export function DocumentScreen({
   return (
     <article className="document">
       <p>
-        <Link to={treePage(tree)}>{tree.kind === "project" ? "Project Documents" : "Workspace Documents"}</Link>
+        {document.ticketId ? (
+          <Link to={`/tickets/${document.ticketId}`}>Report on its Ticket</Link>
+        ) : (
+          <Link to={treePage(tree)}>{tree.kind === "project" ? "Project Documents" : "Workspace Documents"}</Link>
+        )}
       </p>
       <h1>{document.title}</h1>
       <p className="muted">{versionLine(document.version)}</p>
@@ -149,8 +156,11 @@ export function DocumentScreen({
             </button>
           </div>
           {document.body.trim() ? <Markdown text={document.body} mentions={[]} /> : <p className="muted">Empty.</p>}
-          <Move document={document} tree={tree} onMoved={setDocument} />
-          <Delete document={document} onDeleted={() => navigate(treePage(tree))} />
+          {!document.ticketId && <Move document={document} tree={tree} onMoved={setDocument} />}
+          <Delete
+            document={document}
+            onDeleted={() => navigate(document.ticketId ? `/tickets/${document.ticketId}` : treePage(tree))}
+          />
         </>
       )}
       <Versions key={versionsShown} document={document} />

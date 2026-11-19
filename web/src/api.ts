@@ -447,8 +447,14 @@ export interface DocumentSummary {
   workspaceId: string;
   /** Null in the Workspace's page tree. */
   projectId: string | null;
+  /** The Ticket it is a Report on, listed with the Ticket instead of in a page tree; null in a page tree. */
+  ticketId: string | null;
+  /** The Run that wrote it, for a Report. */
+  runId: string | null;
+  /** Null for a Report. */
   parentId: string | null;
-  position: number;
+  /** Null for a Report. */
+  position: number | null;
   title: string;
   version: Version;
 }

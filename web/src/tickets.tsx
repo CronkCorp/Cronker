@@ -612,7 +612,9 @@ function Reports({ reports }: { reports: Report[] }) {
       <h2>Reports</h2>
       {reports.map((report) => (
         <article key={report.id} aria-label={report.title} className="comment">
-          <h3>{report.title}</h3>
+          <h3>
+            <Link to={`/documents/${report.id}`}>{report.title}</Link>
+          </h3>
           <div className="comment-meta">
             <strong>{report.agent.name}</strong> <span className="muted">(Agent)</span> <When at={report.createdAt} />
           </div>
