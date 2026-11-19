@@ -164,17 +164,17 @@ The web client keeps its own small component set, styled with the tokens in plai
 | ![Pull Requests in the side panel](ui/ticket-pull-requests-side.png) | ![Pull Requests in the main column](ui/ticket-pull-requests-main.png) |
 
 - **Side panel:** a **Pull Requests** group after the Run card, one row per Pull Request: number, title, state pill, check counts and review state: "Merged by @ada" once merged, else "Changes requested by @bea" or "Approved by @bea", linking the review. The review state counts each reviewer's latest review, whatever the Ticket's Status and whoever opened the Pull Request: changes any reviewer still requests show over approvals, and a dismissed review no longer counts. A failing check that sent the Ticket back shows below as "Sent back: ✗ test failed".
-- **Main column**, for a Ticket in a Review Status: a card per Pull Request under the description with the branch (`cronk-12-sign-in-limit → main`), its author and review state, and every check with ✓, ✗ or ●.
+- **Main column**, for a Ticket in a Review Status: under the description, a **Code to review** heading over a card per Pull Request with the branch (`cronk-12-sign-in-limit → main`), its author and review state, and every check with ✓, ✗ or ● and its state in words (passed, failed, running), failing checks first.
 - The screenshots show a Refresh button and a Link a Pull Request… action from the old Cronk; this rewrite links by key only and updates by webhook, so neither exists.
 
 #### Attachments on a Ticket
 
 ![Ticket with Attachments](ui/ticket-attachments.png)
 
-- **Under the description:** the Ticket's own Attachments as 168px thumbnails (the type for non-images) with name, size and who attached them, and a drop zone.
+- **Under the description:** an **Attachments** heading with their count ("Attachments · 3"), the Ticket's own Attachments as 168px thumbnails (the type for non-images) with name, size and who attached them, and a drop zone.
 - **Files** in the side panel: every Attachment on the Ticket, in Comments and Reports too.
 - **Dropping or pasting a file** anywhere on the Ticket page attaches it to the Ticket. A paste into a text field that carries text too pastes the text and attaches nothing.
-- **Opening one** shows it in a wide dialog: images in full, anything else as its type with Download. Remove sits in that dialog behind a confirmation.
+- **Opening one**, from a thumbnail or the Files group, shows it in a wide dialog: images in full, anything else as its type with Download. Remove sits in that dialog apart from Download, behind a confirmation whose Cancel goes back to the file.
 
 ### Document
 
