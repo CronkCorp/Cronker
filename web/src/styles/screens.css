@@ -999,6 +999,10 @@
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--space-3);
 }
+/* Cards in a row share their height; each keeps its own content at the top. */
+.agent-card {
+  align-content: start;
+}
 .agent-card-head {
   display: flex;
   align-items: center;
