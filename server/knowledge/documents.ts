@@ -8,6 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
+import { publishLinkingTickets } from "./linked-documents.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace. Each save
@@ -386,10 +387,10 @@ export async function compareVersions(
 
 /**
  * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
- * deleted first. Its siblings after it close the gap.
+ * deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
  */
-export async function deleteDocument({ db }: Context, actor: Caller, documentId: string): Promise<void> {
-  await transaction(db, async (tx) => {
+export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
+  await transaction(context.db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
     if (actor.kind === "agent") {
@@ -410,6 +411,7 @@ export async function deleteDocument({ db }: Context, actor: Caller, documentId:
         },
       );
     }
+    await publishLinkingTickets(context, tx, document);
     await tx.query("delete from documents where id = $1", [document.id]);
     await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
   });

@@ -84,11 +84,13 @@ describe("MCP with an Agent token", () => {
       "edit_ticket",
       "file_ticket",
       "finish",
+      "link_document",
       "list_document_versions",
       "list_documents",
       "list_tickets",
       "read_document",
       "read_ticket",
+      "unlink_document",
       "write_report",
     ]);
   });
@@ -107,6 +109,17 @@ describe("MCP with an Agent token", () => {
     expect(json.relations.relations).toEqual([
       expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-2" }) }),
     ]);
+  });
+
+  test("an Agent reads a Ticket with its Linked Documents", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const document = await post(cookie, `/api/projects/${ticket.projectId}/documents`, { title: "Sign-in design" });
+    await post(cookie, `/api/tickets/${ticket.id}/documents`, { documentId: document.id });
+    const client = await connect(secret);
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design" }]);
   });
 
   test("an Agent lists Tickets, narrowed by Project and Status", async () => {
@@ -220,6 +233,27 @@ describe("MCP with an Agent token", () => {
     expect(later.json.reports).toEqual([
       expect.objectContaining({ runId: read.runs[0].id, title: "Findings", body: "In the parser." }),
     ]);
+  });
+
+  test("during its Run an Agent links and unlinks Documents on its Ticket", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: status("Triage") } });
+    const design = await post(cookie, `/api/projects/${project.id}/documents`, { title: "Sign-in design" });
+    const client = await connect(secret);
+
+    const linked = await call(client, "link_document", { ticket: "CRONK-1", document: design.id });
+    expect(linked).toEqual({ isError: false, json: { id: design.id, projectId: project.id, title: "Sign-in design" } });
+    const refused = await call(client, "link_document", { ticket: "CRONK-2", document: design.id });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
+
+    const unlinked = await call(client, "unlink_document", { ticket: "CRONK-1", document: design.id });
+    expect(unlinked.isError).toBe(false);
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(read.linkedDocuments).toEqual([]);
   });
 
   test("during its Run an Agent splits its Ticket and files a Discovered Ticket that blocks it", async () => {

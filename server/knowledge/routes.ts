@@ -23,6 +23,7 @@ import {
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
+import { linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
@@ -176,6 +177,65 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         await deleteDocument(context, await requireCaller(context, request), request.params.documentId);
+        return reply.code(204).send(null);
+      },
+    );
+
+    const TicketParams = Type.Object({ ticketId: Type.String() });
+
+    app.get(
+      "/api/tickets/:ticketId/documents",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Linked Documents",
+          description: "Documents of the Ticket's Project or of the Workspace linked to it, oldest link first.",
+          params: TicketParams,
+          response: { 200: Type.Array(LinkedDocument), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => linkedDocumentsOf(db, await requireCaller(context, request), request.params.ticketId),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/documents",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Link a Document to a Ticket",
+          description:
+            "Links a Document of the Ticket's Project or of the Workspace (`document_outside_project` for another " +
+            "Project's; `unknown_document` for one not in the Workspace), once (`document_already_linked`). An Agent " +
+            "links only during its own running Run on the Ticket (`no_running_run`). A deleted Document drops out of " +
+            "its links.",
+          params: TicketParams,
+          body: Type.Object({ documentId: Type.String({ description: "A Document of the Ticket's Project or Workspace." }) }),
+          response: { 201: LinkedDocument, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        const linked = await linkDocument(context, caller, request.params.ticketId, request.body.documentId);
+        return reply.code(201).send(linked);
+      },
+    );
+
+    app.delete(
+      "/api/tickets/:ticketId/documents/:documentId",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Unlink a Document from a Ticket",
+          description:
+            "The Document stays in its page tree. An Agent unlinks only during its own running Run on the Ticket " +
+            "(`no_running_run`).",
+          params: Type.Object({ ticketId: Type.String(), documentId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        await unlinkDocument(context, caller, request.params.ticketId, request.params.documentId);
         return reply.code(204).send(null);
       },
     );

@@ -55,8 +55,8 @@ const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents " +
   "(only Users delete them). During your running Run on a Ticket " +
   "you may also edit its description, Priority, Labels, due date and estimate, split it into Sub-Tickets, write " +
-  "Reports on it and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, " +
-  "waiting for its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add " +
+  "Reports on it, link and unlink its Documents and finish the Run. A Ticket you file outside your Ticket's " +
+  "Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add " +
   "blocks from it. Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
@@ -113,7 +113,8 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "A Ticket of your Workspace with its fields, its Comments (oldest first), its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
-        "and the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on. " +
+        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; and its Linked Documents, " +
+        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`. " +
         "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
       annotations: { readOnlyHint: true },
@@ -127,6 +128,7 @@ export function buildMcpServer(api: Api): McpServer {
           relations: await get(`/api/tickets/${found.id}/relations`),
           runs: await get(`/api/tickets/${found.id}/runs`),
           reports: await get(`/api/tickets/${found.id}/reports`),
+          linkedDocuments: await get(`/api/tickets/${found.id}/documents`),
         };
       }),
   );
@@ -436,6 +438,40 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
+  );
+
+  server.registerTool(
+    "link_document",
+    {
+      title: "Link a Document to your Run's Ticket",
+      description:
+        "During your running Run on a Ticket, links a Document of the Ticket's Project or of the Workspace to it, so " +
+        "it is one click away for its Users and later Runs read it with the Ticket. Refused for a Document of another " +
+        "Project, for any other Ticket and outside a running Run.",
+      inputSchema: { ticket: ticketArgument, document: documentArgument },
+    },
+    ({ ticket, document }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        return send("POST", `/api/tickets/${found.id}/documents`, { documentId: document });
+      }),
+  );
+
+  server.registerTool(
+    "unlink_document",
+    {
+      title: "Unlink a Document from your Run's Ticket",
+      description:
+        "During your running Run on a Ticket, unlinks one of its Linked Documents; the Document stays in its page " +
+        "tree. Answers with the Ticket's Linked Documents left. Refused for any other Ticket and outside a running Run.",
+      inputSchema: { ticket: ticketArgument, document: documentArgument },
+    },
+    ({ ticket, document }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        await send("DELETE", `/api/tickets/${found.id}/documents/${encodeURIComponent(document)}`);
+        return get(`/api/tickets/${found.id}/documents`);
+      }),
   );
 
   server.registerTool(
