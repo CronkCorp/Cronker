@@ -164,6 +164,8 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     }
   };
   let cronk: Cronk;
+  // Whether `cronk` is closed, as it is when `upgrade()` could not start the next one, so `stop()` closes it only once.
+  let closed = false;
   try {
     cronk = await boot(options.migrateBefore);
   } catch (error) {
@@ -195,7 +197,9 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async upgrade() {
       await cronk.close();
+      closed = true;
       cronk = await boot();
+      closed = false;
     },
     request(method, path, { body, cookie, origin, headers = {} } = {}) {
       const all: Record<string, string> = { ...headers };
@@ -219,7 +223,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       });
     },
     async stop() {
-      await cronk.close();
+      if (!closed) await cronk.close();
       await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
     },
   };

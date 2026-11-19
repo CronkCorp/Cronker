@@ -19,7 +19,7 @@ What a seam can't see, such as that only hashes of secrets are stored, is kept b
 
 `test/harness/` holds what every test starts from:
 
-- **`startCronk()`** (`start-cronk.ts`) creates a disposable database, starts Cronk in-process listening on a free local port, and returns:
+- **`startCronk()`** (`start-cronk.ts`) creates a disposable database, starts Cronk in-process listening on a free local port, and returns the following. Cronk's public address names its port before it listens, so the harness picks the port first; when another test takes it in between, it starts Cronk again on another, as `upgrade()` does. `start-cronk.test.ts` checks the harness itself: many Cronks started or upgraded at once each answer at their own `url`.
   - `url`: Cronk's address, which is also its configured public address, so the browser and `Origin` checks see the same thing.
   - `github`: the stand-in GitHub Cronk talks to (below).
   - `claude`: the stand-in claude.ai fire endpoint (`claude.ts`) the built-in `subscription` Runner fires scheduled tasks at. `claude.trigger(id, token)` adds a trigger it knows (others answer 404, a wrong token 401), `claude.rateLimitNext(retryAfter)` answers the next fire with 429, and `claude.fires` lists every fire with its trigger id, token, headers and body.
