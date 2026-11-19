@@ -133,7 +133,7 @@ export function ProjectScreen({
     if (event.type === "reconnected") {
       loadProject();
       loadTickets();
-    } else if (event.projectId !== projectId) {
+    } else if (!("projectId" in event) || event.projectId !== projectId) {
       return;
     } else if (event.type === "statuses.changed" || event.type === "project.changed") {
       loadProject();

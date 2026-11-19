@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { forgetAttachments } from "../attachments/attachments.js";
+import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
@@ -421,8 +422,8 @@ export async function compareVersions(
 }
 
 /**
- * Deletes a Document with all its Versions; only a User may. Refused while it has children: they are moved or
- * deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
+ * Deletes a Document with all its Versions and Attachments; only a User may. Refused while it has children: they are
+ * moved or deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
  */
 export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
   const { db, live } = context;
@@ -447,6 +448,10 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
         },
       );
     }
+    const attached = await tx.query<{ id: string }>("delete from attachments where document_id = $1 returning id", [
+      document.id,
+    ]);
+    afterCommit(tx, () => forgetAttachments(context, attached.rows.map((row) => row.id)));
     // It drops out of its links: the Tickets linking it show the change.
     const linking = await tx.query<{ ticketId: string; projectId: string }>(
       `select tickets.id as "ticketId", tickets.project_id as "projectId"

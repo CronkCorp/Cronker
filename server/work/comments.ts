@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { Attachment, attachmentsOnComments } from "../attachments/attachments.js";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
@@ -18,13 +19,14 @@ export const Comment = Type.Object({
   actor: Actor,
   createdAt: Type.String({ format: "date-time" }),
   mentions: Type.Array(Mention, { description: "Ticket keys the body mentions." }),
+  attachments: Type.Array(Attachment, { description: "The files attached to the Comment, oldest first." }),
   questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
   }),
 });
 export type Comment = Static<typeof Comment>;
 
-type Row = Omit<Comment, "createdAt" | "mentions"> & { createdAt: Date };
+type Row = Omit<Comment, "createdAt" | "mentions" | "attachments"> & { createdAt: Date };
 
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.reply_to_id as "replyToId", comments.body,
   ${actorColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId"`;
@@ -42,10 +44,16 @@ async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promis
   return rows;
 }
 
-/** Comments as the API shows them, finding the Ticket keys of all their bodies at once. */
+/** Comments as the API shows them, finding the Ticket keys of all their bodies, and their Attachments, at once. */
 async function present(db: Db | Tx, workspaceId: string, rows: Row[]): Promise<Comment[]> {
   const mentions = await mentionsInEach(db, workspaceId, rows.map((row) => row.body));
-  return rows.map((row, i) => ({ ...row, createdAt: row.createdAt.toISOString(), mentions: mentions[i]! }));
+  const attachments = await attachmentsOnComments(db, rows.map((row) => row.id));
+  return rows.map((row, i) => ({
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    mentions: mentions[i]!,
+    attachments: attachments.get(row.id)!,
+  }));
 }
 
 export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Comment[]> {

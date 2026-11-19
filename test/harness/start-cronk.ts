@@ -1,6 +1,9 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createCronk, type Cronk } from "../../server/cronk.js";
@@ -50,6 +53,8 @@ export interface StartedCronk {
   request(method: string, path: string, options?: RequestOptions): Promise<Response>;
   /** Terminates Cronk's idle database connections from an admin connection, as a Postgres restart would; returns how many. */
   terminateIdleDatabaseConnections(): Promise<number>;
+  /** The files in the directory Cronk keeps Attachments in. */
+  attachmentFiles(): Promise<string[]>;
   /**
    * Runs SQL against this Cronk's database. Only a test of a migration uses it, to stage rows an earlier Cronk
    * wrote, which today's API can no longer write, before `upgrade()`.
@@ -74,6 +79,8 @@ export interface StartCronkOptions {
   webRoot?: string;
   /** Start without `CRONK_SECRET_KEY`, so nothing can be stored encrypted. */
   noSecretKey?: boolean;
+  /** The size limit of each Attachment, in bytes; 25 MB, the default, when left out. */
+  attachmentLimitBytes?: number;
   /**
    * Starts Cronk on a database migrated short of this migration (a file name in `migrations/`) and those after
    * it, for a test of that migration: it stages what an earlier Cronk wrote with `stage()`, then calls `upgrade()`.
@@ -113,6 +120,8 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
   });
 
+  const attachmentsDirectory = await mkdtemp(join(tmpdir(), "cronk-attachments-"));
+  const removeAttachments = () => rm(attachmentsDirectory, { recursive: true, force: true });
   // `upgrade()` restarts Cronk on a fresh port: another test may have taken the old one while it stood free.
   let port = await freePort();
   let url = `http://127.0.0.1:${port}`;
@@ -128,6 +137,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
         secretKey,
         github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
         claudeApiUrl: new URL(claude.apiUrl),
+        attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
       },
       clock,
       logStream,
@@ -141,7 +151,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   try {
     cronk = await boot(options.migrateBefore);
   } catch (error) {
-    await Promise.all([database.drop(), github.stop(), claude.stop()]);
+    await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
     throw error;
   }
 
@@ -163,6 +173,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       return line.setupCode as string;
     },
     terminateIdleDatabaseConnections: () => database.terminateIdleConnections(),
+    attachmentFiles: async () => (await readdir(attachmentsDirectory).catch(() => [])).sort(),
     async stage(sql, params) {
       await database.query(sql, params);
     },
@@ -195,7 +206,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     async stop() {
       await cronk.close();
-      await Promise.all([database.drop(), github.stop(), claude.stop()]);
+      await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
     },
   };
 }

@@ -9,8 +9,16 @@ import { isUuid } from "../http/ids.js";
  * API as the Agent, through `Api`, and passes on whatever the API answers, refusals included.
  */
 
-/** A request to Cronk's HTTP API, made as the Agent. */
-export type Api = (method: string, path: string, body?: unknown) => Promise<{ status: number; json: unknown }>;
+/**
+ * A request to Cronk's HTTP API, made as the Agent: with a JSON body, or with a file's bytes as the body, sent with
+ * its media type.
+ */
+export type Api = (
+  method: string,
+  path: string,
+  body?: unknown,
+  file?: { bytes: Buffer; mediaType: string },
+) => Promise<{ status: number; json: unknown }>;
 
 interface Refusal extends Partial<Guidance> {
   code: string;
@@ -53,11 +61,12 @@ const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CR
 
 const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents " +
-  "(only Users delete them). During your running Run on a Ticket " +
-  "you may also edit its description, Priority, Labels, due date and estimate, split it into Sub-Tickets, write " +
-  "Reports on it, link Documents to it and unlink them, and finish the Run. A Ticket you file outside your Ticket's " +
-  "Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User delegates, moves or dismisses it you " +
-  "may edit it, title included, and add blocks from it. Anything else is refused with the rule and what to do instead.";
+  "(only Users delete them), attaching files to Documents and to their own Comments. During your running Run on a " +
+  "Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it " +
+  "into Sub-Tickets, write Reports on it, link Documents to it and unlink them, and finish the Run. A Ticket you file " +
+  "outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User delegates, moves or " +
+  "dismisses it you may edit it, title included, and add blocks from it. Anything else is refused with the rule and " +
+  "what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -73,8 +82,8 @@ export function buildMcpServer(api: Api): McpServer {
     return send<T>("GET", path);
   }
 
-  async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const { status, json } = await api(method, path, body);
+  async function send<T>(method: string, path: string, body?: unknown, file?: { bytes: Buffer; mediaType: string }): Promise<T> {
+    const { status, json } = await api(method, path, body, file);
     if (status >= 400) throw new Refused((json as { error: Refusal }).error);
     return json as T;
   }
@@ -113,8 +122,9 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "A Ticket of your Workspace with its fields, its Comments (oldest first), its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
-        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; and its Linked Documents, " +
-        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`. " +
+        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Linked Documents, " +
+        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; and the " +
+        "files attached to it, each Comment carrying its own. Markdown refers to an Attachment as `attachment:<id>`. " +
         "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
       annotations: { readOnlyHint: true },
@@ -129,6 +139,7 @@ export function buildMcpServer(api: Api): McpServer {
           runs: await get(`/api/tickets/${found.id}/runs`),
           reports: await get(`/api/tickets/${found.id}/reports`),
           linkedDocuments: await get(`/api/tickets/${found.id}/documents`),
+          attachments: await get(`/api/tickets/${found.id}/attachments`),
         };
       }),
   );
@@ -472,6 +483,54 @@ export function buildMcpServer(api: Api): McpServer {
         const found = await ticketByKeyOrId(ticket);
         await send("DELETE", `/api/tickets/${found.id}/documents/${encodeURIComponent(document)}`);
         return get(`/api/tickets/${found.id}/documents`);
+      }),
+  );
+
+  server.registerTool(
+    "attach_file",
+    {
+      title: "Attach a file",
+      description:
+        "Attaches a file, such as a screenshot or a log, given as base64, to exactly one of: a Ticket during your " +
+        "running Run on it (or a Discovered Ticket you filed that waits for a User), a Document, or a Comment you " +
+        "wrote. Each file is at most the size Cronk is configured with (25 MB by default). Markdown refers to the " +
+        "Attachment as `attachment:<id>`, such as `![Screenshot](attachment:<id>)` in a Document or Comment.",
+      inputSchema: {
+        ticket: ticketArgument.optional(),
+        document: z.string().min(1).optional().describe("A Document's id."),
+        comment: z.string().min(1).optional().describe("The id of a Comment you wrote."),
+        name: z.string().min(1).describe("The file's name, such as `screenshot.png`."),
+        mediaType: z.string().optional().describe("Its media type, such as `image/png`; `application/octet-stream` when left out."),
+        contentBase64: z.string().describe("The file's bytes, in base64."),
+      },
+    },
+    ({ ticket, document, comment, name, mediaType, contentBase64 }) =>
+      answer(async () => {
+        const targets = [ticket, document, comment].filter((target) => target !== undefined);
+        if (targets.length !== 1) {
+          throw new Refused({
+            code: "one_target",
+            message: "A file is attached to exactly one Ticket, Document or Comment.",
+            rule: "Each Attachment belongs to one Ticket, Document or Comment.",
+            advice: "Give exactly one of `ticket`, `document` and `comment`; attach the file again for another.",
+          });
+        }
+        const content = contentBase64.replace(/\s/g, "");
+        if (content.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(content)) {
+          throw new Refused({
+            code: "invalid_base64",
+            message: "`contentBase64` isn't base64.",
+            rule: "A file's bytes are given in standard base64, padded with `=`.",
+            advice: "Encode the file's bytes as base64, for example with `base64 -w0 <file>`, and attach it again.",
+          });
+        }
+        const path = ticket
+          ? `/api/tickets/${(await ticketByKeyOrId(ticket)).id}`
+          : document
+            ? documentPath(document)
+            : `/api/comments/${encodeURIComponent(comment!)}`;
+        const file = { bytes: Buffer.from(content, "base64"), mediaType: mediaType?.trim() || "application/octet-stream" };
+        return send("POST", `${path}/attachments?name=${encodeURIComponent(name)}`, undefined, file);
       }),
   );
 
