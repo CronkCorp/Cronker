@@ -283,7 +283,7 @@ export function TicketScreen({
             owner={{ kind: "ticket", id: ticket.id }}
             attachments={attachments}
             label="Attachments"
-            dropHint="or drop or paste them anywhere on the page"
+            dropHint="Drop files or paste to attach, anywhere on the Ticket"
             onChanged={loadAttachments}
           />
           <Timeline

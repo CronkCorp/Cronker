@@ -21,7 +21,7 @@ import { PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
-import { KindLabel, RunState, StatusPill } from "./ui/labels.js";
+import { Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker } from "./ui/picker.js";
 
@@ -116,6 +116,13 @@ function summary(item: InboxItem): string {
   }
 }
 
+/** A line as a sentence: a full stop at its end, unless it already ends with one, as a Run's reason may. */
+const sentence = (line: string) => (/[.!?]$/.test(line) ? line : `${line}.`);
+
+/** An item's snippet in the list: the Question, or the Report's title on a Ticket to review or verify, else its summary. */
+const snippet = (item: InboxItem) =>
+  (item.kind === "review" || item.kind === "unverified") && item.report ? `Report: ${item.report.title}` : summary(item);
+
 /** Whether an item waits on an answer or a fix: a coloured left border marks it. */
 const tone = (item: InboxItem) =>
   item.kind === "question" || item.kind === "needsYou"
@@ -144,7 +151,7 @@ const typing = (event: KeyboardEvent) => {
     event.metaKey ||
     event.ctrlKey ||
     event.altKey ||
-    !!target?.closest("input, textarea, select, [contenteditable=true]") ||
+    !!target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])") ||
     !!document.querySelector("[role=dialog]")
   );
 };
@@ -268,11 +275,11 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
                           <button type="button" onClick={() => select(key, true)}>
                             <span className="inbox-item-head">
                               <KindLabel kind={kindOf(item)} />
-                              <span className="ticket-key">{item.ticket.key}</span>
+                              <Key>{item.ticket.key}</Key>
                               <RelativeTime at={item.since} />
                             </span>
                             <span className="inbox-item-title">{item.ticket.title}</span>
-                            <span className="inbox-item-snippet">{isResolved ? "Resolved elsewhere" : summary(item)}</span>
+                            <span className="inbox-item-snippet">{isResolved ? "Resolved elsewhere" : snippet(item)}</span>
                           </button>
                         </li>
                       );
@@ -360,9 +367,9 @@ function Detail({
   return (
     <div className="detail">
       <p className="detail-head">
-        <KindLabel kind={kindOf(item)} /> <span className="ticket-key">{ticket.key}</span>{" "}
-        <Link to={`/tickets/${ticket.id}`}>
-          {ticket.key} {ticket.title}
+        <KindLabel kind={kindOf(item)} />
+        <Link to={`/tickets/${ticket.id}`} className="detail-ticket">
+          <Key>{ticket.key}</Key> {ticket.title}
         </Link>
       </p>
       {resolved && (
@@ -423,7 +430,7 @@ function ItemBody({
     case "needsYou":
       return (
         <>
-          <p className="detail-line">{summary(item)}.</p>
+          <p className="detail-line">{sentence(summary(item))}</p>
           {item.question && (
             <div className="bubble bubble-question">
               <p>Cronk asks: {item.question}</p>
@@ -435,17 +442,17 @@ function ItemBody({
     case "review":
       return (
         <>
-          <p className="detail-line">{summary(item)}.</p>
+          <p className="detail-line">{sentence(summary(item))}</p>
           <TicketStatus ticket={ticket} />
-          <TicketPullRequests ticketId={ticket.id} />
-          <LatestReport ticketId={ticket.id} />
+          <TicketPullRequests ticketId={ticket.id} workspaceId={workspace.id} />
+          <LatestReport ticketId={ticket.id} workspaceId={workspace.id} />
         </>
       );
     case "unverified":
       return (
         <>
-          <p className="detail-line">{summary(item)}.</p>
-          <LatestReport ticketId={ticket.id} />
+          <p className="detail-line">{sentence(summary(item))}</p>
+          <LatestReport ticketId={ticket.id} workspaceId={workspace.id} />
         </>
       );
     case "run":
@@ -542,12 +549,16 @@ function Reopen({
   );
 }
 
-/** The Ticket's latest Report, rendered inline, if it has one. */
-function LatestReport({ ticketId }: { ticketId: string }) {
+/** The Ticket's latest Report, rendered inline, if it has one; fetched again after each live event, like the Inbox. */
+function LatestReport({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
   const [report, setReport] = useState<Report | null>(null);
-  useEffect(() => {
-    api.reports(ticketId).then((all) => setReport(all.at(-1) ?? null), () => setReport(null));
-  }, [ticketId]);
+  const latest = useLatest();
+  const load = useCallback(
+    () => latest(api.reports(ticketId), (all) => setReport(all.at(-1) ?? null), () => setReport(null)),
+    [ticketId, latest],
+  );
+  useEffect(load, [load]);
+  useLiveEvents(workspaceId, load);
   if (!report) return null;
   return (
     <div className="report-card">
@@ -564,12 +575,13 @@ function LatestReport({ ticketId }: { ticketId: string }) {
   );
 }
 
-/** The Ticket's Pull Requests, as rows, if it has any. */
-function TicketPullRequests({ ticketId }: { ticketId: string }) {
+/** The Ticket's Pull Requests, as rows, if it has any; fetched again after each live event, like the Inbox. */
+function TicketPullRequests({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
-  useEffect(() => {
-    api.pullRequests(ticketId).then(setPullRequests, () => setPullRequests([]));
-  }, [ticketId]);
+  const latest = useLatest();
+  const load = useCallback(() => latest(api.pullRequests(ticketId), setPullRequests, () => setPullRequests([])), [ticketId, latest]);
+  useEffect(load, [load]);
+  useLiveEvents(workspaceId, load);
   return <PullRequestRows pullRequests={pullRequests} />;
 }
 
@@ -609,7 +621,7 @@ function RunGoneWrong({
   return (
     <>
       <p className="detail-line">
-        <RunState state={item.run.state} /> {summary(item)}.
+        <RunState state={item.run.state} /> {sentence(summary(item))}
       </p>
       {found && (
         <p className="detail-line">
@@ -750,7 +762,7 @@ function Reassign({
   }, [workspace.id]);
   return (
     <>
-      <p className="detail-line">{summary(item)}.</p>
+      <p className="detail-line">{sentence(summary(item))}</p>
       <FieldPicker
         label="Assignee"
         value={<span className="muted">Nobody</span>}

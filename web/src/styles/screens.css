@@ -487,6 +487,29 @@
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
 }
+.pr-checks {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+.pr-check {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+.pr-check a {
+  justify-self: start;
+  font-family: var(--font-mono);
+}
+.pr-check-state {
+  color: var(--muted);
+  font-size: 12px;
+}
 .pr-card-head {
   display: flex;
   flex-wrap: wrap;
@@ -742,6 +765,16 @@
   justify-self: center;
   border-radius: var(--radius-control);
 }
+.attachment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.attachment-actions .dialog-actions {
+  flex: 1;
+}
 .attachment-meta {
   display: flex;
   flex-wrap: wrap;
@@ -846,11 +879,8 @@
 .detail-head a {
   font-weight: 600;
 }
+/* A line of prose with Actors and pills in it: inline, so punctuation sits against the words before it. */
 .detail-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
   font-size: 13px;
 }
 .inline-select {
