@@ -4,6 +4,7 @@ import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { appToken, findApp, webhookSecret } from "./app.js";
 import { appDeliveries, redeliver } from "./client.js";
+import { onRepositoryEvent } from "./repositories.js";
 
 /**
  * The App's webhook deliveries. Each is checked against the App's webhook secret before
@@ -23,7 +24,7 @@ export interface Delivery {
 export type EventHandler = (context: Context, tx: Tx, delivery: Delivery) => Promise<void>;
 
 /** Handlers by event name. Events with none, such as `ping`, are recorded and otherwise ignored. */
-const handlers: Record<string, EventHandler> = {};
+const handlers: Record<string, EventHandler> = { repository: onRepositoryEvent };
 
 const invalidSignature = () =>
   new ApiError(401, "invalid_signature", "The delivery isn't signed with the GitHub App's webhook secret.");

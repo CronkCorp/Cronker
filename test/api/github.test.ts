@@ -26,7 +26,7 @@ describe("creating the GitHub App", () => {
       redirect_url: `${cronk.url}/api/github/app/created`,
       callback_urls: [`${cronk.url}/api/github/callback`],
       public: false,
-      default_events: ["pull_request", "pull_request_review", "check_run", "check_suite", "status"],
+      default_events: ["pull_request", "pull_request_review", "check_run", "check_suite", "status", "repository"],
       hook_attributes: { url: `${cronk.url}/api/github/webhooks`, active: true },
     });
 

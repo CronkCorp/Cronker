@@ -6,7 +6,7 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers, and sending the App's webhook deliveries signed with its secret,
+ * installation covers (listed, or one by id), and sending the App's webhook deliveries signed with its secret,
  * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
@@ -487,6 +487,24 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         html_url: `${github.url}/${r.fullName}`,
       }));
       return json(response, 200, { total_count: installation.repositories.length, repositories }, link ? { link } : {});
+    }
+
+    // API: one repository by GitHub's id, with a token of an installation that covers it.
+    const byId = /^\/repositories\/(\d+)$/.exec(path);
+    if (request.method === "GET" && byId) {
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find((r) => String(r.id) === byId[1]);
+      if (!repository) return json(response, 404, { message: "Not Found" });
+      return json(response, 200, {
+        id: repository.id,
+        name: repository.name,
+        full_name: repository.fullName,
+        owner: { login: repository.fullName.split("/")[0] },
+        private: true,
+        html_url: `${github.url}/${repository.fullName}`,
+      });
     }
 
     return json(response, 404, { message: "Not Found" });
