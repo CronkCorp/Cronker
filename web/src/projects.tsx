@@ -16,6 +16,7 @@ import {
 import { field, useSubmit } from "./forms.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
+import { PageTree } from "./documents.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
@@ -81,11 +82,11 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
 }
 
-type View = "board" | "list" | "settings";
+type View = "board" | "list" | "settings" | "documents";
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** A Project of the Workspace on screen, as a board, as a list, or its settings. */
+/** A Project of the Workspace on screen, as a board, as a list, its page tree of Documents, or its settings. */
 export function ProjectScreen({
   workspace,
   projectId,
@@ -155,11 +156,15 @@ export function ProjectScreen({
         <Link to={`${base}/list`} current={view === "list"}>
           List
         </Link>
+        <Link to={`${base}/documents`} current={view === "documents"}>
+          Documents
+        </Link>
         <Link to={`${base}/settings`} current={view === "settings"}>
           Settings
         </Link>
       </nav>
-      {view !== "settings" && (
+      {view === "documents" && <PageTree tree={{ kind: "project", id: project.id }} />}
+      {(view === "board" || view === "list") && (
         <>
           <NewTicket project={project} onCreated={loadTickets} />
           <Filters project={project} members={members} filter={filter} onChange={setFilter} />

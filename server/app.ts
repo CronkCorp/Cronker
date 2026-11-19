@@ -18,6 +18,7 @@ import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
 import { inboxRoutes } from "./inbox/routes.js";
+import { knowledgeRoutes } from "./knowledge/routes.js";
 import { liveRoutes } from "./live/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
@@ -48,7 +49,14 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     const guide = (statusCode: number, guidance?: Guidance) =>
       guidance ?? (isAgent ? guidanceForAgent(statusCode) : undefined);
     if (error instanceof ApiError) {
-      return sendError(reply, error.statusCode, error.code, error.message, guide(error.statusCode, error.guidance));
+      return sendError(
+        reply,
+        error.statusCode,
+        error.code,
+        error.message,
+        guide(error.statusCode, error.guidance),
+        error.details,
+      );
     }
     const { validation, statusCode, message } = error as { validation?: unknown; statusCode?: number; message: string };
     if (validation) return sendError(reply, 400, "invalid_request", message, guide(400));
@@ -95,7 +103,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             type: "http",
             scheme: "bearer",
             description:
-              "An Agent's token. Agents may read their Workspace, comment on its Tickets and file Tickets; during their running Run on a Ticket they may also edit some of its fields, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents; during their running Run on a Ticket they may also edit some of its fields, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
           },
         },
       },
@@ -112,6 +120,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(knowledgeRoutes(context));
   await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));

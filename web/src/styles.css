@@ -5,6 +5,7 @@
   --line: #d9d9de;
   --accent: #3b5bdb;
   --warn: #c92a2a;
+  --ok: #2b8a3e;
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -16,6 +17,7 @@
     --line: #34343a;
     --accent: #7b93ff;
     --warn: #ff8787;
+    --ok: #69db7c;
   }
 }
 body {
@@ -478,4 +480,61 @@ td.actions {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+.page-tree ul {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+.page-tree > ul {
+  padding-left: 0;
+  list-style: none;
+}
+.page-tree li {
+  margin: 0.2rem 0;
+}
+.editor-panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .editor-panes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.editor-panes textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, monospace;
+}
+.editor-panes h2,
+.versions h2 {
+  font-size: 1rem;
+}
+.conflict,
+.version,
+.comparison {
+  margin: 1rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--line);
+}
+.conflict pre,
+.comparison pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.comparison .added {
+  color: var(--ok);
+}
+.comparison .removed {
+  color: var(--warn);
+  text-decoration: line-through;
+}
+.document .move,
+.versions {
+  margin-top: 1.25rem;
+}
+.page-tree form {
+  margin-top: 1rem;
 }

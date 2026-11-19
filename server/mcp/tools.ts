@@ -52,7 +52,8 @@ interface TicketSummary {
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 const rights =
-  "Agents may read their Workspace, comment on its Tickets and file Tickets. During your running Run on a Ticket " +
+  "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents " +
+  "(only Users delete them). During your running Run on a Ticket " +
   "you may also edit its description, Priority, Labels, due date and estimate, split it into Sub-Tickets, write " +
   "Reports on it and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, " +
   "waiting for its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add " +
@@ -61,7 +62,11 @@ const rights =
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
     { name: "Cronk", version: "0.0.0" },
-    { instructions: `Cronk tracks Tickets for Users and their Agents. You act as one Agent. ${rights}` },
+    {
+      instructions:
+        "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
+        `each Project and of the Workspace. You act as one Agent. ${rights}`,
+    },
   );
 
   async function get<T>(path: string): Promise<T> {
@@ -318,6 +323,119 @@ export function buildMcpServer(api: Api): McpServer {
         const found = await ticketByKeyOrId(ticket);
         return send("POST", `/api/tickets/${found.id}/reports`, { title, body });
       }),
+  );
+
+  const documentArgument = z.string().min(1).describe("The Document's id.");
+
+  /** The path of a page tree: the Project's with that key, or the Workspace's when none is given. */
+  async function treePath(project: string | undefined) {
+    if (project) return `/api/projects/${(await projectByKey(project, ", or leave the Project out for the Workspace's")).id}/documents`;
+    return `/api/workspaces/${(await ownWorkspace()).id}/documents`;
+  }
+
+  const documentPath = (document: string) => `/api/documents/${encodeURIComponent(document)}`;
+
+  server.registerTool(
+    "list_documents",
+    {
+      title: "List a page tree's Documents",
+      description:
+        "The Documents of a Project's page tree, or of the Workspace's when no Project is given, without their bodies, " +
+        "in tree order: each right after its parent (`parentId`), siblings by their place (`position`). A Project's " +
+        "page tree and the Workspace's are separate. Read one with `read_document`.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(await treePath(project))),
+  );
+
+  server.registerTool(
+    "read_document",
+    {
+      title: "Read a Document",
+      description:
+        "A Document of your Workspace as Markdown, at its current Version, whose number a save names as its " +
+        "`baseVersion`; or, given a Version's number, that earlier Version.",
+      inputSchema: {
+        document: documentArgument,
+        version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ document, version }) =>
+      answer(() => get(version === undefined ? documentPath(document) : `${documentPath(document)}/versions/${version}`)),
+  );
+
+  server.registerTool(
+    "list_document_versions",
+    {
+      title: "List a Document's Versions",
+      description: "Each Version of a Document, oldest first: its number, title, the Actor who saved it and when.",
+      inputSchema: { document: documentArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ document }) => answer(() => get(`${documentPath(document)}/versions`)),
+  );
+
+  server.registerTool(
+    "compare_versions",
+    {
+      title: "Compare two Versions of a Document",
+      description: "Both Versions, and their bodies compared line by line: each line `same`, `removed` or `added`.",
+      inputSchema: {
+        document: documentArgument,
+        from: z.number().int().min(1).describe("The earlier Version's number."),
+        to: z.number().int().min(1).describe("The later Version's number."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ document, from, to }) => answer(() => get(`${documentPath(document)}/versions/compare?from=${from}&to=${to}`)),
+  );
+
+  server.registerTool(
+    "create_document",
+    {
+      title: "Create a Document",
+      description:
+        "Creates a Markdown Document in a Project's page tree, or the Workspace's when no Project is given, at Version " +
+        "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
+        title: z.string().min(1),
+        body: z.string().optional().describe("Markdown."),
+        parent: z.string().optional().describe("The id of a Document of the same page tree to sit under."),
+        position: z.number().int().min(0).optional().describe("A place among its siblings, counting from 0."),
+      },
+    },
+    ({ project, parent, ...input }) =>
+      answer(async () => send("POST", await treePath(project), { ...input, parentId: parent })),
+  );
+
+  server.registerTool(
+    "edit_document",
+    {
+      title: "Save, rename or move a Document",
+      description:
+        "A new title or body saves a Document as its next Version, by your Agent, based on the Version you read: give " +
+        "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
+        "the current Version as `current`: merge your change into it and save again based on it. A new parent or place " +
+        "moves the Document within its page tree, making no Version. Only Users delete Documents.",
+      inputSchema: {
+        document: documentArgument,
+        baseVersion: z.number().int().min(1).optional().describe("The number of the Version your save is based on."),
+        title: z.string().min(1).optional(),
+        body: z.string().optional().describe("The whole new body, in Markdown."),
+        parent: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("The id of a Document of the same page tree to sit under, or null for the top."),
+        position: z.number().int().min(0).optional().describe("A place among its siblings, counting from 0."),
+      },
+    },
+    ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
   );
 
   server.registerTool(
