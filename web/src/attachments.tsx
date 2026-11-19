@@ -72,6 +72,7 @@ export function Attachments({
   if (attachments.length === 0 && !canAttach) return null;
   return (
     <section aria-label={label} className={`attachments${compact ? " attachments-compact" : ""}`}>
+      {!compact && <h2>{attachments.length > 0 ? `Attachments · ${attachments.length}` : "Attachments"}</h2>}
       {attachments.length > 0 && (
         <ul className="thumbs">
           {attachments.map((attachment) => (
