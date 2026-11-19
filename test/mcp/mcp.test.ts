@@ -77,11 +77,17 @@ describe("MCP with an Agent token", () => {
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "add_block",
       "comment",
+      "compare_versions",
+      "create_document",
       "create_sub_ticket",
+      "edit_document",
       "edit_ticket",
       "file_ticket",
       "finish",
+      "list_document_versions",
+      "list_documents",
       "list_tickets",
+      "read_document",
       "read_ticket",
       "write_report",
     ]);
@@ -249,6 +255,53 @@ describe("MCP with an Agent token", () => {
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "not_your_discovered_ticket" }) });
     const noProject = await call(client, "file_ticket", { project: "NOPE", title: "Lost" });
     expect(noProject).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project", advice: expect.stringContaining("CRONK") }) });
+  });
+
+  test("an Agent creates, edits, moves and reads Documents in a Project's page tree and the Workspace's", async () => {
+    const { cookie, agent, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const guides = await call(client, "create_document", { project: "cronk", title: "Guides" });
+    const setup = await call(client, "create_document", { project: "CRONK", title: "Setup", body: "Run it." });
+    const handbook = await call(client, "create_document", { title: "Handbook" });
+    expect([guides.isError, setup.isError, handbook.isError]).toEqual([false, false, false]);
+    expect(handbook.json).toEqual(expect.objectContaining({ projectId: null, title: "Handbook" }));
+
+    const saved = await call(client, "edit_document", {
+      document: setup.json.id,
+      baseVersion: 1,
+      title: "Setting up",
+      body: "Install it.\nRun it.",
+    });
+    expect(saved.json.version).toEqual(expect.objectContaining({ number: 2, actor: { kind: "agent", id: agent.id, name: "claude-max" } }));
+    const moved = await call(client, "edit_document", { document: setup.json.id, parent: guides.json.id });
+    expect(moved.json).toEqual(expect.objectContaining({ parentId: guides.json.id, position: 0 }));
+    const outdated = await call(client, "edit_document", { document: setup.json.id, baseVersion: 1, body: "Stale." });
+    expect(outdated.isError).toBe(true);
+    expect(outdated.json).toEqual(
+      expect.objectContaining({ code: "outdated_version", current: expect.objectContaining({ number: 2, body: "Install it.\nRun it." }) }),
+    );
+
+    const projectTree = await call(client, "list_documents", { project: "cronk" });
+    expect(projectTree.json.map((d: { title: string; parentId: string | null }) => [d.title, d.parentId])).toEqual([
+      ["Guides", null],
+      ["Setting up", guides.json.id],
+    ]);
+    const workspaceTree = await call(client, "list_documents", {});
+    expect(workspaceTree.json.map((d: { title: string }) => d.title)).toEqual(["Handbook"]);
+    const current = await call(client, "read_document", { document: setup.json.id });
+    expect(current.json).toEqual(expect.objectContaining({ title: "Setting up", body: "Install it.\nRun it." }));
+    const first = await call(client, "read_document", { document: setup.json.id, version: 1 });
+    expect(first.json).toEqual(expect.objectContaining({ number: 1, title: "Setup", body: "Run it." }));
+    const versions = await call(client, "list_document_versions", { document: setup.json.id });
+    expect(versions.json.map((v: { number: number }) => v.number)).toEqual([1, 2]);
+    const compared = await call(client, "compare_versions", { document: setup.json.id, from: 1, to: 2 });
+    expect(compared.json.lines).toEqual([
+      { change: "added", text: "Install it." },
+      { change: "same", text: "Run it." },
+    ]);
+    const read = await (await cronk.request("GET", `/api/documents/${setup.json.id}`, { cookie })).json();
+    expect(read.title).toBe("Setting up");
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

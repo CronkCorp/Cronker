@@ -162,7 +162,7 @@ describe("what an Agent may change", () => {
       expect((await response.json()).error, `${method} ${path}`).toEqual({
         code: "agent_not_allowed",
         message: expect.any(String),
-        rule: "Agents may read their Workspace, comment on its Tickets and file Tickets; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
+        rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
