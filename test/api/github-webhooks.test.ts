@@ -108,3 +108,51 @@ describe("webhooks: refusals", () => {
     expect(await response.json()).toEqual({ error: { code: "invalid_signature", message: expect.any(String) } });
   });
 });
+
+describe("webhooks: replaying failed deliveries", () => {
+  test("a delivery that never reached Cronk is redelivered and applied when Cronk checks", async () => {
+    const app = await withApp();
+    await cronk.github.deliver(app, "ping", ping, { id: "while-down", fails: "unreachable" });
+
+    await cronk.replayFailedDeliveries();
+
+    expect(cronk.github.redeliveries(app).map((d) => [d.guid, d.statusCode])).toEqual([["while-down", 200]]);
+    expect(await (await cronk.github.deliver(app, "ping", ping, { id: "while-down" })).json()).toEqual({ applied: false });
+  });
+
+  test("a delivery Cronk applied isn't redelivered, though GitHub gave up waiting for its answer", async () => {
+    const app = await withApp();
+    await cronk.github.deliver(app, "ping", ping, { id: "slow", fails: "timed out" });
+
+    await cronk.replayFailedDeliveries();
+
+    expect(cronk.github.redeliveries(app)).toEqual([]);
+  });
+
+  test("a delivery that failed several times is redelivered once", async () => {
+    const app = await withApp();
+    await cronk.github.deliver(app, "ping", ping, { id: "while-down", fails: "unreachable" });
+    await cronk.github.deliver(app, "ping", ping, { id: "while-down", fails: "unreachable" });
+
+    await cronk.replayFailedDeliveries();
+
+    expect(cronk.github.redeliveries(app).map((d) => [d.guid, d.statusCode])).toEqual([["while-down", 200]]);
+  });
+
+  test("without a GitHub App, there is nothing to replay", async () => {
+    await setUp(cronk);
+
+    await expect(cronk.replayFailedDeliveries()).resolves.toBeUndefined();
+  });
+
+  test("a redelivery GitHub refuses doesn't keep the other failed deliveries from being redelivered", async () => {
+    const app = await withApp();
+    await cronk.github.deliver(app, "ping", ping, { id: "older", fails: "unreachable" });
+    await cronk.github.deliver(app, "ping", ping, { id: "newer", fails: "unreachable" });
+    cronk.github.refuseNextRedelivery();
+
+    await expect(cronk.replayFailedDeliveries()).rejects.toThrow();
+
+    expect(cronk.github.redeliveries(app).map((d) => [d.guid, d.statusCode])).toEqual([["older", 200]]);
+  });
+});
