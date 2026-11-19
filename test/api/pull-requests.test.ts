@@ -75,6 +75,59 @@ function pullRequestEvent(
   };
 }
 
+/** A `check_run` delivery as GitHub sends it, with only the fields Cronk reads. */
+const checkRunEvent = (
+  installation: StandInInstallation,
+  repository: StandInRepository,
+  run: { id: number; name: string; sha: string; status: string; conclusion?: string },
+) => ({
+  action: run.status === "completed" ? "completed" : "created",
+  installation: { id: installation.id },
+  repository: { id: repository.id, full_name: repository.fullName },
+  check_run: {
+    id: run.id,
+    name: run.name,
+    head_sha: run.sha,
+    status: run.status,
+    conclusion: run.conclusion ?? null,
+    html_url: `https://github.com/${repository.fullName}/runs/${run.id}`,
+  },
+});
+/** A `status` delivery as GitHub sends it, with only the fields Cronk reads. */
+const statusEvent = (
+  installation: StandInInstallation,
+  repository: StandInRepository,
+  status: { id: number; context: string; sha: string; state: string; targetUrl?: string },
+) => ({
+  installation: { id: installation.id },
+  repository: { id: repository.id, full_name: repository.fullName },
+  id: status.id,
+  sha: status.sha,
+  context: status.context,
+  state: status.state,
+  target_url: status.targetUrl ?? null,
+});
+
+/** A `pull_request_review` delivery as GitHub sends it, with only the fields Cronk reads. */
+const reviewEvent = (
+  installation: StandInInstallation,
+  repository: StandInRepository,
+  pr: PullRequestFields,
+  review: { id: number; state: string; reviewer: string },
+  action = "submitted",
+) => ({
+  action,
+  installation: { id: installation.id },
+  repository: { id: repository.id, full_name: repository.fullName },
+  review: {
+    id: review.id,
+    state: review.state,
+    user: { login: review.reviewer, id: 4000 + review.id },
+    html_url: `https://github.com/${repository.fullName}/pull/${pr.number}#pullrequestreview-${review.id}`,
+  },
+  pull_request: pullRequestEvent(action, installation, repository, pr).pull_request,
+});
+
 async function deliver(app: StandInApp, event: string, payload: unknown) {
   const delivered = await cronk.github.deliver(app, event, payload);
   expect(delivered.status, await delivered.clone().text()).toBe(200);
@@ -110,6 +163,7 @@ describe("Pull Requests linking to Tickets", () => {
       checks: [],
       mergedBy: null,
       producingStep: null,
+      sentBack: null,
     };
     expect(await pullRequestsOf(first.id, cookie)).toEqual([shown]);
     expect(await pullRequestsOf(second.id, cookie)).toEqual([shown]);
@@ -268,37 +322,6 @@ describe("A Pull Request's state", () => {
 
 
 describe("A Pull Request's checks", () => {
-  const checkRunEvent = (
-    installation: StandInInstallation,
-    repository: StandInRepository,
-    run: { id: number; name: string; sha: string; status: string; conclusion?: string },
-  ) => ({
-    action: run.status === "completed" ? "completed" : "created",
-    installation: { id: installation.id },
-    repository: { id: repository.id, full_name: repository.fullName },
-    check_run: {
-      id: run.id,
-      name: run.name,
-      head_sha: run.sha,
-      status: run.status,
-      conclusion: run.conclusion ?? null,
-      html_url: `https://github.com/${repository.fullName}/runs/${run.id}`,
-    },
-  });
-  const statusEvent = (
-    installation: StandInInstallation,
-    repository: StandInRepository,
-    status: { id: number; context: string; sha: string; state: string },
-  ) => ({
-    installation: { id: installation.id },
-    repository: { id: repository.id, full_name: repository.fullName },
-    id: status.id,
-    sha: status.sha,
-    context: status.context,
-    state: status.state,
-    target_url: null,
-  });
-
   test("shows the check runs and commit statuses on its latest commit, the latest of each", async () => {
     const { cookie, app, installation, project, cronker } = await projectWithRepository();
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Checked" });
@@ -632,3 +655,272 @@ describe("Merges", () => {
   });
 });
 
+
+describe("Failures sending work back", () => {
+  const statusNamed = (project: { statuses: { id: string; name: string }[] }, name: string) =>
+    project.statuses.find((s) => s.name === name)!.id;
+  const ok = async (method: string, path: string, cookie: string, body?: unknown) => {
+    const response = await cronk.request(method, path, { cookie, body });
+    expect(response.status, await response.clone().text()).toBeLessThan(300);
+    return response.json();
+  };
+
+  /**
+   * A delegated Ticket whose Implement Run opened Pull Request 501 (`CRONK-1`, branch `b`, latest commit `c1`), then
+   * finished with *done*, which, past Code review that its `no-review` Label skips, moved it to In Review, a Review Status.
+   */
+  async function inReview() {
+    const setup = await projectWithRepository();
+    const { workspace, cookie, app, installation, project, cronker } = setup;
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await ok("PATCH", `/api/agents/${agent.id}`, cookie, { runnerId: runner.id });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, {
+      delegateId: agent.id,
+      labels: ["no-review"],
+      statusId: statusNamed(project, "Implement"),
+    });
+    const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b", sha: "c1" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    /** The Agent finishes the Run running on the Ticket with *done*. */
+    const finishImplementing = async () => {
+      const running = (await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie)).find((r: { state: string }) => r.state === "running");
+      const finished = await cronk.request("POST", `/api/runs/${running.id}/finish`, {
+        headers: { authorization: `Bearer ${secret}` },
+        body: { outcome: "done" },
+      });
+      expect(finished.status, await finished.clone().text()).toBe(200);
+    };
+    await finishImplementing();
+    const status = (name: string) => statusNamed(project, name);
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    return { ...setup, ticket, pr, status, finishImplementing };
+  }
+
+  const ticketOf = async (ticketId: string, cookie: string) => ok("GET", `/api/tickets/${ticketId}`, cookie);
+  const commentsOf = async (ticketId: string, cookie: string) => ok("GET", `/api/tickets/${ticketId}/comments`, cookie);
+
+  test("a failed check run on the latest commit sends the Ticket back to the producing Step's Status, with a Comment from Cronk linking it", async () => {
+    const { cookie, app, installation, cronker, ticket, status } = await inReview();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments).toHaveLength(1);
+    expect(comments[0].actor).toEqual({ kind: "cronk", name: "Cronk" });
+    expect(comments[0].body).toContain("https://github.com/cronkcorp/cronker/runs/10");
+    // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
+  });
+
+  test.each<[string, string, { conclusion?: string; state?: string }]>([
+    ["a check run that failed", "check_run", { conclusion: "failure" }],
+    ["a check run that timed out", "check_run", { conclusion: "timed_out" }],
+    ["a check run that was cancelled", "check_run", { conclusion: "cancelled" }],
+    ["a commit status that failed", "status", { state: "failure" }],
+    ["a commit status that errored", "status", { state: "error" }],
+  ])("%s on the latest commit sends the Ticket back", async (_, event, ended) => {
+    const { cookie, app, installation, cronker, ticket, status } = await inReview();
+
+    await deliver(
+      app,
+      event,
+      event === "check_run"
+        ? checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: ended.conclusion })
+        : statusEvent(installation, cronker, { id: 20, context: "ci/build", sha: "c1", state: ended.state!, targetUrl: "https://ci.example/20" }),
+    );
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+  });
+
+  test("passing, neutral, skipped and pending checks, and a failure on an earlier commit, send nothing back", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+    await deliver(app, "pull_request", pullRequestEvent("synchronize", installation, cronker, { ...pr, sha: "c2", updatedAt: "2026-01-01T10:00:00Z" }));
+
+    for (const [id, conclusion] of [[10, "success"], [11, "neutral"], [12, "skipped"], [13, "action_required"], [14, "stale"]] as const) {
+      await deliver(app, "check_run", checkRunEvent(installation, cronker, { id, name: `check ${id}`, sha: "c2", status: "completed", conclusion }));
+    }
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 15, name: "slow", sha: "c2", status: "in_progress" }));
+    await deliver(app, "status", statusEvent(installation, cronker, { id: 20, context: "ci/build", sha: "c2", state: "success" }));
+    await deliver(app, "status", statusEvent(installation, cronker, { id: 21, context: "ci/deploy", sha: "c2", state: "pending" }));
+    // The commit before the latest.
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 16, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("a review requesting changes, whoever wrote it, sends the Ticket back with a Comment linking the review; other reviews don't", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "approved", reviewer: "bea" }));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 71, state: "commented", reviewer: "bea" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+
+    // An outsider, not a User of the Workspace.
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "mallory" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments.map((c: { actor: unknown; body: string }) => [c.actor, c.body])).toEqual([
+      [
+        { kind: "cronk", name: "Cronk" },
+        "@mallory [requested changes](https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72) on " +
+          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7). Sent CRONK-1 back to Implement.",
+      ],
+    ]);
+  });
+
+  test("sending back counts as a round for the producing Step; past its round limit *needs you* applies, with Cronk's Question in the Inbox", async () => {
+    const { workspace, project, cookie, app, installation, cronker, ticket, pr, status, finishImplementing } = await inReview();
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Implement");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Implement")}/step`, cookie, { ...step, roundLimit: 1 });
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    // The next round pushes a new commit and comes back for review.
+    await deliver(app, "pull_request", pullRequestEvent("synchronize", installation, cronker, { ...pr, sha: "c2", updatedAt: "2026-01-01T10:00:00Z" }));
+    await finishImplementing();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 11, name: "test", sha: "c2", status: "completed", conclusion: "failure" }));
+
+    // Implement's *needs you* Outcome moves it to Ready.
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Ready") });
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, cookie);
+    expect(items.filter((i: { kind: string }) => i.kind === "needsYou")).toEqual([
+      expect.objectContaining({
+        ticket: expect.objectContaining({ key: "CRONK-1" }),
+        status: { id: status("Ready"), name: "Ready" },
+        outcome: "needs you",
+        step: { statusId: status("Implement"), name: "Implement" },
+        question:
+          "Failing checks and requested changes sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
+          "instead. Read the latest Comments, then move it on yourself.",
+      }),
+    ]);
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments.map((c: { body: string }) => c.body)).toEqual([
+      "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed on " +
+        "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
+      "The check [**test**](https://github.com/cronkcorp/cronker/runs/11) failed on " +
+        "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c2`. " +
+        "That is past Implement's round limit, so CRONK-1 comes to its Assignee instead.",
+    ]);
+  });
+
+  test("many failing checks on one commit send the Ticket back once, and so does a review delivered again", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status, finishImplementing } = await inReview();
+    for (let id = 10; id < 13; id++) {
+      await deliver(app, "check_run", checkRunEvent(installation, cronker, { id, name: `check ${id}`, sha: "c1", status: "completed", conclusion: "failure" }));
+    }
+    // The next round comes back for review without pushing; more of the same commit's checks fail.
+    await finishImplementing();
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 13, name: "check 13", sha: "c1", status: "completed", conclusion: "failure" }));
+    await deliver(app, "status", statusEvent(installation, cronker, { id: 20, context: "ci/build", sha: "c1", state: "failure" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+
+    const review = reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" });
+    await deliver(app, "pull_request_review", review);
+    await finishImplementing();
+    // GitHub sends the same review again under a new delivery id.
+    await deliver(app, "pull_request_review", review);
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments.map((c: { body: string }) => c.body.split(" on ")[0])).toEqual([
+      "The check [**check 10**](https://github.com/cronkcorp/cronker/runs/10) failed",
+      "@bea [requested changes](https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72)",
+    ]);
+  });
+
+  const failing = (installation: StandInInstallation, repository: StandInRepository, sha: string) =>
+    checkRunEvent(installation, repository, { id: 10, name: "test", sha, status: "completed", conclusion: "failure" });
+
+  test("a Pull Request no Run opened sends nothing back", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Ada's own" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "b", sha: "c1" }));
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: statusNamed(project, "In Review") });
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "b", sha: "c1" }, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("a Ticket outside a Review Status is not sent back", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: status("Backlog") });
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Backlog") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("with Pull Request automation off, failures only show on the Pull Request", async () => {
+    const { cookie, app, installation, project, cronker, ticket, pr, status } = await inReview();
+    await ok("PATCH", `/api/projects/${project.id}`, cookie, { pullRequestAutomation: false });
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ checks: [{ name: "test", state: "failed" }], sentBack: null }]);
+  });
+
+  test("reading the Ticket's Pull Requests shows what last sent it back", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, finishImplementing } = await inReview();
+    cronk.clock.advance(hours(1));
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    expect((await pullRequestsOf(ticket.id, cookie))[0].sentBack).toEqual({
+      kind: "check",
+      name: "test",
+      sha: "c1",
+      url: "https://github.com/cronkcorp/cronker/runs/10",
+      at: "2026-01-01T10:00:00.000Z",
+    });
+    await finishImplementing();
+
+    cronk.clock.advance(hours(1));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect((await pullRequestsOf(ticket.id, cookie))[0].sentBack).toEqual({
+      kind: "review",
+      reviewer: "bea",
+      url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
+      at: "2026-01-01T11:00:00.000Z",
+    });
+  });
+
+  test("a check failing on a new commit before GitHub reports the push sends the Ticket back once the push is reported", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c2", status: "completed", conclusion: "failure" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    await deliver(app, "pull_request", pullRequestEvent("synchronize", installation, cronker, { ...pr, sha: "c2", updatedAt: "2026-01-01T10:00:00Z" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body.split(" on ")[0])).toEqual([
+      "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed",
+    ]);
+  });
+
+  test("a producing Status whose Step was removed since sends nothing back", async () => {
+    const { cookie, app, installation, project, cronker, ticket, status } = await inReview();
+    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${status("Implement")}/step`, { cookie });
+    expect(removed.status, await removed.clone().text()).toBeLessThan(300);
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+});

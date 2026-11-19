@@ -41,7 +41,9 @@ export const Project = Type.Object({
   }),
   pullRequestAutomation: Type.Boolean({
     description:
-      "Whether a merged Pull Request completes the Tickets it links in this Project. On by default; off, merges only update the Pull Request's state.",
+      "Whether a merged Pull Request completes the Tickets it links in this Project, and a failing check or a review requesting " +
+      "changes sends them back from a Review Status to their producing Step. On by default; off, merges and failures only update " +
+      "the Pull Request's state.",
   }),
   statuses: Type.Array(Status),
 });

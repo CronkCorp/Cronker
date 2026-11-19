@@ -27,7 +27,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented, workspaceCrumb } from "./ui/controls.js";
-import { Chip, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
+import { Chip, ModelLabel, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
 
 /** The Workspace's Projects, and a form to create one. */
@@ -418,7 +418,7 @@ function Board({
   };
 
   const collapsed = (status: Status) => collapsible(status) && !opened.has(status.id);
-  const columns = project.statuses.map((status) => (collapsed(status) ? "44px" : "minmax(0, 1fr)")).join(" ");
+  const columns = project.statuses.map((status) => (collapsed(status) ? "36px" : "minmax(0, 1fr)")).join(" ");
   return (
     <>
       <FormError error={error} />
@@ -466,7 +466,11 @@ function Board({
                   {status.name}
                 </h2>
                 {!collapsible(status) && <span className="column-count">{inStatus.length}</span>}
-                {status.step && !isCollapsed && <span className="model-label">{status.step.model}</span>}
+                {status.step && !isCollapsed && (
+                  <span className="column-step">
+                    <ModelLabel model={status.step.model} />
+                  </span>
+                )}
               </header>
               {!isCollapsed && (
                 <div className="column-cards">
@@ -601,7 +605,7 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
     <Panel
       title="Pull Request automation"
       id="pull-request-automation"
-      description="A merged Pull Request completes the Tickets it links: Verified when a User of this Workspace merged it, otherwise Unverified. Turned off, merges only update the Pull Request's state."
+      description="A merged Pull Request completes the Tickets it links: Verified when a User of this Workspace merged it, otherwise Unverified. A failing check or a review requesting changes sends a Ticket in a Review Status back to the Step that opened the Pull Request. Turned off, merges and failures only update the Pull Request's state."
     >
       <label className="check">
         <input
@@ -610,7 +614,7 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
           disabled={busy}
           onChange={(e) => void toggle({ pullRequestAutomation: e.target.checked })}
         />
-        Merges complete their Tickets
+        Merges complete their Tickets, and failures send them back
       </label>
       <FormError error={error} />
     </Panel>
