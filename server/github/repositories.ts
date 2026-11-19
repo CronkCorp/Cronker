@@ -17,20 +17,33 @@ import type { EventHandler } from "./webhooks.js";
 export const Repository = Type.Object({
   id: Type.Integer({ description: "GitHub's id for the Repository, which stays the same through renames and transfers." }),
   fullName: Type.String({ description: "`owner/name` as GitHub last reported it." }),
+  keyClash: Type.Boolean({
+    description:
+      "Whether a Project of another Workspace lists this Repository under the same key, so its Pull Requests link to Tickets there too. Which Project, and whose, is never said.",
+  }),
 });
 export type Repository = Static<typeof Repository>;
 
-/** The Repositories a Project lists, by owner and name. */
+/**
+ * The Repositories a Project lists, by owner and name. Keys are unique within a Workspace,
+ * so a Project sharing this one's key on a Repository is always in another Workspace.
+ */
 async function repositoriesListed(db: Db | Tx, projectId: string): Promise<Repository[]> {
-  const { rows } = await db.query<{ id: string; fullName: string }>(
-    `select repositories.id, repositories.full_name as "fullName"
-     from project_repositories join repositories on repositories.id = project_repositories.repository_id
+  const { rows } = await db.query<{ id: string; fullName: string; keyClash: boolean }>(
+    `select repositories.id, repositories.full_name as "fullName",
+       exists (
+         select from project_repositories others join projects other on other.id = others.project_id
+         where others.repository_id = repositories.id and other.id <> projects.id and lower(other.key) = lower(projects.key)
+       ) as "keyClash"
+     from project_repositories
+     join repositories on repositories.id = project_repositories.repository_id
+     join projects on projects.id = project_repositories.project_id
      where project_repositories.project_id = $1
      order by lower(repositories.full_name), repositories.id`,
     [projectId],
   );
   // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
-  return rows.map((r) => ({ id: Number(r.id), fullName: r.fullName }));
+  return rows.map((r) => ({ id: Number(r.id), fullName: r.fullName, keyClash: r.keyClash }));
 }
 
 /** The Repositories of a Project in the Viewer's view. */
