@@ -378,6 +378,9 @@ ul.inbox li button {
 .narrow {
   max-width: 24rem;
 }
+.github-page {
+  max-width: 40rem;
+}
 .admin-forms {
   display: flex;
   flex-wrap: wrap;
