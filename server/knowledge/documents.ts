@@ -10,8 +10,8 @@ import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
 
 /**
- * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace. Each save
- * makes a Version recording its Actor; the Document shows its current Version.
+ * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace, or, as a Report,
+ * on a Ticket. Each save makes a Version recording its Actor; the Document shows its current Version.
  */
 
 /** One saved state of a Document, without its body. */
@@ -27,12 +27,20 @@ export const Document = Type.Object({
   id: Type.String({ format: "uuid" }),
   workspaceId: Type.String({ format: "uuid" }),
   projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
-    description: "The Project whose page tree holds it, or null for the Workspace's.",
+    description: "The Project whose page tree holds it, or null for the Workspace's; a Report's is its Ticket's Project.",
+  }),
+  ticketId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Ticket it is a Report on, listed with the Ticket instead of in a page tree; null in a page tree.",
+  }),
+  runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Run that wrote it, for a Report; otherwise null.",
   }),
   parentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
-    description: "The Document above it in the same page tree, or null at the top.",
+    description: "The Document above it in the same page tree, or null at the top; null for a Report.",
   }),
-  position: Type.Integer({ minimum: 0, description: "Its place among its siblings, counting from 0." }),
+  position: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()], {
+    description: "Its place among its siblings, counting from 0; null for a Report.",
+  }),
   title: Type.String(),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
@@ -48,7 +56,7 @@ export interface Tree {
 type Row = Omit<Document, "version"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
 
 const columns = `documents.id, documents.workspace_id as "workspaceId", documents.project_id as "projectId",
-  documents.parent_id as "parentId", documents.position, versions.title, versions.body,
+  documents.ticket_id as "ticketId", documents.run_id as "runId", documents.parent_id as "parentId", documents.position, versions.title, versions.body,
   json_build_object('number', versions.number, 'title', versions.title,
     'actor', ${actorColumn("users", "agents")}, 'savedAt', versions.saved_at) as version`;
 
@@ -219,6 +227,12 @@ export async function createDocument(
  * Document locked with its page tree.
  */
 async function moveDocument(tx: Tx, document: Placed, to: { parentId?: string | null; position?: number }): Promise<void> {
+  if (document.position === null) {
+    throw new ApiError(409, "report_outside_tree", "A Report is listed with its Ticket, so it doesn't move in a page tree.", {
+      rule: "A Report is listed with its Ticket instead of in a page tree.",
+      advice: "Leave the Report on its Ticket; to keep what it says in a page tree, create a Document there from it.",
+    });
+  }
   const parentId = to.parentId === undefined ? document.parentId : to.parentId;
   if (parentId) {
     await requireParentInTree(tx, document, parentId);
@@ -271,7 +285,7 @@ async function versionOf(db: Db | Tx, documentId: string, number: number): Promi
 }
 
 /** A Document as a write needs it: where it sits, and the number of its current Version. */
-type Placed = Tree & { id: string; version: number; parentId: string | null; position: number };
+type Placed = Tree & { id: string; version: number; parentId: string | null; position: number | null; ticketId: string | null };
 
 /**
  * The Document's row, locked until the transaction ends, so writes to it queue up. With `tree`, its page tree's
@@ -281,7 +295,7 @@ async function lockDocument(tx: Tx, viewer: Viewer, documentId: string, { tree =
   if (!isUuid(documentId)) return undefined;
   const view = inView(viewer, "documents.workspace_id", "$2");
   const select = `select id, workspace_id as "workspaceId", project_id as "projectId", parent_id as "parentId", position,
-    version from documents where id = $1 and ${view.sql}`;
+    ticket_id as "ticketId", version from documents where id = $1 and ${view.sql}`;
   if (tree) {
     // A Document never changes page tree, so the one read before locking is the one it is in.
     const found = (await tx.query<Placed>(select, [documentId, view.value])).rows[0];
@@ -413,6 +427,6 @@ export async function deleteDocument({ db }: Context, actor: Caller, documentId:
       );
     }
     await tx.query("delete from documents where id = $1", [document.id]);
-    await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
+    if (document.position !== null) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
   });
 }
