@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
@@ -210,12 +211,17 @@ async function requireReplacementInScope(
   }
 }
 
+/** Tells the Workspace's streams that a Decision was recorded or saved, so its register shows it. */
+function decisionChanged(live: Live, tx: Tx, decision: Place & { id: string }): void {
+  live.publish(tx, decision.workspaceId, { type: "decision.changed", projectId: decision.projectId, decisionId: decision.id });
+}
+
 /**
  * Records a Decision in the scope, numbered next in it, at Version 1 by its Actor: proposed, unless a User records
  * it with another status.
  */
 export async function createDecision(
-  { db, clock }: Context,
+  { db, clock, live }: Context,
   actor: Caller,
   scope: Place,
   input: { title: string; body: string; status?: DecisionStatus; supersededById?: string | null },
@@ -236,6 +242,7 @@ export async function createDecision(
     const id = rows[0]!.id;
     const content: Content = { title: input.title, body: input.body, ...asked };
     await insertVersion(tx, { id, workspaceId: scope.workspaceId }, 1, content, actor, now);
+    decisionChanged(live, tx, { ...scope, id });
     return (await findDecision(tx, actor, id))!;
   });
 }
@@ -313,7 +320,7 @@ export interface DecisionEdit {
  * see what changed.
  */
 export async function editDecision(
-  { db, clock }: Context,
+  { db, clock, live }: Context,
   actor: Caller,
   decisionId: string,
   edit: DecisionEdit,
@@ -342,6 +349,7 @@ export async function editDecision(
     if (unchanged) return (await findDecision(tx, actor, decision.id))!;
     await insertVersion(tx, decision, number, content, actor, clock.now());
     await tx.query("update decisions set version = $2 where id = $1", [decision.id, number]);
+    decisionChanged(live, tx, decision);
     return (await findDecision(tx, actor, decision.id))!;
   });
 }

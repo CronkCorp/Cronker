@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
@@ -123,8 +124,13 @@ async function withUniqueName<T>(glossary: Glossary, name: string, write: () => 
   }
 }
 
+/** Tells the Workspace's streams that a Term was created, saved or deleted, so its glossary shows it. */
+function termChanged(live: Live, tx: Tx, term: Glossary & { id: string }): void {
+  live.publish(tx, term.workspaceId, { type: "term.changed", projectId: term.projectId, termId: term.id });
+}
+
 /** Creates a Term in the glossary at Version 1 by its Actor; refused if the glossary has its name, ignoring case. */
-export async function createTerm({ db, clock }: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<Term> {
+export async function createTerm({ db, clock, live }: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<Term> {
   return transaction(db, async (tx) => {
     const now = clock.now();
     const { rows } = await withUniqueName(glossary, input.name, () =>
@@ -135,6 +141,7 @@ export async function createTerm({ db, clock }: Context, actor: Caller, glossary
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: glossary.workspaceId }, 1, input, actor, now);
+    termChanged(live, tx, { ...glossary, id });
     return (await findTerm(tx, actor, id))!;
   });
 }
@@ -190,7 +197,7 @@ export interface TermEdit extends Partial<TermContent> {
  * current Version: one based on an outdated Version is refused with the current one, so its Actor can see what
  * changed.
  */
-export async function editTerm({ db, clock }: Context, actor: Caller, termId: string, edit: TermEdit): Promise<Term> {
+export async function editTerm({ db, clock, live }: Context, actor: Caller, termId: string, edit: TermEdit): Promise<Term> {
   return transaction(db, async (tx) => {
     const locked = await lockTerm(tx, actor, termId);
     if (!locked) throw termNotFound();
@@ -208,6 +215,7 @@ export async function editTerm({ db, clock }: Context, actor: Caller, termId: st
     await withUniqueName(locked, content.name, () =>
       tx.query("update terms set version = $2, name = $3 where id = $1", [locked.id, number, content.name]),
     );
+    termChanged(live, tx, locked);
     return (await findTerm(tx, actor, locked.id))!;
   });
 }
@@ -286,7 +294,7 @@ export async function glossaryOf(db: Db, project: Glossary & { projectId: string
 }
 
 /** Deletes a Term with all its Versions; only a User may. */
-export async function deleteTerm({ db }: Context, actor: Caller, termId: string): Promise<void> {
+export async function deleteTerm({ db, live }: Context, actor: Caller, termId: string): Promise<void> {
   await transaction(db, async (tx) => {
     const term = await lockTerm(tx, actor, termId);
     if (!term) throw termNotFound();
@@ -297,5 +305,6 @@ export async function deleteTerm({ db }: Context, actor: Caller, termId: string)
       });
     }
     await tx.query("delete from terms where id = $1", [term.id]);
+    termChanged(live, tx, term);
   });
 }
