@@ -267,6 +267,8 @@ export interface Runner {
   name: string;
   kind: string;
   limit: number;
+  /** How many of its Runs are running now, counted against its limit. */
+  running: number;
   /** Until when a rate limit pauses its queue. */
   pausedUntil: string | null;
   triggers: Trigger[];
