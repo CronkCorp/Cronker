@@ -1,22 +1,13 @@
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures.js";
+import { addMember, firstUser, setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-
-const ada = { email: "ada@example.com", password: "correct horse battery" };
+import { expect, test } from "./fixtures.js";
 
 /** Sets Cronk up with Ada and Bea in one Workspace, signs Ada in, and opens a Workspace Document Ada wrote. */
 async function openDocument(page: Page, cronk: StartedCronk, body: string) {
-  const setup = await cronk.request("POST", "/api/setup", {
-    body: { ...ada, setupCode: cronk.setupCode(), workspaceName: "Ada's Workspace" },
-  });
-  const { workspace } = await setup.json();
-  const signIn = async (email: string, password: string) =>
-    (await cronk.request("POST", "/api/sign-in", { body: { email, password } })).headers.get("set-cookie")!.split(";")[0]!;
-  const adaCookie = await signIn(ada.email, ada.password);
-  const added = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie: adaCookie, body: { email: "bea@example.com" } });
-  const { link } = await added.json();
-  await cronk.request("POST", "/api/links/use", { body: { token: new URL(link.url).hash.slice(1), password: "bea's password" } });
-  const beaCookie = await signIn("bea@example.com", "bea's password");
+  const { workspace } = await setUp(cronk);
+  const adaCookie = await signIn(cronk);
+  const bea = await addMember(cronk, adaCookie, workspace.id, "bea@example.com");
   const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/documents`, {
     cookie: adaCookie,
     body: { title: "How Runs start", body },
@@ -24,15 +15,15 @@ async function openDocument(page: Page, cronk: StartedCronk, body: string) {
   const document = await created.json();
 
   await page.goto(cronk.url);
-  await page.getByLabel("Email").fill(ada.email);
-  await page.getByLabel("Password").fill(ada.password);
+  await page.getByLabel("Email").fill(firstUser.email);
+  await page.getByLabel("Password").fill(firstUser.password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
   await page.goto(`${cronk.url}/documents/${document.id}`);
   await expect(page.getByRole("heading", { name: "How Runs start" })).toBeVisible();
   /** Bea saves the Document on top of the Version she names. */
   const beaSaves = (baseVersion: number, body: string) =>
-    cronk.request("PATCH", `/api/documents/${document.id}`, { cookie: beaCookie, body: { baseVersion, body } });
+    cronk.request("PATCH", `/api/documents/${document.id}`, { cookie: bea.cookie, body: { baseVersion, body } });
   return { document, beaSaves };
 }
 
@@ -64,7 +55,7 @@ test("a refused save keeps the draft under a banner naming who saved which Versi
   await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(3);
 });
 
-/** Hands the Markdown source files as the browser would on a paste or a drop, with the cursor where it is. */
+/** Pastes or drops files from the User's computer into the Markdown source, as the browser hands them over, at the cursor. */
 async function giveFiles(page: Page, kind: "paste" | "drop", names: string[]) {
   await page.getByLabel("Markdown").evaluate(
     (source, { kind, names }) => {
@@ -80,11 +71,11 @@ async function giveFiles(page: Page, kind: "paste" | "drop", names: string[]) {
   );
 }
 
-test("files pasted or dropped into the Markdown are attached, each as an attachment: picture at the cursor", async ({ page, cronk }) => {
+test("files pasted or dropped into the Markdown become the Document's Attachments, each an attachment: picture at the cursor", async ({ page, cronk }) => {
   await openDocument(page, cronk, "Before.\nAfter.");
   await page.getByRole("button", { name: "Edit" }).click();
   const source = page.getByLabel("Markdown");
-  const reference = (name: string) => new RegExp(`!\\[${name.replace(".", "\\.")}\\]\\(attachment:[0-9a-f-]{36}\\)`);
+  const reference = (name: string) => new RegExp(`!\\[${name.replaceAll(".", "\\.")}\\]\\(attachment:[0-9a-f-]{36}\\)`);
 
   // The cursor sits after "Before.\n".
   await source.evaluate((textarea: HTMLTextAreaElement) => textarea.setSelectionRange(8, 8));
