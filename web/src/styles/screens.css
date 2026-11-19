@@ -811,6 +811,9 @@
   gap: 6px;
   font-size: 13px;
 }
+.inline-select {
+  width: auto !important;
+}
 .keys-line kbd {
   font-size: 11px;
 }

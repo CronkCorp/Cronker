@@ -72,15 +72,18 @@ const groups: { name: string; kinds: InboxItem["kind"][] }[] = [
   { name: "Discovered", kinds: ["discovered"] },
 ];
 
-const kindNames: Record<InboxItem["kind"], string> = {
+const kindNames: Record<Exclude<InboxItem["kind"], "run">, string> = {
   question: "Question",
   needsYou: "Needs you",
-  reassign: "Reassign",
-  run: "Run",
+  reassign: "Needs you",
   review: "To review",
   unverified: "Unverified",
   discovered: "Discovered",
 };
+
+/** An item's kind label: a Run gone wrong is labelled by how it went wrong. */
+const kindOf = (item: InboxItem) =>
+  item.kind === "run" ? { failed: "Failed", lost: "Lost", refused: "Couldn't start" }[item.run.state] : kindNames[item.kind];
 
 const wentWrong = { failed: "failed", lost: "was lost", refused: "couldn't start" } as const;
 
@@ -260,7 +263,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
                         >
                           <button type="button" onClick={() => select(key, true)}>
                             <span className="inbox-item-head">
-                              <KindLabel kind={kindNames[item.kind]} />
+                              <KindLabel kind={kindOf(item)} />
                               <span className="ticket-key">{item.ticket.key}</span>
                               {item.kind === "question" && <RelativeTime at={item.question.askedAt} />}
                             </span>
@@ -353,7 +356,7 @@ function Detail({
   return (
     <div className="detail">
       <p className="detail-head">
-        <KindLabel kind={kindNames[item.kind]} /> <span className="ticket-key">{ticket.key}</span>{" "}
+        <KindLabel kind={kindOf(item)} /> <span className="ticket-key">{ticket.key}</span>{" "}
         <Link to={`/tickets/${ticket.id}`}>
           {ticket.key} {ticket.title}
         </Link>
@@ -639,6 +642,8 @@ function Discovered({
     api.agents(workspace.id).then(setAgents, () => setAgents([]));
   }, [workspace.id]);
   const own = agents.filter((a) => a.owner.id === user.id);
+  const [chosen, setChosen] = useState("");
+  const delegate = own.find((a) => a.id === chosen) ?? own[0];
   return (
     <>
       <p className="detail-line">
@@ -657,13 +662,22 @@ function Discovered({
         </div>
       )}
       <Actions>
+        {own.length > 1 && (
+          <select aria-label="Agent to delegate to" value={delegate?.id} onChange={(e) => setChosen(e.target.value)} className="inline-select">
+            {own.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}
+              </option>
+            ))}
+          </select>
+        )}
         <Button
           variant="primary"
-          disabled={disabled || own.length === 0}
-          title={own.length === 0 ? "You have no Agent in this Workspace to delegate to" : undefined}
-          onClick={() => run(() => api.editTicket(item.ticket.id, { delegateId: own[0]!.id }))}
+          disabled={disabled || !delegate}
+          title={delegate ? undefined : "You have no Agent in this Workspace to delegate to"}
+          onClick={() => delegate && run(() => api.editTicket(item.ticket.id, { delegateId: delegate.id }))}
         >
-          Delegate{own.length > 0 ? ` to ${own[0]!.name}` : ""}
+          Delegate{delegate && own.length === 1 ? ` to ${delegate.name}` : ""}
         </Button>
         <Button variant="ghost" disabled={disabled} onClick={() => setMoving(true)}>
           Move…

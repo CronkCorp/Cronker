@@ -95,7 +95,7 @@ const kindTones: Record<string, string> = {
   failed: "danger",
   lost: "danger",
   error: "danger",
-  "couldn't start": "danger",
+  "couldn't start": "warn",
   report: "agent",
   run: "agent",
   decision: "agent",

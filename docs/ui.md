@@ -62,7 +62,8 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 | Spacing | 4, 8, 12, 16, 24, 32 px. Lay groups out with `gap`, not margins. |
 | Radius | 4px for controls and chips inside text, 6px for buttons and inputs, 8px for panels and cards, 999px for pills |
 | Borders | 1px `--border`. A coloured 3px left border marks a selected list item, or one that needs the User, only. |
-| Shadow | Popovers and menus only |
+| Shadow | Popovers and menus only (`--shadow`) |
+| Scrim | `--scrim` dims the page behind a dialog: `rgb(27 31 28 / 0.35)` light, `rgb(0 0 0 / 0.55)` dark |
 
 | Light | Dark |
 |---|---|

@@ -656,7 +656,7 @@ textarea.markdown-source {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgb(0 0 0 / 0.35);
+  background: var(--scrim);
 }
 .dialog {
   position: fixed;

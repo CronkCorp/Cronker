@@ -20,8 +20,9 @@
   --ok-soft: #dcefe1;
   --info: #2a65ad;
   --info-soft: #dde9f7;
-  /* Shadows only on popovers and menus. */
+  /* Shadows only on popovers and menus; the scrim dims the page behind a dialog. */
   --shadow: 0 6px 24px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08);
+  --scrim: rgb(27 31 28 / 0.35);
 
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -65,5 +66,6 @@
     --info: #74a8ea;
     --info-soft: #1b2b40;
     --shadow: 0 6px 24px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+    --scrim: rgb(0 0 0 / 0.55);
   }
 }
