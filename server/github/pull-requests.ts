@@ -67,6 +67,26 @@ export const SentBack = Type.Union(
 );
 export type SentBack = Static<typeof SentBack>;
 
+export const reviewStates = ["approved", "changes_requested"] as const;
+export type ReviewState = (typeof reviewStates)[number];
+
+export const PullRequestReview = Type.Object(
+  {
+    state: Type.Union(
+      reviewStates.map((s) => Type.Literal(s)),
+      { description: "`approved` or `changes_requested`." },
+    ),
+    reviewer: Type.String({ description: "The login of the GitHub account that wrote the review." }),
+    url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows the review, if it says." }),
+  },
+  {
+    description:
+      "Where its review stands: of each reviewer's latest review, dismissed ones aside, the latest requesting changes, " +
+      "or else the latest approval.",
+  },
+);
+export type PullRequestReview = Static<typeof PullRequestReview>;
+
 export const PullRequest = Type.Object({
   id: Type.Integer({ description: "GitHub's id for the Pull Request." }),
   repository: Type.String({ description: "Its Repository's `owner/name` as GitHub last reported it with the Pull Request." }),
@@ -85,6 +105,9 @@ export const PullRequest = Type.Object({
   producingStep: Type.Union([ProducingStep, Type.Null()], {
     description:
       "The Step of the Run that was running on this Ticket when GitHub reported the Pull Request opened, or null if none was, as when a User opened it.",
+  }),
+  reviewState: Type.Union([PullRequestReview, Type.Null()], {
+    description: "Null until someone approves it or requests changes, whatever the Ticket's Status and whoever opened it, and again once each such review is dismissed.",
   }),
   sentBack: Type.Union([SentBack, Type.Null()], { description: "Null until a failure on it sends the Ticket back." }),
 });
@@ -106,6 +129,10 @@ export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): 
        case when runs.id is null then null
          else json_build_object('runId', runs.id, 'statusId', runs.status_id, 'name', runs.status_name) end
          as "producingStep",
+       (select json_build_object('state', reviews.state, 'reviewer', reviews.reviewer, 'url', reviews.url)
+        from pull_request_reviews reviews
+        where reviews.pull_request_id = pull_requests.id and reviews.state <> 'dismissed'
+        order by reviews.state = 'changes_requested' desc, reviews.review_id desc limit 1) as "reviewState",
        (select sent_back.failure || jsonb_build_object('at', sent_back.sent_at) from sent_back
         where sent_back.pull_request_id = pull_requests.id and sent_back.ticket_id = pull_request_links.ticket_id
         order by sent_back.seq desc limit 1) as "sentBack"
@@ -388,8 +415,11 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
 };
 
 /**
- * GitHub's `pull_request_review` event: a review submitted on a Pull Request Cronk knows. One
- * requesting changes, whoever wrote it, sends the Tickets an open Pull Request links back to work.
+ * GitHub's `pull_request_review` event: a review submitted on, or dismissed from, a Pull Request Cronk knows.
+ * Each reviewer's latest approval or request for changes is kept, whatever the Tickets' Statuses and whoever
+ * opened the Pull Request, until a later one replaces it or GitHub dismisses it; reviews that only comment
+ * change nothing. A request for changes, whoever wrote it, also sends the Tickets an open Pull Request links
+ * back to work.
  */
 export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, review, pull_request: pr } = payload as {
@@ -397,20 +427,38 @@ export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payl
     review?: { id?: unknown; state?: unknown; html_url?: unknown; user?: { login?: unknown } | null };
     pull_request?: { id?: unknown };
   };
-  if (action !== "submitted" || typeof review?.id !== "number" || typeof pr?.id !== "number") return;
-  if (typeof review.state !== "string" || review.state.toLowerCase() !== "changes_requested") return;
-  const { rows } = await tx.query<{ repository: string; number: number; url: string }>(
-    `select repository_full_name as repository, number, url from pull_requests
-     where id = $1 and state in ('open', 'draft')`,
+  if ((action !== "submitted" && action !== "dismissed") || typeof review?.id !== "number" || typeof pr?.id !== "number") return;
+  if (typeof review.state !== "string") return;
+  const state = action === "dismissed" ? "dismissed" : review.state.toLowerCase();
+  if (state !== "approved" && state !== "changes_requested" && state !== "dismissed") return;
+  const { rows } = await tx.query<{ repository: string; number: number; url: string; open: boolean }>(
+    `select repository_full_name as repository, number, url, state in ('open', 'draft') as open
+     from pull_requests where id = $1`,
     [pr.id],
   );
   const known = rows[0];
   if (!known) return;
-  await sendBackForFailure(context, tx, { id: pr.id, ...known }, {
-    kind: "review",
-    id: review.id,
-    reviewer: typeof review.user?.login === "string" ? review.user.login : null,
-    url: typeof review.html_url === "string" ? review.html_url : null,
-  });
+  const reviewer = typeof review.user?.login === "string" ? review.user.login : null;
+  const url = typeof review.html_url === "string" ? review.html_url : null;
+  // A review of an account GitHub no longer names has no reviewer to keep it under.
+  if (reviewer !== null) {
+    // Kept unless a later review is known; a dismissal of the same review wins whichever arrives first.
+    await tx.query(
+      `insert into pull_request_reviews (pull_request_id, reviewer, review_id, state, url) values ($1, $2, $3, $4, $5)
+       on conflict (pull_request_id, reviewer) do update set review_id = excluded.review_id, state = excluded.state,
+         url = excluded.url
+       where pull_request_reviews.review_id < excluded.review_id
+         or (pull_request_reviews.review_id = excluded.review_id and excluded.state = 'dismissed')`,
+      [pr.id, reviewer, review.id, state, url],
+    );
+  }
+  if (state === "changes_requested" && known.open) {
+    await sendBackForFailure(context, tx, { id: pr.id, repository: known.repository, number: known.number, url: known.url }, {
+      kind: "review",
+      id: review.id,
+      reviewer,
+      url,
+    });
+  }
   await announce(context, tx, [pr.id]);
 };

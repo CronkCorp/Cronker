@@ -14,7 +14,7 @@ export type LiveEvent =
   /** A file was attached to or removed from a Ticket or one of its Comments, or a Document. */
   | { type: "attachments.changed"; projectId: string; ticketId: string }
   | { type: "attachments.changed"; documentId: string }
-  /** A Pull Request linked to a Ticket, or one linked to it changed its title, branch, state or checks. */
+  /** A Pull Request linked to a Ticket, or one linked to it changed its title, branch, state, checks or reviews. */
   | { type: "pull_requests.changed"; projectId: string; ticketId: string }
   /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
   | { type: "reconnected" };

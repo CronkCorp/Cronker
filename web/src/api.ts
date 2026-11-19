@@ -572,6 +572,11 @@ export interface PullRequest {
   mergedBy: string | null;
   /** The Step of the Run running on the Ticket when GitHub reported it opened. */
   producingStep: { runId: string; statusId: string | null; name: string } | null;
+  /**
+   * Where its review stands: of each reviewer's latest review, dismissed ones aside, the latest requesting changes,
+   * or else the latest approval; null when there is none.
+   */
+  reviewState: { state: "approved" | "changes_requested"; reviewer: string; url: string | null } | null;
   /** What last sent the Ticket back to its producing Step from this Pull Request, if anything did. */
   sentBack:
     | { kind: "check"; name: string; sha: string; url: string | null; at: string }

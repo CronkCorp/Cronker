@@ -169,6 +169,7 @@ describe("MCP with an Agent token", () => {
         checks: [{ name: "test", state: "failed", url: null }],
         mergedBy: null,
         producingStep: null,
+        reviewState: null,
         sentBack: null,
       },
     ]);

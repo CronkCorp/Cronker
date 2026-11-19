@@ -60,9 +60,15 @@ test("a Ticket shows the Pull Requests naming its key, with their state and chec
   const card = page.getByRole("region", { name: "Code to review" }).getByRole("article", { name: "#7 CRONK-1: list Pull Requests" });
   await expect(card).toContainText("cronk-1-list");
   await expect(card.getByRole("listitem")).toHaveText(["✗ test failed"]);
+  await cronk.github.deliver(app, "pull_request_review", {
+    ...pullRequest({ draft: false, updated_at: "2026-01-01T10:00:00Z" }),
+    action: "submitted",
+    review: { id: 70, state: "approved", user: { login: "bea", id: 4070 }, html_url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-70" },
+  });
+  await expect(card.getByRole("link", { name: "Approved by @bea" })).toBeVisible();
 });
 
-test("a Pull Request's row shows its review state: changes requested, then who merged it", async ({ page, cronk }) => {
+test("a Pull Request's row shows its review state: changes requested, approved, then who merged it", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   await createGitHubApp(cronk, cookie);
@@ -103,6 +109,17 @@ test("a Pull Request's row shows its review state: changes requested, then who m
     "href",
     "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72",
   );
+
+  // An approval from a later review replaces the requested changes, without a reload.
+  await cronk.github.deliver(app, "pull_request_review", {
+    ...event("submitted"),
+    review: { id: 73, state: "approved", user: { login: "bea", id: 4072 }, html_url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-73" },
+  });
+  await expect(row.getByRole("link", { name: "Approved by @bea" })).toHaveAttribute(
+    "href",
+    "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-73",
+  );
+  await expect(row).not.toContainText("Changes requested");
 
   await cronk.github.deliver(app, "pull_request", event("closed", { state: "closed", merged: true, merged_by: { login: "ada", id: 1 }, updated_at: "2026-01-01T12:00:00Z" }));
   await expect(row).toContainText("Merged");
