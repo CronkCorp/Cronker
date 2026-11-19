@@ -138,7 +138,16 @@ export interface Project extends ProjectSummary {
   newTicketsDelegated: boolean;
   /** Whether a Ticket takes Autonomous Delegation when first delegated. */
   autonomousDelegationDefault: boolean;
+  /** Whether a merged Pull Request completes the Tickets it links. */
+  pullRequestAutomation: boolean;
   statuses: Status[];
+}
+
+/** The settings a User changes on a Project. */
+export interface ProjectEdit {
+  newTicketsDelegated?: boolean;
+  autonomousDelegationDefault?: boolean;
+  pullRequestAutomation?: boolean;
 }
 
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
@@ -360,6 +369,7 @@ export interface Change {
     | "verification"
     | "dismissed"
     | "linkedDocument"
+    | "merged"
     | RelationKind;
   from: unknown;
   to: unknown;
@@ -400,6 +410,8 @@ export interface UnverifiedItem {
   status: { id: string; name: string };
   /** The Step that completed it, by its Status; null once that Status is removed. */
   completedBy: { id: string; name: string } | null;
+  /** Whether no Step produced the work, as with a merge of a Pull Request a User opened. */
+  completedWithoutStep: boolean;
 }
 
 /** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
@@ -539,8 +551,20 @@ export interface PullRequest {
   url: string;
   state: "open" | "draft" | "merged" | "closed";
   checks: Check[];
+  /** The login of the GitHub account that merged it, if GitHub named one. */
+  mergedBy: string | null;
   /** The Step of the Run running on the Ticket when GitHub reported it opened. */
   producingStep: { runId: string; statusId: string | null; name: string } | null;
+}
+
+/** What completed a Ticket, and where Reopen sends it. */
+export interface Completion {
+  /** The merged Pull Request that completed it; null when a Run's Step did. */
+  merge: {
+    pullRequest: { id: number; repository: string; number: number; title: string; url: string };
+    mergedBy: string | null;
+  } | null;
+  reopen: { kind: "back"; status: { id: string; name: string } } | { kind: "stays" } | { kind: "refused" };
 }
 
 /** Which page tree: a Project's, or the Workspace's. */
@@ -686,7 +710,7 @@ export const api = {
   createProject: (workspaceId: string, input: { name: string; key: string }) =>
     call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
-  editProject: (id: string, edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean }) =>
+  editProject: (id: string, edit: ProjectEdit) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
   repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
   addRepository: (projectId: string, id: number) =>
@@ -765,6 +789,8 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
+  completion: (ticketId: string) =>
+    call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkedDocuments: (ticketId: string) =>

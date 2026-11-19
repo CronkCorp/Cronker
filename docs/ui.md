@@ -27,7 +27,7 @@ The web client follows this file since the styling pass at the end of milestone 
   - **Projects**, each listed by key and name.
   - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins.
   - The signed-in User, which opens a menu: Password and Sign out.
-- **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents.
+- **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Password, New Workspace or a page that isn't there, marks none.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
 - **Page head:** breadcrumbs (13px, muted), then a row holding the `h1`, the view switcher and the actions. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
 - **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, which used to sit on Members), so the sidebar's Settings has a page of its own.
@@ -204,6 +204,11 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Agents:** one card per Agent with its avatar, name, the Tickets delegated to it and its running Runs, its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
 - **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face.
+
+### Signed-out pages and the consent screen
+
+- **Centred cards outside the frame:** sign-in, setup and its Connect GitHub step, the one-time link pages (joining a Workspace, setting a password) and the OAuth consent screen. The password page is signed in, so it stays in the frame. Each shows Cronk's mark above a card at most 400px wide holding the `h1` and the form.
+- **Sign in** and **Sign in with GitHub** span the card: the only full-width buttons in Cronk. Every other button sizes to its label, and a form's buttons share an action row with the primary first, such as the consent screen's Connect, then Don't connect.
 
 ## Live updates
 

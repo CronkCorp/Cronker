@@ -45,6 +45,7 @@ export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] 
             <span className="pr-meta">
               <PullRequestState state={pr.state} />
               <CheckCounts checks={pr.checks} />
+              {pr.mergedBy && <span className="small muted">Merged by @{pr.mergedBy}</span>}
             </span>
           </li>
         ))}
