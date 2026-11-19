@@ -69,7 +69,7 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "Definition", exact: true }).fill("In this Project: one Claude Code session on a Ticket.");
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(page.getByText("In this Project: one Claude Code session on a Ticket.")).toBeVisible();
+  await expect(page.getByRole("article", { name: "run" })).toContainText("In this Project: one Claude Code session on a Ticket.");
   await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(2);
 
   await page.goto(`${projectUrl}/glossary`);
@@ -123,4 +123,18 @@ test("a Term reads as a Document does, and each of its Versions opens to what it
   await expect(version).toContainText("ada@example.com");
   await expect(version.getByRole("article", { name: "Brief" })).toContainText("The instructions a Run starts from.");
   await expect(version.getByRole("article", { name: "Brief" })).toContainText("Avoid: Prompt");
+});
+
+test("a Term's editor shows its definition and words to avoid in a preview beside the Markdown, as a Document's does", async ({ page, cronk }) => {
+  await openTerm(page, cronk);
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByRole("textbox", { name: "Definition", exact: true }).fill("The instructions a Run starts from, **in full**.");
+  await page.getByLabel("Words to avoid").fill("Prompt, instructions");
+  const preview = page.getByRole("region", { name: "Preview" });
+  await expect(preview.getByRole("strong")).toHaveText("in full");
+  await expect(preview).toContainText("Avoid: Prompt, instructions");
+
+  await page.getByRole("button", { name: "Save as Version 3" }).click();
+  await expect(page.getByRole("article", { name: "Brief" })).toContainText("The instructions a Run starts from, in full.");
+  await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(3);
 });

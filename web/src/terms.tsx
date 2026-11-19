@@ -267,26 +267,24 @@ export function TermScreen({
           )
         }
       />
-      <div className="page-split">
-        <div className="page">
-          {editing ? (
-            <Editor
-              term={term}
-              onSaved={(next) => {
-                setTerm(next);
-                setEditing(false);
-              }}
-              onRebased={load}
-              onCancel={() => setEditing(false)}
-            />
-          ) : (
-            <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
-          )}
+      {editing ? (
+        <Editor
+          term={term}
+          onSaved={(next) => {
+            setTerm(next);
+            setEditing(false);
+          }}
+          onRebased={load}
+          onCancel={() => setEditing(false)}
+        />
+      ) : (
+        <div className="page-split">
+          <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
+          <aside className="side" aria-label="Term details">
+            <Versions key={term.version.number} term={term} />
+          </aside>
         </div>
-        <aside className="side" aria-label="Term details">
-          <Versions key={term.version.number} term={term} />
-        </aside>
-      </div>
+      )}
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -333,7 +331,7 @@ function Editor({
     }
   });
   return (
-    <form onSubmit={onSubmit} className="panel">
+    <form onSubmit={onSubmit} className="editor">
       {current && (
         <Banner tone="info" label="Saved meanwhile">
           <p>
@@ -358,18 +356,25 @@ function Editor({
         </Banner>
       )}
       <Field label="Name">
-        <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
+        <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} className="title-input" />
       </Field>
-      <Field label="Definition">
-        <textarea value={definition} rows={6} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
-      </Field>
+      <div className="editor-panes">
+        <Field label="Definition">
+          <textarea value={definition} rows={12} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
+        </Field>
+        <section aria-label="Preview" className="editor-preview">
+          <span className="field-label">Preview</span>
+          <TermBody definition={definition} avoid={wordsToAvoid(avoid)} />
+        </section>
+      </div>
       <Field label="Words to avoid" hint="Separated by commas.">
         <input value={avoid} onChange={(e) => setAvoid(e.target.value)} />
       </Field>
       {!current && <FormError error={error} />}
       <Actions>
-        <Button type="submit" variant="primary" disabled={busy}>
-          Save as Version {base + 1}
+        {/* Until the draft is based on the Version saved meanwhile, a save would only be refused again. */}
+        <Button type="submit" variant="primary" disabled={busy || current !== null}>
+          Save as Version {(current?.number ?? base) + 1}
         </Button>
         <Button variant="ghost" onClick={onCancel}>
           Cancel
@@ -379,15 +384,23 @@ function Editor({
   );
 }
 
-/** A Term as it reads, as a Document's body does: its definition at 15px at a 720px measure, then the words to avoid. */
-function TermBody({ name, definition, avoid }: { name: string; definition: string; avoid: string[] }) {
-  return (
+/**
+ * A Term as it reads, as a Document's body does: its definition at 15px at a 720px measure, then the words to avoid.
+ * The read view, the editor's preview and a Version's dialog all draw it this way. Named, it is an article.
+ */
+function TermBody({ name, definition, avoid }: { name?: string; definition: string; avoid: string[] }) {
+  const content = (
+    <div className="prose">
+      {definition.trim() ? <Markdown text={definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
+      <Avoid words={avoid} />
+    </div>
+  );
+  return name ? (
     <article className="panel document-body" aria-label={name}>
-      <div className="prose">
-        {definition.trim() ? <Markdown text={definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
-        <Avoid words={avoid} />
-      </div>
+      {content}
     </article>
+  ) : (
+    <div className="panel document-body">{content}</div>
   );
 }
 
