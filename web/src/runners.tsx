@@ -114,7 +114,7 @@ function RunnerSettings({
           <span className="mono">{runner.kind}</span>
         </Chip>
         <span className="muted small">
-          up to {runner.limit} Run{runner.limit === 1 ? "" : "s"} at once
+          {runner.running} of {runner.limit} running
         </span>
       </header>
       {runner.pausedUntil && (
