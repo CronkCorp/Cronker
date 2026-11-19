@@ -167,9 +167,11 @@ function RunnerSettings({
                       <code>{trigger.triggerId}</code>
                     </td>
                     <td className="cell-actions">
-                      <Button variant="ghost" size="small" onClick={() => setRemoving(trigger)}>
-                        Remove
-                      </Button>
+                      <div>
+                        <Button variant="ghost" size="small" onClick={() => setRemoving(trigger)}>
+                          Remove
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}

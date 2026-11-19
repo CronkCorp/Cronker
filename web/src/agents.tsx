@@ -366,9 +366,11 @@ function ManageTokens({
                   <RelativeTime at={token.createdAt} />
                 </td>
                 <td className="cell-actions">
-                  <Button variant="ghost" size="small" onClick={() => setRevoking(token)}>
-                    Revoke
-                  </Button>
+                  <div>
+                    <Button variant="ghost" size="small" onClick={() => setRevoking(token)}>
+                      Revoke
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}

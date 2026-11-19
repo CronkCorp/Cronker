@@ -1119,7 +1119,8 @@
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
-.cell-actions {
+/* A table cell of row actions stays a cell, so its row's border runs under it too; its buttons sit in a row inside. */
+.cell-actions > div {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;

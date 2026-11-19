@@ -679,17 +679,19 @@ function Members({
                             : "by GitHub login, joins at their next sign-in"}
                         </td>
                         <td className="cell-actions">
-                          <Button
-                            size="small"
-                            onClick={() =>
-                              act(async () => {
-                                await api.cancelPendingAdd(workspace.id, add.user.id);
-                                refresh();
-                              })
-                            }
-                          >
-                            Cancel add
-                          </Button>
+                          <div>
+                            <Button
+                              size="small"
+                              onClick={() =>
+                                act(async () => {
+                                  await api.cancelPendingAdd(workspace.id, add.user.id);
+                                  refresh();
+                                })
+                              }
+                            >
+                              Cancel add
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -723,34 +725,36 @@ function Members({
                         <td className="muted small">{member.isAdmin ? "Admin" : "Member"}</td>
                         {workspace.isAdmin && (
                           <td className="cell-actions">
-                            <Button
-                              size="small"
-                              onClick={() =>
-                                act(async () => {
-                                  await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
-                                  setSavedAdmin(true);
-                                  refresh();
-                                  if (member.user.id === user.id) onChanged();
-                                })
-                              }
-                            >
-                              {member.isAdmin ? "Remove Admin" : "Make Admin"}
-                            </Button>
-                            <Menu label={`More for ${nameOf(member.user)}`}>
-                              <MenuItem
-                                onSelect={() =>
-                                  void act(async () => {
-                                    const link = await api.resetLink(workspace.id, member.user.id);
-                                    setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
+                            <div>
+                              <Button
+                                size="small"
+                                onClick={() =>
+                                  act(async () => {
+                                    await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
+                                    setSavedAdmin(true);
+                                    refresh();
+                                    if (member.user.id === user.id) onChanged();
                                   })
                                 }
                               >
-                                Reset link
-                              </MenuItem>
-                              <MenuItem tone="danger" onSelect={() => setRemoving(member)}>
-                                Remove from Workspace
-                              </MenuItem>
-                            </Menu>
+                                {member.isAdmin ? "Remove Admin" : "Make Admin"}
+                              </Button>
+                              <Menu label={`More for ${nameOf(member.user)}`}>
+                                <MenuItem
+                                  onSelect={() =>
+                                    void act(async () => {
+                                      const link = await api.resetLink(workspace.id, member.user.id);
+                                      setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
+                                    })
+                                  }
+                                >
+                                  Reset link
+                                </MenuItem>
+                                <MenuItem tone="danger" onSelect={() => setRemoving(member)}>
+                                  Remove from Workspace
+                                </MenuItem>
+                              </Menu>
+                            </div>
                           </td>
                         )}
                       </tr>
