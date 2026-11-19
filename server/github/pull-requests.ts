@@ -134,6 +134,12 @@ function stateOf(pr: PullRequestPayload): PullRequestState {
   return pr.draft ? "draft" : "open";
 }
 
+/** Whether some Project lists the Repository; Cronk forgets a Repository once none does. */
+async function isListed(tx: Tx, repositoryId: number): Promise<boolean> {
+  const { rowCount } = await tx.query("select from repositories where id = $1", [repositoryId]);
+  return rowCount !== 0;
+}
+
 /** Tells each Workspace with a Ticket the Pull Request links to that its Pull Requests changed. */
 async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Promise<void> {
   if (pullRequestIds.length === 0) return;
@@ -161,8 +167,7 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
     pull_request?: unknown;
   };
   if (typeof repository?.id !== "number" || typeof repository.full_name !== "string" || !isPullRequest(pr)) return;
-  const { rowCount: listed } = await tx.query("select from repositories where id = $1", [repository.id]);
-  if (!listed) return;
+  if (!(await isListed(tx, repository.id))) return;
 
   await tx.query(
     `insert into pull_requests (id, repository_id, repository_full_name, number, title, branch, head_sha, state, url, updated_at)
@@ -177,7 +182,8 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
 
   // Keys named by this delivery link even if it arrived late, since links are only ever added. A key may be
   // written more than once, in different cases, so each Ticket is taken once.
-  const keys = keysWritten(`${pr.title}\n${pr.head.ref}`);
+  // Branch names often join words with underscores, which would hide a key from a word boundary.
+  const keys = keysWritten(`${pr.title}\n${pr.head.ref}`.replaceAll("_", " "));
   if (keys.length > 0) {
     const opened = action === "opened";
     await tx.query(
@@ -222,8 +228,7 @@ async function recordCheck(
   tx: Tx,
   check: { repositoryId: number; sha: string; kind: "check_run" | "status"; name: string; sourceId: number; state: CheckState; stage: number; url: string | null },
 ): Promise<void> {
-  const { rowCount: listed } = await tx.query("select from repositories where id = $1", [check.repositoryId]);
-  if (!listed) return;
+  if (!(await isListed(tx, check.repositoryId))) return;
   const { rowCount } = await tx.query(
     `insert into commit_checks (repository_id, sha, kind, name, source_id, state, stage, url)
      values ($1, $2, $3, $4, $5, $6, $7, $8)

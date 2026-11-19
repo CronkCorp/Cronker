@@ -121,6 +121,19 @@ describe("Pull Requests linking to Tickets", () => {
     expect((await pullRequestsOf(ticket.id, cookie)).map((pr: { id: number }) => pr.id)).toEqual([501]);
   });
 
+  test("a key joined to the rest of a branch name by underscores still links", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Underscored" });
+
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "Fix login", branch: "feat_CRONK-1_fix-login" }),
+    );
+
+    expect((await pullRequestsOf(ticket.id, cookie)).map((pr: { id: number }) => pr.id)).toEqual([501]);
+  });
+
   test("only Projects listing the Pull Request's Repository get links, and a Repository no Project lists links nothing", async () => {
     const { workspace, cookie, app, installation, project, cronker, website } = await projectWithRepository();
     const listed = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Listed" });
