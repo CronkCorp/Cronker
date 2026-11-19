@@ -18,6 +18,7 @@ import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
 import { inboxRoutes } from "./inbox/routes.js";
+import { knowledgeRoutes } from "./knowledge/routes.js";
 import { liveRoutes } from "./live/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
@@ -48,7 +49,14 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
     const guide = (statusCode: number, guidance?: Guidance) =>
       guidance ?? (isAgent ? guidanceForAgent(statusCode) : undefined);
     if (error instanceof ApiError) {
-      return sendError(reply, error.statusCode, error.code, error.message, guide(error.statusCode, error.guidance));
+      return sendError(
+        reply,
+        error.statusCode,
+        error.code,
+        error.message,
+        guide(error.statusCode, error.guidance),
+        error.details,
+      );
     }
     const { validation, statusCode, message } = error as { validation?: unknown; statusCode?: number; message: string };
     if (validation) return sendError(reply, 400, "invalid_request", message, guide(400));
@@ -112,6 +120,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
+  await app.register(knowledgeRoutes(context));
   await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));

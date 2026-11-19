@@ -17,6 +17,8 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly guidance?: Guidance,
+    /** More the refusal carries for the client, such as the current Version a save was refused with. */
+    readonly details?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -39,8 +41,15 @@ export function guidanceForAgent(statusCode: number): Guidance {
   };
 }
 
-export function sendError(reply: FastifyReply, statusCode: number, code: string, message: string, guidance?: Guidance) {
-  return reply.code(statusCode).send({ error: { code, message, ...guidance } });
+export function sendError(
+  reply: FastifyReply,
+  statusCode: number,
+  code: string,
+  message: string,
+  guidance?: Guidance,
+  details?: Record<string, unknown>,
+) {
+  return reply.code(statusCode).send({ error: { ...details, code, message, ...guidance } });
 }
 
 export const ErrorBody = Type.Object({
