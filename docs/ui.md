@@ -192,6 +192,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Terms page:** reads like a glossary. The page head holds a Workspace / Project scope switch, then Export and **New Term**. A filter box matches names and words to avoid.
 - **Each Term:** the name, "Overrides the Workspace Term" in `--info` where it does (on a Workspace Term, "Replaced in CRONK"), its scope and Version. Then the definition, and "Avoid:" with the words struck through.
+- **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside the Term's Versions, each of which opens to what it said. The editor holds the Name, the definition's Markdown beside its preview, and the words to avoid, with "Save as Version N" first.
 - The screenshots' groups, Protected marks and Suggestion counts belong to the old Cronk.
 
 ### Decisions
@@ -199,7 +200,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 ![Decisions](ui/decisions.png)
 
 - **Register:** the page head holds the same scope switch, then **Export** and **New Decision**. Below it, status filter chips with counts, and a table of number, title, status and date. A superseded Decision carries "→ 0007" after its title.
-- **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it. Only Users see the status actions.
+- **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value. Only Users see the status actions.
 
 ### Agents and Runners
 
