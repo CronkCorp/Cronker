@@ -471,11 +471,6 @@ textarea.markdown-source {
   background: var(--agent-soft);
   color: var(--agent);
 }
-.chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
 
 /* Run states */
 .run-state {
