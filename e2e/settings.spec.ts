@@ -121,4 +121,9 @@ test("Workspace settings, Members and the GitHub page share the settings layout"
 
   await page.goto(`${cronk.url}/github`);
   await expect(sections(page).getByRole("link")).toHaveText(["The App", "What the App needs", "Installations"]);
+  // A page too short to scroll marks its first section until another is picked.
+  await expect(sections(page).getByRole("link", { name: "The App", exact: true })).toHaveAttribute("aria-current", "true");
+  await sections(page).getByRole("link", { name: "Installations" }).click();
+  await expect(sections(page).getByRole("link", { name: "Installations" })).toHaveAttribute("aria-current", "true");
+  await expect(sections(page).getByRole("link", { name: "The App", exact: true })).not.toHaveAttribute("aria-current", "true");
 });
