@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
@@ -119,6 +119,55 @@ describe("MCP with an Agent token", () => {
     ]);
     expect(json.relations.relations).toEqual([
       expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-2" }) }),
+    ]);
+  });
+
+  test("an Agent reads a Ticket with its Pull Requests, their state and checks", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+    const cronker = installation.repositories[0]!;
+    await post(cookie, `/api/projects/${ticket.projectId}/repositories`, { id: cronker.id });
+    const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
+    await cronk.github.deliver(app, "pull_request", {
+      action: "opened",
+      installation: { id: installation.id },
+      repository,
+      pull_request: {
+        id: 501,
+        number: 7,
+        title: "CRONK-1: read me",
+        state: "open",
+        draft: true,
+        merged: false,
+        html_url: "https://github.com/cronkcorp/cronker/pull/7",
+        head: { ref: "cronk-1", sha: "c1" },
+        updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await cronk.github.deliver(app, "check_run", {
+      action: "completed",
+      installation: { id: installation.id },
+      repository,
+      check_run: { id: 10, name: "test", head_sha: "c1", status: "completed", conclusion: "failure", html_url: null },
+    });
+    const client = await connect(secret);
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.pullRequests).toEqual([
+      {
+        id: 501,
+        repository: "cronkcorp/cronker",
+        number: 7,
+        title: "CRONK-1: read me",
+        branch: "cronk-1",
+        url: "https://github.com/cronkcorp/cronker/pull/7",
+        state: "draft",
+        checks: [{ name: "test", state: "failed", url: null }],
+        producingStep: null,
+      },
     ]);
   });
 
