@@ -8,6 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
+import type { Scope } from "./scopes.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace. Each save
@@ -40,10 +41,7 @@ export const Document = Type.Object({
 export type Document = Static<typeof Document>;
 
 /** Which page tree a Document is in: a Project's, or the Workspace's when `projectId` is null. */
-export interface Tree {
-  workspaceId: string;
-  projectId: string | null;
-}
+export type Tree = Scope;
 
 type Row = Omit<Document, "version"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
 

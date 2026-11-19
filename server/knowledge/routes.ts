@@ -1,11 +1,8 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
-import type { FastifyRequest } from "fastify";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ApiError, ErrorBody } from "../http/errors.js";
-import { requireCaller, type Caller } from "../identity/callers.js";
-import { findWorkspace } from "../workspaces/workspaces.js";
-import { findProject, projectNotFound } from "../work/projects.js";
+import { ErrorBody } from "../http/errors.js";
+import { requireCaller } from "../identity/callers.js";
 import {
   compareVersions,
   Comparison,
@@ -18,11 +15,11 @@ import {
   findDocument,
   readVersion,
   treeOf,
-  type Tree,
   Version,
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
+import { scopes } from "./scopes.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
@@ -50,28 +47,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
 
   return async (app) => {
     // A Project's page tree and the Workspace's are reached the same way, each from its own path.
-    const trees = [
-      {
-        path: "/api/projects/:projectId/documents",
-        params: Type.Object({ projectId: Type.String() }),
-        name: "a Project's",
-        async find(request: FastifyRequest, caller: Caller): Promise<Tree> {
-          const project = await findProject(db, caller, (request.params as { projectId: string }).projectId);
-          if (!project) throw projectNotFound();
-          return { workspaceId: project.workspaceId, projectId: project.id };
-        },
-      },
-      {
-        path: "/api/workspaces/:workspaceId/documents",
-        params: Type.Object({ workspaceId: Type.String() }),
-        name: "the Workspace's",
-        async find(request: FastifyRequest, caller: Caller): Promise<Tree> {
-          const workspace = await findWorkspace(db, caller, (request.params as { workspaceId: string }).workspaceId);
-          if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
-          return { workspaceId: workspace.id, projectId: null };
-        },
-      },
-    ];
+    const trees = scopes(context, "documents");
     for (const tree of trees) {
       const { params } = tree;
 
