@@ -46,9 +46,9 @@ export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] 
             <span className="pr-meta">
               <PullRequestState state={pr.state} />
               <CheckCounts checks={pr.checks} />
-              {pr.mergedBy && <span className="small muted">Merged by @{pr.mergedBy}</span>}
+              <ReviewState pullRequest={pr} />
             </span>
-            {pr.sentBack && <SentBackBy sentBack={pr.sentBack} />}
+            {pr.sentBack?.kind === "check" && <SentBackBy sentBack={pr.sentBack} />}
           </li>
         ))}
       </ul>
@@ -56,19 +56,38 @@ export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] 
   );
 }
 
-/** What last sent the Ticket back to its producing Step from a Pull Request: a failing check or requested changes. */
-function SentBackBy({ sentBack }: { sentBack: NonNullable<PullRequest["sentBack"]> }) {
-  const what =
-    sentBack.kind === "check" ? (
-      <>
-        <span className="check-failed" aria-hidden="true">
-          ✗
-        </span>{" "}
-        {sentBack.name} failed
-      </>
-    ) : (
-      <>{sentBack.reviewer ? `@${sentBack.reviewer}` : "A reviewer"} requested changes</>
-    );
+/**
+ * Where a Pull Request's review stands, as far as Cronk knows: who merged it, or the requested changes that sent the
+ * Ticket back, linking the review.
+ */
+function ReviewState({ pullRequest: pr }: { pullRequest: PullRequest }) {
+  if (pr.mergedBy) return <span className="small muted">Merged by @{pr.mergedBy}</span>;
+  if (pr.sentBack?.kind !== "review") return null;
+  const what = `Changes requested${pr.sentBack.reviewer ? ` by @${pr.sentBack.reviewer}` : ""}`;
+  return (
+    <span className="small">
+      {pr.sentBack.url ? (
+        <a href={pr.sentBack.url} target="_blank" rel="noreferrer">
+          {what}
+        </a>
+      ) : (
+        what
+      )}{" "}
+      <RelativeTime at={pr.sentBack.at} />
+    </span>
+  );
+}
+
+/** A failing check that last sent the Ticket back to its producing Step from a Pull Request. */
+function SentBackBy({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["sentBack"]>, { kind: "check" }> }) {
+  const what = (
+    <>
+      <span className="check-failed" aria-hidden="true">
+        ✗
+      </span>{" "}
+      {sentBack.name} failed
+    </>
+  );
   return (
     <span className="small muted">
       Sent back:{" "}

@@ -95,7 +95,7 @@ The web client keeps its own small component set, styled with the tokens in plai
   - Buttons size to their label and are never full width outside sign-in forms.
 - **Forms:** the label sits above the field, in 12px `--muted`. Inputs have a `--surface` background and a 1px border, and show the `--accent` focus ring. Markdown inputs use the mono face. Each error sits under its form in `--danger` with `role="alert"`, and a refusal's rule and advice show as Cronk gives them. A settings page stays open after saving and says "Saved." beside its buttons (`role="status"`), or under a section's checkboxes where a toggle saves at once.
 - **Settings layout** (`<SettingsLayout>`): every settings page (Project settings, the Workspace's Settings, Members and GitHub) lists its sections in a 180px column beside them, named "Settings sections". Every section stays on the page: a link in the list brings its section into view, and the section in view is marked like a selected list item (`--accent-soft`, with an `--accent` left border). Below 760px the list wraps above the sections.
-- **Pickers** (`<FieldPicker>`): Ticket fields are edited in place. Clicking the value opens a popover list with type-to-filter; once something is typed, Enter picks the first match, and a picker that takes new values (Labels) offers the typed text. Bare `<select>` rows are not used for this.
+- **Pickers** (`<FieldPicker>`): Ticket fields are edited in place. Clicking the value opens a popover list with type-to-filter; once something is typed, Enter picks the first match, and a picker that takes new values (Labels) offers the typed text. Bare `<select>` rows are not used for this. The same list (`<Picker>`) opens from a button for other choices on the Ticket, such as Link a Document… (its options grouped under This Project and The Workspace) and the kind of a Relation to add.
 - **Times** (`<RelativeTime>`):
   - Relative under an hour ("12 min ago").
   - Then clock time for today ("10:18") and "yesterday".
@@ -143,8 +143,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Main column:** the title, the description and its Attachments, then one **timeline**, and the Comment box at the end.
 - **Side panel (280px, sticky):**
-  - Status, Priority, Assignee, Delegate, Autonomous Delegation and Labels, each edited in place. An agent's completion adds a Verification row: an Unverified chip with Accept and Reopen…, or Verified.
-  - The **Run card**, in `--agent-soft`, while a Run is running or waiting: the Agent, the Step and its model label, the Run state, when it started and its session link. A Run gone wrong shows here with Retry. It is hidden otherwise.
+  - Status, Priority, Assignee, Delegate, Autonomous Delegation (On, Off, or the Project's once delegated) and Labels, each edited in place, then Due date and Estimate. An agent's completion adds a Verification row among them: an Unverified chip with Accept and Reopen…, or Verified.
+  - The **Run card**, in `--agent-soft`, while a Run is running or waiting: the Agent, the Step and its model label, the Run state, when it started and its session link (a waiting Run has not started, so it shows why it waits instead). A Run gone wrong shows here with Retry, in `--danger-soft`. It is hidden otherwise.
   - Pull Requests, Parent, Sub-Tickets, Relations, Linked Documents (with Link and Unlink) and Files.
 - **Below 900px** the side panel moves above the timeline.
 - **Timeline entries**, oldest first, each with an avatar in the gutter:
@@ -162,7 +162,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 |---|---|
 | ![Pull Requests in the side panel](ui/ticket-pull-requests-side.png) | ![Pull Requests in the main column](ui/ticket-pull-requests-main.png) |
 
-- **Side panel:** a **Pull Requests** group after the Run card, one row per Pull Request: number, title, state pill, check counts and review state ("Changes requested", "Merged by Ada").
+- **Side panel:** a **Pull Requests** group after the Run card, one row per Pull Request: number, title, state pill, check counts and review state ("Changes requested by @bea", linking the review, or "Merged by @ada"). Cronk learns of requested changes only when they send the Ticket back.
 - **Main column**, for a Ticket in a Review Status: a card per Pull Request under the description with the branch (`cronk-12-sign-in-limit → main`), its author and review state, and every check with ✓, ✗ or ●.
 - The screenshots show a Refresh button and a Link a Pull Request… action from the old Cronk; this rewrite links by key only and updates by webhook, so neither exists.
 

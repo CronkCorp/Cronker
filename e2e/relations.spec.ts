@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, newTicket, pick, test } from "./fixtures.js";
+import { expect, fieldPicker, newTicket, pick, test } from "./fixtures.js";
 
 async function signedInWithTickets(page: Page, cronk: StartedCronk, titles: string[]) {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -38,7 +38,8 @@ test("relate Tickets, make a Sub-Ticket, and see both sides on the Ticket view a
   const group = (name: string) => relations.getByRole("list", { name, exact: true });
 
   const add = async (kind: string, key: string) => {
-    await relations.getByLabel("Relation").selectOption(kind);
+    await pick(page, "Relation", kind);
+    await expect(fieldPicker(page, "Relation")).toHaveAccessibleName(`Relation ${kind}`);
     await relations.getByLabel("Ticket", { exact: true }).fill(key);
     await relations.getByRole("button", { name: "Add" }).click();
   };
