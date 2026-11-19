@@ -4,11 +4,25 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { findProject, projectNotFound } from "../work/projects.js";
-import { createDocument, Document, documentNotFound, editDocument, findDocument, VersionWithBody } from "./documents.js";
+import {
+  compareVersions,
+  Comparison,
+  createDocument,
+  Document,
+  documentNotFound,
+  editDocument,
+  findDocument,
+  readVersion,
+  Version,
+  versionsOf,
+  VersionWithBody,
+} from "./documents.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
 const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
 const tags = ["Documents"];
+const DocumentParams = Type.Object({ documentId: Type.String() });
+const VersionNumber = Type.Integer({ minimum: 1 });
 
 /** A save refused for being based on an outdated Version, with the current Version to merge into. */
 const OutdatedVersionBody = Type.Object({
@@ -82,6 +96,50 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),
+    );
+
+    app.get(
+      "/api/documents/:documentId/versions",
+      {
+        schema: {
+          tags,
+          summary: "A Document's Versions, oldest first",
+          description: "Each Version's number, title, Actor and time, without its body; read one for its body.",
+          params: DocumentParams,
+          response: { 200: Type.Array(Version), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => versionsOf(db, await requireCaller(context, request), request.params.documentId),
+    );
+
+    app.get(
+      "/api/documents/:documentId/versions/compare",
+      {
+        schema: {
+          tags,
+          summary: "Compare two of a Document's Versions",
+          description: "Both Versions, and their bodies compared line by line from `from` to `to`.",
+          params: DocumentParams,
+          querystring: Type.Object({ from: VersionNumber, to: VersionNumber }),
+          response: { 200: Comparison, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) =>
+        compareVersions(db, await requireCaller(context, request), request.params.documentId, request.query),
+    );
+
+    app.get(
+      "/api/documents/:documentId/versions/:number",
+      {
+        schema: {
+          tags,
+          summary: "One of a Document's Versions, with its body",
+          params: Type.Object({ documentId: Type.String(), number: VersionNumber }),
+          response: { 200: VersionWithBody, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) =>
+        readVersion(db, await requireCaller(context, request), request.params.documentId, request.params.number),
     );
   };
 }

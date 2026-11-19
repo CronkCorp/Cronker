@@ -110,6 +110,50 @@ describe("Documents", () => {
     expect((await ok("GET", `/api/documents/${document.id}`, ada)).body).toBe("Agent's take.");
   });
 
+  test("earlier Versions are listed, oldest first, and each can be read", async () => {
+    const { ada, user, project, agent, asAgent } = await workspaceWithProject();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan", body: "One." });
+    cronk.clock.advance(60_000);
+    await ok("PATCH", `/api/documents/${document.id}`, asAgent, { baseVersion: 1, title: "The plan", body: "Two." });
+
+    const versions = await ok("GET", `/api/documents/${document.id}/versions`, ada);
+    const first = await ok("GET", `/api/documents/${document.id}/versions/1`, asAgent);
+
+    expect(versions).toEqual([
+      { number: 1, title: "Plan", actor: { kind: "user", id: user.id, name: "ada@example.com" }, savedAt: "2026-01-01T09:00:00.000Z" },
+      { number: 2, title: "The plan", actor: { kind: "agent", id: agent.id, name: "claude-max" }, savedAt: "2026-01-01T09:01:00.000Z" },
+    ]);
+    expect(first).toEqual({ ...versions[0], body: "One." });
+    expect((await call("GET", `/api/documents/${document.id}/versions/3`, ada)).status).toBe(404);
+  });
+
+  test("two Versions compare line by line", async () => {
+    const { ada, project } = await workspaceWithProject();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, {
+      title: "Plan",
+      body: "# Plan\nBuild it.\nShip it.",
+    });
+    await ok("PATCH", `/api/documents/${document.id}`, ada, {
+      baseVersion: 1,
+      title: "The plan",
+      body: "# Plan\nDesign it.\nBuild it.\nShip it soon.",
+    });
+
+    const compared = await ok("GET", `/api/documents/${document.id}/versions/compare?from=1&to=2`, ada);
+
+    expect(compared).toEqual({
+      from: expect.objectContaining({ number: 1, title: "Plan" }),
+      to: expect.objectContaining({ number: 2, title: "The plan" }),
+      lines: [
+        { change: "same", text: "# Plan" },
+        { change: "added", text: "Design it." },
+        { change: "same", text: "Build it." },
+        { change: "removed", text: "Ship it." },
+        { change: "added", text: "Ship it soon." },
+      ],
+    });
+  });
+
   test("a save must name the Version it's based on", async () => {
     const { ada, project } = await workspaceWithProject();
     const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan" });

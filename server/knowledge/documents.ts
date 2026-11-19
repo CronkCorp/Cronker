@@ -6,6 +6,7 @@ import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import { ComparedLine, compareLines } from "./compare.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace. Each save
@@ -213,4 +214,43 @@ export async function editDocument(
     }
     return (await findDocument(tx, actor, document.id))!;
   });
+}
+
+/** A Document's Versions, oldest first, without their bodies. */
+export async function versionsOf(db: Db, viewer: Viewer, documentId: string): Promise<Version[]> {
+  const document = await findDocument(db, viewer, documentId);
+  if (!document) throw documentNotFound();
+  const { rows } = await db.query<VersionRow>(
+    `select ${versionColumns} from ${fromVersions} where versions.document_id = $1 order by versions.number`,
+    [document.id],
+  );
+  return rows.map(({ body: _body, ...row }) => ({ ...row, savedAt: row.savedAt.toISOString() }));
+}
+
+/** One of a Document's Versions, with its body. */
+export async function readVersion(db: Db, viewer: Viewer, documentId: string, number: number): Promise<VersionWithBody> {
+  const document = await findDocument(db, viewer, documentId);
+  if (!document) throw documentNotFound();
+  const version = await versionOf(db, document.id, number);
+  if (!version) throw new ApiError(404, "not_found", `${document.title} has no Version ${number}.`);
+  return version;
+}
+
+export const Comparison = Type.Object({
+  from: VersionWithBody,
+  to: VersionWithBody,
+  lines: Type.Array(ComparedLine, { description: "The bodies compared line by line, in order." }),
+});
+export type Comparison = Static<typeof Comparison>;
+
+/** Two of a Document's Versions, their bodies compared line by line. */
+export async function compareVersions(
+  db: Db,
+  viewer: Viewer,
+  documentId: string,
+  numbers: { from: number; to: number },
+): Promise<Comparison> {
+  const from = await readVersion(db, viewer, documentId, numbers.from);
+  const to = await readVersion(db, viewer, documentId, numbers.to);
+  return { from, to, lines: compareLines(from.body, to.body) };
 }
