@@ -18,6 +18,7 @@ import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
 import { identityRoutes } from "./identity/routes.js";
 import { inboxRoutes } from "./inbox/routes.js";
+import { decisionRoutes } from "./knowledge/decision-routes.js";
 import { knowledgeRoutes } from "./knowledge/routes.js";
 import { liveRoutes } from "./live/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
@@ -103,7 +104,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             type: "http",
             scheme: "bearer",
             description:
-              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, and create, save and move Documents; during their running Run on a Ticket they may also edit some of its fields, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit some of its fields, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
           },
         },
       },
@@ -121,6 +122,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(workRoutes(context));
   await app.register(ticketRoutes(context));
   await app.register(knowledgeRoutes(context));
+  await app.register(decisionRoutes(context));
   await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));
