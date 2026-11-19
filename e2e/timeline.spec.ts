@@ -59,6 +59,36 @@ test("a failing check's send-back shows as Cronk's Comment labelled Sent back, l
   await expect(move.getByRole("link", { name: "test" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/10");
 });
 
+test("each send-back from the same Pull Request names its own check, the earlier one too", async ({ page, cronk }) => {
+  const { ticket, deliver, pullRequestEvent, call, secret } = await inReview(cronk);
+  await deliver("check_run", {
+    action: "completed",
+    check_run: { id: 10, name: "lint", head_sha: "c1", status: "completed", conclusion: "failure", html_url: "https://github.com/cronkcorp/cronker/runs/10" },
+  });
+  // The Run the send-back started pushes a new commit and finishes, back to In Review, where its test fails.
+  cronk.clock.advance(60_000);
+  const running = (await call(`/api/tickets/${ticket.id}/runs`, undefined, "GET")).find((r: { state: string }) => r.state === "running");
+  await call(`/api/runs/${running.id}/finish`, { outcome: "done" }, "POST", secret);
+  await pullRequestEvent("synchronize", { head: { ref: "cronk-1", sha: "c2" }, updated_at: "2026-01-01T10:00:00Z" });
+  cronk.clock.advance(60_000);
+  await deliver("check_run", {
+    action: "completed",
+    check_run: { id: 11, name: "test", head_sha: "c2", status: "completed", conclusion: "failure", html_url: "https://github.com/cronkcorp/cronker/runs/11" },
+  });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const moves = timeline.getByRole("listitem").filter({ hasText: "Cronk sent it back" });
+  await expect(moves).toHaveText([
+    /^Cronk sent it back from In Review to Implement: the check lint failed on cronkcorp\/cronker#212 \d\d:\d\d$/,
+    /^Cronk sent it back from In Review to Implement: the check test failed on cronkcorp\/cronker#212 \d\d:\d\d$/,
+  ]);
+  await expect(moves.first().getByRole("link", { name: "lint" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/10");
+  await expect(moves.last().getByRole("link", { name: "test" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/11");
+  await expect(timeline.getByRole("article", { name: "Sent back by Cronk" })).toHaveCount(2);
+});
+
 test("a merge's Changes by Cronk read as one line naming who merged what, where it moved and how it completed", async ({ page, cronk }) => {
   const { ticket, pullRequestEvent } = await inReview(cronk);
   await pullRequestEvent("closed", { state: "closed", merged: true, merged_by: { login: "ada", id: 1 }, updated_at: "2026-01-01T12:00:00Z" });

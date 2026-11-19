@@ -11,7 +11,8 @@ export const ChangedBy = ActorOrCronk;
  * marks Cronk passing the Ticket on past a Step it didn't pass, before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
  * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
- * before the `status` and `verification` Changes moving it.
+ * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check
+ * or requested changes on a Pull Request, before the `status` Change moving it.
  */
 export const changeFields = [
   "created",
@@ -35,6 +36,7 @@ export const changeFields = [
   "dismissed",
   "linkedDocument",
   "merged",
+  "sentBack",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 
@@ -50,7 +52,10 @@ export const Change = Type.Object({
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
       "and the default Outcome the Ticket moved on by. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
-      "login of the GitHub account that merged it, or null when GitHub named none.",
+      "login of the GitHub account that merged it, or null when GitHub named none. A `sentBack` Change goes from null to " +
+      "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it, either a check " +
+      "`{ kind: \"check\", name, url }` or a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
+      "being the login of the GitHub account that wrote it, or null when GitHub named none; a `url` is null when GitHub gave none.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {

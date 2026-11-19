@@ -813,9 +813,50 @@ describe("Failures sending work back", () => {
     expect(comments).toHaveLength(1);
     expect(comments[0].actor).toEqual({ kind: "cronk", name: "Cronk" });
     expect(comments[0].body).toContain("https://github.com/cronkcorp/cronker/runs/10");
+    expect(comments[0]).toMatchObject({ sentBack: true, questionId: null });
     // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
     const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
     expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
+  });
+
+  test("a failing check's send-back records a Change by Cronk naming the Pull Request and the check, just before its move", async () => {
+    const { cookie, app, installation, cronker, ticket } = await inReview();
+
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, cookie);
+    const at = timeline.findIndex((c: { field: string }) => c.field === "sentBack");
+    expect(timeline[at]).toMatchObject({
+      actor: { kind: "cronk", name: "Cronk" },
+      from: null,
+      to: {
+        pullRequest: { id: 501, repository: "cronkcorp/cronker", number: 7, url: "https://github.com/cronkcorp/cronker/pull/7" },
+        failure: { kind: "check", name: "test", url: "https://github.com/cronkcorp/cronker/runs/10" },
+      },
+      runId: null,
+    });
+    expect(timeline[at + 1]).toMatchObject({
+      actor: { kind: "cronk" },
+      field: "status",
+      from: { name: "In Review" },
+      to: { name: "Implement" },
+      at: timeline[at].at,
+    });
+  });
+
+  test("each send-back from the same Pull Request records its own Change, requested changes naming the review", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, finishImplementing } = await inReview();
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    await finishImplementing();
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, cookie);
+    const pullRequest = { id: 501, repository: "cronkcorp/cronker", number: 7, url: "https://github.com/cronkcorp/cronker/pull/7" };
+    expect(timeline.filter((c: { field: string }) => c.field === "sentBack").map((c: { to: unknown }) => c.to)).toEqual([
+      { pullRequest, failure: { kind: "check", name: "test", url: "https://github.com/cronkcorp/cronker/runs/10" } },
+      { pullRequest, failure: { kind: "review", reviewer: "bea", url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72" } },
+    ]);
   });
 
   test.each<[string, string, { conclusion?: string; state?: string }]>([
@@ -874,6 +915,7 @@ describe("Failures sending work back", () => {
           "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7). Sent CRONK-1 back to Implement.",
       ],
     ]);
+    expect(comments[0].sentBack).toBe(true);
   });
 
   test("sending back counts as a round for the producing Step; past its round limit *needs you* applies, with Cronk's Question in the Inbox", async () => {
@@ -1033,5 +1075,34 @@ describe("Failures sending work back", () => {
 
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
     expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+});
+
+describe("Send-back Comments written before they were marked", () => {
+  test("Cronk's earlier Comments, each a send-back, are marked as one; other Comments are not", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
+    const { workspace, user } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+    for (const [userId, body] of [
+      [null, "The check **test** failed on cronkcorp/cronker#7's latest commit `c1`. Sent CRONK-1 back to Implement."],
+      [user.id, "Looking into it."],
+    ]) {
+      await cronk.stage(
+        `insert into comments (workspace_id, ticket_id, actor_user_id, body, created_at) values ($1, $2, $3, $4, '2026-01-01T09:00:00Z')`,
+        [workspace.id, ticket.id, userId, body],
+      );
+    }
+
+    await cronk.upgrade();
+
+    const response = await cronk.request("GET", `/api/tickets/${ticket.id}/comments`, { cookie });
+    expect(response.status).toBe(200);
+    expect((await response.json()).map((c: { actor: { kind: string }; sentBack: boolean }) => [c.actor.kind, c.sentBack])).toEqual([
+      ["cronk", true],
+      ["user", false],
+    ]);
   });
 });

@@ -301,6 +301,8 @@ export interface Comment {
   mentions: Mention[];
   /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
   questionId: string | null;
+  /** Whether this is Cronk's Comment on a send-back, linking the failing check or the review requesting changes. */
+  sentBack: boolean;
   attachments: Attachment[];
 }
 
@@ -373,6 +375,7 @@ export interface Change {
     | "dismissed"
     | "linkedDocument"
     | "merged"
+    | "sentBack"
     | RelationKind;
   from: unknown;
   to: unknown;

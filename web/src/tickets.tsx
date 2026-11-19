@@ -295,7 +295,6 @@ export function TicketScreen({
             runs={runs}
             comments={comments}
             reports={reports}
-            pullRequests={pullRequests}
             onAdded={addComment}
             onChanged={loadComments}
           />
@@ -1017,7 +1016,7 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | RelationKind>,
+  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | RelationKind>,
   string
 > = {
   delegate: "Delegate",
@@ -1057,12 +1056,25 @@ interface Merged {
   mergedBy: string | null;
 }
 
+/** What a `sentBack` Change records: the Pull Request, and the failing check or the review requesting changes on it. */
+interface SentBack {
+  pullRequest: { repository: string; number: number; url: string };
+  failure: { kind: "check"; name: string; url: string | null } | { kind: "review"; reviewer: string | null; url: string | null };
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
     const { pullRequest, mergedBy } = change.to as Merged;
     const name = `${pullRequestName(pullRequest)} ${pullRequest.title}`;
     return mergedBy ? `completed it: @${mergedBy} merged ${name}` : `completed it: ${name} was merged`;
+  }
+  if (change.field === "sentBack") {
+    const { pullRequest, failure } = change.to as SentBack;
+    const name = pullRequestName(pullRequest);
+    return failure.kind === "check"
+      ? `sent it back: the check ${failure.name} failed on ${name}`
+      : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "stepSkipped") {
@@ -1087,7 +1099,7 @@ function described(change: Change): string {
 
 /**
  * Cronk's Changes recorded at the same moment as one that says why: a skipped Step's move on out of its Status,
- * and a merge's move to a Done Status with the Verification it completed the Ticket as.
+ * a send-back's move, and a merge's move to a Done Status with the Verification it completed the Ticket as.
  */
 function recordedWith(change: Change, changes: Change[], project: Project): Change[] {
   if (change.actor.kind !== "cronk") return [];
@@ -1096,6 +1108,11 @@ function recordedWith(change: Change, changes: Change[], project: Project): Chan
     const skipped = (change.to as StepSkipped).status.id;
     const moved = sameMoment.find((c) => c.field === "status" && (c.from as { id: string }).id === skipped);
     return moved ? [moved] : [];
+  }
+  if (change.field === "sentBack") {
+    // Cronk records the move right after it.
+    const next = changes[changes.indexOf(change) + 1];
+    return next && next.actor.kind === "cronk" && next.field === "status" && next.at === change.at ? [next] : [];
   }
   if (change.field !== "merged") return [];
   const kindOf = (value: unknown) => project.statuses.find((s) => s.id === (value as { id: string }).id)?.kind;
@@ -1114,27 +1131,11 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
   );
 }
 
-/** How far apart Cronk records a send-back, its move and its Comment, at most. */
-const sendBackWindow = 5_000;
-
-/**
- * When Cronk moved the Ticket back for the failure its Comment names, so the Comment reads right after that move
- * and before the Run the move started; Cronk writes the Comment a moment after both.
- */
-function movedBackAt(comment: Comment, changes: Change[]): string | undefined {
-  if (comment.actor.kind !== "cronk") return undefined;
-  const written = new Date(comment.createdAt).getTime();
-  return changes.findLast((c) => {
-    const at = new Date(c.at).getTime();
-    return c.actor.kind === "cronk" && c.field === "status" && at <= written && written - at <= sendBackWindow;
-  })?.at;
-}
-
 /**
  * A Change Cronk made, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
- * where it moved on to, and a move of its own the failing check or requested changes that sent the Ticket back.
+ * where it moved on to, and a send-back the failing check or requested changes that sent the Ticket back, and where.
  */
-function describedByCronk(change: Change, related: Change[], pullRequests: PullRequest[]): ReactNode {
+function describedByCronk(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
     const verification = related.find((c) => c.field === "verification")?.to;
@@ -1154,31 +1155,21 @@ function describedByCronk(change: Change, related: Change[], pullRequests: PullR
       </>
     );
   }
-  if (change.field !== "status") return described(change);
-  // Cronk moves a Ticket on its own only to send it back, as a failing check or requested changes do.
-  const at = new Date(change.at).getTime();
-  const cause = pullRequests.find(
-    (pr) => pr.sentBack && Math.abs(new Date(pr.sentBack.at).getTime() - at) <= sendBackWindow,
-  );
-  const failure = cause?.sentBack;
+  if (change.field !== "sentBack") return described(change);
+  const { pullRequest, failure } = change.to as SentBack;
   return (
     <>
-      sent it back from {shown(change, change.from)} to {shown(change, change.to)}
-      {cause && failure && (
+      sent it back{moved && <> from {shown(moved, moved.from)} to {shown(moved, moved.to)}</>}:{" "}
+      {failure.kind === "check" ? (
         <>
-          :{" "}
-          {failure.kind === "check" ? (
-            <>
-              the check <ExternalLink url={failure.url}>{failure.name}</ExternalLink> failed on{" "}
-            </>
-          ) : (
-            <>
-              {failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} <ExternalLink url={failure.url}>requested changes</ExternalLink> on{" "}
-            </>
-          )}
-          <ExternalLink url={cause.url}>{pullRequestName(cause)}</ExternalLink>
+          the check <ExternalLink url={failure.url}>{failure.name}</ExternalLink> failed on{" "}
+        </>
+      ) : (
+        <>
+          {failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} <ExternalLink url={failure.url}>requested changes</ExternalLink> on{" "}
         </>
       )}
+      <ExternalLink url={pullRequest.url}>{pullRequestName(pullRequest)}</ExternalLink>
     </>
   );
 }
@@ -1221,7 +1212,6 @@ function Timeline({
   runs,
   comments,
   reports,
-  pullRequests,
   onAdded,
   onChanged,
 }: {
@@ -1234,8 +1224,6 @@ function Timeline({
   runs: Run[];
   comments: Comment[];
   reports: Report[];
-  /** The Ticket's Pull Requests, whose send-backs name why Cronk sent the Ticket back. */
-  pullRequests: PullRequest[];
   onAdded: (comment: Comment) => void;
   /** Something attached to a Comment changed. */
   onChanged: () => void;
@@ -1249,7 +1237,7 @@ function Timeline({
     ...runs.map((run) => ({ at: run.startedAt, key: `run:${run.id}`, kind: "run" as const, run })),
     ...comments
       .filter((c) => c.replyToId === null)
-      .map((comment) => ({ at: movedBackAt(comment, changes) ?? comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
+      .map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
   ].sort((a, b) => a.at.localeCompare(b.at) || tieOrder[a.kind] - tieOrder[b.kind]);
   const runOf = new Map(runs.map((run) => [run.id, run]));
@@ -1291,7 +1279,7 @@ function Timeline({
           </span>
           <p className="entry-line">
             <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
-            {change.actor.kind === "cronk" ? describedByCronk(change, explained.get(change.id) ?? [], pullRequests) : described(change)}
+            {change.actor.kind === "cronk" ? describedByCronk(change, explained.get(change.id) ?? []) : described(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,
@@ -1381,8 +1369,6 @@ function CommentThread({
   const replies = comments.filter((c) => c.replyToId === comment.id);
   const parent = comment.replyToId ? comments.find((c) => c.id === comment.replyToId) : undefined;
   const question = comment.questionId !== null;
-  // Cronk writes a Comment only when a failing check or requested changes send the Ticket back.
-  const sentBack = comment.actor.kind === "cronk";
   // The first User's reply answers a Question.
   const answered = question && replies.some((r) => r.actor.kind === "user");
   const askedIn = question ? runs.find((r) => r.question === comment.body && r.questionBy === "agent") : undefined;
@@ -1393,11 +1379,11 @@ function CommentThread({
   };
   return (
     <article
-      aria-label={`${question ? "Question from" : sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
+      aria-label={`${question ? "Question from" : comment.sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
       className={`entry-body comment${depth > 0 ? " reply" : ""}${arrived.has(`comment:${comment.id}`) ? " arrived" : ""}`}
     >
       <p className="entry-head">
-        {depth === 0 && <KindLabel kind={question ? "Question" : sentBack ? "Sent back" : "Comment"} />}{" "}
+        {depth === 0 && <KindLabel kind={question ? "Question" : comment.sentBack ? "Sent back" : "Comment"} />}{" "}
         <Actor actor={actor} avatar={depth > 0} /> <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}
