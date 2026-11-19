@@ -36,7 +36,7 @@ import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
-import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
@@ -301,9 +301,9 @@ export function TicketScreen({
           <CommentForm label="New Comment" button="Comment" placeholder="Comment… Markdown, and Ticket keys link" onSend={async (body) => addComment(await api.comment(ticket.id, { body }))} />
         </div>
         <aside className="side" aria-label="Details">
-          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save} />
-          {ticket.verification && (
-            <Verification
+          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
+            {ticket.verification && (
+              <Verification
               ticket={ticket}
               runs={runs}
               onAccept={() => apply(api.acceptTicket(ticket.id))}
@@ -313,8 +313,9 @@ export function TicketScreen({
                 await reopened;
                 loadComments();
               }}
-            />
-          )}
+              />
+            )}
+          </Fields>
           <RunCard ticket={ticket} runs={runs} agents={agents} statusModel={status?.step?.model ?? null} onRetried={() => apply(api.retry(ticket.id))} />
           <PullRequestRows pullRequests={pullRequests} />
           <Relations
@@ -419,6 +420,7 @@ function Fields({
   user,
   labels,
   onSave,
+  children,
 }: {
   ticket: Ticket;
   project: Project;
@@ -428,6 +430,8 @@ function Fields({
   /** The Labels to offer. */
   labels: string[];
   onSave: (edit: TicketEdit) => Promise<void>;
+  /** Rows shown after Labels, such as Verification. */
+  children?: ReactNode;
 }) {
   const status = project.statuses.find((s) => s.id === ticket.statusId);
   const assignee = members.find((m) => m.user.id === ticket.assigneeId)?.user;
@@ -443,7 +447,7 @@ function Fields({
   };
   const offeredAgents = delegate && !own.some((a) => a.id === delegate.id) ? [...own, delegate] : own;
   return (
-    <Panel className="side-section fields">
+    <section aria-label="Fields" className="panel side-section fields">
       <FieldPicker
         label="Status"
         value={status ? <StatusPill kind={status.kind} name={status.name} model={status.step?.model} /> : none}
@@ -532,6 +536,7 @@ function Fields({
         onPick={(label) => saveLabels(shownLabels.includes(label) ? shownLabels.filter((l) => l !== label) : [...shownLabels, label])}
         onCreate={(label) => !shownLabels.includes(label) && saveLabels([...shownLabels, label])}
       />
+      {children}
       <FieldForm
         key={`due:${ticket.dueDate}`}
         label="Due date"
@@ -555,7 +560,7 @@ function Fields({
       >
         <input id="ticket-estimate" name="estimate" type="number" min={0} step="any" defaultValue={ticket.estimate ?? ""} className="field-inline" />
       </FieldForm>
-    </Panel>
+    </section>
   );
 }
 
@@ -608,7 +613,7 @@ function Verification({
         ? "leave it here for you to move"
         : "send it back to a Step whose Status has since been removed, which Cronk refuses";
   return (
-    <section aria-label="Verification" className="panel side-section verification">
+    <section aria-label="Verification" className="field-row-group verification">
       <div className="field-row">
         <span className="field-row-label">Verification</span>
         {ticket.verification === "verified" ? <Chip tone="ok">Verified</Chip> : <Chip tone="info">Unverified</Chip>}

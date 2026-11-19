@@ -1,4 +1,4 @@
-import { expect, fieldPicker, pick, test } from "./fixtures.js";
+import { expect, fieldPicker, pick, test, widthOf } from "./fixtures.js";
 
 test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed", async ({ page, cronk }) => {
   const credentials = { email: "ada@example.com", password: "correct horse battery" };
@@ -55,6 +55,9 @@ test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed",
   const verification = page.getByRole("region", { name: "Verification" });
   await expect(verification).toContainText("Unverified");
   await expect(verification).toContainText("claude-max's Run of the Code review Step completed this.");
+  // A row among the Ticket's fields, its chip sized to its word.
+  await expect(page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Fields" }).getByRole("region", { name: "Verification" })).toBeVisible();
+  expect(await widthOf(verification.getByText("Unverified", { exact: true }))).toBeLessThan(120);
   await expect(fieldPicker(page, "Status")).toBeDisabled();
   const inboxLink = page.getByRole("navigation").getByRole("link", { name: /^Inbox/ });
   await expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting");

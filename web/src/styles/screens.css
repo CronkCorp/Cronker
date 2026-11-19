@@ -414,8 +414,19 @@
   gap: 0;
   padding: var(--space-1) var(--space-3);
 }
-.fields > .field-row + .field-row {
+.fields > .field-row + .field-row,
+.fields > .verification,
+.fields > .verification + .field-row {
   border-top: 1px solid var(--border);
+}
+/* The Verification row: its chip, then what completed the Ticket and Accept or Reopen… */
+.verification {
+  display: grid;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+}
+.verification .chip {
+  justify-self: start;
 }
 .field-row-value {
   display: flex;
