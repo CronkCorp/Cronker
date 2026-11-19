@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
+  nameOf,
   priorities,
   statusKinds,
+  type Agent,
   type Member,
   type Priority,
   type Project,
@@ -14,18 +16,22 @@ import {
   type Workspace,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
-import { useLatest, useLiveEvents } from "./live.js";
+import { usePlace } from "./frame.js";
+import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
-import { DecisionList } from "./decisions.js";
-import { PageTree } from "./documents.js";
+import { ProjectDecisions } from "./decisions.js";
+import { ProjectDocuments } from "./documents.js";
 import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
-
-const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
+import { Avatar } from "./ui/actor.js";
+import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented } from "./ui/controls.js";
+import { Chip, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
+import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
 
 /** The Workspace's Projects, and a form to create one. */
 export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
+  usePlace(null);
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -45,43 +51,51 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   });
 
   return (
-    <>
-      <h1>{workspace.name}</h1>
-      {failure && <p role="alert">{failure}</p>}
+    <div className="page">
+      <PageHead title={workspace.name} />
+      <FormError error={failure} />
       {projects &&
         (projects.length === 0 ? (
-          <p>No Projects yet.</p>
+          <EmptyState title="No Projects yet.">A Project holds a product's Tickets and knowledge. Create the first one below.</EmptyState>
         ) : (
-          <ul className="projects">
-            {projects.map((project) => (
-              <li key={project.id}>
-                <Link to={`/projects/${project.id}`}>{project.name}</Link> <span className="muted">{project.key}</span>
-              </li>
-            ))}
-          </ul>
+          <Panel title="Projects" id="projects" className="panel-flush">
+            <ul className="rows">
+              {projects.map((project) => (
+                <li key={project.id}>
+                  <Link to={`/projects/${project.id}`} className="row">
+                    <span className="row-title">{project.name}</span> <span className="ticket-key">{project.key}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Panel>
         ))}
-      <h2>New Project</h2>
-      <form onSubmit={onSubmit} className="inline">
-        <label>
-          Project name
-          <input name="name" required maxLength={200} />
-        </label>
-        <label>
-          Key
-          <input
-            name="key"
-            required
-            pattern="[A-Za-z][A-Za-z0-9]{1,9}"
-            title="2 to 10 letters and digits, starting with a letter"
-            autoComplete="off"
-          />
-        </label>
-        <button type="submit" disabled={busy}>
-          Create Project
-        </button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-    </>
+      <Panel title="New Project" id="new-project" description="Its key starts each Ticket's key, such as CRONK-12.">
+        <form onSubmit={onSubmit}>
+          <div className="form-row">
+            <Field label="Project name">
+              <input name="name" required maxLength={200} />
+            </Field>
+            <Field label="Key">
+              <input
+                name="key"
+                required
+                pattern="[A-Za-z][A-Za-z0-9]{1,9}"
+                title="2 to 10 letters and digits, starting with a letter"
+                autoComplete="off"
+                className="mono"
+              />
+            </Field>
+          </div>
+          <FormError error={error} />
+          <Actions>
+            <Button type="submit" variant="primary" disabled={busy}>
+              Create Project
+            </Button>
+          </Actions>
+        </form>
+      </Panel>
+    </div>
   );
 }
 
@@ -89,7 +103,20 @@ type View = "board" | "list" | "settings" | "documents" | "glossary" | "decision
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** A Project of the Workspace on screen, as a board, as a list, its page tree of Documents, its glossary, its Decisions, or its settings. */
+/** The Project's other pages, in the page head's "…" menu. */
+export function ProjectMenu({ project }: { project: ProjectSummary }) {
+  const base = `/projects/${project.id}`;
+  return (
+    <Menu label="More of this Project">
+      <MenuLink to={`${base}/documents`}>Documents</MenuLink>
+      <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
+      <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
+      <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
+    </Menu>
+  );
+}
+
+/** A Project of the Workspace on screen, as a board, as a list, its Documents, its Terms, its Decisions, or its settings. */
 export function ProjectScreen({
   workspace,
   projectId,
@@ -104,11 +131,13 @@ export function ProjectScreen({
 }) {
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
   const [filter, setFilter] = useState<TicketFilter>({});
   const [failure, setFailure] = useState<string | null>(null);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
+  usePlace(view === "documents" ? "documents" : view === "glossary" ? "terms" : view === "decisions" ? "decisions" : "project", projectId);
 
   useEffect(() => {
     api.project(projectId).then(
@@ -120,6 +149,7 @@ export function ProjectScreen({
       (e: Error) => setFailure(e.message),
     );
     api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
+    api.agents(workspace.id).then(setAgents, (e: Error) => setFailure(e.message));
   }, [projectId, workspace.id]);
 
   const latestTickets = useLatest();
@@ -144,88 +174,91 @@ export function ProjectScreen({
     }
   });
 
-  if (failure) return <p role="alert">{failure}</p>;
-  if (!project || !tickets) return <p>Loading…</p>;
+  if (failure) return <FormError error={failure} />;
+  if (!project || !tickets) return <p className="muted">Loading…</p>;
+  if (view === "documents") return <ProjectDocuments workspace={workspace} project={project} />;
+  if (view === "glossary") return <ProjectGlossary workspace={workspace} project={project} />;
+  if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
+
   const base = `/projects/${project.id}`;
-  return (
-    <>
-      <h1>
-        {project.name} <span className="muted">{project.key}</span>
-      </h1>
-      <nav className="tabs" aria-label="Project views">
-        <Link to={base} current={view === "board"}>
-          Board
-        </Link>
-        <Link to={`${base}/list`} current={view === "list"}>
-          List
-        </Link>
-        <Link to={`${base}/documents`} current={view === "documents"}>
-          Documents
-        </Link>
-        <Link to={`${base}/glossary`} current={view === "glossary"}>
-          Glossary
-        </Link>
-        <Link to={`${base}/decisions`} current={view === "decisions"}>
-          Decisions
-        </Link>
-        <Link to={`${base}/settings`} current={view === "settings"}>
-          Settings
-        </Link>
-      </nav>
-      {view === "documents" && <PageTree tree={{ kind: "project", id: project.id }} />}
-      {view === "glossary" && <ProjectGlossary projectId={project.id} />}
-      {view === "decisions" && <DecisionList place={{ kind: "project", id: project.id }} />}
-      {(view === "board" || view === "list") && (
-        <>
-          <NewTicket project={project} onCreated={loadTickets} />
-          <Filters project={project} members={members} filter={filter} onChange={setFilter} />
-        </>
-      )}
-      {view === "board" && <Board project={project} members={members} tickets={tickets} onMoved={loadTickets} />}
-      {view === "list" && (
-        <List
-          project={project}
-          members={members}
-          tickets={tickets}
-          filtered={Object.values(filter).some((value) => value !== undefined)}
+  const home = { label: workspace.name, to: `/workspaces/${workspace.id}` };
+  if (view === "settings") {
+    return (
+      <div className="page page-settings">
+        <PageHead
+          crumbs={[home, { label: <span className="mono">{project.key}</span>, to: base }]}
+          title="Project settings"
+          actions={<ProjectMenu project={project} />}
         />
-      )}
-      {view === "settings" && (
-        <>
-          <DelegationSettings project={project} onChange={setProject} />
-          <RepositoriesSettings project={project} />
-          <Settings project={project} onChange={setProject} />
-          <StepsSettings project={project} onChange={setProject} />
-          <BriefPreview project={project} />
-        </>
-      )}
-    </>
+        <StatusesSettings project={project} onChange={setProject} />
+        <StepsSettings project={project} onChange={setProject} />
+        <BriefPreview project={project} />
+        <DelegationSettings project={project} onChange={setProject} />
+        <RepositoriesSettings project={project} />
+      </div>
+    );
+  }
+  const filtered = Object.values(filter).some((value) => value !== undefined);
+  return (
+    <div className="page">
+      <PageHead
+        crumbs={[home, { label: <span className="mono">{project.key}</span> }]}
+        title={project.name}
+        switcher={
+          <>
+            <LiveIndicator workspaceId={workspace.id} />
+            <Segmented
+              label="Project views"
+              items={[
+                { label: "List", to: `${base}/list`, current: view === "list" },
+                { label: "Board", to: base, current: view === "board" },
+              ]}
+            />
+          </>
+        }
+        actions={
+          <>
+            <ProjectMenu project={project} />
+            <NewTicket project={project} onCreated={loadTickets} />
+          </>
+        }
+      />
+      <Filters project={project} members={members} filter={filter} onChange={setFilter} />
+      {view === "board" && <Board project={project} members={members} agents={agents} tickets={tickets} onMoved={loadTickets} />}
+      {view === "list" && <List project={project} members={members} agents={agents} tickets={tickets} filtered={filtered} />}
+    </div>
   );
 }
 
 function NewTicket({ project, onCreated }: { project: Project; onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     await api.createTicket(project.id, { title: field(form, "title") });
+    setOpen(false);
     onCreated();
   });
   return (
-    <form
-      className="inline"
-      onSubmit={async (event) => {
-        const form = event.currentTarget;
-        await onSubmit(event);
-        form.reset();
-      }}
-    >
-      <label>
-        New Ticket title
-        <input name="title" required maxLength={300} />
-      </label>
-      <button type="submit" disabled={busy}>
-        Create Ticket
-      </button>
-      {error && <p role="alert">{error}</p>}
-    </form>
+    <>
+      <Button variant="primary" onClick={() => setOpen(true)}>
+        New Ticket
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen} title={`New Ticket in ${project.name}`}>
+        <form onSubmit={onSubmit}>
+          <Field label="Title">
+            <input name="title" required maxLength={300} autoFocus />
+          </Field>
+          <FormError error={error} />
+          <DialogActions>
+            <DialogClose asChild>
+              <Button>Cancel</Button>
+            </DialogClose>
+            <Button type="submit" variant="primary" disabled={busy}>
+              Create Ticket
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+    </>
   );
 }
 
@@ -243,10 +276,10 @@ function Filters({
   const set = (change: TicketFilter) => onChange({ ...filter, ...change });
   return (
     <div className="filters" role="group" aria-label="Filters">
-      <label>
-        Filter by Status
+      <label className="filter">
+        <span className="sr-only">Filter by Status</span>
         <select value={filter.statusId ?? ""} onChange={(e) => set({ statusId: e.target.value || undefined })}>
-          <option value="">Any</option>
+          <option value="">Any Status</option>
           {project.statuses.map((status) => (
             <option key={status.id} value={status.id}>
               {status.name}
@@ -254,25 +287,25 @@ function Filters({
           ))}
         </select>
       </label>
-      <label>
-        Filter by Assignee
+      <label className="filter">
+        <span className="sr-only">Filter by Assignee</span>
         <select value={filter.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || undefined })}>
           <option value="">Anyone</option>
           <option value="none">Nobody</option>
           {members.map(({ user }) => (
             <option key={user.id} value={user.id}>
-              {user.email}
+              {nameOf(user)}
             </option>
           ))}
         </select>
       </label>
-      <label>
-        Filter by Priority
+      <label className="filter">
+        <span className="sr-only">Filter by Priority</span>
         <select
           value={filter.priority ?? ""}
           onChange={(e) => set({ priority: (e.target.value || undefined) as Priority | undefined })}
         >
-          <option value="">Any</option>
+          <option value="">Any Priority</option>
           {priorities.map(({ priority, label }) => (
             <option key={priority} value={priority}>
               {label}
@@ -280,83 +313,93 @@ function Filters({
           ))}
         </select>
       </label>
-      <label>
-        Filter by Label
-        <input value={filter.label ?? ""} onChange={(e) => set({ label: e.target.value.trim() || undefined })} />
+      <label className="filter">
+        <span className="sr-only">Filter by Label</span>
+        <input placeholder="Label" value={filter.label ?? ""} onChange={(e) => set({ label: e.target.value.trim() || undefined })} />
       </label>
     </div>
   );
 }
 
-function TicketItem({
-  ticket,
-  members,
-  draggable,
-}: {
-  ticket: TicketSummary;
-  members: Member[];
-  draggable?: boolean;
-}) {
+/** Why a Ticket that needs a Run waits for one, as a Run state's tooltip reads. */
+const waitingReasons = {
+  runnerSlot: "Runner full",
+  runnerPaused: "Runner rate-limited",
+  blocked: "Blocked by another Ticket",
+} as const;
+
+/** A Ticket's Run state on its card or row: while a Run is running, waiting or has gone wrong; nothing otherwise. */
+export function TicketRunState({ ticket }: { ticket: TicketSummary }) {
+  if (ticket.waiting) return <RunState state="waiting" reason={waitingReasons[ticket.waiting]} />;
+  const state = ticket.lastRun?.state;
+  if (state === "running" || state === "failed" || state === "lost" || state === "refused") return <RunState state={state} />;
+  return null;
+}
+
+/** The Delegate's and Assignee's avatars, each named in its tooltip. */
+function People({ ticket, members, agents }: { ticket: TicketSummary; members: Member[]; agents: Agent[] }) {
+  const delegate = agents.find((a) => a.id === ticket.delegateId);
   const assignee = members.find((m) => m.user.id === ticket.assigneeId)?.user;
-  const details = [
-    ticket.priority === "none" ? null : priorityLabel(ticket.priority),
-    ...ticket.labels,
-    assignee?.email,
-  ].filter(Boolean);
+  return (
+    <span className="people">
+      {delegate && <Avatar actor={{ kind: "agent", name: delegate.name }} title={`Delegate: ${delegate.name}`} />}
+      {assignee && <Avatar actor={{ kind: "user", name: nameOf(assignee) }} title={`Assignee: ${nameOf(assignee)}`} />}
+    </span>
+  );
+}
+
+const ticketDrag = "application/x-cronk-ticket";
+
+/** A Ticket on the board: key and Priority, title, Labels, Run state and avatars. */
+function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; members: Member[]; agents: Agent[]; arrived: boolean }) {
   return (
     <Link
       to={`/tickets/${ticket.id}`}
-      className="ticket-item"
-      draggable={draggable}
+      className={`card${arrived ? " arrived" : ""}`}
+      draggable
       onDragStart={(event: DragEvent<HTMLAnchorElement>) => {
         event.dataTransfer.setData(ticketDrag, ticket.id);
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <span className="muted">{ticket.key}</span> <span>{ticket.title}</span>
-      {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
-      {ticket.waiting ? (
-        <small className={`run-marker ${ticket.waiting}`}> {waitingMarkers[ticket.waiting]}</small>
-      ) : (
-        ticket.lastRun &&
-        ticket.lastRun.state in runMarkers && (
-          <small className={`run-marker ${ticket.lastRun.state}`}> {runMarkers[ticket.lastRun.state as keyof typeof runMarkers]}</small>
-        )
-      )}
+      <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
+      <span className="card-priority">
+        <PriorityTag priority={ticket.priority} />
+      </span>
+      <span className="card-meta">
+        {ticket.labels.map((label) => (
+          <Chip key={label}>{label}</Chip>
+        ))}
+        <TicketRunState ticket={ticket} />
+        <People ticket={ticket} members={members} agents={agents} />
+      </span>
     </Link>
   );
 }
 
-/** How a card marks its Ticket's latest Run, unless it finished or a User stopped it. */
-const runMarkers = {
-  running: "Run running",
-  failed: "Run failed",
-  lost: "Run lost",
-  refused: "Run couldn't start",
-} as const;
+/** Done and Canceled columns start collapsed. */
+const collapsible = (status: Status) => status.kind === "done" || status.kind === "canceled";
 
-/** How a card marks a Ticket that needs a Run but waits for one; this replaces its latest Run's marker. */
-const waitingMarkers = {
-  runnerSlot: "Waiting for a Runner slot",
-  runnerPaused: "Waiting: Runner rate limited",
-  blocked: "Blocked",
-} as const;
-
-const ticketDrag = "application/x-cronk-ticket";
+const ticketCount = (count: number) => `${count} Ticket${count === 1 ? "" : "s"}`;
 
 function Board({
   project,
   members,
+  agents,
   tickets,
   onMoved,
 }: {
   project: Project;
   members: Member[];
+  agents: Agent[];
   tickets: TicketSummary[];
   onMoved: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<string | null>(null);
+  // Opened collapsed columns, until the User leaves the page; nothing is stored.
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const arrived = useArrivals(tickets.map((t) => `${t.id} ${t.statusId}`));
 
   const drop = async (event: DragEvent<HTMLElement>, status: Status) => {
     event.preventDefault();
@@ -372,32 +415,73 @@ function Board({
     onMoved();
   };
 
+  const collapsed = (status: Status) => collapsible(status) && !opened.has(status.id);
+  const columns = project.statuses.map((status) => (collapsed(status) ? "44px" : "minmax(0, 1fr)")).join(" ");
   return (
     <>
-      {error && <p role="alert">{error}</p>}
-      <section aria-label="Board" className="board">
-        {project.statuses.map((status) => (
-          <section
-            key={status.id}
-            aria-label={status.name}
-            className={target === status.id ? "lane target" : "lane"}
-            onDragOver={(event) => {
-              if (!event.dataTransfer.types.includes(ticketDrag)) return;
-              event.preventDefault();
-              setTarget(status.id);
-            }}
-            onDragLeave={() => setTarget(null)}
-            onDrop={(event) => void drop(event, status)}
-          >
-            <h2>{status.name}</h2>
-            <p className="muted">{kindLabel(status.kind)}</p>
-            {tickets
-              .filter((ticket) => ticket.statusId === status.id)
-              .map((ticket) => (
-                <TicketItem key={ticket.id} ticket={ticket} members={members} draggable />
-              ))}
-          </section>
-        ))}
+      <FormError error={error} />
+      <section aria-label="Board" className="board" style={{ gridTemplateColumns: columns }}>
+        {project.statuses.map((status) => {
+          const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
+          const isCollapsed = collapsed(status);
+          return (
+            <section
+              key={status.id}
+              aria-label={status.name}
+              className={`column${target === status.id ? " column-target" : ""}${isCollapsed ? " column-collapsed" : ""}`}
+              onDragOver={(event) => {
+                if (!event.dataTransfer.types.includes(ticketDrag)) return;
+                event.preventDefault();
+                setTarget(status.id);
+              }}
+              onDragLeave={() => setTarget(null)}
+              onDrop={(event) => void drop(event, status)}
+            >
+              <header className="column-head">
+                {collapsible(status) ? (
+                  <button
+                    type="button"
+                    className="column-toggle"
+                    aria-expanded={!isCollapsed}
+                    aria-label={`${status.name}, ${ticketCount(inStatus.length)}`}
+                    title={isCollapsed ? `Open ${status.name}` : `Collapse ${status.name}`}
+                    onClick={() =>
+                      setOpened((shown) => {
+                        const next = new Set(shown);
+                        if (next.has(status.id)) next.delete(status.id);
+                        else next.add(status.id);
+                        return next;
+                      })
+                    }
+                  >
+                    <StatusDot kind={status.kind} />
+                    <span className="column-count">{inStatus.length}</span>
+                  </button>
+                ) : (
+                  <StatusDot kind={status.kind} />
+                )}
+                <h2 className={isCollapsed ? "sr-only" : "column-name"} title={status.name}>
+                  {status.name}
+                </h2>
+                {!collapsible(status) && <span className="column-count">{inStatus.length}</span>}
+                {status.step && !isCollapsed && <span className="model-label">{status.step.model}</span>}
+              </header>
+              {!isCollapsed && (
+                <div className="column-cards">
+                  {inStatus.map((ticket) => (
+                    <Card
+                      key={ticket.id}
+                      ticket={ticket}
+                      members={members}
+                      agents={agents}
+                      arrived={arrived.has(`${ticket.id} ${ticket.statusId}`)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          );
+        })}
       </section>
     </>
   );
@@ -406,28 +490,53 @@ function Board({
 function List({
   project,
   members,
+  agents,
   tickets,
   filtered,
 }: {
   project: Project;
   members: Member[];
+  agents: Agent[];
   tickets: TicketSummary[];
   filtered: boolean;
 }) {
   return (
     <section aria-label="List" className="list">
-      {tickets.length === 0 && <p>{filtered ? "No Tickets match these filters." : "No Tickets yet."}</p>}
+      {tickets.length === 0 &&
+        (filtered ? (
+          <EmptyState title="No Tickets match these filters.">Clear a filter to see more.</EmptyState>
+        ) : (
+          <EmptyState title="No Tickets yet.">New Ticket adds one; Agents file Discovered Tickets as they work.</EmptyState>
+        ))}
       {project.statuses.map((status) => {
         const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
         return (
-          <section key={status.id} aria-label={status.name}>
-            <div className="list-heading">
+          <section key={status.id} aria-label={status.name} className="list-group">
+            <header className="list-head">
+              <StatusDot kind={status.kind} />
               <h2>{status.name}</h2>
-              <span className="muted">{inStatus.length}</span>
-            </div>
-            {inStatus.map((ticket) => (
-              <TicketItem key={ticket.id} ticket={ticket} members={members} />
-            ))}
+              <span className="column-count">{inStatus.length}</span>
+            </header>
+            {inStatus.length > 0 && (
+              <ul className="rows panel panel-flush">
+                {inStatus.map((ticket) => (
+                  <li key={ticket.id}>
+                    <Link to={`/tickets/${ticket.id}`} className="row ticket-row">
+                      <StatusDot kind={status.kind} name={status.name} alone />
+                      <span className="ticket-key">{ticket.key}</span> <span className="row-title">{ticket.title}</span>
+                      <span className="row-meta">
+                        {ticket.labels.map((label) => (
+                          <Chip key={label}>{label}</Chip>
+                        ))}
+                        <PriorityTag priority={ticket.priority} />
+                        <TicketRunState ticket={ticket} />
+                        <People ticket={ticket} members={members} agents={agents} />
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
         );
       })}
@@ -450,8 +559,11 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
     }
   };
   return (
-    <section aria-labelledby="delegation-heading" className="settings">
-      <h2 id="delegation-heading">Delegation</h2>
+    <Panel
+      title="Delegation defaults"
+      id="delegation"
+      description="Under Autonomous Delegation a Step may complete a Ticket itself, as Unverified, until its Assignee Accepts or Reopens it. Sub-Tickets take their parent's setting."
+    >
       <label className="check">
         <input
           type="checkbox"
@@ -470,16 +582,12 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
         />
         Tickets first delegated get Autonomous Delegation
       </label>
-      <p className="muted">
-        Under Autonomous Delegation a Step may complete a Ticket itself, as Unverified, until its Assignee Accepts or
-        Reopens it. Sub-Tickets take their parent's setting.
-      </p>
-      {error && <p role="alert">{error}</p>}
-    </section>
+      <FormError error={error} />
+    </Panel>
   );
 }
 
-function Settings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+function StatusesSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -511,12 +619,12 @@ function Settings({ project, onChange }: { project: Project; onChange: (project:
 
   const last = project.statuses.length - 1;
   return (
-    <section aria-labelledby="statuses-heading" className="settings">
-      <h2 id="statuses-heading">Statuses</h2>
-      <p className="muted">
-        Every Project keeps at least one Status of each kind: Backlog, Active, Review, Done and Canceled.
-      </p>
-      {error && <p role="alert">{error}</p>}
+    <Panel
+      title="Statuses"
+      id="statuses"
+      description="The board's columns, in order. Every Project keeps at least one Status of each kind: Backlog, Active, Review, Done and Canceled."
+    >
+      <FormError error={error} />
       <ol className="statuses">
         {project.statuses.map((status, position) => (
           <StatusRow
@@ -532,20 +640,22 @@ function Settings({ project, onChange }: { project: Project; onChange: (project:
           />
         ))}
       </ol>
-      <form onSubmit={add} className="inline">
-        <label>
-          New Status name
-          <input name="name" required maxLength={100} />
-        </label>
-        <label>
-          New Status kind
-          <KindSelect name="kind" defaultValue="active" />
-        </label>
-        <button type="submit" disabled={busy}>
-          Add Status
-        </button>
+      <form onSubmit={add}>
+        <div className="form-row">
+          <Field label="New Status name">
+            <input name="name" required maxLength={100} />
+          </Field>
+          <Field label="New Status kind">
+            <KindSelect name="kind" defaultValue="active" />
+          </Field>
+        </div>
+        <Actions>
+          <Button type="submit" variant="primary" disabled={busy}>
+            Add Status
+          </Button>
+        </Actions>
       </form>
-    </section>
+    </Panel>
   );
 }
 
@@ -572,47 +682,39 @@ function StatusRow({
   useEffect(() => setName(status.name), [status.name]);
 
   return (
-    <li>
+    <li className="status-row">
+      <StatusDot kind={status.kind} />
       <form
-        className="inline"
+        className="status-rename"
         onSubmit={(event) => {
           event.preventDefault();
           void onRename(name);
         }}
       >
-        <input
-          aria-label={`Name of ${status.name}`}
-          value={name}
-          required
-          maxLength={100}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <button type="submit" disabled={busy || name === status.name} aria-label={`Rename ${status.name}`}>
+        <input aria-label={`Name of ${status.name}`} value={name} required maxLength={100} onChange={(e) => setName(e.target.value)} />
+        <Button type="submit" size="small" disabled={busy || name === status.name} aria-label={`Rename ${status.name}`}>
           Rename
-        </button>
+        </Button>
       </form>
-      <KindSelect
-        aria-label={`Kind of ${status.name}`}
-        value={status.kind}
-        disabled={busy}
-        onChange={(e) => void onKind(e.target.value as StatusKind)}
-      />
-      <button type="button" disabled={busy || first} aria-label={`Move ${status.name} up`} onClick={() => onMove(-1)}>
-        ↑
-      </button>
-      <button type="button" disabled={busy || last} aria-label={`Move ${status.name} down`} onClick={() => onMove(1)}>
-        ↓
-      </button>
-      <button type="button" disabled={busy} aria-label={`Remove ${status.name}`} onClick={() => onRemove()}>
-        Remove
-      </button>
+      <KindSelect aria-label={`Kind of ${status.name}`} value={status.kind} disabled={busy} onChange={(e) => void onKind(e.target.value as StatusKind)} />
+      <span className="status-row-tools">
+        <Button size="small" disabled={busy || first} aria-label={`Move ${status.name} up`} onClick={() => onMove(-1)}>
+          ↑
+        </Button>
+        <Button size="small" disabled={busy || last} aria-label={`Move ${status.name} down`} onClick={() => onMove(1)}>
+          ↓
+        </Button>
+        <Button variant="ghost" size="small" disabled={busy} aria-label={`Remove ${status.name}`} onClick={() => onRemove()}>
+          Remove
+        </Button>
+      </span>
     </li>
   );
 }
 
 function KindSelect(props: ComponentProps<"select">) {
   return (
-    <select {...props}>
+    <select {...props} className="kind-select">
       {statusKinds.map(({ kind, label }) => (
         <option key={kind} value={kind}>
           {label}
@@ -620,4 +722,41 @@ function KindSelect(props: ComponentProps<"select">) {
       ))}
     </select>
   );
+}
+
+/** The Workspace / Project scope switch of a knowledge page's head. */
+export function ScopeSwitch({
+  workspace,
+  project,
+  kind,
+}: {
+  workspace: Workspace;
+  project: ProjectSummary | null;
+  kind: "documents" | "glossary" | "decisions";
+}) {
+  const [projects, setProjects] = useState<ProjectSummary[]>(project ? [project] : []);
+  useEffect(() => {
+    api.projects(workspace.id).then(setProjects, () => {});
+  }, [workspace.id]);
+  return (
+    <Segmented
+      label="Scope"
+      items={[
+        { label: "Workspace", to: `/workspaces/${workspace.id}/${kind}`, current: project === null },
+        ...projects.map((p) => ({
+          label: <span className="mono">{p.key}</span>,
+          to: `/projects/${p.id}/${kind}`,
+          current: p.id === project?.id,
+        })),
+      ]}
+    />
+  );
+}
+
+/** Crumbs leading to a Project's or the Workspace's knowledge page. */
+export function knowledgeCrumbs(workspace: Workspace, project: ProjectSummary | null, page: ReactNode) {
+  const home = { label: workspace.name, to: `/workspaces/${workspace.id}` };
+  return project
+    ? [home, { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }, { label: page }]
+    : [home, { label: page }];
 }

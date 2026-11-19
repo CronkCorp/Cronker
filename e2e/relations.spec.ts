@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, test } from "./fixtures.js";
+import { expect, newTicket, pick, test } from "./fixtures.js";
 
 async function signedInWithTickets(page: Page, cronk: StartedCronk, titles: string[]) {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -21,8 +21,7 @@ async function signedInWithTickets(page: Page, cronk: StartedCronk, titles: stri
   await page.getByRole("button", { name: "Create Project" }).click();
   await expect(page.getByRole("heading", { name: "Cronker" })).toBeVisible();
   for (const [i, title] of titles.entries()) {
-    await page.getByLabel("New Ticket title").fill(title);
-    await page.getByRole("button", { name: "Create Ticket" }).click();
+    await newTicket(page, title);
     await expect(page.getByRole("link", { name: `CRONK-${i + 1} ${title}` })).toBeVisible();
   }
 }
@@ -66,9 +65,9 @@ test("relate Tickets, make a Sub-Ticket, and see both sides on the Ticket view a
   await expect(page.getByRole("heading", { name: "CRONK-1 Sign in" })).toBeVisible();
   await expect(group("Blocks")).toContainText("CRONK-2 Relations");
 
-  await page.getByRole("link", { name: "Cronker" }).click();
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
   await page.getByRole("link", { name: "CRONK-5 Ticket view" }).click();
-  await page.getByLabel("Parent").selectOption("CRONK-2 Relations");
+  await pick(page, "Parent", "CRONK-2 Relations");
   await expect(relations.getByRole("link", { name: "CRONK-2 Relations" })).toBeVisible();
   await expect(timeline).toContainText("ada@example.com changed Parent from none to CRONK-2 Relations");
 

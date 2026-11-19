@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, fieldPicker, pick, test } from "./fixtures.js";
 
 test("delegate a Ticket and watch its Runs move it on the board", async ({ page, cronk }) => {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -27,12 +27,13 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
   const { secret } = await post(`/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
 
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
-  await page.getByLabel("Delegate to an Agent").click();
-  await expect(page.getByLabel("Delegated to claude-max")).toBeChecked();
-  await page.getByLabel("Status").selectOption("Triage");
+  await pick(page, "Delegate", "claude-max");
+  await expect(fieldPicker(page, "Delegate")).toContainText("claude-max");
+  await pick(page, "Status", "Triage");
 
   const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline).toContainText("claude-max ran the Triage Step on haiku: running");
+  await expect(timeline.getByRole("listitem").filter({ hasText: "Triage · claude-max · haiku" })).toContainText("Run running");
+  await expect(page.getByRole("region", { name: "Run" })).toContainText("Triage");
   await expect(timeline.getByRole("link", { name: "Session" })).toHaveAttribute("href", "https://claude.ai/code/session_1");
 
   // During its Run the Agent edits the Ticket and writes a Report; both show up live.
@@ -45,13 +46,16 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
     body: { title: "Findings", body: "The bug is in **parsing**." },
   });
   expect(reported.status).toBe(201);
-  const reports = page.getByRole("region", { name: "Reports" });
-  await expect(reports.getByRole("article", { name: "Findings" })).toContainText("The bug is in parsing.");
+  const report = timeline.getByRole("article", { name: "Findings" });
+  await expect(report).toContainText("The bug is in parsing.");
   // The Report is a Document with Versions, leading back to its Ticket.
-  await reports.getByRole("link", { name: "Findings" }).click();
+  await report.getByRole("link", { name: "Findings" }).click();
   await expect(page.getByRole("heading", { name: "Findings" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Versions" })).toContainText("claude-max");
-  await expect(page.getByRole("link", { name: "Report on its Ticket" })).toHaveAttribute("href", `/tickets/${ticket.id}`);
+  await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "CRONK-1" })).toHaveAttribute(
+    "href",
+    `/tickets/${ticket.id}`,
+  );
 
   await page.goto(`${cronk.url}/projects/${project.id}`);
   const board = page.getByRole("region", { name: "Board" });

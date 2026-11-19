@@ -1,0 +1,69 @@
+/* The design tokens of docs/ui.md. Every colour in the web client comes from one of these. */
+:root {
+  color-scheme: light;
+  --bg: #f3f4f1;
+  --surface: #ffffff;
+  --surface-2: #e9ece6;
+  --border: #d5dad2;
+  --text: #1b1f1c;
+  --muted: #5c655f;
+  --accent: #116466;
+  --accent-soft: #d7ebe9;
+  --on-accent: #ffffff;
+  --agent: #6247c2;
+  --agent-soft: #e9e4fb;
+  --danger: #b93a2b;
+  --danger-soft: #f8e1dd;
+  --warn: #a35f00;
+  --warn-soft: #fbecd2;
+  --ok: #2c7a42;
+  --ok-soft: #dcefe1;
+  --info: #2a65ad;
+  --info-soft: #dde9f7;
+  /* Shadows only on popovers and menus. */
+  --shadow: 0 6px 24px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08);
+
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-chip: 4px;
+  --radius-control: 6px;
+  --radius-panel: 8px;
+  --radius-pill: 999px;
+
+  --sidebar-width: 232px;
+  --main-width: 1120px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #121513;
+    --surface: #1a1e1b;
+    --surface-2: #232825;
+    --border: #2e3430;
+    --text: #e2e6e1;
+    --muted: #98a29b;
+    --accent: #4fb2aa;
+    --accent-soft: #1d3634;
+    --on-accent: #0c1514;
+    --agent: #a793f2;
+    --agent-soft: #2b2545;
+    --danger: #ee7d6b;
+    --danger-soft: #3d211d;
+    --warn: #e3a447;
+    --warn-soft: #3a2c15;
+    --ok: #6cc284;
+    --ok-soft: #1c3324;
+    --info: #74a8ea;
+    --info-soft: #1b2b40;
+    --shadow: 0 6px 24px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  }
+}

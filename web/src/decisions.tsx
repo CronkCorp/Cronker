@@ -6,23 +6,35 @@ import {
   type DecisionStatus,
   decisionStatuses,
   type DecisionSummary,
+  type DecisionVersion,
   type Place,
+  type ProjectSummary,
   type Workspace,
 } from "./api.js";
-import { Editor, versionLine, Versions } from "./documents.js";
+import { Editor, VersionMeta, Versions } from "./documents.js";
 import { field, useSubmit } from "./forms.js";
+import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
+import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
+import { Actor } from "./ui/actor.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime } from "./ui/controls.js";
+import { DecisionStatusPill, decisionStatusLabel } from "./ui/labels.js";
+import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 
-const statusLabel = (status: DecisionStatus) => status[0]!.toUpperCase() + status.slice(1);
+/** A Decision's number as it is written, such as 0007. */
+const numbered = (number: number) => String(number).padStart(4, "0");
 
-/** Where a Project's or the Workspace's Decisions are listed: a Project's Decisions tab, or the Workspace's Decisions page. */
+/** Where a Project's or the Workspace's Decisions are listed. */
 const listPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/decisions` : `/workspaces/${place.id}/decisions`);
 
-/** A Project's Decisions, or the Workspace's own, by number, and a form to record one. */
-export function DecisionList({ place }: { place: Place }) {
+/** A Project's Decisions, or the Workspace's own: a register with status filters, and New Decision. */
+function Register({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
+  const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
   const [decisions, setDecisions] = useState<DecisionSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [only, setOnly] = useState<DecisionStatus | null>(null);
+  const [creating, setCreating] = useState(false);
   useEffect(() => {
     api.decisions(place).then(setDecisions, (e: Error) => setFailure(e.message));
   }, [place.kind, place.id]);
@@ -32,56 +44,114 @@ export function DecisionList({ place }: { place: Place }) {
     navigate(`/decisions/${created.id}`);
   });
 
-  if (failure) return <p role="alert">{failure}</p>;
-  if (!decisions) return <p>Loading…</p>;
+  const count = (status: DecisionStatus) => decisions?.filter((d) => d.status === status).length ?? 0;
+  const shown = decisions?.filter((d) => only === null || d.status === only) ?? [];
   return (
-    <section aria-label="Decisions" className="decision-list">
-      {decisions.length === 0 ? (
-        <p>No Decisions yet.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Number</th>
-              <th>Title</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {decisions.map((decision) => (
-              <tr key={decision.id}>
-                <td>{decision.number}</td>
-                <td>
-                  <Link to={`/decisions/${decision.id}`}>{decision.title}</Link>
-                </td>
-                <td>{statusLabel(decision.status)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      <form onSubmit={onSubmit} className="inline">
-        <label>
-          New Decision title
-          <input name="title" required maxLength={300} />
-        </label>
-        <button type="submit" disabled={busy}>
-          Record Decision
-        </button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-    </section>
+    <div className="page">
+      <PageHead
+        crumbs={knowledgeCrumbs(workspace, project, "Decisions")}
+        title="Decisions"
+        switcher={<ScopeSwitch workspace={workspace} project={project} kind="decisions" />}
+        actions={
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            New Decision
+          </Button>
+        }
+      />
+      <FormError error={failure} />
+      {decisions &&
+        (decisions.length === 0 ? (
+          <EmptyState title="No Decisions yet.">New Decision records one: what was decided and why, proposed until accepted.</EmptyState>
+        ) : (
+          <>
+            <div className="filter-chips" role="group" aria-label="Filter by status">
+              <button type="button" className="filter-chip" aria-pressed={only === null} onClick={() => setOnly(null)}>
+                All <span className="filter-count">{decisions.length}</span>
+              </button>
+              {decisionStatuses.map((status) => (
+                <button
+                  key={status}
+                  type="button"
+                  className="filter-chip"
+                  aria-pressed={only === status}
+                  disabled={count(status) === 0}
+                  onClick={() => setOnly(only === status ? null : status)}
+                >
+                  {decisionStatusLabel(status)} <span className="filter-count">{count(status)}</span>
+                </button>
+              ))}
+            </div>
+            <section aria-label="Decisions" className="panel panel-flush">
+              <table className="register">
+                <thead>
+                  <tr>
+                    <th>Number</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Changed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((decision) => {
+                    const replacement = decisions.find((d) => d.id === decision.supersededById);
+                    return (
+                      <tr key={decision.id}>
+                        <td className="mono muted">{numbered(decision.number)}</td>
+                        <td>
+                          <Link to={`/decisions/${decision.id}`}>{decision.title}</Link>
+                          {replacement && (
+                            <>
+                              {" "}
+                              <Link to={`/decisions/${replacement.id}`} className="superseded-by" title={`Superseded by ${replacement.title}`}>
+                                → {numbered(replacement.number)}
+                              </Link>
+                            </>
+                          )}
+                        </td>
+                        <td>
+                          <DecisionStatusPill status={decision.status} />
+                        </td>
+                        <td>
+                          <RelativeTime at={decision.version.savedAt} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </section>
+          </>
+        ))}
+      <Dialog open={creating} onOpenChange={setCreating} title="New Decision" description="It starts as Proposed.">
+        <form onSubmit={onSubmit}>
+          <Field label="Title">
+            <input name="title" required maxLength={300} autoFocus />
+          </Field>
+          <FormError error={error} />
+          <DialogActions>
+            <DialogClose asChild>
+              <Button>Cancel</Button>
+            </DialogClose>
+            <Button type="submit" variant="primary" disabled={busy}>
+              Record Decision
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+    </div>
   );
 }
 
 /** The Workspace's own Decisions, separate from its Projects'. */
 export function WorkspaceDecisions({ workspace }: { workspace: Workspace }) {
-  return (
-    <>
-      <h1>{workspace.name} Decisions</h1>
-      <DecisionList place={{ kind: "workspace", id: workspace.id }} />
-    </>
-  );
+  usePlace("decisions");
+  return <Register workspace={workspace} project={null} />;
+}
+
+/** A Project's Decisions. */
+export function ProjectDecisions({ workspace, project }: { workspace: Workspace; project: ProjectSummary }) {
+  usePlace("decisions", project.id);
+  return <Register workspace={workspace} project={project} />;
 }
 
 /** A Decision: read it, edit its text as Markdown with a preview, change its status, and browse its Versions. */
@@ -97,11 +167,14 @@ export function DecisionScreen({
 }) {
   const [decision, setDecision] = useState<Decision | null>(null);
   const [others, setOthers] = useState<DecisionSummary[]>([]);
+  const [project, setProject] = useState<ProjectSummary | null>(null);
+  const [first, setFirst] = useState<DecisionVersion | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [versionsShown, setVersionsShown] = useState(0);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
+  usePlace("decisions", decision?.projectId ?? null);
 
   const load = useCallback(() => {
     api.decision(decisionId).then(
@@ -111,6 +184,8 @@ export function DecisionScreen({
       },
       (e: Error) => setFailure(e.message),
     );
+    // Who proposed it: whoever saved its first Version.
+    api.decisionVersions(decisionId).then((versions) => setFirst(versions[0] ?? null), () => {});
   }, [decisionId, workspace.id]);
   useEffect(load, [load]);
 
@@ -120,37 +195,68 @@ export function DecisionScreen({
       : { kind: "workspace", id: decision.workspaceId }
     : null;
   useEffect(() => {
-    if (place) api.decisions(place).then(setOthers, () => setOthers([]));
-  }, [place?.kind, place?.id]);
+    if (!place) return;
+    api.decisions(place).then(setOthers, () => setOthers([]));
+    if (place.kind === "project") api.project(place.id).then(setProject, () => setProject(null));
+  }, [place?.kind, place?.id, decision?.version.number]);
 
   const saved = (next: Decision) => {
     setDecision(next);
     setVersionsShown((n) => n + 1);
   };
 
-  if (failure) return <p role="alert">{failure}</p>;
-  if (!decision || !place) return <p>Loading…</p>;
+  if (failure) return <FormError error={failure} />;
+  if (!decision || !place) return <p className="muted">Loading…</p>;
   const replacement = others.find((d) => d.id === decision.supersededById);
+  const replaced = others.filter((d) => d.supersededById === decision.id);
   return (
-    <article className="decision">
-      <p>
-        <Link to={listPage(place)}>{place.kind === "project" ? "Project Decisions" : "Workspace Decisions"}</Link>
-      </p>
-      <h1>
-        Decision {decision.number}: {decision.title}
-      </h1>
-      <p>
-        <span className={`decision-status ${decision.status}`}>{statusLabel(decision.status)}</span>
-        {decision.supersededById && (
+    <div className="page">
+      <PageHead
+        crumbs={knowledgeCrumbs(workspace, project, <Link to={listPage(place)}>Decisions</Link>)}
+        title={decision.title}
+        large
+        meta={
           <>
-            {" by "}
-            <Link to={`/decisions/${decision.supersededById}`}>
-              {replacement ? `Decision ${replacement.number}: ${replacement.title}` : "its replacing Decision"}
-            </Link>
+            <span className="mono">{numbered(decision.number)}</span>
+            <DecisionStatusPill status={decision.status} />
+            <VersionMeta version={decision.version} />
           </>
-        )}
-      </p>
-      <p className="muted">{versionLine(decision.version)}</p>
+        }
+        actions={
+          !editing && (
+            <Button variant="primary" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          )
+        }
+      />
+      {decision.supersededById && (
+        <Banner tone="warn" label="Superseded">
+          <p>
+            Superseded by{" "}
+            <Link to={`/decisions/${decision.supersededById}`}>
+              {replacement ? `${numbered(replacement.number)} ${replacement.title}` : "the Decision replacing it"}
+            </Link>
+            .
+          </p>
+        </Banner>
+      )}
+      {replaced.length > 0 && (
+        <Banner tone="info" label="Supersedes">
+          <p>
+            Supersedes{" "}
+            {replaced.map((d, index) => (
+              <span key={d.id}>
+                <Link to={`/decisions/${d.id}`}>
+                  {numbered(d.number)} {d.title}
+                </Link>
+                {index < replaced.length - 1 && ", "}
+              </span>
+            ))}
+            .
+          </p>
+        </Banner>
+      )}
       {editing ? (
         <Editor
           saved={decision}
@@ -166,33 +272,50 @@ export function DecisionScreen({
           onCancel={() => setEditing(false)}
         />
       ) : (
-        <>
-          <div className="actions">
-            <button type="button" onClick={() => setEditing(true)}>
-              Edit
-            </button>
-          </div>
-          {decision.body.trim() ? <Markdown text={decision.body} mentions={[]} /> : <p className="muted">Empty.</p>}
-          <StatusForm
-            decision={decision}
-            others={others.filter((d) => d.id !== decision.id)}
-            onChanged={saved}
-            onOutdated={() => {
-              load();
-              setVersionsShown((n) => n + 1);
-            }}
-          />
-        </>
+        <div className="page-split">
+          <article className="panel" aria-label={decision.title}>
+            {decision.body.trim() ? (
+              <div className="prose">
+                <Markdown text={decision.body} mentions={[]} />
+              </div>
+            ) : (
+              <EmptyState title="Nothing written yet.">Edit records the context, the decision and what follows from it.</EmptyState>
+            )}
+          </article>
+          <aside className="side" aria-label="Decision details">
+            <Panel className="side-section">
+              <div className="side-row">
+                <span className="field-row-label">Status</span>
+                <DecisionStatusPill status={decision.status} />
+              </div>
+              {first && (
+                <div className="side-row">
+                  <span className="field-row-label">Proposed by</span>
+                  <Actor actor={first.actor} />
+                </div>
+              )}
+              <StatusForm
+                decision={decision}
+                others={others.filter((d) => d.id !== decision.id)}
+                onChanged={saved}
+                onOutdated={() => {
+                  load();
+                  setVersionsShown((n) => n + 1);
+                }}
+              />
+            </Panel>
+            <Versions
+              key={versionsShown}
+              source={{
+                list: () => api.decisionVersions(decision.id),
+                read: (number) => api.decisionVersion(decision.id, number),
+                compare: (from, to) => api.compareDecisionVersions(decision.id, from, to),
+              }}
+            />
+          </aside>
+        </div>
       )}
-      <Versions
-        key={versionsShown}
-        source={{
-          list: () => api.decisionVersions(decision.id),
-          read: (number) => api.decisionVersion(decision.id, number),
-          compare: (from, to) => api.compareDecisionVersions(decision.id, from, to),
-        }}
-      />
-    </article>
+    </div>
   );
 }
 
@@ -229,38 +352,36 @@ function StatusForm({
     }
   });
   return (
-    <>
-      <form onSubmit={onSubmit} className="inline status-form" key={decision.version.number}>
-        <label>
-          Status
-          <select value={status} onChange={(e) => setStatus(e.target.value as DecisionStatus)}>
-            {decisionStatuses.map((s) => (
-              <option key={s} value={s}>
-                {statusLabel(s)}
+    <form onSubmit={onSubmit} key={decision.version.number}>
+      <Field label="Change status">
+        <select value={status} onChange={(e) => setStatus(e.target.value as DecisionStatus)}>
+          {decisionStatuses.map((s) => (
+            <option key={s} value={s}>
+              {decisionStatusLabel(s)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {status === "superseded" && (
+        <Field label="Replaced by">
+          <select name="supersededById" required defaultValue={decision.supersededById ?? ""}>
+            <option value="" disabled>
+              Choose a Decision
+            </option>
+            {others.map((d) => (
+              <option key={d.id} value={d.id}>
+                {numbered(d.number)} {d.title}
               </option>
             ))}
           </select>
-        </label>
-        {status === "superseded" && (
-          <label>
-            Replaced by
-            <select name="supersededById" required defaultValue={decision.supersededById ?? ""}>
-              <option value="" disabled>
-                Choose a Decision
-              </option>
-              {others.map((d) => (
-                <option key={d.id} value={d.id}>
-                  Decision {d.number}: {d.title}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <button type="submit" className="secondary" disabled={busy}>
-          Change status
-        </button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-    </>
+        </Field>
+      )}
+      <FormError error={error} />
+      <Actions>
+        <Button type="submit" disabled={busy || (status === decision.status && status !== "superseded")}>
+          Save status
+        </Button>
+      </Actions>
+    </form>
   );
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, type ConnectRequest } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { Centered } from "./frame.js";
+import { Button, FormError } from "./ui/controls.js";
 
 /**
  * The consent screen of Cronk's OAuth server: a connector, such as claude.ai's, asks to
@@ -46,7 +48,7 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
   if ("failed" in request) {
     return (
       <ConnectFrame title="This request to connect doesn't work">
-        <p role="alert">{request.failed}</p>
+        <FormError error={request.failed} />
       </ConnectFrame>
     );
   }
@@ -59,31 +61,33 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
         Agent may. Once you choose, you go back to <strong>{returnHost}</strong>.
       </p>
       {request.agents.length === 0 ? (
-        <p role="alert">You have no Agents yet. Create one on a Workspace's Agents page, then start connecting again.</p>
+        <FormError error="You have no Agents yet. Create one on a Workspace's Agents page, then start connecting again." />
       ) : (
         <form onSubmit={approve.onSubmit}>
-          <fieldset>
-            <legend>Act as</legend>
+          <fieldset className="consent-agents">
+            <legend className="field-label">Act as</legend>
             {request.agents.map((agent, index) => (
               <label key={agent.id} className="check">
                 <input type="radio" name="agentId" value={agent.id} defaultChecked={index === 0} required />
-                {agent.name} <span className="muted">in {agent.workspace.name}</span>
+                <span>
+                  <span className="actor-agent-name">{agent.name}</span> <span className="muted">in {agent.workspace.name}</span>
+                </span>
               </label>
             ))}
           </fieldset>
-          {approve.error && <p role="alert">{approve.error}</p>}
-          <button type="submit" disabled={approve.busy || leaving}>
+          <FormError error={approve.error} />
+          <Button type="submit" variant="primary" className="button-wide" disabled={approve.busy || leaving}>
             Connect
-          </button>
+          </Button>
         </form>
       )}
       <form onSubmit={deny.onSubmit}>
-        {deny.error && <p role="alert">{deny.error}</p>}
-        <button type="submit" className="secondary" disabled={deny.busy || leaving}>
+        <FormError error={deny.error} />
+        <Button type="submit" className="button-wide" disabled={deny.busy || leaving}>
           Don't connect
-        </button>
+        </Button>
       </form>
-      <p className="muted">
+      <p className="muted small">
         Removing the Agent, or revoking the token named {name} among its tokens, disconnects {name}.
       </p>
     </ConnectFrame>
@@ -91,19 +95,14 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
 }
 
 function ConnectFrame({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <main className="centered">
-      <h1>{title}</h1>
-      {children}
-    </main>
-  );
+  return <Centered title={title}>{children}</Centered>;
 }
 
 /** Why Cronk couldn't ask at all: shown without signing in, since there is nothing to approve. */
 export function ConnectError({ code }: { code: string }) {
   return (
     <ConnectFrame title="This request to connect doesn't work">
-      <p role="alert">{connectErrorMessage(code)}</p>
+      <FormError error={connectErrorMessage(code)} />
     </ConnectFrame>
   );
 }

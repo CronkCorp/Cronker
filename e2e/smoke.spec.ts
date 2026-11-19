@@ -18,7 +18,8 @@ test("set up a fresh installation without GitHub, sign in, see the empty Workspa
   await page.getByRole("button", { name: "Skip for now" }).click();
   await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "ada@example.com" }).click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Sign in with GitHub" })).toHaveCount(0);
   await page.getByLabel("Email").fill("ada@example.com");
@@ -31,7 +32,8 @@ test("set up a fresh installation without GitHub, sign in, see the empty Workspa
   await page.reload();
   await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "ada@example.com" }).click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();

@@ -22,13 +22,18 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
   await expect(page.getByRole("heading", { name: "Cronker" })).toBeVisible();
   const projectUrl = page.url();
 
-  await page.getByRole("navigation").getByRole("link", { name: "Glossary" }).first().click();
-  await expect(page.getByRole("heading", { name: "Ada's Workspace Glossary" })).toBeVisible();
+  // On a Project's page the sidebar leads to the Project's Terms; the scope switch leads to the Workspace's.
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Terms" }).click();
+  await expect(page).toHaveURL(/\/projects\/[^/]+\/glossary$/);
+  await page.getByRole("navigation", { name: "Scope" }).getByRole("link", { name: "Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Terms", level: 1 })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Scope" }).getByRole("link", { name: "Workspace" })).toHaveAttribute("aria-current", "page");
   for (const [name, definition, avoid] of [
     ["Ticket", "A unit of work tracked within a Project.", "Issue, task"],
     ["Run", "One agent execution Cronk starts for one Ticket.", "job"],
   ]) {
-    await page.getByLabel("New Term name").fill(name!);
+    await page.getByRole("button", { name: "New Term" }).click();
+    await page.getByRole("dialog").getByLabel("Name").fill(name!);
     await page.getByRole("textbox", { name: "Definition", exact: true }).fill(definition!);
     await page.getByLabel("Words to avoid").fill(avoid!);
     await page.getByRole("button", { name: "Create Term" }).click();
@@ -40,17 +45,23 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
 
   await page.goto(projectUrl);
   await expect(page.getByRole("heading", { name: "Cronker" })).toBeVisible();
-  await page.getByRole("link", { name: "Glossary", exact: true }).last().click();
+  // On a Project's page, the sidebar leads to the Project's Terms.
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Terms" }).click();
   await expect(page).toHaveURL(/\/projects\/[^/]+\/glossary$/);
   await expect(glossary.getByRole("heading", { level: 2 })).toHaveText(["Run", "Ticket"]);
   await expect(glossary.getByText("Avoid: Issue, task")).toBeVisible();
-  await expect(glossary.getByText("Workspace Term")).toHaveCount(2);
-  await page.getByLabel("New Term name").fill("run");
+  await expect(glossary.getByText("Workspace", { exact: true })).toHaveCount(2);
+  await page.getByLabel("Filter Terms").fill("task");
+  await expect(glossary.getByRole("heading", { level: 2 })).toHaveText(["Ticket"]);
+  await page.getByLabel("Filter Terms").fill("");
+  await page.getByRole("button", { name: "New Term" }).click();
+  await page.getByRole("dialog").getByLabel("Name").fill("run");
   await page.getByRole("textbox", { name: "Definition", exact: true }).fill("In this Project: one Claude session on a Ticket.");
   await page.getByLabel("Words to avoid").fill("session");
   await page.getByRole("button", { name: "Create Term" }).click();
   await expect(page.getByRole("heading", { name: "run", exact: true })).toBeVisible();
-  await expect(page.getByText("Version 1 by ada@example.com").first()).toBeVisible();
+  await expect(page.getByText("CRONK Term")).toBeVisible();
+  await expect(page.getByText("Version 1", { exact: true }).first()).toBeVisible();
 
   await page.getByRole("button", { name: "Edit" }).click();
   await page.getByRole("textbox", { name: "Definition", exact: true }).fill("In this Project: one Claude Code session on a Ticket.");
@@ -62,10 +73,12 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
   await expect(glossary.getByRole("heading", { level: 2 })).toHaveText(["run", "Ticket"]);
   await expect(glossary.getByText("In this Project: one Claude Code session on a Ticket.")).toBeVisible();
   await expect(glossary.getByText("One agent execution Cronk starts for one Ticket.")).toHaveCount(0);
-  await expect(glossary.getByText("Workspace Term")).toHaveCount(1);
+  await expect(glossary.getByText("Workspace", { exact: true })).toHaveCount(1);
+  await expect(glossary.getByText("Overrides the Workspace Term")).toHaveCount(1);
 
   await glossary.getByRole("link", { name: "run", exact: true }).click();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Delete Term" }).click();
+  await page.getByRole("button", { name: "More of this Term" }).click();
+  await page.getByRole("menuitem", { name: "Delete Term" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
   await expect(glossary.getByRole("heading", { level: 2 })).toHaveText(["Run", "Ticket"]);
 });

@@ -1,7 +1,7 @@
 import { connect, type Socket } from "node:net";
 import { addMember, setUp, signIn } from "../test/harness/flows.js";
 import { startCronk, type StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, test, webRoot } from "./fixtures.js";
+import { expect, fieldPicker, test, webRoot } from "./fixtures.js";
 
 test("the board and the Ticket view show what another member changes, without a reload", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
@@ -23,7 +23,7 @@ test("the board and the Ticket view show what another member changes, without a 
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("link", { name: "Cronker" }).click();
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
   await expect(lane("Backlog")).toBeVisible();
@@ -38,16 +38,19 @@ test("the board and the Ticket view show what another member changes, without a 
 
   await lane("Ready").getByRole("link", { name: /CRONK-1/ }).click();
   await expect(page.getByRole("heading", { name: "CRONK-1 Moved by Bob" })).toBeVisible();
-  await page.getByLabel("Edit description").fill("Ada is still typing");
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Description").fill("Ada is still typing");
   await asBob("PATCH", `/api/tickets/${ticket.id}`, { priority: "high", statusId: statusId("Triage") });
-  await expect(page.getByLabel("Priority")).toHaveValue("high");
-  await expect(page.getByLabel("Status")).toHaveValue(statusId("Triage"));
+  await expect(fieldPicker(page, "Priority")).toContainText("High");
+  await expect(fieldPicker(page, "Status")).toContainText("Triage");
   await expect(page.getByRole("region", { name: "Timeline" })).toContainText(
     "bob@example.com changed Priority from None to High",
   );
-  await expect(page.getByLabel("Edit description")).toHaveValue("Ada is still typing");
+  await expect(page.getByLabel("Description")).toHaveValue("Ada is still typing");
   await asBob("POST", `/api/tickets/${ticket.id}/comments`, { body: "Picking this up." });
-  await expect(page.getByRole("region", { name: "Comments" }).getByRole("article")).toContainText(["Picking this up."]);
+  await expect(page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by bob@example.com" })).toContainText(
+    "Picking this up.",
+  );
 });
 
 /** Opens a connection to Cronk without sending anything on it yet. */

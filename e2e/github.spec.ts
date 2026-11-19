@@ -33,10 +33,11 @@ test("set up with a GitHub App, add someone by GitHub login, and they sign in wi
   await expect(beaPage.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
   await beaPage.getByRole("link", { name: "Sign in with GitHub" }).click();
   await expect(beaPage.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
-  await expect(beaPage.getByRole("link", { name: "bea@example.com" })).toBeVisible();
+  await expect(beaPage.getByRole("button", { name: "bea@example.com" })).toBeVisible();
 
   // Someone nobody added is refused.
-  await beaPage.getByRole("button", { name: "Sign out" }).click();
+  await beaPage.getByRole("button", { name: "bea@example.com" }).click();
+  await beaPage.getByRole("menuitem", { name: "Sign out" }).click();
   cronk.github.signedInAs = cronk.github.account("mallory");
   await beaPage.getByRole("link", { name: "Sign in with GitHub" }).click();
   await expect(beaPage.getByRole("status")).toContainText("No User has that GitHub account");

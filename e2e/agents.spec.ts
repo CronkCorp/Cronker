@@ -15,6 +15,7 @@ test("a User creates an Agent, issues a token shown once, and revokes it", async
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await page.getByRole("link", { name: "Agents" }).click();
+  await page.getByRole("button", { name: "New Agent" }).click();
   await page.getByLabel("Agent name").fill("claude-max");
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page.getByRole("link", { name: "claude-max" }).click();

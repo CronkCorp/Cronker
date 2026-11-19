@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, pick, test } from "./fixtures.js";
 
 test("set up a subscription Runner, point an Agent at it, and follow a Run to its claude.ai session", async ({
   page,
@@ -46,10 +46,10 @@ test("set up a subscription Runner, point an Agent at it, and follow a Run to it
   await expect(page.getByLabel("Runner")).toHaveValue(/.+/);
 
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
-  await page.getByLabel("Delegate to an Agent").click();
-  await page.getByLabel("Status").selectOption("Triage");
+  await pick(page, "Delegate", "claude-max");
+  await pick(page, "Status", "Triage");
   const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline).toContainText("claude-max ran the Triage Step on haiku: running");
+  await expect(timeline.getByRole("listitem").filter({ hasText: "Triage · claude-max · haiku" })).toContainText("Run running");
   await expect(timeline.getByRole("link", { name: "Session" })).toHaveAttribute(
     "href",
     "https://claude.ai/code/session_01STANDIN",

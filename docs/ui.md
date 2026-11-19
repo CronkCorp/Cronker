@@ -4,7 +4,7 @@ How Cronk's web client looks and behaves. Read this before changing anything in 
 
 This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are the old Cronk's prototypes: they show the look to aim for, but also concepts this rewrite dropped (Claims, Agent Sessions, Protected items, Suggestions, Triage). Where a screenshot and this text differ, the text wins.
 
-The web client doesn't follow this file yet. The styling pass at the end of milestone 2 (`docs/roadmap.md`) brings it in line: first the foundation (tokens, faces, components, the frame), then each screen. Until then, new screens use the tokens and components once they exist, and leave old screens to that pass.
+The web client follows this file since the styling pass at the end of milestone 2 (`docs/roadmap.md`). The tokens live in `web/src/styles/tokens.css`, the shared components in `web/src/ui/`, the frame in `web/src/frame.tsx`, and each screen's layout in `web/src/styles/screens.css`. New screens build on them.
 
 ## Principles
 
@@ -30,7 +30,8 @@ The web client doesn't follow this file yet. The styling pass at the end of mile
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
 - **Page head:** breadcrumbs (13px, muted), then a row holding the `h1`, the view switcher and the actions. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
-- **Routes stay as they are.** The styling pass changes how screens look, not their addresses.
+- **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, which used to sit on Members), so the sidebar's Settings has a page of its own.
+- **A Ticket's or Document's Project:** a page tells the frame which item it belongs to and which Project it is in (`usePlace`), and the sidebar's Documents, Terms and Decisions then lead to that Project's.
 
 ## Design tokens
 
@@ -75,12 +76,12 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 
 ## Component conventions
 
-The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog, tabs), each wrapped once (`Popover`, `Menu`, `Dialog` and `ConfirmDialog`, `Tabs`) and styled by our classes. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
+The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog), each wrapped once (`Popover`, `Menu` with `MenuItem` and `MenuLink`, `Dialog` and `ConfirmDialog`) and styled by our classes. Every view switch so far is an address (List / Board, the scope switch), so no screen needs tabs yet; Radix's tabs join the set, wrapped once as `Tabs`, when one does. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
 
-- **Actor** (`<Actor>`): avatar plus name. A User is round. An Agent is square and violet, followed by "for <Owner>" where the Owner isn't obvious. Cronk is muted text with its "C" avatar.
+- **Actor** (`<Actor>`): avatar plus name. An avatar's letters are drawn by CSS, so they stay out of the text around them. A User is round. An Agent is square and violet, followed by "for <Owner>" where the Owner isn't obvious. Cronk is muted text with its "C" avatar.
 - **Status** (`<StatusPill>`): dot and name. **Priority** (`<PriorityTag>`): a small uppercase tag. Urgent is filled `--danger`, High is `--danger` on `--danger-soft`, Medium is `--warn` on `--warn-soft`, Low is muted, and None shows nothing.
 - **Label** (`<Chip>`): a neutral chip on `--surface-2`. A state marker takes a tone: `ok` ("Verified", "Answered") is filled `--ok-soft`; `warn` ("Waiting for an answer") and `danger` ("Failed") are outlined pills in that colour; `info` ("Unverified", "Overrides the Workspace Term") is the same outlined pill; `agent` marks what Agents did.
-- **Run state** (`<RunState>`): 11px uppercase pill. Running is `--agent` on `--agent-soft` with a pulsing dot, Finished outlined `--ok`, Failed and Lost outlined `--danger`, Stopped outlined `--muted`, Refused (*couldn't start*) outlined `--warn`, and Waiting (Runner full or rate-limited) dashed `--muted` with the reason in its tooltip.
+- **Run state** (`<RunState>`): 11px uppercase pill. Running is `--agent` on `--agent-soft` with a pulsing dot, Finished outlined `--ok`, Failed and Lost outlined `--danger`, Stopped outlined `--muted`, Refused (*couldn't start*) outlined `--warn`, and Waiting (Runner full, rate-limited, or blocked by another Ticket) dashed `--muted` with the reason in its tooltip. Each pill also reads out "Run" and its reason, so it makes sense on its own.
 - **Banner** (`<Banner tone>`): a full-width box above an editor or detail. `info` (`--info-soft` with an `--info` border) says what to settle, such as a refused save. `warn` (`--warn-soft` with a `--warn` border) says what to heed, such as a Version saved meanwhile.
 - **Kind label** (`<KindLabel>`): 11px uppercase, coloured by kind. Comment `--accent`; Question and Needs you `--warn`; Failed, Lost and Error `--danger`; Report, Run and Decision `--agent`; To review and Unverified `--info`; Discovered `--warn`; Sent back (by Cronk) `--warn`.
 - **Buttons** (`<Button variant>`, or `buttonClass` for a link or file picker that looks like one):

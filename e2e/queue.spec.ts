@@ -41,12 +41,12 @@ test("board cards show Tickets waiting for a Runner slot and blocked, live", asy
     await call(`/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: status("Triage") }, "PATCH");
   }
   await expect(card("Running")).toContainText("Run running");
-  await expect(card("Waiting")).toContainText("Waiting for a Runner slot");
-  await expect(card("Blocked")).toContainText("Blocked");
+  await expect(card("Waiting")).toContainText("Run waiting: Runner full");
+  await expect(card("Blocked")).toContainText("Run waiting: Blocked by another Ticket");
 
   // The blocker is done: the blocked Ticket waits for a slot behind the other.
   await call(`/api/tickets/${blocker.id}`, { statusId: status("Done") }, "PATCH");
-  await expect(card("Blocked")).toContainText("Waiting for a Runner slot");
+  await expect(card("Blocked")).toContainText("Run waiting: Runner full");
 
   // The running Run finishes: its slot goes to the Ticket that waited longest.
   const [run] = await (await cronk.request("GET", `/api/tickets/${running.id}/runs`, { cookie })).json();
@@ -55,6 +55,6 @@ test("board cards show Tickets waiting for a Runner slot and blocked, live", asy
     body: { outcome: "ready" },
   });
   await expect(card("Waiting")).toContainText("Run running");
-  await expect(card("Waiting")).not.toContainText("Waiting for a Runner slot");
-  await expect(card("Blocked")).toContainText("Waiting for a Runner slot");
+  await expect(card("Waiting")).not.toContainText("Run waiting");
+  await expect(card("Blocked")).toContainText("Run waiting: Runner full");
 });

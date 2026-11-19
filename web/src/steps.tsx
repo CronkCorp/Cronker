@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { Actions, Button, Check, Field, FormError, Panel } from "./ui/controls.js";
+import { StatusPill } from "./ui/labels.js";
 
 /**
  * A new Step's starting point: sends Tickets on to the next Status, or back to the first other one for a User,
@@ -25,19 +27,17 @@ function newStep(project: Project, status: Status): Step {
 /** Each Status's Step, to attach, edit or remove. Cronk checks the Outcomes; its refusals show here. */
 export function StepsSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
   return (
-    <section aria-labelledby="steps-heading" className="settings">
-      <h2 id="steps-heading">Steps</h2>
-      <p className="muted">
-        A delegated Ticket entering a Status with a Step gets a Run, which ends by choosing one of the Step's Outcomes.
-        One its Label rule doesn't let through gets no Run and moves on by the default Outcome. Tickets in a Status
-        without a Step wait for a User.
-      </p>
+    <Panel
+      title="Steps"
+      id="steps"
+      description="A delegated Ticket entering a Status with a Step gets a Run, which ends by choosing one of the Step's Outcomes. One its Label rule doesn't let through gets no Run and moves on by the default Outcome. Tickets in a Status without a Step wait for a User."
+    >
       <ul className="steps">
         {project.statuses.map((status) => (
           <StepItem key={status.id} project={project} status={status} onChange={onChange} />
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }
 
@@ -82,13 +82,13 @@ function StepItem({
     <li>
       <details open={draft !== null && status.step === null}>
         <summary>
-          <strong>{status.name}</strong> <span className="muted">{summary}</span>
+          <StatusPill kind={status.kind} name={status.name} /> <span className="muted small">{summary}</span>
         </summary>
-        {error && <p role="alert">{error}</p>}
+        <FormError error={error} />
         {draft === null ? (
-          <button type="button" onClick={() => setDraft(newStep(project, status))}>
-            Add a Step to {status.name}
-          </button>
+          <div>
+            <Button onClick={() => setDraft(newStep(project, status))}>Add a Step to {status.name}</Button>
+          </div>
         ) : (
           <StepForm
             project={project}
@@ -150,29 +150,28 @@ function StepForm({
         void onSave();
       }}
     >
-      <label>
-        Brief for {of}
+      <Field label={`Brief for ${of}`}>
         <textarea
+          className="markdown-source"
           rows={8}
           required
           maxLength={50_000}
           value={draft.brief}
           onChange={(e) => onDraft({ ...draft, brief: e.target.value })}
         />
-      </label>
-      <div className="inline">
-        <label>
-          Model for {of}
+      </Field>
+      <div className="form-row">
+        <Field label={`Model for ${of}`}>
           <input
+            className="mono"
             required
             maxLength={50}
             pattern="\S+"
             value={draft.model}
             onChange={(e) => onDraft({ ...draft, model: e.target.value })}
           />
-        </label>
-        <label>
-          Round limit for {of}
+        </Field>
+        <Field label={`Round limit for ${of}`}>
           <input
             type="number"
             min={0}
@@ -181,11 +180,10 @@ function StepForm({
             value={draft.roundLimit}
             onChange={(e) => onDraft({ ...draft, roundLimit: Number(e.target.value) })}
           />
-        </label>
+        </Field>
       </div>
-      <div className="inline">
-        <label>
-          Label rule for {of}
+      <div className="form-row">
+        <Field label={`Label rule for ${of}`}>
           <select
             value={draft.labelRule?.kind ?? ""}
             onChange={(e) => {
@@ -197,10 +195,9 @@ function StepForm({
             <option value="requires">Requires a Label</option>
             <option value="skippedBy">Skipped by a Label</option>
           </select>
-        </label>
+        </Field>
         {draft.labelRule && (
-          <label>
-            Label for the rule of {of}
+          <Field label={`Label for the rule of ${of}`}>
             <input
               required
               maxLength={50}
@@ -208,16 +205,16 @@ function StepForm({
               value={draft.labelRule.label}
               onChange={(e) => onDraft({ ...draft, labelRule: { ...draft.labelRule!, label: e.target.value } })}
             />
-          </label>
+          </Field>
         )}
       </div>
-      <fieldset>
-        <legend>Outcomes of {of}</legend>
+      <fieldset className="outcomes-set">
+        <legend className="field-label">Outcomes of {of}</legend>
         <ol className="outcomes">
           {draft.outcomes.map((outcome, index) => {
             const label = outcome.name || `Outcome ${index + 1}`;
             return (
-              <li key={index} className="inline">
+              <li key={index} className="outcome">
                 <input
                   aria-label={`Name of Outcome ${index + 1} of ${of}`}
                   required
@@ -237,45 +234,36 @@ function StepForm({
                     </option>
                   ))}
                 </select>
-                <label className="check">
-                  <input
-                    type="radio"
-                    name={`default-${status.id}`}
-                    checked={outcome.default}
-                    onChange={() => setOutcome(index, { default: true })}
-                  />
-                  Default
-                </label>
-                <label className="check">
-                  <input
-                    type="radio"
-                    name={`needs-you-${status.id}`}
-                    checked={outcome.needsYou}
-                    onChange={() => setOutcome(index, { needsYou: true })}
-                  />
-                  Needs you
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={outcome.countsAsRound}
-                    onChange={(e) => setOutcome(index, { countsAsRound: e.target.checked })}
-                  />
-                  Counts as a round
-                </label>
-                <button
-                  type="button"
+                <Check
+                  type="radio"
+                  label="Default"
+                  name={`default-${status.id}`}
+                  checked={outcome.default}
+                  onChange={() => setOutcome(index, { default: true })}
+                />
+                <Check
+                  type="radio"
+                  label="Needs you"
+                  name={`needs-you-${status.id}`}
+                  checked={outcome.needsYou}
+                  onChange={() => setOutcome(index, { needsYou: true })}
+                />
+                <Check label="Counts as a round" checked={outcome.countsAsRound} onChange={(e) => setOutcome(index, { countsAsRound: e.target.checked })} />
+                <Button
+                  variant="ghost"
+                  size="small"
                   aria-label={`Remove Outcome ${label} of ${of}`}
                   onClick={() => onDraft({ ...draft, outcomes: draft.outcomes.filter((_, i) => i !== index) })}
                 >
                   Remove
-                </button>
+                </Button>
               </li>
             );
           })}
         </ol>
-        <button
-          type="button"
+        <div>
+        <Button
+          size="small"
           onClick={() =>
             onDraft({
               ...draft,
@@ -287,22 +275,23 @@ function StepForm({
           }
         >
           Add an Outcome to {of}
-        </button>
+        </Button>
+        </div>
       </fieldset>
-      <div className="inline">
-        <button type="submit" disabled={busy}>
+      <Actions>
+        <Button type="submit" variant="primary" disabled={busy}>
           Save the Step on {of}
-        </button>
+        </Button>
         {status.step ? (
-          <button type="button" disabled={busy} onClick={() => void onRemove()}>
+          <Button variant="ghost" disabled={busy} onClick={() => void onRemove()}>
             Remove the Step from {of}
-          </button>
+          </Button>
         ) : (
-          <button type="button" disabled={busy} onClick={onCancel}>
+          <Button variant="ghost" disabled={busy} onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         )}
-      </div>
+      </Actions>
     </form>
   );
 }
@@ -319,22 +308,22 @@ export function BriefPreview({ project }: { project: Project }) {
   });
 
   return (
-    <section aria-labelledby="brief-heading" className="settings">
-      <h2 id="brief-heading">Brief preview</h2>
-      <p className="muted">
-        What a Run on a Ticket would receive in the Ticket's Status: Cronk's preamble, the Step's Brief, then the
-        Ticket's key.
-      </p>
-      <form className="inline" onSubmit={onSubmit}>
-        <label>
-          Ticket key
-          <input name="key" required placeholder={`${project.key}-1`} />
-        </label>
-        <button type="submit" disabled={busy}>
-          Preview Brief
-        </button>
+    <Panel
+      title="Brief preview"
+      id="brief"
+      description="What a Run on a Ticket would receive in the Ticket's Status: Cronk's preamble, the Step's Brief, then the Ticket's key."
+    >
+      <form onSubmit={onSubmit}>
+        <Field label="Ticket key">
+          <input name="key" required placeholder={`${project.key}-1`} className="mono" />
+        </Field>
+        <Actions>
+          <Button type="submit" disabled={busy}>
+            Preview Brief
+          </Button>
+        </Actions>
       </form>
-      {error && <p role="alert">{error}</p>}
+      <FormError error={error} />
       {brief && (
         <div className="brief" aria-label={`Brief for ${brief.ticketKey}`}>
           <h3>Cronk's preamble</h3>
@@ -345,6 +334,6 @@ export function BriefPreview({ project }: { project: Project }) {
           <pre>{brief.ticketKey}</pre>
         </div>
       )}
-    </section>
+    </Panel>
   );
 }

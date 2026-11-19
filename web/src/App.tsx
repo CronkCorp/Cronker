@@ -14,16 +14,20 @@ import {
 import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
 import { ConnectError, ConnectScreen } from "./connect.js";
+import { Centered, Frame, usePlace } from "./frame.js";
 import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { DecisionScreen, WorkspaceDecisions } from "./decisions.js";
 import { DocumentScreen, WorkspaceDocuments } from "./documents.js";
 import { TermScreen, WorkspaceGlossary } from "./terms.js";
-import { InboxLink, InboxScreen } from "./inbox.js";
+import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
-import { Link, navigate, replace, usePath } from "./router.js";
+import { navigate, replace, usePath } from "./router.js";
 import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
+import { Avatar } from "./ui/actor.js";
+import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
+import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 type Screen =
   | { kind: "loading" }
@@ -69,9 +73,11 @@ export function App() {
   if (failure) {
     return (
       <Centered title="Cronk can't be reached">
-        <p role="alert">{failure}</p>
-        <button
-          type="button"
+        <p role="alert" className="form-error">
+          {failure}
+        </p>
+        <Button
+          variant="primary"
           onClick={() => {
             setFailure(null);
             setScreen({ kind: "loading" });
@@ -79,7 +85,7 @@ export function App() {
           }}
         >
           Try again
-        </button>
+        </Button>
       </Centered>
     );
   }
@@ -125,15 +131,6 @@ export function App() {
   }
 }
 
-function Centered({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <main className="centered">
-      <h1>{title}</h1>
-      {children}
-    </main>
-  );
-}
-
 function SetupScreen({ onDone }: { onDone: () => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const email = field(form, "email");
@@ -150,28 +147,24 @@ function SetupScreen({ onDone }: { onDone: () => void }) {
   });
   return (
     <Centered title="Set up Cronk">
-      <p>Enter the setup code from Cronk's log, then create the first User and their Workspace.</p>
+      <p className="muted">Enter the setup code from Cronk's log, then create the first User and their Workspace.</p>
       <form onSubmit={onSubmit}>
-        <label>
-          Setup code
-          <input name="setupCode" required autoComplete="off" />
-        </label>
-        <label>
-          Email
+        <Field label="Setup code">
+          <input name="setupCode" required autoComplete="off" className="mono" />
+        </Field>
+        <Field label="Email">
           <input name="email" type="email" required autoComplete="username" />
-        </label>
-        <label>
-          Password
+        </Field>
+        <Field label="Password">
           <input name="password" type="password" required minLength={8} autoComplete="new-password" />
-        </label>
-        <label>
-          Workspace name
+        </Field>
+        <Field label="Workspace name">
           <input name="workspaceName" required />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        </Field>
+        <FormError error={error} />
+        <Button type="submit" variant="primary" className="button-wide" disabled={busy}>
           Set up
-        </button>
+        </Button>
       </form>
     </Centered>
   );
@@ -184,24 +177,24 @@ function SignInScreen({ notice, returnTo, onSignedIn }: { notice?: string; retur
   });
   return (
     <Centered title="Sign in to Cronk">
-      {notice && <p role="status">{notice}</p>}
+      {notice && (
+        <p role="status" className="notice">
+          {notice}
+        </p>
+      )}
       <form onSubmit={onSubmit}>
-        <label>
-          Email
+        <Field label="Email">
           <input name="email" type="email" required autoComplete="username" />
-        </label>
-        <label>
-          Password
+        </Field>
+        <Field label="Password">
           <input name="password" type="password" required autoComplete="current-password" />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        </Field>
+        <FormError error={error} />
+        <Button type="submit" variant="primary" className="button-wide" disabled={busy}>
           Sign in
-        </button>
+        </Button>
       </form>
-      <p className="or">
-        <GitHubSignIn returnTo={returnTo} />
-      </p>
+      <GitHubSignIn returnTo={returnTo} />
     </Centered>
   );
 }
@@ -227,7 +220,7 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
   if (details === "invalid") {
     return (
       <Centered title="This link doesn't work">
-        <p>It has been used, has expired or never existed. Ask an Admin of your Workspace for a new one.</p>
+        <p className="muted">It has been used, has expired or never existed. Ask an Admin of your Workspace for a new one.</p>
       </Centered>
     );
   }
@@ -251,20 +244,18 @@ function LinkScreen({ onDone }: { onDone: (notice: string) => void }) {
       <form onSubmit={onSubmit}>
         <input type="hidden" name="username" value={details.email ?? ""} autoComplete="username" />
         {details.setsPassword ? (
-          <label>
-            Choose a password
+          <Field label="Choose a password">
             <input name="password" type="password" required minLength={8} autoComplete="new-password" />
-          </label>
+          </Field>
         ) : (
-          <label>
-            Your password
+          <Field label="Your password">
             <input name="password" type="password" required autoComplete="current-password" />
-          </label>
+          </Field>
         )}
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
+        <FormError error={error} />
+        <Button type="submit" variant="primary" className="button-wide" disabled={busy}>
           {joining ? "Join" : "Set password"}
-        </button>
+        </Button>
       </form>
     </Centered>
   );
@@ -283,11 +274,7 @@ function SignedIn({
   reload: () => void;
   onSignedOut: () => void;
 }) {
-  const { error, busy, onSubmit } = useSubmit(async () => {
-    await api.signOut();
-    onSignedOut();
-  });
-  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|agents|inbox|documents|glossary|decisions)(?:\/([^/]+))?)?\/?$/.exec(path);
+  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|settings|agents|inbox|documents|glossary|decisions)(?:\/([^/]+))?)?\/?$/.exec(path);
   const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary|decisions))?\/?$/.exec(path);
   const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
@@ -308,6 +295,12 @@ function SignedIn({
   useEffect(() => {
     if (path === "/" && workspaces[0]) replace(`/workspaces/${workspaces[0].id}`);
   }, [path, workspaces]);
+
+  const onOtherWorkspace = (workspaceId: string) => {
+    if (!workspaces.some((w) => w.id === workspaceId)) return false;
+    setSelectedId(workspaceId);
+    return true;
+  };
 
   let page: ReactNode;
   if (path === "/workspaces/new") {
@@ -332,11 +325,7 @@ function SignedIn({
         workspace={current}
         projectId={projectPath[1]!}
         view={(projectPath[2] as "list" | "settings" | "documents" | "glossary" | "decisions" | undefined) ?? "board"}
-        onOtherWorkspace={(workspaceId) => {
-          if (!workspaces.some((w) => w.id === workspaceId)) return false;
-          setSelectedId(workspaceId);
-          return true;
-        }}
+        onOtherWorkspace={onOtherWorkspace}
       />
     );
   } else if (current && ticketPath) {
@@ -346,11 +335,7 @@ function SignedIn({
         workspace={current}
         user={user}
         ticketId={ticketPath[1]!}
-        onOtherWorkspace={(workspaceId) => {
-          if (!workspaces.some((w) => w.id === workspaceId)) return false;
-          setSelectedId(workspaceId);
-          return true;
-        }}
+        onOtherWorkspace={onOtherWorkspace}
       />
     );
   } else if (current && documentPath) {
@@ -359,25 +344,12 @@ function SignedIn({
         key={`${current.id} ${documentPath[1]}`}
         workspace={current}
         documentId={documentPath[1]!}
-        onOtherWorkspace={(workspaceId) => {
-          if (!workspaces.some((w) => w.id === workspaceId)) return false;
-          setSelectedId(workspaceId);
-          return true;
-        }}
+        onOtherWorkspace={onOtherWorkspace}
       />
     );
   } else if (current && termPath) {
     page = (
-      <TermScreen
-        key={`${current.id} ${termPath[1]}`}
-        workspace={current}
-        termId={termPath[1]!}
-        onOtherWorkspace={(workspaceId) => {
-          if (!workspaces.some((w) => w.id === workspaceId)) return false;
-          setSelectedId(workspaceId);
-          return true;
-        }}
-      />
+      <TermScreen key={`${current.id} ${termPath[1]}`} workspace={current} termId={termPath[1]!} onOtherWorkspace={onOtherWorkspace} />
     );
   } else if (current && decisionPath) {
     page = (
@@ -385,11 +357,7 @@ function SignedIn({
         key={`${current.id} ${decisionPath[1]}`}
         workspace={current}
         decisionId={decisionPath[1]!}
-        onOtherWorkspace={(workspaceId) => {
-          if (!workspaces.some((w) => w.id === workspaceId)) return false;
-          setSelectedId(workspaceId);
-          return true;
-        }}
+        onOtherWorkspace={onOtherWorkspace}
       />
     );
   } else if (current && workspacePath?.[2] === "glossary" && !workspacePath[3]) {
@@ -399,11 +367,13 @@ function SignedIn({
   } else if (current && workspacePath?.[2] === "documents" && !workspacePath[3]) {
     page = <WorkspaceDocuments key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "inbox" && !workspacePath[3]) {
-    page = <InboxScreen key={current.id} workspace={current} />;
+    page = <InboxScreen key={current.id} workspace={current} user={user} />;
   } else if (current && workspacePath?.[2] === "agents" && workspacePath[3]) {
     page = <AgentScreen key={`${current.id} ${workspacePath[3]}`} workspace={current} agentId={workspacePath[3]} />;
   } else if (current && workspacePath?.[2] === "agents") {
     page = <Agents key={current.id} user={user} workspace={current} />;
+  } else if (current && workspacePath?.[2] === "settings" && !workspacePath[3]) {
+    page = <WorkspaceSettingsPage key={current.id} workspace={current} onChanged={reload} />;
   } else if (current && workspacePath?.[2] === "members" && !workspacePath[3]) {
     page = (
       <Members
@@ -420,93 +390,54 @@ function SignedIn({
   } else if (current && (routedId || path === "/")) {
     page = <WorkspaceHome key={current.id} workspace={current} />;
   } else if (workspaces.length === 0 && path === "/") {
-    page = <p>You don't belong to any Workspace yet.</p>;
+    page = <EmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</EmptyState>;
   } else {
-    page = <p>Nothing is here.</p>;
+    page = <EmptyState title="Nothing is here.">The page may have moved, or you may not see it.</EmptyState>;
   }
 
   return (
-    <div className="shell">
-      <header>
-        <strong>{current ? <Link to={`/workspaces/${current.id}`}>{current.name}</Link> : "Cronk"}</strong>
-        {workspaces.length > 1 && (
-          <select
-            aria-label="Workspace"
-            value={current?.id ?? ""}
-            onChange={(event) => navigate(`/workspaces/${event.target.value}`)}
-          >
-            {!current && <option value="">Choose a Workspace</option>}
-            {workspaces.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <nav>
-          {current && (
-            <InboxLink key={current.id} workspaceId={current.id} current={workspacePath?.[2] === "inbox"} />
-          )}
-          {current && (
-            <Link to={`/workspaces/${current.id}/documents`} current={workspacePath?.[2] === "documents"}>
-              Documents
-            </Link>
-          )}
-          {current && (
-            <Link to={`/workspaces/${current.id}/glossary`} current={workspacePath?.[2] === "glossary"}>
-              Glossary
-            </Link>
-          )}
-          {current && (
-            <Link to={`/workspaces/${current.id}/decisions`} current={workspacePath?.[2] === "decisions"}>
-              Decisions
-            </Link>
-          )}
-          {current && <Link to={`/workspaces/${current.id}/members`}>Members</Link>}
-          {current && <Link to={`/workspaces/${current.id}/agents`}>Agents</Link>}
-          <Link to="/runners">Runners</Link>
-          <Link to="/workspaces/new">New Workspace</Link>
-          <Link to="/github">GitHub</Link>
-        </nav>
-        <span className="spacer" />
-        <Link to="/password">{nameOf(user)}</Link>
-        <form onSubmit={onSubmit}>
-          <button type="submit" disabled={busy}>
-            Sign out
-          </button>
-        </form>
-      </header>
-      <main>
-        {error && <p role="alert">{error}</p>}
-        {page}
-      </main>
-    </div>
+    <Frame
+      user={user}
+      workspaces={workspaces}
+      current={current}
+      onSignOut={async () => {
+        await api.signOut();
+        onSignedOut();
+      }}
+    >
+      {page}
+    </Frame>
   );
 }
 
 function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) => void }) {
+  usePlace(null);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     onCreated(await api.createWorkspace(field(form, "name")));
   });
   return (
-    <section className="narrow">
-      <h1>New Workspace</h1>
-      <p>You'll be its Admin, and can add Users to it.</p>
-      <form onSubmit={onSubmit}>
-        <label>
-          Workspace name
-          <input name="name" required />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>
-          Create Workspace
-        </button>
-      </form>
-    </section>
+    <div className="page page-settings">
+      <PageHead title="New Workspace" />
+      <Panel>
+        <p className="muted">You'll be its Admin, and can add Users to it.</p>
+        <form onSubmit={onSubmit}>
+          <Field label="Workspace name">
+            <input name="name" required />
+          </Field>
+          <FormError error={error} />
+          <Actions>
+            <Button type="submit" variant="primary" disabled={busy}>
+              Create Workspace
+            </Button>
+          </Actions>
+        </form>
+      </Panel>
+    </div>
   );
 }
 
 function ChangePassword() {
+  usePlace(null);
   const [done, setDone] = useState(false);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     setDone(false);
@@ -515,35 +446,94 @@ function ChangePassword() {
     setDone(true);
   });
   return (
-    <section className="narrow">
-      <h1>Change your password</h1>
-      <form onSubmit={onSubmit}>
-        <label>
-          Current password
-          <input name="currentPassword" type="password" required autoComplete="current-password" />
-        </label>
-        <label>
-          New password
-          <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        {done && <p role="status">Password changed. Your other sign-ins have ended.</p>}
-        <button type="submit" disabled={busy}>
-          Change password
-        </button>
-      </form>
-    </section>
+    <div className="page page-settings">
+      <PageHead crumbs={[{ label: "Account" }]} title="Password" />
+      <Panel>
+        <form onSubmit={onSubmit}>
+          <Field label="Current password">
+            <input name="currentPassword" type="password" required autoComplete="current-password" />
+          </Field>
+          <Field label="New password" hint="At least 8 characters. Changing it ends your other sign-ins.">
+            <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
+          </Field>
+          <FormError error={error} />
+          <Actions>
+            <Button type="submit" variant="primary" disabled={busy}>
+              Change password
+            </Button>
+            <Saved shown={done}>Password changed. Your other sign-ins have ended.</Saved>
+          </Actions>
+        </form>
+      </Panel>
+    </div>
   );
 }
 
 function IssuedLink({ label, link }: { label: string; link: LinkInfo }) {
   return (
-    <div className="issued-link">
-      <label>
-        {label}
-        <input readOnly value={link.url} onFocus={(event) => event.currentTarget.select()} />
-      </label>
-      <small>Pass it on yourself. It works once, until {new Date(link.expiresAt).toLocaleString()}.</small>
+    <div className="issued">
+      <Field label={label} hint={`Pass it on yourself. It works once, until ${new Date(link.expiresAt).toLocaleString()}.`}>
+        <input readOnly value={link.url} className="mono" onFocus={(event) => event.currentTarget.select()} />
+      </Field>
+    </div>
+  );
+}
+
+/** The Workspace's name and its settings, for Admins. */
+function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceSummary; onChanged: () => void }) {
+  usePlace("settings");
+  const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [renamed, setRenamed] = useState(false);
+  const [savedThreshold, setSavedThreshold] = useState(false);
+  useEffect(() => {
+    api.workspaceSettings(workspace.id).then(setSettings, (e: Error) => setFailure(e.message));
+  }, [workspace.id]);
+  const rename = useSubmit(async (form) => {
+    setRenamed(false);
+    await api.renameWorkspace(workspace.id, field(form, "name"));
+    setRenamed(true);
+    onChanged();
+  });
+  const changeSettings = useSubmit(async (form) => {
+    setSavedThreshold(false);
+    setSettings(await api.changeWorkspaceSettings(workspace.id, { lostRunMinutes: Number(field(form, "lostRunMinutes")) }));
+    setSavedThreshold(true);
+  });
+  return (
+    <div className="page page-settings">
+      <PageHead crumbs={[{ label: workspace.name }]} title="Settings" />
+      <FormError error={failure} />
+      <Panel title="Name" id="workspace-name">
+        <form onSubmit={rename.onSubmit}>
+          <Field label="Workspace name">
+            <input name="name" required defaultValue={workspace.name} />
+          </Field>
+          <FormError error={rename.error} />
+          <Actions>
+            <Button type="submit" variant="primary" disabled={rename.busy}>
+              Rename
+            </Button>
+            <Saved shown={renamed} />
+          </Actions>
+        </form>
+      </Panel>
+      {settings && (
+        <Panel title="Lost Runs" id="lost-runs" description="A Run nothing has named for this long is lost, and waits in its Assignee's Inbox for Retry.">
+          <form onSubmit={changeSettings.onSubmit}>
+            <Field label="Lost-Run threshold (minutes)">
+              <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
+            </Field>
+            <FormError error={changeSettings.error} />
+            <Actions>
+              <Button type="submit" variant="primary" disabled={changeSettings.busy}>
+                Save threshold
+              </Button>
+              <Saved shown={savedThreshold} />
+            </Actions>
+          </form>
+        </Panel>
+      )}
     </div>
   );
 }
@@ -559,10 +549,12 @@ function Members({
   onChanged: () => void;
   onLeft: () => void;
 }) {
+  usePlace("members");
   const [members, setMembers] = useState<Member[] | null>(null);
   const [pending, setPending] = useState<PendingAdd[]>([]);
   const [notice, setNotice] = useState<ReactNode>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<Member | null>(null);
   const refresh = useCallback(() => {
     api.members(workspace.id).then(setMembers, (e: Error) => setError(e.message));
     if (workspace.isAdmin) api.pendingAdds(workspace.id).then(setPending, (e: Error) => setError(e.message));
@@ -580,17 +572,6 @@ function Members({
     }
   };
 
-  const rename = useSubmit(async (form) => {
-    await api.renameWorkspace(workspace.id, field(form, "name"));
-    onChanged();
-  });
-  const [settings, setSettings] = useState<WorkspaceSettings | null>(null);
-  useEffect(() => {
-    api.workspaceSettings(workspace.id).then(setSettings, (e: Error) => setError(e.message));
-  }, [workspace.id]);
-  const changeSettings = useSubmit(async (form) => {
-    setSettings(await api.changeWorkspaceSettings(workspace.id, { lostRunMinutes: Number(field(form, "lostRunMinutes")) }));
-  });
   const add = useSubmit(async (form, element) => {
     setNotice(null);
     const email = field(form, "email");
@@ -603,77 +584,67 @@ function Members({
     setNotice(null);
     const { user: added } = await api.addMemberByGitHub(workspace.id, field(form, "login").trim().replace(/^@/, ""));
     element.reset();
-    setNotice(<p role="status">{nameOf(added)} joins at their next sign-in with GitHub.</p>);
+    setNotice(
+      <p role="status" className="saved">
+        {nameOf(added)} joins at their next sign-in with GitHub.
+      </p>,
+    );
     refresh();
   });
 
   return (
-    <section>
-      <h1>{workspace.name}: members</h1>
+    <div className="page page-settings">
+      <PageHead crumbs={[{ label: workspace.name }]} title="Members" />
       {workspace.isAdmin && (
-        <div className="admin-forms">
-          <form onSubmit={rename.onSubmit}>
-            <label>
-              Workspace name
-              <input name="name" required defaultValue={workspace.name} />
-            </label>
-            {rename.error && <p role="alert">{rename.error}</p>}
-            <button type="submit" disabled={rename.busy}>
-              Rename
-            </button>
-          </form>
-          {settings && (
-            <form onSubmit={changeSettings.onSubmit}>
-              <label>
-                Lost-Run threshold (minutes)
-                <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
-              </label>
-              {changeSettings.error && <p role="alert">{changeSettings.error}</p>}
-              <button type="submit" disabled={changeSettings.busy}>
-                Save threshold
-              </button>
+        <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
+          <div className="form-columns">
+            <form onSubmit={add.onSubmit}>
+              <Field label="Email">
+                <input name="email" type="email" required autoComplete="off" />
+              </Field>
+              <FormError error={add.error} />
+              <Actions>
+                <Button type="submit" variant="primary" disabled={add.busy}>
+                  Add by email
+                </Button>
+              </Actions>
             </form>
-          )}
-          <form onSubmit={add.onSubmit}>
-            <label>
-              Email
-              <input name="email" type="email" required autoComplete="off" />
-            </label>
-            {add.error && <p role="alert">{add.error}</p>}
-            <button type="submit" disabled={add.busy}>
-              Add by email
-            </button>
-          </form>
-          <form onSubmit={addByGitHub.onSubmit}>
-            <label>
-              GitHub login
-              <input name="login" required autoComplete="off" />
-            </label>
-            {addByGitHub.error && <p role="alert">{addByGitHub.error}</p>}
-            <button type="submit" disabled={addByGitHub.busy}>
-              Add by GitHub login
-            </button>
-          </form>
-        </div>
+            <form onSubmit={addByGitHub.onSubmit}>
+              <Field label="GitHub login">
+                <input name="login" required autoComplete="off" />
+              </Field>
+              <FormError error={addByGitHub.error} />
+              <Actions>
+                <Button type="submit" variant="primary" disabled={addByGitHub.busy}>
+                  Add by GitHub login
+                </Button>
+              </Actions>
+            </form>
+          </div>
+          {notice}
+        </Panel>
       )}
-      {notice}
-      {error && <p role="alert">{error}</p>}
+      <FormError error={error} />
       {pending.length > 0 && (
-        <>
-          <h2 id="pending-adds">Added, not joined yet</h2>
-          <table aria-labelledby="pending-adds">
+        <Panel title="Added, not joined yet" id="pending-adds" className="panel-table">
+          <table aria-labelledby="pending-adds-heading">
             <tbody>
               {pending.map((add) => (
                 <tr key={`${add.user.id} ${add.addedVia}`}>
-                  <td>{nameOf(add.user)}</td>
-                  <td className="muted">
+                  <td>
+                    <span className="actor">
+                      <Avatar actor={{ kind: "user", name: nameOf(add.user) }} />
+                      {nameOf(add.user)}
+                    </span>
+                  </td>
+                  <td className="muted small">
                     {add.addedVia === "email"
                       ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
                       : "by GitHub login, joins at their next sign-in"}
                   </td>
-                  <td className="actions">
-                    <button
-                      type="button"
+                  <td className="cell-actions">
+                    <Button
+                      size="small"
                       onClick={() =>
                         act(async () => {
                           await api.cancelPendingAdd(workspace.id, add.user.id);
@@ -682,72 +653,87 @@ function Members({
                       }
                     >
                       Cancel add
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <h2>Members</h2>
-        </>
+        </Panel>
       )}
-      {members === null ? (
-        <p>Loading…</p>
-      ) : (
-        <table aria-label="Members">
-          <tbody>
-            {members.map((member) => (
-              <tr key={member.user.id}>
-                <td>
-                  {nameOf(member.user)}
-                  {member.user.githubLogin && member.user.email && <span className="muted"> @{member.user.githubLogin}</span>}
-                  {member.user.id === user.id && " (you)"}
-                </td>
-                <td>{member.isAdmin ? "Admin" : ""}</td>
-                {workspace.isAdmin && (
-                  <td className="actions">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        act(async () => {
-                          await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
-                          refresh();
-                          if (member.user.id === user.id) onChanged();
-                        })
-                      }
-                    >
-                      {member.isAdmin ? "Remove Admin" : "Make Admin"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        act(async () => {
-                          const link = await api.resetLink(workspace.id, member.user.id);
-                          setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
-                        })
-                      }
-                    >
-                      Reset link
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        act(async () => {
-                          await api.removeMember(workspace.id, member.user.id);
-                          if (member.user.id === user.id) onLeft();
-                          else refresh();
-                        })
-                      }
-                    >
-                      Remove from Workspace
-                    </button>
+      <Panel title="Members" id="members" className="panel-table">
+        {members === null ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <table aria-label="Members">
+            <tbody>
+              {members.map((member) => (
+                <tr key={member.user.id}>
+                  <td>
+                    <span className="actor">
+                      <Avatar actor={{ kind: "user", name: nameOf(member.user) }} />
+                      <span>
+                        {nameOf(member.user)}
+                        {member.user.githubLogin && member.user.email && <span className="muted"> @{member.user.githubLogin}</span>}
+                        {member.user.id === user.id && <span className="muted"> (you)</span>}
+                      </span>
+                    </span>
                   </td>
-                )}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <td className="muted small">{member.isAdmin ? "Admin" : "Member"}</td>
+                  {workspace.isAdmin && (
+                    <td className="cell-actions">
+                      <Button
+                        size="small"
+                        onClick={() =>
+                          act(async () => {
+                            await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
+                            refresh();
+                            if (member.user.id === user.id) onChanged();
+                          })
+                        }
+                      >
+                        {member.isAdmin ? "Remove Admin" : "Make Admin"}
+                      </Button>
+                      <Menu label={`More for ${nameOf(member.user)}`}>
+                        <MenuItem
+                          onSelect={() =>
+                            void act(async () => {
+                              const link = await api.resetLink(workspace.id, member.user.id);
+                              setNotice(<IssuedLink label={`Reset link for ${nameOf(member.user)}`} link={link} />);
+                            })
+                          }
+                        >
+                          Reset link
+                        </MenuItem>
+                        <MenuItem tone="danger" onSelect={() => setRemoving(member)}>
+                          Remove from Workspace
+                        </MenuItem>
+                      </Menu>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {!workspace.isAdmin && notice}
+      </Panel>
+      {removing && (
+        <ConfirmDialog
+          open
+          onOpenChange={(open) => !open && setRemoving(null)}
+          title={`Remove ${nameOf(removing.user)} from ${workspace.name}?`}
+          confirm="Remove"
+          onConfirm={async () => {
+            setError(null);
+            await api.removeMember(workspace.id, removing.user.id);
+            if (removing.user.id === user.id) onLeft();
+            else refresh();
+          }}
+        >
+          Their Tickets stay, and any assigned to them wait for an Admin to assign them to someone.
+        </ConfirmDialog>
       )}
-    </section>
+    </div>
   );
 }

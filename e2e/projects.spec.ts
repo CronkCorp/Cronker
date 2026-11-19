@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, openProjectSettings, test } from "./fixtures.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
 import type { Page } from "@playwright/test";
 
@@ -42,11 +42,11 @@ test("create a Project, see its empty board and list, and edit its Statuses in s
   const statusHeadings = page.getByRole("region", { name: "Board" }).getByRole("heading", { level: 2 });
   await expect(statusHeadings).toHaveText(defaultBoard);
 
-  await page.getByRole("link", { name: "List" }).click();
+  await page.getByRole("navigation", { name: "Project views" }).getByRole("link", { name: "List" }).click();
   await expect(page.getByRole("region", { name: "List" }).getByRole("heading", { level: 2 })).toHaveText(defaultBoard);
   await expect(page.getByText("No Tickets yet.")).toBeVisible();
 
-  await page.getByRole("link", { name: "Settings" }).click();
+  await openProjectSettings(page);
   await expect(page.getByRole("heading", { name: "Statuses" })).toBeVisible();
 
   await page.getByRole("button", { name: "Remove Canceled" }).click();
@@ -68,7 +68,7 @@ test("create a Project, see its empty board and list, and edit its Statuses in s
   await page.getByRole("button", { name: "Remove Investigate" }).click();
   await expect(page.getByLabel("Name of Investigate")).toHaveCount(0);
 
-  await page.getByRole("link", { name: "Board" }).click();
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
   await expect(statusHeadings).toHaveText([
     "Backlog",
     "Triage",
@@ -94,6 +94,8 @@ test("create a Project, see its empty board and list, and edit its Statuses in s
     "Canceled",
   ]);
 
-  await page.getByRole("link", { name: "Ada's Workspace" }).click();
-  await expect(page.getByRole("link", { name: "Cronker" })).toBeVisible();
+  await page.getByRole("button", { name: "Workspace: Ada's Workspace" }).click();
+  await page.getByRole("menuitem", { name: "Ada's Workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Cronker CRONK" })).toBeVisible();
 });
