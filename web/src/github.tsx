@@ -291,8 +291,8 @@ export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
                 </Panel>
               ),
             },
-            ...(app && isAdmin ? [{ id: "checklist", label: "What the App needs", children: <AppChecklist /> }] : []),
-            ...(app ? [{ id: "installations", label: "Installations", children: <Installations app={app} /> }] : []),
+            !!app && isAdmin && { id: "checklist", label: "What the App needs", children: <AppChecklist /> },
+            !!app && { id: "installations", label: "Installations", children: <Installations app={app} /> },
           ]}
         />
       )}

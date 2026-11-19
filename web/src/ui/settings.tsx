@@ -13,7 +13,9 @@ export interface SettingsSection {
  * Every settings page's layout: the list of its sections beside the sections themselves. A link in the
  * list brings its section into view, and the list marks the section in view. Below 760px the list wraps above them.
  */
-export function SettingsLayout({ sections }: { sections: SettingsSection[] }) {
+export function SettingsLayout({ sections: given }: { sections: (SettingsSection | false)[] }) {
+  // A section a page shows only sometimes, such as one for Admins, is passed as `cond && { … }`.
+  const sections = given.filter((section): section is SettingsSection => section !== false);
   const ids = sections.map((section) => section.id).join(" ");
   const [current, setCurrent] = useState<string | undefined>(() => {
     const hash = window.location.hash.slice(1);
@@ -46,7 +48,11 @@ export function SettingsLayout({ sections }: { sections: SettingsSection[] }) {
       if (shown) setCurrent(shown.id);
     };
     window.addEventListener("scroll", update, { passive: true });
-    return () => window.removeEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
   }, [ids]);
 
   // A section dropped from the list, such as one emptied, marks the first instead.

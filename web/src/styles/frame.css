@@ -265,7 +265,7 @@
 .page-settings {
   max-width: 760px;
 }
-/* A settings page with a section list takes its width beside the sections. */
+/* A settings page with a section list: its 180px list and 24px gap beside 760px of sections. */
 .page-settings:has(> .settings) {
   max-width: 964px;
 }
