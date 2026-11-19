@@ -93,7 +93,8 @@ The web client keeps its own small component set, styled with the tokens in plai
   - Danger is filled `--danger`, and only inside a confirming dialog.
   - A disabled button keeps its colours at 50% opacity with a `not-allowed` cursor.
   - Buttons size to their label and are never full width outside sign-in forms.
-- **Forms:** the label sits above the field, in 12px `--muted`. Inputs have a `--surface` background and a 1px border, and show the `--accent` focus ring. Markdown inputs use the mono face. Each error sits under its form in `--danger` with `role="alert"`, and a refusal's rule and advice show as Cronk gives them. A settings page stays open after saving and says "Saved." beside its buttons (`role="status"`).
+- **Forms:** the label sits above the field, in 12px `--muted`. Inputs have a `--surface` background and a 1px border, and show the `--accent` focus ring. Markdown inputs use the mono face. Each error sits under its form in `--danger` with `role="alert"`, and a refusal's rule and advice show as Cronk gives them. A settings page stays open after saving and says "Saved." beside its buttons (`role="status"`), or under a section's checkboxes where a toggle saves at once.
+- **Settings layout** (`<SettingsLayout>`): every settings page (Project settings, the Workspace's Settings, Members and GitHub) lists its sections in a 180px column beside them, named "Settings sections". Every section stays on the page: a link in the list brings its section into view, and the section in view is marked like a selected list item (`--accent-soft`, with an `--accent` left border). Below 760px the list wraps above the sections.
 - **Pickers** (`<FieldPicker>`): Ticket fields are edited in place. Clicking the value opens a popover list with type-to-filter; once something is typed, Enter picks the first match, and a picker that takes new values (Labels) offers the typed text. Bare `<select>` rows are not used for this.
 - **Times** (`<RelativeTime>`):
   - Relative under an hour ("12 min ago").
@@ -112,9 +113,9 @@ The web client keeps its own small component set, styled with the tokens in plai
 ### Project
 
 - **Page head:** the title, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Project settings), and New Ticket as the only primary action, last.
-- **Project settings:** one section each for Statuses and their Steps, Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories and Pull Request automation.
+- **Project settings:** in the settings layout, one section each for Statuses and their Steps (with the Brief preview), Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories and Pull Request automation. A Step the User opened stays open after saving.
 - **List rows:** Status dot, key, title, Labels, Priority tag, the running Run's state when there is one, and the Delegate's and Assignee's avatars, each named in its tooltip ("Delegate: claude-laptop").
-- **Board:** open columns share the main column's width. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A 1280px screen shows every Status without sideways scrolling. Cards show the key, Priority, title, Labels, the avatars, and a Run state pill while a Run is running, waiting or has gone wrong.
+- **Board:** open columns share the main column's width. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A 1280px screen shows every Status without sideways scrolling. A column's name wraps rather than being cut off, with its Step's model label on a line under it. Cards show the key with the Priority beside it, then the title, Labels, the avatars, and a Run state pill while a Run is running, waiting or has gone wrong.
 
 ### Inbox
 
@@ -203,7 +204,11 @@ The web client keeps its own small component set, styled with the tokens in plai
 ### Agents and Runners
 
 - **Agents:** one card per Agent with its avatar, name, the Tickets delegated to it and its running Runs, its tokens in one line with **Manage tokens**, and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
-- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face.
+- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and its triggers per model label in the mono face. The page streams the User's own Runners, so the count and the pause stay current while it is open.
+
+### Workspace settings, Members and GitHub
+
+- **In the settings layout:** the Workspace's Settings with its Name and Lost Runs; Members with Add a member (for Admins), Added, not joined yet (while there are any) and Members, which says "Saved." after Make Admin or Remove Admin; GitHub with The App, What the App needs (its upgrade checklist, for Admins) and Installations.
 
 ### Signed-out pages and the consent screen
 
@@ -212,7 +217,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ## Live updates
 
-Server-sent events keep open views current. Every screen treats them the same way:
+Server-sent events keep open views current: each Workspace has its stream, and a User's own Runners, which belong to no Workspace, have theirs. Every screen treats them the same way:
 
 - New entries appear in place (timeline entries at the end, Inbox items in their group), with a short `--accent` ring that fades over about 2s. The page never scrolls on its own unless the User is already at the end.
 - A changed field updates where it is shown, such as the side panel, a card on the board or the Run card. Nothing reloads the whole page or flashes empty while reloading.

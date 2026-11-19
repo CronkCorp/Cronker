@@ -1,4 +1,5 @@
 import { type Check, type PullRequest } from "./api.js";
+import { RelativeTime } from "./ui/controls.js";
 import { Key, PullRequestState } from "./ui/labels.js";
 
 const marks: { state: Check["state"]; mark: string }[] = [
@@ -29,7 +30,7 @@ export function CheckCounts({ checks }: { checks: Check[] }) {
 
 /**
  * The Pull Requests whose branch or title names the Ticket's key, one row each: number, title, state and check
- * counts. Hidden until there is one; GitHub's webhooks keep them current.
+ * counts, and what last sent the Ticket back. Hidden until there is one; GitHub's webhooks keep them current.
  */
 export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] }) {
   if (pullRequests.length === 0) return null;
@@ -47,10 +48,39 @@ export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] 
               <CheckCounts checks={pr.checks} />
               {pr.mergedBy && <span className="small muted">Merged by @{pr.mergedBy}</span>}
             </span>
+            {pr.sentBack && <SentBackBy sentBack={pr.sentBack} />}
           </li>
         ))}
       </ul>
     </section>
+  );
+}
+
+/** What last sent the Ticket back to its producing Step from a Pull Request: a failing check or requested changes. */
+function SentBackBy({ sentBack }: { sentBack: NonNullable<PullRequest["sentBack"]> }) {
+  const what =
+    sentBack.kind === "check" ? (
+      <>
+        <span className="check-failed" aria-hidden="true">
+          ✗
+        </span>{" "}
+        {sentBack.name} failed
+      </>
+    ) : (
+      <>{sentBack.reviewer ? `@${sentBack.reviewer}` : "A reviewer"} requested changes</>
+    );
+  return (
+    <span className="small muted">
+      Sent back:{" "}
+      {sentBack.url ? (
+        <a href={sentBack.url} target="_blank" rel="noreferrer">
+          {what}
+        </a>
+      ) : (
+        what
+      )}{" "}
+      <RelativeTime at={sentBack.at} />
+    </span>
   );
 }
 

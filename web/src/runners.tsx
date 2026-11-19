@@ -2,22 +2,27 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type ProjectSummary, type Runner, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
+import { useLatest, useRunnerEvents } from "./live.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
 /**
  * The User's own Runners: ways for Cronk to start their Agents' Runs with their own credentials.
  * A subscription Runner fires one claude.ai scheduled task per model label, optionally per Project.
+ * Each card's count of running Runs and its pause stay current from the User's Runners stream.
  */
 export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   usePlace("runners");
   const [runners, setRunners] = useState<Runner[] | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const latest = useLatest();
   const refresh = useCallback(() => {
-    api.runners().then(setRunners, (e: Error) => setError(e.message));
-  }, []);
+    latest(api.runners(), setRunners, (e) => setError(e.message));
+  }, [latest]);
   useEffect(refresh, [refresh]);
+  // A Run starting or ending on a Runner, or its queue pausing or resuming, changes its card; so may events missed while away.
+  useRunnerEvents(refresh);
   useEffect(() => {
     Promise.all(workspaces.map((w) => api.projects(w.id))).then(
       (lists) => setProjects(lists.flat()),
@@ -35,7 +40,7 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
 
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: "Yours" }]} title="Runners" />
+      <PageHead crumbs={[{ label: "Yours" }]} title="Runners" switcher={<RunnersLiveIndicator />} />
       <p className="muted">
         A Runner is how Cronk starts Runs of your Agents, spending your own credentials. A subscription Runner fires
         Claude Code on the web scheduled tasks: in claude.ai, create one task per model (for example triage on Haiku,
