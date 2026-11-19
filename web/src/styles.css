@@ -538,3 +538,40 @@ td.actions {
 .page-tree form {
   margin-top: 1rem;
 }
+.glossary .term {
+  margin: 0.75rem 0;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--line);
+}
+.glossary .term h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+.glossary .term p {
+  margin: 0.25rem 0;
+}
+.term-form {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 40rem;
+  margin-top: 1rem;
+}
+.term-form h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+.term-form label {
+  display: grid;
+  gap: 0.25rem;
+}
+.term-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.term-form > button {
+  justify-self: start;
+}
+.versions details pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

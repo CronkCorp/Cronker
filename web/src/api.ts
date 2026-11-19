@@ -474,6 +474,37 @@ export interface Comparison {
   lines: { change: "same" | "removed" | "added"; text: string }[];
 }
 
+/** A glossary entry naming one concept, kept by a Project or by the Workspace. */
+export interface Term {
+  id: string;
+  workspaceId: string;
+  /** Null for the Workspace's. */
+  projectId: string | null;
+  name: string;
+  definition: string;
+  avoid: string[];
+  version: { number: number; actor: Actor; savedAt: string };
+}
+
+/** One saved state of a Term, recording the Actor who saved it. */
+export interface TermVersion {
+  number: number;
+  name: string;
+  definition: string;
+  avoid: string[];
+  actor: Actor;
+  savedAt: string;
+}
+
+export interface TermContent {
+  name: string;
+  definition: string;
+  avoid: string[];
+}
+
+/** Where knowledge is kept: a Project, or the Workspace. */
+export type Place = Tree;
+
 /** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
 export interface ConnectRequest {
   client: { id: string; name: string | null };
@@ -620,13 +651,26 @@ export const api = {
   version: (documentId: string, number: number) => call<VersionWithBody>("GET", `${doc(documentId)}/versions/${number}`),
   compareVersions: (documentId: string, from: number, to: number) =>
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
+  terms: (place: Place) => call<Term[]>("GET", `${placePath(place)}/terms`),
+  glossary: (projectId: string) => call<Term[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/glossary`),
+  createTerm: (place: Place, input: TermContent) => call<Term>("POST", `${placePath(place)}/terms`, input),
+  term: (id: string) => call<Term>("GET", term(id)),
+  editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
+  deleteTerm: (id: string) => call<void>("DELETE", term(id)),
+  termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function treePath(tree: Tree) {
-  return tree.kind === "project"
-    ? `/api/projects/${encodeURIComponent(tree.id)}/documents`
-    : `${ws(tree.id)}/documents`;
+  return `${placePath(tree)}/documents`;
+}
+
+function placePath(place: Place) {
+  return place.kind === "project" ? `/api/projects/${encodeURIComponent(place.id)}` : ws(place.id);
+}
+
+function term(id: string) {
+  return `/api/terms/${encodeURIComponent(id)}`;
 }
 
 function doc(id: string) {
