@@ -39,6 +39,10 @@ export const Project = Type.Object({
   autonomousDelegationDefault: Type.Boolean({
     description: "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it already. Off by default.",
   }),
+  pullRequestAutomation: Type.Boolean({
+    description:
+      "Whether a merged Pull Request completes the Tickets it links in this Project. On by default; off, merges only update the Pull Request's state.",
+  }),
   statuses: Type.Array(Status),
 });
 export type Project = Static<typeof Project>;
@@ -87,9 +91,10 @@ export async function findProject(
 ): Promise<Project | undefined> {
   if (!isUuid(projectId)) return undefined;
   const view = inView(viewer, "projects.workspace_id", "$2");
-  const { rows } = await db.query<ProjectSummary & { newTicketsDelegated: boolean; autonomousDelegationDefault: boolean }>(
+  const { rows } = await db.query<Omit<Project, "statuses">>(
     `select ${summaryColumns}, projects.new_tickets_delegated as "newTicketsDelegated",
-       projects.autonomous_delegation_default as "autonomousDelegationDefault"
+       projects.autonomous_delegation_default as "autonomousDelegationDefault",
+       projects.pull_request_automation as "pullRequestAutomation"
      from projects where projects.id = $1 and ${view.sql}
      ${lock ? "for update of projects" : ""}`,
     [projectId, view.value],
@@ -147,7 +152,13 @@ export async function createProject(
       await writeStep(tx, project, idOf(name), step, now);
     }
     live.publish(tx, workspaceId, { type: "project.created", projectId: project.id });
-    return { ...project, newTicketsDelegated: false, autonomousDelegationDefault: false, statuses: await statusesOf(tx, project.id) };
+    return {
+      ...project,
+      newTicketsDelegated: false,
+      autonomousDelegationDefault: false,
+      pullRequestAutomation: true,
+      statuses: await statusesOf(tx, project.id),
+    };
   });
 }
 
@@ -156,7 +167,7 @@ export async function editProject(
   { db, live }: Context,
   viewer: Viewer,
   projectId: string,
-  edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean },
+  edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean; pullRequestAutomation?: boolean },
 ): Promise<Project> {
   return transaction(db, async (tx) => {
     const project = await findProject(tx, viewer, projectId, { lock: true });
@@ -164,16 +175,18 @@ export async function editProject(
     const next = {
       newTicketsDelegated: edit.newTicketsDelegated ?? project.newTicketsDelegated,
       autonomousDelegationDefault: edit.autonomousDelegationDefault ?? project.autonomousDelegationDefault,
+      pullRequestAutomation: edit.pullRequestAutomation ?? project.pullRequestAutomation,
     };
     if (
       next.newTicketsDelegated !== project.newTicketsDelegated ||
-      next.autonomousDelegationDefault !== project.autonomousDelegationDefault
+      next.autonomousDelegationDefault !== project.autonomousDelegationDefault ||
+      next.pullRequestAutomation !== project.pullRequestAutomation
     ) {
-      await tx.query("update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3 where id = $1", [
-        project.id,
-        next.newTicketsDelegated,
-        next.autonomousDelegationDefault,
-      ]);
+      await tx.query(
+        `update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3, pull_request_automation = $4
+         where id = $1`,
+        [project.id, next.newTicketsDelegated, next.autonomousDelegationDefault, next.pullRequestAutomation],
+      );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     }
     return (await findProject(tx, viewer, project.id))!;

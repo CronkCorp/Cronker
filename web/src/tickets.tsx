@@ -6,6 +6,7 @@ import {
   type Agent,
   type Attachment,
   type Change,
+  type Completion,
   type Comment,
   labelRuleShown,
   type LabelRule,
@@ -549,8 +550,8 @@ function Fields({
 }
 
 /**
- * A Ticket a Run completed: Unverified until the User Accepts it, or Reopens it with a Comment saying why,
- * sending it back to the Step that completed it.
+ * A Ticket a Run or a merge completed: Unverified until the User Accepts it, or Reopens it with a Comment saying why,
+ * which does what the Ticket's completion says: back to a Step's Status, or, when no Step produced the work, nowhere.
  */
 function Verification({
   ticket,
@@ -564,12 +565,38 @@ function Verification({
   onReopen: (comment: string) => Promise<void>;
 }) {
   const [reopening, setReopening] = useState(false);
+  const [completion, setCompletion] = useState<Completion | null>(null);
+  useEffect(() => {
+    let current = true;
+    void api.completion(ticket.id).then(
+      (loaded) => current && setCompletion(loaded),
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  }, [ticket]);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     await onReopen(field(form, "comment"));
     setReopening(false);
   });
+  const merge = completion?.merge ?? null;
   const completing = runs.filter((r) => r.state === "finished").at(-1);
-  const by = completing ? `${completing.agent.name}'s Run of the ${completing.step.name} Step` : "A Run";
+  const by = merge
+    ? merge.mergedBy
+      ? `@${merge.mergedBy} merged ${pullRequestName(merge.pullRequest)}`
+      : `${pullRequestName(merge.pullRequest)} was merged`
+    : completing
+      ? `${completing.agent.name}'s Run of the ${completing.step.name} Step`
+      : "A Run";
+  const reopen = completion?.reopen;
+  const back = !reopen
+    ? "send it back"
+    : reopen.kind === "back"
+      ? `send it back to the ${reopen.status.name} Step`
+      : reopen.kind === "stays"
+        ? "leave it here for you to move"
+        : "send it back to a Step whose Status has since been removed, which Cronk refuses";
   return (
     <section aria-label="Verification" className="panel side-section verification">
       <div className="field-row">
@@ -577,10 +604,13 @@ function Verification({
         {ticket.verification === "verified" ? <Chip tone="ok">Verified</Chip> : <Chip tone="info">Unverified</Chip>}
       </div>
       {ticket.verification === "verified" ? (
-        <p className="muted small">A Run completed this and a User Accepted it.</p>
+        <p className="muted small">{merge ? `${by}, completing this; it is Verified.` : "A Run completed this and a User Accepted it."}</p>
       ) : (
         <>
-          <p className="small">{by} completed this. It is Unverified until you Accept it, or Reopen it to send it back to that Step.</p>
+          <p className="small">
+            {by}
+            {merge ? ", completing this" : " completed this"}. It is Unverified until you Accept it, or Reopen it to {back}.
+          </p>
           <Actions>
             <Button variant="primary" size="small" onClick={() => void onAccept()}>
               Accept
@@ -591,7 +621,7 @@ function Verification({
           </Actions>
         </>
       )}
-      <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description="It goes back to the Step that completed it, with your Comment.">
+      <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
           <Field label="Why reopen it?">
             <textarea name="comment" required rows={4} autoFocus />
@@ -610,6 +640,9 @@ function Verification({
     </section>
   );
 }
+
+/** A Pull Request as the timeline and Verification name it: its Repository and number. */
+const pullRequestName = (pr: { repository: string; number: number }) => `${pr.repository}#${pr.number}`;
 
 const waitingReasons = {
   runnerSlot: "Runner full",
@@ -964,7 +997,7 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | RelationKind>,
+  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | RelationKind>,
   string
 > = {
   delegate: "Delegate",
@@ -998,8 +1031,19 @@ interface StepSkipped {
   outcome: string;
 }
 
+/** What a `merged` Change records: the Pull Request as it was then, and the login of the GitHub account that merged it. */
+interface Merged {
+  pullRequest: { repository: string; number: number; title: string };
+  mergedBy: string | null;
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
+  if (change.field === "merged") {
+    const { pullRequest, mergedBy } = change.to as Merged;
+    const name = `${pullRequestName(pullRequest)} ${pullRequest.title}`;
+    return mergedBy ? `completed it: @${mergedBy} merged ${name}` : `completed it: ${name} was merged`;
+  }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "stepSkipped") {
     const { status, labelRule, outcome } = change.to as StepSkipped;
