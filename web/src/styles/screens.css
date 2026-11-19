@@ -559,6 +559,10 @@
   color: var(--agent);
   font-weight: 500;
 }
+/* An Agent's name stays violet where it links to the Agent's page. */
+.actor-agent-name a {
+  color: inherit;
+}
 .entry-run .entry-line {
   color: var(--text);
 }
@@ -1014,6 +1018,36 @@
 }
 .stat strong {
   font-size: 16px;
+}
+.agent-runs {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.agent-runs li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.agent-runs a {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text);
+}
+.agent-run-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-runs .run-state {
+  margin-left: auto;
+  flex: none;
 }
 .agent-tokens {
   display: flex;

@@ -5,6 +5,7 @@ import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
 import { Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, workspaceCrumb } from "./ui/controls.js";
+import { Key, RunState } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Every Ticket of the Workspace, to count what each Agent is delegated and running. */
@@ -127,6 +128,18 @@ function AgentCard({
           <strong>{running.length}</strong> <span className="muted">running</span>
         </span>
       </div>
+      {running.length > 0 && (
+        <ul className="agent-runs" aria-label="Running Runs">
+          {running.map((ticket) => (
+            <li key={ticket.id}>
+              <Link to={`/tickets/${ticket.id}`}>
+                <Key>{ticket.key}</Key> <span className="agent-run-title">{ticket.title}</span>
+              </Link>
+              <RunState state="running" />
+            </li>
+          ))}
+        </ul>
+      )}
       {mine && <AgentTokens agent={agent} />}
       {renaming && <RenameAgent agent={agent} onClose={() => setRenaming(false)} onRenamed={onChanged} />}
       <ConfirmDialog
