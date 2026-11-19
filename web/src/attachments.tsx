@@ -131,7 +131,8 @@ export function FileList({ attachments, onChanged }: { attachments: Attachment[]
           ))}
         </ul>
       )}
-      {open && <AttachmentDialog attachment={open} canRemove={false} onClose={() => setOpen(null)} onRemoved={onChanged} />}
+      {/* Users remove any Attachment, wherever it was attached. */}
+      {open && <AttachmentDialog attachment={open} canRemove onClose={() => setOpen(null)} onRemoved={onChanged} />}
     </section>
   );
 }
@@ -164,28 +165,33 @@ function AttachmentDialog({
           <span className="muted">Markdown that shows it: </span>
           <code>{markdownReference(attachment)}</code>
         </p>
-        <DialogActions>
+        {/* Remove sits apart from Download, the primary action, and asks first. */}
+        <div className="attachment-actions">
           {canRemove && (
             <Button variant="ghost" onClick={() => setRemoving(true)}>
               Remove…
             </Button>
           )}
-          <DialogClose asChild>
-            <Button>Close</Button>
-          </DialogClose>
-          <a className={buttonClass("primary")} href={attachmentUrl(attachment.id)} download={attachment.name}>
-            Download
-          </a>
-        </DialogActions>
+          <DialogActions>
+            <DialogClose asChild>
+              <Button>Close</Button>
+            </DialogClose>
+            <a className={buttonClass("primary")} href={attachmentUrl(attachment.id)} download={attachment.name}>
+              Download
+            </a>
+          </DialogActions>
+        </div>
       </Dialog>
       <ConfirmDialog
         open={removing}
-        onOpenChange={(next) => (next ? setRemoving(true) : onClose())}
+        // Cancel goes back to the file; only a removal closes it.
+        onOpenChange={setRemoving}
         title={`Remove ${attachment.name}?`}
         confirm="Remove"
         onConfirm={async () => {
           await api.removeAttachment(attachment.id);
           onRemoved();
+          onClose();
         }}
       >
         Markdown that refers to it shows a broken link afterwards.
