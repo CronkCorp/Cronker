@@ -19,7 +19,7 @@ export const ReviewItem = Type.Object({
   kind: Type.Literal("review"),
   ticket: TicketSummary,
   status: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
-  since: Since("when the Ticket entered its Status"),
+  since: Since("when the Ticket entered its Review Status"),
 });
 
 /** A Question a Run asked on a Ticket assigned to the User, until a User answers or dismisses it. */
@@ -27,7 +27,7 @@ export const QuestionItem = Type.Object({
   kind: Type.Literal("question"),
   ticket: TicketSummary,
   question: Question,
-  since: Since("when the Run asked it"),
+  since: Since("when the Run asked the Question"),
 });
 
 /**
@@ -53,7 +53,7 @@ export const NeedsYouItem = Type.Object({
         "is an Inbox item of its own.",
     }),
   ),
-  since: Since("when the Ticket entered its Status"),
+  since: Since("when the needs you Outcome moved the Ticket"),
 });
 
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting where it is for the Delegate's Owner to Retry. */
@@ -79,7 +79,7 @@ export const UnverifiedItem = Type.Object({
   completedBy: Type.Union([StatusRef, Type.Null()], {
     description: "The Step that completed it, by its Status, where Reopen sends it; null once that Status is removed.",
   }),
-  since: Since("when the Ticket was completed, entering its Done Status"),
+  since: Since("when the Run completed the Ticket, moving it to its Done Status"),
 });
 
 /** A Discovered Ticket an Agent filed, waiting for its Assignee to delegate, move or dismiss it. */
@@ -87,7 +87,7 @@ export const DiscoveredItem = Type.Object({
   kind: Type.Literal("discovered"),
   ticket: TicketSummary,
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Agent that filed it." }),
-  since: Since("when the Agent filed it"),
+  since: Since("when the Agent filed the Ticket"),
 });
 
 /** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it to someone. */
@@ -95,7 +95,7 @@ export const ReassignItem = Type.Object({
   kind: Type.Literal("reassign"),
   ticket: TicketSummary,
   formerAssignee: User,
-  since: Since("when its Assignee was removed from the Workspace"),
+  since: Since("when the Assignee of the Ticket was removed from the Workspace"),
 });
 
 export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem, ReassignItem]);
@@ -139,49 +139,22 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
   );
   const summary = ({ statusName: _s, statusEnteredAt: _e, inReview: _r, completedBy: _c, handedBack: _h, ...row }: Row) => ticketSummary(row);
   const tickets = new Map(rows.map((row) => [row.id, summary(row)]));
+  /** The Ticket, the Status it waits in, and when it entered it. */
+  const inStatus = (row: Row) => ({
+    ticket: summary(row),
+    status: { id: row.statusId, name: row.statusName },
+    since: row.statusEnteredAt.toISOString(),
+  });
   const items: InboxItem[] = [
     // A Ticket reassigned between the two reads drops out with its Question.
     ...questions.flatMap(({ ticketId, ...question }): InboxItem[] => {
       const ticket = tickets.get(ticketId);
       return ticket ? [{ kind: "question", ticket, question, since: question.askedAt }] : [];
     }),
+    ...rows.flatMap((row): InboxItem[] => (row.handedBack ? [{ kind: "needsYou", ...inStatus(row), ...row.handedBack }] : [])),
+    ...rows.flatMap((row): InboxItem[] => (row.inReview ? [{ kind: "review", ...inStatus(row) }] : [])),
     ...rows.flatMap((row): InboxItem[] =>
-      row.handedBack
-        ? [
-            {
-              kind: "needsYou",
-              ticket: summary(row),
-              status: { id: row.statusId, name: row.statusName },
-              ...row.handedBack,
-              since: row.statusEnteredAt.toISOString(),
-            },
-          ]
-        : [],
-    ),
-    ...rows.flatMap((row): InboxItem[] =>
-      row.inReview
-        ? [
-            {
-              kind: "review",
-              ticket: summary(row),
-              status: { id: row.statusId, name: row.statusName },
-              since: row.statusEnteredAt.toISOString(),
-            },
-          ]
-        : [],
-    ),
-    ...rows.flatMap((row): InboxItem[] =>
-      row.verification === "unverified"
-        ? [
-            {
-              kind: "unverified",
-              ticket: summary(row),
-              status: { id: row.statusId, name: row.statusName },
-              completedBy: row.completedBy,
-              since: row.statusEnteredAt.toISOString(),
-            },
-          ]
-        : [],
+      row.verification === "unverified" ? [{ kind: "unverified", ...inStatus(row), completedBy: row.completedBy }] : [],
     ),
   ];
   // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents,
@@ -214,12 +187,11 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     items.push({ kind: "discovered", ticket: ticketSummary(row), agent, since: row.createdAt.toISOString() });
   }
   if (workspace.isAdmin) {
-    // Its Assignee's removal is its latest assignee Change, as assigning it again takes it out of the Inbox.
+    // Removing its Assignee recorded its latest assignee Change: assigning it again takes it out of the Inbox.
     const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User; removedAt: Date }>(
       `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
          json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee",
-         coalesce((select max(changes.at) from changes where changes.ticket_id = tickets.id and changes.field = 'assignee'),
-           tickets.status_entered_at) as "removedAt"
+         (select max(changes.at) from changes where changes.ticket_id = tickets.id and changes.field = 'assignee') as "removedAt"
        from tickets join projects on projects.id = tickets.project_id
        join users on users.id = tickets.former_assignee_id
        where tickets.workspace_id = $1 and tickets.assignee_id is null

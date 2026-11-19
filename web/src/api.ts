@@ -391,7 +391,7 @@ export interface ReviewItem {
   kind: "review";
   ticket: TicketSummary;
   status: { id: string; name: string };
-  /** When it began waiting: when it entered its Review Status. */
+  /** When it began waiting: when the Ticket entered its Review Status. */
   since: string;
 }
 
@@ -402,7 +402,7 @@ export interface UnverifiedItem {
   status: { id: string; name: string };
   /** The Step that completed it, by its Status; null once that Status is removed. */
   completedBy: { id: string; name: string } | null;
-  /** When it began waiting: when it was completed, entering its Done Status. */
+  /** When it began waiting: when the Run completed the Ticket, moving it to its Done Status. */
   since: string;
 }
 
@@ -418,7 +418,7 @@ export interface QuestionItem {
     step: { statusId: string | null; name: string };
     askedAt: string;
   };
-  /** When it began waiting: when the Run asked it. */
+  /** When it began waiting: when the Run asked the Question. */
   since: string;
 }
 
@@ -431,7 +431,7 @@ export interface NeedsYouItem {
   step: { statusId: string | null; name: string };
   /** Cronk's own Question, when it applied needs you past the Step's round limit. */
   question?: string;
-  /** When it began waiting: when the Outcome moved it. */
+  /** When it began waiting: when the needs you Outcome moved the Ticket. */
   since: string;
 }
 
@@ -449,7 +449,7 @@ export interface DiscoveredItem {
   kind: "discovered";
   ticket: TicketSummary;
   agent: { id: string; name: string };
-  /** When it began waiting: when the Agent filed it. */
+  /** When it began waiting: when the Agent filed the Ticket. */
   since: string;
 }
 
@@ -458,7 +458,7 @@ export interface ReassignItem {
   kind: "reassign";
   ticket: TicketSummary;
   formerAssignee: User;
-  /** When it began waiting: when its Assignee was removed from the Workspace. */
+  /** When it began waiting: when the Assignee of the Ticket was removed from the Workspace. */
   since: string;
 }
 
