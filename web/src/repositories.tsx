@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, type GitHubInstallation, type Project, type Repository } from "./api.js";
+import { api, ApiError, type GitHubInstallation, type Project, type Repository } from "./api.js";
 import { field } from "./forms.js";
 import { useLatest } from "./live.js";
 
@@ -11,6 +11,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
   const [repositories, setRepositories] = useState<Repository[] | undefined>(undefined);
   const [installations, setInstallations] = useState<GitHubInstallation[] | undefined>(undefined);
   const [installationsError, setInstallationsError] = useState<string | null>(null);
+  const [noApp, setNoApp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const latest = useLatest();
@@ -20,7 +21,10 @@ export function RepositoriesSettings({ project }: { project: Project }) {
     latest(api.repositories(project.id), setRepositories, (e) => setError(e.message));
   }, [project]);
   useEffect(() => {
-    api.githubInstallations().then(setInstallations, (e: unknown) => setInstallationsError(message(e)));
+    api.githubInstallations().then(setInstallations, (e: unknown) => {
+      if (e instanceof ApiError && e.code === "github_not_set_up") setNoApp(true);
+      else setInstallationsError(message(e));
+    });
   }, []);
 
   const change = async (act: () => Promise<unknown>) => {
@@ -76,7 +80,12 @@ export function RepositoriesSettings({ project }: { project: Project }) {
           ))}
         </ul>
       )}
-      {installationsError ? (
+      {noApp ? (
+        <p className="muted">
+          This installation has no GitHub App yet. Once an Admin creates it on the GitHub page and installs it on GitHub,
+          its Repositories can be added here.
+        </p>
+      ) : installationsError ? (
         <p role="alert">Couldn't ask GitHub which Repositories the App is installed on: {installationsError}</p>
       ) : !installations ? (
         <p>Asking GitHub which Repositories the App is installed on…</p>
