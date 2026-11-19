@@ -90,6 +90,11 @@ export interface Crumb {
   to?: string;
 }
 
+/** The crumb every page of a Workspace starts from: its name, leading to its home. */
+export function workspaceCrumb(workspace: { id: string; name: string }): Crumb {
+  return { label: workspace.name, to: `/workspaces/${workspace.id}` };
+}
+
 /** The head of a page: breadcrumbs, then the title, its view switcher and its actions, the primary last. */
 export function PageHead({
   crumbs,
