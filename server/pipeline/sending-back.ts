@@ -120,7 +120,7 @@ export async function sendBackForFailure(
     const sentWhere = decision.outcome?.needsYou
       ? `That is past ${stepName}'s round limit, so ${ticket.key} comes to its Assignee instead.`
       : `Sent ${ticket.key} back to ${stepName}.`;
-    await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null);
+    await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null, { sentBack: true });
   }
   return sent;
 }

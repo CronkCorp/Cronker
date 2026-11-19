@@ -813,6 +813,7 @@ describe("Failures sending work back", () => {
     expect(comments).toHaveLength(1);
     expect(comments[0].actor).toEqual({ kind: "cronk", name: "Cronk" });
     expect(comments[0].body).toContain("https://github.com/cronkcorp/cronker/runs/10");
+    expect(comments[0]).toMatchObject({ sentBack: true, questionId: null });
     // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
     const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
     expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
@@ -914,6 +915,7 @@ describe("Failures sending work back", () => {
           "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7). Sent CRONK-1 back to Implement.",
       ],
     ]);
+    expect(comments[0].sentBack).toBe(true);
   });
 
   test("sending back counts as a round for the producing Step; past its round limit *needs you* applies, with Cronk's Question in the Inbox", async () => {

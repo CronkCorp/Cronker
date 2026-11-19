@@ -113,6 +113,7 @@ describe("what an Agent may change", () => {
       createdAt: expect.any(String),
       mentions: [],
       questionId: null,
+      sentBack: false,
       attachments: [],
     });
   });

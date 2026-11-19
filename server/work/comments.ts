@@ -23,13 +23,17 @@ export const Comment = Type.Object({
   questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
   }),
+  sentBack: Type.Boolean({
+    description: "Whether this is Cronk's Comment on a send-back, linking the failing check or the review requesting changes.",
+  }),
 });
 export type Comment = Static<typeof Comment>;
 
 type Row = Omit<Comment, "createdAt" | "mentions" | "attachments"> & { createdAt: Date };
 
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.reply_to_id as "replyToId", comments.body,
-  ${actorOrCronkColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId"`;
+  ${actorOrCronkColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId",
+  comments.sent_back as "sentBack"`;
 
 async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promise<Row[]> {
   const { rows } = await db.query<Row>(
