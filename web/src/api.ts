@@ -406,9 +406,56 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** Everything the refusal carried, such as the current Version a save was refused with. */
+    readonly body: Record<string, unknown> = {},
   ) {
     super(message);
   }
+}
+
+/** One saved state of a Document, recording the Actor who saved it. */
+export interface Version {
+  number: number;
+  title: string;
+  actor: Actor;
+  savedAt: string;
+}
+
+export interface VersionWithBody extends Version {
+  body: string;
+}
+
+/** A Document as its page tree lists it, without its body. */
+export interface DocumentSummary {
+  id: string;
+  workspaceId: string;
+  /** Null in the Workspace's page tree. */
+  projectId: string | null;
+  parentId: string | null;
+  position: number;
+  title: string;
+  version: Version;
+}
+
+export interface Document extends DocumentSummary {
+  body: string;
+}
+
+export interface DocumentEdit {
+  baseVersion?: number;
+  title?: string;
+  body?: string;
+  parentId?: string | null;
+  position?: number;
+}
+
+/** Which page tree: a Project's, or the Workspace's. */
+export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
+
+export interface Comparison {
+  from: VersionWithBody;
+  to: VersionWithBody;
+  lines: { change: "same" | "removed" | "added"; text: string }[];
 }
 
 /** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
@@ -429,7 +476,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = (json as { error?: { code?: string; message?: string } }).error;
-    throw new ApiError(response.status, error?.code ?? "unknown", error?.message ?? response.statusText);
+    throw new ApiError(response.status, error?.code ?? "unknown", error?.message ?? response.statusText, error);
   }
   return json as T;
 }
@@ -545,8 +592,28 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
+  documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
+  createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
+    call<Document>("POST", treePath(tree), input),
+  document: (id: string) => call<Document>("GET", doc(id)),
+  editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
+  deleteDocument: (id: string) => call<void>("DELETE", doc(id)),
+  versions: (documentId: string) => call<Version[]>("GET", `${doc(documentId)}/versions`),
+  version: (documentId: string, number: number) => call<VersionWithBody>("GET", `${doc(documentId)}/versions/${number}`),
+  compareVersions: (documentId: string, from: number, to: number) =>
+    call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
+
+function treePath(tree: Tree) {
+  return tree.kind === "project"
+    ? `/api/projects/${encodeURIComponent(tree.id)}/documents`
+    : `${ws(tree.id)}/documents`;
+}
+
+function doc(id: string) {
+  return `/api/documents/${encodeURIComponent(id)}`;
+}
 
 function runner(id: string) {
   return `/api/runners/${encodeURIComponent(id)}`;
