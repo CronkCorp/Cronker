@@ -423,7 +423,7 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   });
   return (
     <div className="page page-settings">
-      <PageHead title="New Workspace" />
+      <PageHead crumbs={[{ label: "Workspaces" }]} title="New Workspace" />
       <Panel>
         <p className="muted">You'll be its Admin, and can add Users to it.</p>
         <form onSubmit={onSubmit}>
@@ -508,7 +508,7 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
   });
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: workspace.name }]} title="Settings" />
+      <PageHead crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]} title="Settings" />
       <FormError error={failure} />
       <Panel title="Name" id="workspace-name">
         <form onSubmit={rename.onSubmit}>
@@ -600,7 +600,7 @@ function Members({
 
   return (
     <div className="page page-settings">
-      <PageHead crumbs={[{ label: workspace.name }]} title="Members" />
+      <PageHead crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]} title="Members" />
       {workspace.isAdmin && (
         <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
           <div className="form-columns">

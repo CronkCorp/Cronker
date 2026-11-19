@@ -235,7 +235,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
 
   return (
     <div className="page">
-      <PageHead title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
+      <PageHead crumbs={[{ label: workspace.name, to: `/workspaces/${workspace.id}` }]} title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
       <FormError error={failure} />
       {inbox &&
         (shown.length === 0 ? (

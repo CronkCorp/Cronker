@@ -52,7 +52,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="page">
-      <PageHead title={workspace.name} />
+      <PageHead crumbs={[{ label: "Workspace" }]} title={workspace.name} />
       <FormError error={failure} />
       {projects &&
         (projects.length === 0 ? (
