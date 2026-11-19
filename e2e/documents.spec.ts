@@ -63,3 +63,58 @@ test("a refused save keeps the draft under a banner naming who saved which Versi
   await expect(page.getByRole("article", { name: "How Runs start" })).toContainText("Bea's line. Ada's line.");
   await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(3);
 });
+
+/** Hands the Markdown source files as the browser would on a paste or a drop, with the cursor where it is. */
+async function giveFiles(page: Page, kind: "paste" | "drop", names: string[]) {
+  await page.getByLabel("Markdown").evaluate(
+    (source, { kind, names }) => {
+      const transfer = new DataTransfer();
+      for (const name of names) transfer.items.add(new File(["not really a picture"], name, { type: "image/png" }));
+      const event =
+        kind === "paste"
+          ? new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true })
+          : new DragEvent("drop", { dataTransfer: transfer, bubbles: true, cancelable: true });
+      source.dispatchEvent(event);
+    },
+    { kind, names },
+  );
+}
+
+test("files pasted or dropped into the Markdown are attached, each as an attachment: picture at the cursor", async ({ page, cronk }) => {
+  await openDocument(page, cronk, "Before.\nAfter.");
+  await page.getByRole("button", { name: "Edit" }).click();
+  const source = page.getByLabel("Markdown");
+  const reference = (name: string) => new RegExp(`!\\[${name.replace(".", "\\.")}\\]\\(attachment:[0-9a-f-]{36}\\)`);
+
+  // The cursor sits after "Before.\n".
+  await source.evaluate((textarea: HTMLTextAreaElement) => textarea.setSelectionRange(8, 8));
+  await giveFiles(page, "paste", ["brief.png"]);
+  await expect(source).toHaveValue(new RegExp(`^Before\\.\\n${reference("brief.png").source}After\\.$`));
+
+  await source.evaluate((textarea: HTMLTextAreaElement) => textarea.setSelectionRange(0, 0));
+  await giveFiles(page, "drop", ["one.png", "two.png"]);
+  await expect(source).toHaveValue(new RegExp(`^${reference("one.png").source}\\n${reference("two.png").source}Before\\.`));
+
+  // The preview shows them as the read view will, and the Document lists them as its Attachments.
+  await expect(page.getByRole("region", { name: "Preview" }).getByRole("img")).toHaveCount(3);
+  await page.getByRole("button", { name: "Save as Version 2" }).click();
+  const attachments = page.getByRole("region", { name: "Attachments" });
+  for (const name of ["brief.png", "one.png", "two.png"]) await expect(attachments).toContainText(name);
+});
+
+test("a Document reads with its Versions beside it, and picking two shows their Diff naming both", async ({ page, cronk }) => {
+  const { beaSaves } = await openDocument(page, cronk, "Runs start from a Brief.\nOne Brief per Run.");
+  await beaSaves(1, "Runs start from a Brief.\nEach Run has its own Brief.");
+  await page.reload();
+
+  await expect(page.getByRole("article", { name: "How Runs start" })).toContainText("Each Run has its own Brief.");
+  const versions = page.getByRole("region", { name: "Versions" });
+  await expect(versions.getByRole("listitem")).toHaveText([/Version 2.*bea@example\.com/, /Version 1.*ada@example\.com/]);
+
+  await versions.getByLabel("Compare Version 1").check();
+  await versions.getByLabel("Compare Version 2").check();
+  const diff = page.getByRole("dialog", { name: "What changed" }).getByRole("region", { name: "Comparison" });
+  await expect(diff).toContainText(/^Version 1\s*→\s*Version 2/);
+  await expect(diff.getByRole("deletion")).toHaveText("One Brief per Run.");
+  await expect(diff.getByRole("insertion")).toHaveText("Each Run has its own Brief.");
+});
