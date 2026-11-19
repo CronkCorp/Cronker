@@ -193,7 +193,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Terms page:** reads like a glossary. The page head holds a Workspace / Project scope switch, then Export and **New Term**. A filter box matches names and words to avoid.
 - **Each Term:** the name, "Overrides the Workspace Term" in `--info` where it does (on a Workspace Term, "Replaced in CRONK"), its scope and Version. Then the definition, and "Avoid:" with the words struck through.
-- **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside the Term's Versions, each of which opens to what it said. The editor holds the Name, the definition's Markdown beside its preview, and the words to avoid, with "Save as Version N" first.
+- **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside the Term's Versions, each of which opens to what it said; picking two shows their Diff, the definition's lines and then, under "Avoid:", the words to avoid. The editor holds the Name, the definition's Markdown beside its preview, and the words to avoid, with "Save as Version N" first.
 - The screenshots' groups, Protected marks and Suggestion counts belong to the old Cronk.
 
 ### Decisions

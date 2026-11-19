@@ -8,6 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Place } from "./places.js";
+import { ComparedLine, compareLines, compareWords } from "./compare.js";
 import { outdatedVersion } from "./versions.js";
 
 /**
@@ -220,6 +221,40 @@ export async function versionsOf(db: Db, viewer: Viewer, termId: string): Promis
     [term.id],
   );
   return rows.map(presentVersion);
+}
+
+/** One of a Term's Versions; a number it has no Version of is refused. */
+export async function readTermVersion(db: Db, viewer: Viewer, termId: string, number: number): Promise<TermVersion> {
+  const term = await findTerm(db, viewer, termId);
+  if (!term) throw termNotFound();
+  const version = await versionOf(db, term.id, number);
+  if (!version) throw new ApiError(404, "not_found", `The Term ${term.name} has no Version ${number}.`);
+  return version;
+}
+
+export const TermComparison = Type.Object({
+  from: TermVersion,
+  to: TermVersion,
+  lines: Type.Array(ComparedLine, { description: "The definitions compared line by line, in order." }),
+  avoid: Type.Array(ComparedLine, { description: "The words to avoid compared one word to a line, in order." }),
+});
+export type TermComparison = Static<typeof TermComparison>;
+
+/** Two of a Term's Versions: their definitions compared line by line, and their words to avoid one by one. */
+export async function compareTermVersions(
+  db: Db,
+  viewer: Viewer,
+  termId: string,
+  numbers: { from: number; to: number },
+): Promise<TermComparison> {
+  const from = await readTermVersion(db, viewer, termId, numbers.from);
+  const to = await readTermVersion(db, viewer, termId, numbers.to);
+  return {
+    from,
+    to,
+    lines: compareLines(from.definition, to.definition),
+    avoid: compareWords(from.avoid, to.avoid),
+  };
 }
 
 /** The glossary's own Terms, by name ignoring case. */

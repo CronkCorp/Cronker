@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type Place, type ProjectSummary, type Term, type TermVersion, type Workspace } from "./api.js";
-import { DocumentBody, VersionMeta } from "./documents.js";
+import { api, ApiError, type Place, type ProjectSummary, type Term, type TermComparison, type TermVersion, type Workspace } from "./api.js";
+import { DocumentBody, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
-import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, RelativeTime } from "./ui/controls.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
@@ -281,7 +280,7 @@ export function TermScreen({
         <div className="page-split">
           <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
           <aside className="side" aria-label="Term details">
-            <Versions key={term.version.number} term={term} />
+            <Versions key={term.version.number} source={termVersions(term.id)} />
           </aside>
         </div>
       )}
@@ -401,41 +400,23 @@ function TermBody({ name, definition, avoid }: { name?: string; definition: stri
   );
 }
 
-/** The Term's Versions, newest first, in a side list as a Document's are: each opens to what it said. */
-function Versions({ term }: { term: Term }) {
-  const [versions, setVersions] = useState<TermVersion[] | null>(null);
-  const [shown, setShown] = useState<TermVersion | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  useEffect(() => {
-    api.termVersions(term.id).then(setVersions, (e: Error) => setFailure(e.message));
-  }, [term.id]);
-  if (failure) return <FormError error={failure} />;
-  if (!versions) return null;
-  return (
-    <section aria-label="Versions" className="panel side-section">
-      <h2 className="side-title">Versions</h2>
-      <ol className="version-list">
-        {[...versions].reverse().map((version) => (
-          <li key={version.number}>
-            <span className="version-item">
-              <Button variant="ghost" size="small" onClick={() => setShown(version)}>
-                Version {version.number}
-              </Button>
-              <span className="version-by">
-                <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
-              </span>
-            </span>
-          </li>
-        ))}
-      </ol>
-      <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.name}` : ""} wide>
-        {shown && (
-          <>
-            <VersionMeta version={shown} />
-            <TermBody name={shown.name} definition={shown.definition} avoid={shown.avoid} />
-          </>
-        )}
-      </Dialog>
-    </section>
-  );
-}
+/** A Term's Version read as the shared Versions panel reads one: its name as the title, its definition as the body. */
+type ReadTermVersion = TermVersion & { title: string; body: string };
+const read = (version: TermVersion): ReadTermVersion => ({ ...version, title: version.name, body: version.definition });
+
+/** The definitions' lines, then, when either Version has any, the words to avoid one to a line under "Avoid:". */
+const comparedLines = ({ lines, avoid }: TermComparison) =>
+  avoid.length === 0 ? lines : [...lines, { change: "same" as const, text: "" }, { change: "same" as const, text: "Avoid:" }, ...avoid];
+
+/** Where a Term's Versions come from, for the panel a Document's and a Decision's Versions are listed in. */
+const termVersions = (termId: string) => ({
+  list: () => api.termVersions(termId).then((versions) => versions.map(read)),
+  read: (number: number) => api.termVersion(termId, number).then(read),
+  compare: (from: number, to: number) =>
+    api.compareTermVersions(termId, from, to).then((comparison) => ({
+      from: read(comparison.from),
+      to: read(comparison.to),
+      lines: comparedLines(comparison),
+    })),
+  show: (version: ReadTermVersion) => <TermBody name={version.name} definition={version.definition} avoid={version.avoid} />,
+});

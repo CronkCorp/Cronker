@@ -509,19 +509,21 @@ function Move({
   );
 }
 
-/** Where a Document's or Decision's Versions come from. */
-export interface VersionSource {
+/** Where a Document's, Decision's or Term's Versions come from, each read with a title and a body. */
+export interface VersionSource<V extends VersionWithBody = VersionWithBody> {
   list: () => Promise<Version[]>;
-  read: (number: number) => Promise<VersionWithBody>;
-  compare: (from: number, to: number) => Promise<Comparison>;
+  read: (number: number) => Promise<V>;
+  compare: (from: number, to: number) => Promise<Comparison<V>>;
+  /** Draws a Version read alone; its body as a Document's when left out. */
+  show?: (version: V) => ReactNode;
 }
 
-/** A Document's or Decision's Versions, newest first, in a side list: read any one, or pick two to see their Diff. */
-export function Versions({ source }: { source: VersionSource }) {
+/** A Document's, Decision's or Term's Versions, newest first, in a side list: read any one, or pick two to see their Diff. */
+export function Versions<V extends VersionWithBody>({ source }: { source: VersionSource<V> }) {
   const [versions, setVersions] = useState<Version[] | null>(null);
-  const [shown, setShown] = useState<VersionWithBody | null>(null);
+  const [shown, setShown] = useState<V | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
-  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [comparison, setComparison] = useState<Comparison<V> | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   // A new source each render is the same Versions; the screen remounts this to show a new one.
   const sourceRef = useRef(source);
@@ -570,7 +572,7 @@ export function Versions({ source }: { source: VersionSource }) {
         {shown && (
           <>
             <VersionMeta version={shown} />
-            <DocumentBody body={shown.body} />
+            {sourceRef.current.show ? sourceRef.current.show(shown) : <DocumentBody body={shown.body} />}
           </>
         )}
       </Dialog>
