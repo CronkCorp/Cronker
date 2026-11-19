@@ -849,7 +849,6 @@
 /* A line of prose with Actors and pills in it: inline, so punctuation sits against the words before it. */
 .detail-line {
   font-size: 13px;
-  line-height: 1.9;
 }
 .inline-select {
   width: auto !important;
