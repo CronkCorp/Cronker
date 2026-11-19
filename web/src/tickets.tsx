@@ -36,7 +36,7 @@ import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
-import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime } from "./ui/controls.js";
+import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker } from "./ui/picker.js";
@@ -245,7 +245,7 @@ export function TicketScreen({
     >
       <PageHead
         crumbs={[
-          { label: workspace.name, to: `/workspaces/${workspace.id}` },
+          workspaceCrumb(workspace),
           { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` },
           { label: <span className="mono">{ticket.key}</span> },
         ]}
