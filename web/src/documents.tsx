@@ -55,6 +55,28 @@ export function VersionMeta({ version }: { version: { number: number; actor: Act
 export const versionLine = (version: { number: number; actor: { name: string } }) =>
   `Version ${version.number} by ${version.actor.name}`;
 
+/**
+ * A Document's or Decision's body as it reads: Markdown in a panel, 15px at a 720px measure. The read view, the
+ * editor's preview and a Version's dialog all draw it this way, so the preview shows what saving will look like.
+ */
+export function DocumentBody({ body, label, empty }: { body: string; label?: string; empty?: ReactNode }) {
+  const content =
+    empty && !body.trim() ? (
+      empty
+    ) : (
+      <div className="prose">
+        <Markdown text={body} mentions={[]} />
+      </div>
+    );
+  return label ? (
+    <article className="panel document-body" aria-label={label}>
+      {content}
+    </article>
+  ) : (
+    <div className="panel document-body">{content}</div>
+  );
+}
+
 /** A page tree's Documents, nested, under a page head with the scope switch and New Document. */
 function PageTree({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
   const tree: Tree = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
@@ -250,15 +272,11 @@ export function DocumentScreen({
       ) : (
         <div className="page-split">
           <div className="page">
-            <article className="panel document-body" aria-label={document.title}>
-              {document.body.trim() ? (
-                <div className="prose">
-                  <Markdown text={document.body} mentions={[]} />
-                </div>
-              ) : (
-                <EmptyState title="Nothing written yet.">Edit adds the first words, and saving makes a new Version.</EmptyState>
-              )}
-            </article>
+            <DocumentBody
+              body={document.body}
+              label={document.title}
+              empty={<EmptyState title="Nothing written yet.">Edit adds the first words, and saving makes a new Version.</EmptyState>}
+            />
             <Attachments
               owner={{ kind: "document", id: document.id }}
               attachments={attachments}
@@ -401,9 +419,7 @@ export function Editor<T>({
         </Field>
         <section aria-label="Preview" className="editor-preview">
           <span className="field-label">Preview</span>
-          <div className="panel prose">
-            <Markdown text={body} mentions={[]} />
-          </div>
+          <DocumentBody body={body} />
         </section>
       </div>
       <FormError error={attachError} />
@@ -542,9 +558,7 @@ export function Versions({ source }: { source: VersionSource }) {
         {shown && (
           <>
             <VersionMeta version={shown} />
-            <div className="panel prose">
-              <Markdown text={shown.body} mentions={[]} />
-            </div>
+            <DocumentBody body={shown.body} />
           </>
         )}
       </Dialog>
