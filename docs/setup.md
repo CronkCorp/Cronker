@@ -38,7 +38,7 @@ docker compose up -d --build
 docker compose logs cronk | grep "setup code"
 ```
 
-Without Docker, run `npm ci && npm run build`, then `npm start` with `CRONK_PUBLIC_URL`, `CRONK_SECRET_KEY` and `DATABASE_URL` (a Postgres database Cronk may create tables in) set in its environment; the setup code is in its output.
+Without Docker, run `npm ci && npm run build`, then `npm start` with `CRONK_PUBLIC_URL`, `CRONK_SECRET_KEY` and `DATABASE_URL` (a Postgres database Cronk may create tables in) set in its environment; the setup code is in its output. Attachments are kept as files in `CRONK_ATTACHMENTS_DIR` (by default `data/attachments` under the directory Cronk starts in), so back that directory up with the database.
 
 The log line says `Cronk is not set up yet. Open it and enter this setup code: cronk_setup_…`. Open the address, enter the setup code, your email, a password and a name for your first Workspace, and choose **Set up**. The setup code works once; while nobody has set Cronk up, each start logs a new one.
 

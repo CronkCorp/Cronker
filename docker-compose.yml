@@ -13,6 +13,11 @@ services:
       # Encrypts the secrets Cronk keeps, such as the GitHub App's credentials. Set it to
       # something like `openssl rand -base64 32` and keep it: without it, sign-in with GitHub stops.
       CRONK_SECRET_KEY: ${CRONK_SECRET_KEY:-}
+      # Attachments are files in this directory, so a backup is the database plus this volume.
+      CRONK_ATTACHMENTS_DIR: /app/data/attachments
+      CRONK_ATTACHMENT_LIMIT_MB: ${CRONK_ATTACHMENT_LIMIT_MB:-25}
+    volumes:
+      - attachments:/app/data/attachments
     depends_on:
       postgres:
         condition: service_healthy
@@ -35,3 +40,4 @@ services:
 
 volumes:
   postgres:
+  attachments:
