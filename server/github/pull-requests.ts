@@ -331,3 +331,31 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
     url: typeof url === "string" ? url : null,
   });
 };
+
+/**
+ * GitHub's `pull_request_review` event: a review submitted on a Pull Request Cronk knows. One
+ * requesting changes, whoever wrote it, sends the Tickets an open Pull Request links back to work.
+ */
+export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payload }) => {
+  const { action, review, pull_request: pr } = payload as {
+    action?: string;
+    review?: { id?: unknown; state?: unknown; html_url?: unknown; user?: { login?: unknown } | null };
+    pull_request?: { id?: unknown };
+  };
+  if (action !== "submitted" || typeof review?.id !== "number" || typeof pr?.id !== "number") return;
+  if (typeof review.state !== "string" || review.state.toLowerCase() !== "changes_requested") return;
+  const { rows } = await tx.query<{ repository: string; number: number; url: string }>(
+    `select repository_full_name as repository, number, url from pull_requests
+     where id = $1 and state in ('open', 'draft')`,
+    [pr.id],
+  );
+  const known = rows[0];
+  if (!known) return;
+  await sendBackForFailure(context, tx, { id: pr.id, ...known }, {
+    kind: "review",
+    id: review.id,
+    reviewer: typeof review.user?.login === "string" ? review.user.login : null,
+    url: typeof review.html_url === "string" ? review.html_url : null,
+  });
+  await announce(context, tx, [pr.id]);
+};
