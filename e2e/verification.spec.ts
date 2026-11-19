@@ -40,10 +40,11 @@ test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed",
   await expect(settings.getByLabel("Tickets first delegated get Autonomous Delegation")).toBeChecked();
 
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
-  const autonomous = page.getByLabel("Autonomous Delegation");
-  await expect(autonomous).not.toBeChecked();
+  // Undelegated, it takes the Project's default once delegated.
+  const autonomous = fieldPicker(page, "Autonomous Delegation");
+  await expect(autonomous).toHaveAccessibleName("Autonomous Delegation The Project's, once delegated");
   await pick(page, "Delegate", "claude-max");
-  await expect(autonomous).toBeChecked();
+  await expect(autonomous).toHaveAccessibleName("Autonomous Delegation On");
   await pick(page, "Status", "Code review");
   const timeline = page.getByRole("region", { name: "Timeline" });
   const runs = timeline.getByRole("listitem").filter({ hasText: "Code review · claude-max · sonnet" });

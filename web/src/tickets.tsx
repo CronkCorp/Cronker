@@ -502,17 +502,27 @@ function Fields({
       {ticket.delegateId === null && own.length === 0 && (
         <p className="field-note">You have no Agent in this Workspace to delegate to.</p>
       )}
-      <label className="field-row">
-        <span className="field-row-label">Autonomous Delegation</span>
-        <span className="field-row-value">
-          <input
-            type="checkbox"
-            checked={ticket.autonomousDelegation === true}
-            onChange={(e) => void onSave({ autonomousDelegation: e.target.checked })}
-          />
-          <span className="muted small">{ticket.autonomousDelegation === null ? "The Project's, once delegated" : "A Step may complete it"}</span>
-        </span>
-      </label>
+      <FieldPicker
+        label="Autonomous Delegation"
+        value={
+          ticket.autonomousDelegation === null ? (
+            <span className="muted">The Project's, once delegated</span>
+          ) : ticket.autonomousDelegation ? (
+            "On"
+          ) : (
+            "Off"
+          )
+        }
+        options={[
+          { value: "on", label: "On", content: <span>On <span className="muted small">· a Step may complete it</span></span> },
+          { value: "off", label: "Off", content: <span>Off <span className="muted small">· each Step stops for a User</span></span> },
+        ]}
+        selected={ticket.autonomousDelegation === null ? [] : [ticket.autonomousDelegation ? "on" : "off"]}
+        onPick={(picked) => {
+          const next = picked === "on";
+          if (next !== ticket.autonomousDelegation) void onSave({ autonomousDelegation: next });
+        }}
+      />
       <FieldPicker
         label="Labels"
         value={shownLabels.length ? shownLabels.map((label) => <Chip key={label}>{label}</Chip>) : none}
