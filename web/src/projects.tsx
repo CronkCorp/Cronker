@@ -22,6 +22,7 @@ import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { Button } from "./button.js";
+import { Key } from "./labels.js";
 
 const kindLabel = (kind: StatusKind) => statusKinds.find((k) => k.kind === kind)!.label;
 
@@ -56,7 +57,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
           <ul className="projects">
             {projects.map((project) => (
               <li key={project.id}>
-                <Link to={`/projects/${project.id}`}>{project.name}</Link> <span className="key">{project.key}</span>
+                <Link to={`/projects/${project.id}`}>{project.name}</Link> <Key>{project.key}</Key>
               </li>
             ))}
           </ul>
@@ -71,6 +72,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
           Key
           <input
             name="key"
+            className="mono"
             required
             pattern="[A-Za-z][A-Za-z0-9]{1,9}"
             title="2 to 10 letters and digits, starting with a letter"
@@ -151,7 +153,7 @@ export function ProjectScreen({
   return (
     <>
       <h1>
-        {project.name} <span className="key">{project.key}</span>
+        {project.name} <Key>{project.key}</Key>
       </h1>
       <nav className="tabs" aria-label="Project views">
         <Link to={base} current={view === "board"}>
@@ -314,7 +316,7 @@ function TicketItem({
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <span className="key">{ticket.key}</span> <span>{ticket.title}</span>
+      <Key>{ticket.key}</Key> <span>{ticket.title}</span>
       {details.length > 0 && <small className="muted"> {details.join(" · ")}</small>}
       {ticket.waiting ? (
         <small className={`run-marker ${ticket.waiting}`}> {waitingMarkers[ticket.waiting]}</small>
@@ -588,7 +590,7 @@ function StatusRow({
           maxLength={100}
           onChange={(e) => setName(e.target.value)}
         />
-        <Button variant="secondary" type="submit" disabled={busy || name === status.name} aria-label={`Rename ${status.name}`}>
+        <Button variant="ghost" type="submit" disabled={busy || name === status.name} aria-label={`Rename ${status.name}`}>
           Rename
         </Button>
       </form>

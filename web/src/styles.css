@@ -39,8 +39,6 @@
   --radius-panel: 8px;
   --radius-pill: 999px;
 
-  --shadow-popover: 0 4px 16px color-mix(in srgb, var(--text) 16%, transparent);
-
   color-scheme: light;
   font-family: var(--font-sans);
   font-size: 14px;
@@ -83,7 +81,6 @@ h2,
 h3 {
   margin: var(--space-4) 0 var(--space-2);
   font-weight: 600;
-  line-height: 1.3;
 }
 h1 {
   font-size: 20px;
@@ -114,7 +111,7 @@ kbd,
 }
 code {
   font-size: 12px;
-  padding: 1px var(--space-1);
+  padding: 0 var(--space-1);
   border-radius: var(--radius-chip);
   background: var(--surface-2);
 }
@@ -131,18 +128,12 @@ pre {
   font-size: 12px;
   overflow-x: auto;
 }
-.mono {
-  font-size: 12px;
-}
 /* A Ticket or Project key. */
 .key {
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 400;
   color: var(--muted);
-}
-h1 .key {
-  font-size: 0.75em;
 }
 .muted {
   color: var(--muted);
@@ -161,12 +152,11 @@ h1 .key {
   justify-content: center;
   gap: var(--space-1);
   box-sizing: border-box;
-  padding: 5px var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-control);
   font: inherit;
   font-size: 13px;
-  font-weight: 500;
   line-height: 1.5;
   text-decoration: none;
   cursor: pointer;
@@ -217,7 +207,7 @@ input,
 select,
 textarea {
   box-sizing: border-box;
-  padding: 5px var(--space-2);
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface);
@@ -246,9 +236,9 @@ input[type="file"] {
 }
 input[type="file"]::file-selector-button {
   margin-right: var(--space-2);
-  padding: 2px var(--space-2);
+  padding: 0 var(--space-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-control);
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
@@ -288,6 +278,12 @@ label.check {
 [role="alert"] {
   color: var(--danger);
   font-size: 13px;
+}
+/* Each error sits under its form, after the form's buttons, whatever its place in the markup. */
+form > [role="alert"] {
+  order: 1;
+  flex-basis: 100%;
+  grid-column: 1 / -1;
 }
 [role="status"] {
   color: var(--muted);
@@ -351,7 +347,7 @@ li.inline {
 }
 .shell header nav .count {
   margin-left: var(--space-1);
-  padding: 0 6px;
+  padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
   background: var(--danger);
   color: var(--on-accent);
@@ -421,19 +417,21 @@ td.actions {
 
 .tabs {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
   margin-bottom: var(--space-4);
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
 .tabs a {
-  padding: var(--space-2) 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control);
   color: var(--muted);
   text-decoration: none;
 }
 .tabs a[aria-current="page"] {
-  color: var(--text);
-  border-bottom: 2px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .filters {
   display: flex;
@@ -457,12 +455,11 @@ td.actions {
 }
 .lane.target {
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
 }
 .lane h2,
 .list h2 {
   margin: var(--space-3) 0 0;
-  font-size: 14px;
 }
 .lane p {
   margin: var(--space-1) 0;
@@ -573,7 +570,7 @@ td.actions {
 }
 .comment-meta .badge {
   margin-left: var(--space-1);
-  padding: 0 6px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--warn);
   border-radius: var(--radius-pill);
   color: var(--warn);
@@ -653,14 +650,14 @@ ul.inbox li {
 ul.inbox small {
   color: var(--muted);
 }
-ul.inbox li .button {
+ul.inbox li > .button {
   justify-self: start;
 }
 blockquote.question {
   margin: var(--space-1) 0;
   padding: var(--space-2) var(--space-3);
   border-left: 3px solid var(--warn);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-panel);
   background: var(--warn-soft);
 }
 
@@ -669,13 +666,6 @@ blockquote.question {
 .markdown {
   overflow-wrap: anywhere;
 }
-.markdown h1 {
-  font-size: 20px;
-}
-.markdown h2 {
-  font-size: 16px;
-}
-.markdown h3,
 .markdown h4 {
   font-size: 14px;
 }
@@ -688,7 +678,7 @@ blockquote.question {
   margin-left: 0;
   margin-right: 0;
   padding-left: var(--space-3);
-  border-left: 3px solid var(--border);
+  border-left: 1px solid var(--border);
   color: var(--muted);
 }
 .markdown img {
@@ -795,9 +785,6 @@ blockquote.question {
 .term-form textarea {
   width: 100%;
 }
-.term-form > .button {
-  justify-self: start;
-}
 
 /* Repositories. */
 
@@ -825,7 +812,7 @@ ul.repositories .warning {
 }
 .decision-status {
   display: inline-block;
-  padding: 1px var(--space-2);
+  padding: 0 var(--space-2);
   border: 1px solid var(--muted);
   border-radius: var(--radius-pill);
   color: var(--muted);

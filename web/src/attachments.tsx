@@ -73,7 +73,7 @@ export function Attachments({
               <code title="Markdown that refers to it">{markdownReference(attachment)}</code>{" "}
               {canAttach && (
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   type="button"
                   disabled={busy}
                   aria-label={`Remove ${attachment.name}`}

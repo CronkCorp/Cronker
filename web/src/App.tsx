@@ -620,7 +620,7 @@ function Members({
               <input name="name" required defaultValue={workspace.name} />
             </label>
             {rename.error && <p role="alert">{rename.error}</p>}
-            <Button variant="primary" type="submit" disabled={rename.busy}>
+            <Button variant="ghost" type="submit" disabled={rename.busy}>
               Rename
             </Button>
           </form>

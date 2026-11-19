@@ -4,6 +4,7 @@ import { useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { Link } from "./router.js";
 import { Button } from "./button.js";
+import { Key } from "./labels.js";
 
 /**
  * The User's Inbox in the Workspace, fetched again after each live event: an Inbox is worked
@@ -63,7 +64,7 @@ function Item({ item }: { item: InboxItem }) {
   return (
     <li>
       <Link to={`/tickets/${item.ticket.id}`}>
-        <span className="key">{item.ticket.key}</span> {item.ticket.title}
+        <Key>{item.ticket.key}</Key> {item.ticket.title}
       </Link>
       <ItemDetail item={item} />
     </li>
@@ -95,7 +96,7 @@ function WentWrong({ item }: { item: RunItem }) {
         {item.run.endReason && <>: {item.run.endReason}</>}
       </small>
       {error && <p role="alert">{error}</p>}
-      <Button variant="secondary" type="button" onClick={retry} disabled={busy} aria-label={`Retry ${item.ticket.key}`}>
+      <Button variant="primary" type="button" onClick={retry} disabled={busy} aria-label={`Retry ${item.ticket.key}`}>
         Retry
       </Button>
     </>
@@ -179,13 +180,15 @@ function Discovered({ item }: { item: DiscoveredItem }) {
         {source && (
           <>
             {" "}
-            while on <Link to={`/tickets/${source.id}`} className="key">{source.key}</Link>
+            while on <Link to={`/tickets/${source.id}`}>
+              <Key>{source.key}</Key>
+            </Link>
           </>
         )}
         : delegate, move or dismiss it
       </small>
       {error && <p role="alert">{error}</p>}
-      <Button variant="secondary" type="button" onClick={dismiss} disabled={busy} aria-label={`Dismiss ${item.ticket.key}`}>
+      <Button variant="ghost" type="button" onClick={dismiss} disabled={busy} aria-label={`Dismiss ${item.ticket.key}`}>
         Dismiss
       </Button>
     </>

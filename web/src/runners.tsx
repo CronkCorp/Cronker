@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type ProjectSummary, type Runner, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Button } from "./button.js";
+import { ModelLabel } from "./labels.js";
 
 /**
  * The User's own Runners: ways for Cronk to start their Agents' Runs with their own credentials.
@@ -124,7 +125,7 @@ function RunnerSettings({
           <form onSubmit={save.onSubmit} aria-label="Save a trigger">
             <label>
               Model
-              <input name="model" required autoComplete="off" placeholder="haiku" />
+              <input name="model" className="mono" required autoComplete="off" placeholder="haiku" />
             </label>
             <label>
               For
@@ -174,7 +175,9 @@ function RunnerSettings({
               <tbody>
                 {runner.triggers.map((trigger) => (
                   <tr key={trigger.id}>
-                    <td className="mono">{trigger.model}</td>
+                    <td>
+                      <ModelLabel>{trigger.model}</ModelLabel>
+                    </td>
                     <td>{projectName(trigger.projectId)}</td>
                     <td>
                       <code>{trigger.triggerId}</code>

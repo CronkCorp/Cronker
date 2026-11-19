@@ -32,6 +32,7 @@ import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { Link } from "./router.js";
 import { Button } from "./button.js";
+import { Key, ModelLabel } from "./labels.js";
 
 /**
  * A Ticket: its fields, its description, its Reports, its Relations, its Linked Documents, its Comments and its
@@ -173,7 +174,7 @@ export function TicketScreen({
         <Link to={`/projects/${project.id}`}>{project.name}</Link>
       </p>
       <h1 className="title">
-        <span className="key">{ticket.key}</span> {ticket.title}
+        <Key>{ticket.key}</Key> {ticket.title}
       </h1>
       {error && <p role="alert">{error}</p>}
       {ticket.verification && (
@@ -540,7 +541,7 @@ const relationGroups: { kind: RelationKind; label: string }[] = [
 function TicketLink({ ticket }: { ticket: TicketRef }) {
   return (
     <Link to={`/tickets/${ticket.id}`}>
-      <span className="key">{ticket.key}</span> {ticket.title}
+      <Key>{ticket.key}</Key> {ticket.title}
     </Link>
   );
 }
@@ -606,7 +607,7 @@ function Relations({
               {inGroup.map((relation) => (
                 <li key={relation.id}>
                   <TicketLink ticket={relation.ticket} />{" "}
-                  <Button variant="ghost" type="button" onClick={() => void remove(relation.id)}>
+                  <Button variant="secondary" type="button" onClick={() => void remove(relation.id)}>
                     Remove
                   </Button>
                 </li>
@@ -706,7 +707,7 @@ function LinkedDocuments({
             <li key={document.id}>
               <Link to={`/documents/${document.id}`}>{document.title}</Link>
               {document.projectId === null && <span className="muted"> (Workspace)</span>}{" "}
-              <Button variant="ghost" type="button" onClick={() => void unlink(document.id)}>
+              <Button variant="secondary" type="button" onClick={() => void unlink(document.id)}>
                 Unlink
               </Button>
             </li>
@@ -949,7 +950,7 @@ const runStateShown: Record<Run["state"], string> = {
 function RunEntry({ run }: { run: Run }) {
   return (
     <li className="run-entry">
-      {run.agent.name} ran the {run.step.name} Step on <span className="mono">{run.model}</span>:{" "}
+      {run.agent.name} ran the {run.step.name} Step on <ModelLabel>{run.model}</ModelLabel>:{" "}
       <span className={`run-state ${run.state}`}>{runStateShown[run.state]}</span>
       {run.outcome && <> with {run.outcome}</>}
       {run.endReason && <>: {run.endReason}</>}

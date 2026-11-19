@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Button } from "./button.js";
+import { ModelLabel } from "./labels.js";
 
 /**
  * A new Step's starting point: sends Tickets on to the next Status, or back to the first other one for a User,
@@ -73,7 +74,7 @@ function StepItem({
 
   const summary = status.step ? (
     <>
-      <span className="mono">{status.step.model}</span>,{" "}
+      <ModelLabel>{status.step.model}</ModelLabel>,{" "}
       {[`${status.step.outcomes.length} Outcomes`, ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : [])].join(", ")}
     </>
   ) : (
@@ -166,6 +167,7 @@ function StepForm({
         <label>
           Model for {of}
           <input
+            className="mono"
             required
             maxLength={50}
             pattern="\S+"
@@ -332,7 +334,7 @@ export function BriefPreview({ project }: { project: Project }) {
       <form className="inline" onSubmit={onSubmit}>
         <label>
           Ticket key
-          <input name="key" required placeholder={`${project.key}-1`} />
+          <input name="key" className="mono" required placeholder={`${project.key}-1`} />
         </label>
         <Button variant="primary" type="submit" disabled={busy}>
           Preview Brief

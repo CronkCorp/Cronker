@@ -57,7 +57,7 @@ export function GitHubSignIn({ label = "Sign in with GitHub", returnTo }: { labe
   if (!app) return null;
   return (
     <a
-      className={buttonClass("primary")}
+      className={buttonClass("secondary")}
       href="/api/github/sign-in"
       onClick={() => {
         // GitHub sends the browser back to `/`; carry on from here once signed in.

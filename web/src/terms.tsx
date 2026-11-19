@@ -271,7 +271,7 @@ function Delete({ term, onDeleted }: { term: Term; onDeleted: () => void }) {
   return (
     <>
       <form onSubmit={onSubmit} className="inline">
-        <Button variant="ghost" type="submit" disabled={busy}>
+        <Button variant="secondary" type="submit" disabled={busy}>
           Delete Term
         </Button>
       </form>

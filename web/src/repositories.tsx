@@ -3,6 +3,7 @@ import { api, ApiError, type GitHubInstallation, type Project, type Repository }
 import { field } from "./forms.js";
 import { useLatest } from "./live.js";
 import { Button } from "./button.js";
+import { Key } from "./labels.js";
 
 /**
  * The Repositories a Project lists as holding its code, added from those the GitHub App's
@@ -73,8 +74,8 @@ export function RepositoriesSettings({ project }: { project: Project }) {
               </Button>
               {repository.keyClash && (
                 <p role="note" className="warning">
-                  A Project of another Workspace also lists {repository.fullName} under the key {project.key}, so a Pull Request
-                  naming a key such as {project.key}-12 links to Tickets in both Projects. Which Project isn't shown, since it
+                  A Project of another Workspace also lists {repository.fullName} under the key <Key>{project.key}</Key>, so a Pull Request
+                  naming a key such as <Key>{project.key}-12</Key> links to Tickets in both Projects. Which Project isn't shown, since it
                   isn't in this Workspace.
                 </p>
               )}

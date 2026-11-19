@@ -329,7 +329,7 @@ function Delete({ document, onDeleted }: { document: Document; onDeleted: () => 
   return (
     <>
       <form onSubmit={onSubmit} className="inline">
-        <Button variant="ghost" type="submit" disabled={busy}>
+        <Button variant="secondary" type="submit" disabled={busy}>
           Delete Document
         </Button>
       </form>
