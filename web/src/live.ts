@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ApiError } from "./api.js";
 
 /**
  * Live updates: one server-sent event stream per Workspace, and one for the User's own Runners, each shared by
@@ -16,10 +17,16 @@ export type LiveEvent =
   | { type: "attachments.changed"; documentId: string }
   /** A Pull Request linked to a Ticket, or one linked to it changed its title, branch, state, checks or reviews. */
   | { type: "pull_requests.changed"; projectId: string; ticketId: string }
+  /** A Document in a page tree, the Workspace's (`projectId` null) or a Project's, was created, saved, moved or deleted. */
+  | { type: "document.changed"; projectId: string | null; documentId: string }
+  /** A Term in a glossary was created, saved or deleted. */
+  | { type: "term.changed"; projectId: string | null; termId: string }
+  /** A Decision in a register was recorded or saved. */
+  | { type: "decision.changed"; projectId: string | null; decisionId: string }
   /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
   | { type: "reconnected" };
 
-const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed"];
+const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "document.changed", "term.changed", "decision.changed"];
 
 /** What the User's own Runners' stream tells: a Run started or ended on one, or its queue paused or resumed. */
 export type RunnerEvent = { type: "runner.changed"; runnerId: string } | { type: "reconnected" };
@@ -177,4 +184,27 @@ export function useArrivals(keys: string[], ready = true): Set<string> {
     );
   }, [joined, ready]);
   return arrived;
+}
+
+/**
+ * Whether the item a page shows was deleted by someone else while shown, so the page keeps it on screen, marked,
+ * until the User moves on. `failed` takes a live refetch's failure; `deleteHere` wraps the page's own delete, which
+ * isn't someone else's.
+ */
+export function useDeletedElsewhere(): { gone: boolean; failed: (error: Error) => void; deleteHere: (remove: () => Promise<void>) => Promise<void> } {
+  const [gone, setGone] = useState(false);
+  const deletingHere = useRef(false);
+  const failed = useCallback((error: Error) => {
+    if (error instanceof ApiError && error.status === 404 && !deletingHere.current) setGone(true);
+  }, []);
+  const deleteHere = useCallback(async (remove: () => Promise<void>) => {
+    deletingHere.current = true;
+    try {
+      await remove();
+    } catch (error) {
+      deletingHere.current = false;
+      throw error;
+    }
+  }, []);
+  return { gone, failed, deleteHere };
 }

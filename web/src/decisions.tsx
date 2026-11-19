@@ -18,7 +18,8 @@ import { usePlace } from "./frame.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime } from "./ui/controls.js";
+import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime } from "./ui/controls.js";
 import { DecisionStatusPill, decisionStatusLabel } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 
@@ -35,9 +36,16 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
   const [failure, setFailure] = useState<string | null>(null);
   const [only, setOnly] = useState<DecisionStatus | null>(null);
   const [creating, setCreating] = useState(false);
-  useEffect(() => {
-    api.decisions(place).then(setDecisions, (e: Error) => setFailure(e.message));
-  }, [place.kind, place.id]);
+  const latest = useLatest();
+  const load = useCallback(
+    () => latest(api.decisions(place), setDecisions, (e) => setFailure(e.message)),
+    [place.kind, place.id, latest],
+  );
+  useEffect(load, [load]);
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "decision.changed" && event.projectId === (project?.id ?? null))) load();
+  });
+  const arrived = useArrivals(decisions?.map((d) => d.id) ?? [], decisions !== null);
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createDecision(place, { title: field(form, "title") });
@@ -51,7 +59,12 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
       <PageHead
         crumbs={knowledgeCrumbs(workspace, project, "Decisions")}
         title="Decisions"
-        switcher={<ScopeSwitch workspace={workspace} project={project} kind="decisions" />}
+        switcher={
+          <>
+            <LiveIndicator workspaceId={workspace.id} />
+            <ScopeSwitch workspace={workspace} project={project} kind="decisions" />
+          </>
+        }
         actions={
           <>
             <ExportLink place={place} />
@@ -98,7 +111,7 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
                   {shown.map((decision) => {
                     const replacement = decisions.find((d) => d.id === decision.supersededById);
                     return (
-                      <tr key={decision.id}>
+                      <tr key={decision.id} className={arrived.has(decision.id) ? "arrived" : undefined}>
                         <td className="mono muted">{numbered(decision.number)}</td>
                         <td>
                           <Link to={`/decisions/${decision.id}`}>{decision.title}</Link>
@@ -197,11 +210,25 @@ export function DecisionScreen({
       ? { kind: "project", id: decision.projectId }
       : { kind: "workspace", id: decision.workspaceId }
     : null;
+  const latestOthers = useLatest();
+  const loadOthers = useCallback(() => {
+    if (place) latestOthers(api.decisions(place), setOthers, () => setOthers([]));
+  }, [place?.kind, place?.id, latestOthers]);
+  // Its own save may supersede it by another, which the banner names; it shows even while the stream is away.
+  useEffect(loadOthers, [loadOthers, decision?.version.number]);
   useEffect(() => {
-    if (!place) return;
-    api.decisions(place).then(setOthers, () => setOthers([]));
-    if (place.kind === "project") api.project(place.id).then(setProject, () => setProject(null));
-  }, [place?.kind, place?.id, decision?.version.number]);
+    if (place?.kind === "project") api.project(place.id).then(setProject, () => setProject(null));
+  }, [place?.kind, place?.id]);
+  const latestDecision = useLatest();
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "decision.changed" && event.decisionId === decisionId)) {
+      latestDecision(api.decision(decisionId), setDecision);
+    }
+    // Another Decision of its register may now supersede it, or be superseded by it.
+    if (event.type === "reconnected" || (event.type === "decision.changed" && place && event.projectId === (place.kind === "project" ? place.id : null))) {
+      loadOthers();
+    }
+  });
 
   const saved = (next: Decision) => {
     setDecision(next);
@@ -224,6 +251,7 @@ export function DecisionScreen({
             <DecisionStatusPill status={decision.status} />
           </>
         }
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
         meta={<VersionMeta version={decision.version} />}
         actions={
           !editing && (
@@ -305,7 +333,7 @@ export function DecisionScreen({
               />
             </Panel>
             <Versions
-              key={versionsShown}
+              key={`${versionsShown} ${decision.version.number}`}
               source={{
                 list: () => api.decisionVersions(decision.id),
                 read: (number) => api.decisionVersion(decision.id, number),

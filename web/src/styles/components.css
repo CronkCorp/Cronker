@@ -705,6 +705,20 @@ textarea.markdown-source {
     box-shadow: 0 0 0 2px transparent;
   }
 }
+/* A flush panel clips what is drawn outside its rows, and a table row draws no shadow, so there the ring is inside. */
+.panel-flush .arrived {
+  animation-name: arrived-inside;
+}
+@keyframes arrived-inside {
+  from {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  to {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+  }
+}
 
 /* Popovers, menus and dialogs: the only surfaces with a shadow. */
 .popover,

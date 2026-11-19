@@ -75,6 +75,17 @@ export function Banner({ tone, children, label }: { tone: "info" | "warn"; child
   );
 }
 
+/** Marks an item deleted by someone else while the User has it open, with a way back to where it was listed. */
+export function DeletedElsewhere({ children, back }: { children: ReactNode; back: { to: string; label: string } }) {
+  return (
+    <Banner tone="warn" label="Deleted elsewhere">
+      <p>
+        Deleted elsewhere: {children} <Link to={back.to}>{back.label}</Link>
+      </p>
+    </Banner>
+  );
+}
+
 /** What will appear here, and how it gets there. */
 export function EmptyState({ title, children }: { title: string; children?: ReactNode }) {
   return (
@@ -258,7 +269,7 @@ export function RunnersLiveIndicator() {
 
 function LiveStatus({ state }: { state: LiveState }) {
   return (
-    <span className={`live live-${state}`}>
+    <span role="status" aria-label="Live updates" className={`live live-${state}`}>
       <span className="live-dot" aria-hidden="true" />
       {state === "live" ? "Live" : "Reconnecting…"}
     </span>

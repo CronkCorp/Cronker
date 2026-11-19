@@ -18,12 +18,12 @@ import {
 import { Attachments, markdownReference } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
-import { useLatest, useLiveEvents } from "./live.js";
+import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -96,9 +96,16 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
   const [documents, setDocuments] = useState<DocumentSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  useEffect(() => {
-    api.documents(tree).then(setDocuments, (e: Error) => setFailure(e.message));
-  }, [tree.kind, tree.id]);
+  const latest = useLatest();
+  const load = useCallback(
+    () => latest(api.documents(tree), setDocuments, (e) => setFailure(e.message)),
+    [tree.kind, tree.id, latest],
+  );
+  useEffect(load, [load]);
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "document.changed" && event.projectId === (project?.id ?? null))) load();
+  });
+  const arrived = useArrivals(documents?.map((d) => d.id) ?? [], documents !== null);
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createDocument(tree, { title: field(form, "title") });
@@ -109,7 +116,7 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
   const branch = (parentId: string | null, depth: number): ReactNode =>
     (children.get(parentId) ?? []).map((document) => (
       <li key={document.id}>
-        <Link to={`/documents/${document.id}`} className="row" style={{ paddingLeft: 16 + depth * 20 }}>
+        <Link to={`/documents/${document.id}`} className={`row${arrived.has(document.id) ? " arrived" : ""}`} style={{ paddingLeft: 16 + depth * 20 }}>
           <span className="row-title">{document.title}</span>
           <span className="row-meta">
             <span className="muted small">Version {document.version.number}</span>
@@ -124,7 +131,12 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
       <PageHead
         crumbs={knowledgeCrumbs(workspace, project, "Documents")}
         title="Documents"
-        switcher={<ScopeSwitch workspace={workspace} project={project} kind="documents" />}
+        switcher={
+          <>
+            <LiveIndicator workspaceId={workspace.id} />
+            <ScopeSwitch workspace={workspace} project={project} kind="documents" />
+          </>
+        }
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
             New Document
@@ -193,6 +205,7 @@ export function DocumentScreen({
   const [deleting, setDeleting] = useState(false);
   const [versionsShown, setVersionsShown] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const { gone, failed, deleteHere } = useDeletedElsewhere();
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
   usePlace("documents", document?.projectId ?? null);
@@ -207,6 +220,13 @@ export function DocumentScreen({
     );
   }, [documentId, workspace.id]);
   useEffect(load, [load]);
+  const latestDocument = useLatest();
+  /** Fetches the shown Document again after a live event, keeping it on screen if it went meanwhile. */
+  const reload = useCallback(
+    () =>
+      latestDocument(api.document(documentId), setDocument, failed),
+    [documentId, latestDocument, failed],
+  );
   const projectId = document?.projectId ?? null;
   const ticketId = document?.ticketId ?? null;
   useEffect(() => {
@@ -222,6 +242,13 @@ export function DocumentScreen({
   useLiveEvents(workspace.id, (event) => {
     if (event.type === "reconnected" || (event.type === "attachments.changed" && "documentId" in event && event.documentId === documentId)) {
       loadAttachments();
+    }
+    if (
+      event.type === "reconnected" ||
+      (event.type === "document.changed" && event.documentId === documentId) ||
+      (event.type === "report.changed" && event.reportId === documentId)
+    ) {
+      reload();
     }
   });
 
@@ -248,9 +275,11 @@ export function DocumentScreen({
         crumbs={crumbs}
         title={document.title}
         large
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
         meta={<VersionMeta version={document.version} />}
         actions={
-          !editing && (
+          !editing &&
+          !gone && (
             <>
               <Menu label="More of this Document">
                 {!document.ticketId && <MenuItem onSelect={() => setMoving(true)}>Move…</MenuItem>}
@@ -265,6 +294,11 @@ export function DocumentScreen({
           )
         }
       />
+      {gone && (
+        <DeletedElsewhere back={{ to: home, label: document.ticketId ? "Back to its Ticket" : "Back to Documents" }}>
+          this Document is no longer kept.
+        </DeletedElsewhere>
+      )}
       {editing ? (
         <Editor
           saved={document}
@@ -299,7 +333,7 @@ export function DocumentScreen({
           </div>
           <aside className="side" aria-label="Document details">
             <Versions
-              key={versionsShown}
+              key={`${versionsShown} ${document.version.number}`}
               source={{
                 list: () => api.versions(document.id),
                 read: (number) => api.version(document.id, number),
@@ -316,7 +350,7 @@ export function DocumentScreen({
         title={`Delete ${document.title}?`}
         confirm="Delete"
         onConfirm={async () => {
-          await api.deleteDocument(document.id);
+          await deleteHere(() => api.deleteDocument(document.id));
           navigate(home);
         }}
       >

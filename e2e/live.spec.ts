@@ -1,7 +1,7 @@
 import { connect, type Socket } from "node:net";
 import { addMember, setUp, signIn } from "../test/harness/flows.js";
 import { startCronk, type StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, fieldPicker, test, webRoot } from "./fixtures.js";
+import { expect, fieldPicker, signInInBrowser, test, webRoot } from "./fixtures.js";
 
 test("the board and the Ticket view show what another member changes, without a reload", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
@@ -51,6 +51,88 @@ test("the board and the Ticket view show what another member changes, without a 
   await expect(page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by bob@example.com" })).toContainText(
     "Picking this up.",
   );
+});
+
+test("Documents, Terms and Decisions show what another member adds or saves, without a reload", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const bob = await addMember(cronk, cookie, workspace.id, "bob@example.com");
+  const asBob = (method: string, path: string, body?: unknown) =>
+    cronk.request(method, path, { cookie: bob.cookie, body }).then((response) => {
+      expect(response.ok).toBe(true);
+      return response.json();
+    });
+
+  await signInInBrowser(page, cronk);
+  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+  const live = page.getByRole("status", { name: "Live updates" });
+
+  await sidebar.getByRole("link", { name: "Documents" }).click();
+  await expect(live).toHaveText("Live");
+  const guide = await asBob("POST", `/api/workspaces/${workspace.id}/documents`, { title: "Guide", body: "First draft." });
+  await page.getByRole("region", { name: "Page tree" }).getByRole("link", { name: /Guide/ }).click();
+  await expect(page.getByRole("heading", { name: "Guide" })).toBeVisible();
+  await asBob("PATCH", `/api/documents/${guide.id}`, { baseVersion: 1, title: "Guide", body: "Second draft." });
+  await expect(page.getByText("Second draft.")).toBeVisible();
+  await expect(live).toHaveText("Live");
+
+  await sidebar.getByRole("link", { name: "Terms" }).click();
+  await expect(live).toHaveText("Live");
+  const term = await asBob("POST", `/api/workspaces/${workspace.id}/terms`, { name: "Ticket", definition: "A unit of work." });
+  const glossary = page.getByRole("region", { name: "Glossary" });
+  await expect(glossary.getByRole("article", { name: "Ticket" })).toContainText("A unit of work.");
+  await asBob("PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "A unit of work in a Project." });
+  await expect(glossary.getByRole("article", { name: "Ticket" })).toContainText("A unit of work in a Project.");
+  // A Term deleted while Ada reads it stays on her screen, marked, until she moves on.
+  await glossary.getByRole("link", { name: "Ticket" }).click();
+  await expect(page.getByRole("heading", { name: "Ticket" })).toBeVisible();
+  expect((await cronk.request("DELETE", `/api/terms/${term.id}`, { cookie: bob.cookie })).status).toBe(204);
+  await expect(page.getByRole("note", { name: "Deleted elsewhere" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ticket" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+
+  await sidebar.getByRole("link", { name: "Decisions" }).click();
+  await expect(live).toHaveText("Live");
+  const decision = await asBob("POST", `/api/workspaces/${workspace.id}/decisions`, { title: "Use Postgres", body: "It's dependable." });
+  const register = page.getByRole("region", { name: "Decisions" });
+  await expect(register.getByRole("row", { name: /Use Postgres/ })).toContainText("Proposed");
+  await register.getByRole("link", { name: "Use Postgres" }).click();
+  await expect(page.getByText("It's dependable.")).toBeVisible();
+  await asBob("PATCH", `/api/decisions/${decision.id}`, { baseVersion: 1, status: "accepted" });
+  await expect(page.getByRole("complementary", { name: "Decision details" })).toContainText("Accepted");
+});
+
+test("every streaming view says it is Live, and Reconnecting… while its stream is away", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
+  const project = (await created.json()) as { id: string };
+  const ticket = await (await cronk.request("POST", `/api/projects/${project.id}/tickets`, { cookie, body: { title: "Live" } })).json();
+
+  await signInInBrowser(page, cronk);
+  const live = page.getByRole("status", { name: "Live updates" });
+  for (const path of [
+    `/projects/${project.id}`,
+    `/tickets/${ticket.id}`,
+    `/workspaces/${workspace.id}/inbox`,
+    `/workspaces/${workspace.id}/documents`,
+    `/workspaces/${workspace.id}/glossary`,
+    `/workspaces/${workspace.id}/decisions`,
+  ]) {
+    await page.goto(`${cronk.url}${path}`);
+    await expect(live, path).toHaveText("Live");
+  }
+
+  // The stream drops, here by Cronk ending it as the browser's sign-in ends, and can't reach Cronk again for now.
+  await page.route("**/events", (route) => route.abort());
+  const browserCookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  expect((await cronk.request("DELETE", "/api/sign-in", { cookie: browserCookie })).status).toBe(204);
+  await expect(live).toHaveText("Reconnecting…");
+
+  // Once Cronk can be reached again, with a sign-in, the stream comes back.
+  await page.context().addCookies([{ name: cookie.split("=")[0]!, value: cookie.split("=").slice(1).join("="), url: cronk.url }]);
+  await page.unroute("**/events");
+  await expect(live).toHaveText("Live", { timeout: 15_000 });
 });
 
 /** Opens a connection to Cronk without sending anything on it yet. */

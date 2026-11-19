@@ -201,7 +201,7 @@ async function shiftSiblings(
  * siblings or last, at Version 1 by its Actor.
  */
 export async function createDocument(
-  { db, clock }: Context,
+  { db, clock, live }: Context,
   actor: Caller,
   tree: Tree,
   input: { title: string; body: string; parentId?: string | null; position?: number },
@@ -221,6 +221,7 @@ export async function createDocument(
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: tree.workspaceId }, 1, input, actor, now);
+    documentChanged(live, tx, { ...tree, id, ticketId: null });
     return (await findDocument(tx, actor, id))!;
   });
 }
@@ -295,14 +296,20 @@ type Placed = Tree & { id: string; version: number; parentId: string | null; pos
 const isInPageTree = (document: Placed): document is Placed & { ticketId: null; position: number } =>
   document.ticketId === null;
 
-/** Tells the Workspace's streams that a Report changed or went, so its Ticket shows it. */
-function reportChanged(live: Live, tx: Tx, report: Placed): void {
-  if (report.ticketId === null) return;
-  live.publish(tx, report.workspaceId, {
+/**
+ * Tells the Workspace's streams that a Document changed or went: one in a page tree so its tree and page show it,
+ * a Report so its Ticket does.
+ */
+function documentChanged(live: Live, tx: Tx, document: Tree & { id: string; ticketId: string | null }): void {
+  if (document.ticketId === null) {
+    live.publish(tx, document.workspaceId, { type: "document.changed", projectId: document.projectId, documentId: document.id });
+    return;
+  }
+  live.publish(tx, document.workspaceId, {
     type: "report.changed",
-    projectId: report.projectId!,
-    ticketId: report.ticketId,
-    reportId: report.id,
+    projectId: document.projectId!,
+    ticketId: document.ticketId,
+    reportId: document.id,
   });
 }
 
@@ -367,7 +374,7 @@ export async function editDocument(
       await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
     }
     if (moving) await moveDocument(tx, document, edit);
-    reportChanged(live, tx, document);
+    documentChanged(live, tx, document);
     return (await findDocument(tx, actor, document.id))!;
   });
 }
@@ -454,6 +461,6 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
     }
     await tx.query("delete from documents where id = $1", [document.id]);
     if (isInPageTree(document)) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
-    reportChanged(live, tx, document);
+    documentChanged(live, tx, document);
   });
 }

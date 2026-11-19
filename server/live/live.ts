@@ -15,7 +15,10 @@ export type LiveEvent =
   | { type: "report.changed"; projectId: string; ticketId: string; reportId: string }
   | { type: "attachments.changed"; projectId: string; ticketId: string }
   | { type: "pull_requests.changed"; projectId: string; ticketId: string }
-  | { type: "attachments.changed"; documentId: string };
+  | { type: "attachments.changed"; documentId: string }
+  | { type: "document.changed"; projectId: string | null; documentId: string }
+  | { type: "term.changed"; projectId: string | null; termId: string }
+  | { type: "decision.changed"; projectId: string | null; decisionId: string };
 
 export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.created": "A Project was created, with its Statuses.",
@@ -27,6 +30,10 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "report.added": "A Run wrote a Report on a Ticket.",
   "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
   "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state, checks or reviews.",
+  "document.changed":
+    "A Document in a page tree, the Workspace's (`projectId` null) or a Project's, was created, saved, moved or deleted.",
+  "term.changed": "A Term in a glossary, the Workspace's (`projectId` null) or a Project's, was created, saved or deleted.",
+  "decision.changed": "A Decision in a register, the Workspace's (`projectId` null) or a Project's, was recorded or saved.",
   "attachments.changed":
     "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
 };
