@@ -39,3 +39,28 @@ for (const [colorScheme, ground] of [
     await expect(page.locator("body")).toHaveCSS("background-color", ground);
   });
 }
+
+// docs/ui.md: buttons size to their label and are never full width outside sign-in forms.
+test("only the sign-in form's buttons span their card; other signed-out pages' buttons fit their label", async ({ page, cronk }) => {
+  const width = async (locator: ReturnType<typeof page.getByRole>) => (await locator.boundingBox())!.width;
+
+  await page.goto(cronk.url);
+  const setupField = await width(page.getByLabel("Setup code"));
+  expect(await width(page.getByRole("button", { name: "Set up" }))).toBeLessThan(setupField / 2);
+
+  const setup = await cronk.request("POST", "/api/setup", {
+    body: { setupCode: cronk.setupCode(), email: "ada@example.com", password: "correct horse battery", workspaceName: "Ada's Workspace" },
+  });
+  const { workspace } = await setup.json();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
+  expect(await width(page.getByRole("button", { name: "Sign in" }))).toBe(await width(page.getByLabel("Email")));
+
+  const signedIn = await cronk.request("POST", "/api/sign-in", { body: { email: "ada@example.com", password: "correct horse battery" } });
+  const cookie = signedIn.headers.get("set-cookie")!.split(";")[0]!;
+  const added = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } });
+  const { link } = await added.json();
+  await page.goto(link.url);
+  await expect(page.getByRole("heading", { name: "Join Ada's Workspace" })).toBeVisible();
+  expect(await width(page.getByRole("button", { name: "Join" }))).toBeLessThan((await width(page.getByLabel("Choose a password"))) / 2);
+});
