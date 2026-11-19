@@ -4,7 +4,11 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
-import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow } from "./app.js";
+import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
+import { receiveDelivery } from "./webhooks.js";
+
+/** GitHub sends webhook payloads of up to 25 MB. */
+const webhookBodyLimit = 25 * 1024 * 1024;
 
 /** Where a browser GitHub sent back is sent on: a page of the web client, with an error code if it failed. */
 function pageWith(path: string, error: unknown, fallback: string, parameter = "error"): string {
@@ -93,6 +97,38 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         return reply.code(201).send(await startManifestFlow(context, user.id, request.body.githubOrganization));
       },
     );
+
+    // The webhook endpoint reads its body as bytes, since the signature covers exactly those.
+    await app.register(async (hooks) => {
+      hooks.removeAllContentTypeParsers();
+      hooks.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: webhookBodyLimit }, (_request, body, done) => done(null, body));
+      hooks.post(
+        webhooksPath,
+        {
+          bodyLimit: webhookBodyLimit,
+          schema: {
+            tags: ["GitHub"],
+            summary: "Where GitHub sends the App's webhook deliveries",
+            description:
+              "For GitHub only. A delivery must carry `X-Hub-Signature-256`, the HMAC-SHA256 of its body under the App's webhook secret, or it is refused with `invalid_signature` before anything else is looked at. Each delivery is applied once, by its `X-GitHub-Delivery` id: `applied` says whether this call applied it, and is false for one applied before.",
+            response: { 200: Type.Object({ applied: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody },
+          },
+        },
+        async (request) => {
+          const header = (name: string) => {
+            const value = request.headers[name];
+            return Array.isArray(value) ? value[0] : value;
+          };
+          const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+          const applied = await receiveDelivery(context, body, {
+            signature: header("x-hub-signature-256"),
+            event: header("x-github-event"),
+            id: header("x-github-delivery"),
+          });
+          return { applied };
+        },
+      );
+    });
 
     app.get(
       createdPath,
