@@ -87,9 +87,9 @@ export async function answerQuestion(
   const now = context.clock.now();
   const { rows } = await tx.query<{ runId: string; stepStatusId: string | null; needsYouRunId: string | null }>(
     `update questions set answer_comment_id = $2, answered_at = $3
-     from tickets where questions.comment_id = $1 and questions.answered_at is null and tickets.id = questions.ticket_id
+     where questions.comment_id = $1 and questions.answered_at is null
      returning questions.run_id as "runId", questions.step_status_id as "stepStatusId",
-       tickets.needs_you_run_id as "needsYouRunId"`,
+       (select run_id from needs_you where needs_you.ticket_id = questions.ticket_id) as "needsYouRunId"`,
     [replyToId, answerId, now],
   );
   const question = rows[0];
@@ -98,11 +98,8 @@ export async function answerQuestion(
   if (question.needsYouRunId !== question.runId || !question.stepStatusId) return;
 
   // The User moves it back, as moving it by hand would: entering the Status resets its rounds.
-  await tx.query("update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null where id = $1", [
-    ticket.id,
-    question.stepStatusId,
-    now,
-  ]);
+  await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticket.id, question.stepStatusId, now]);
+  await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
   const statuses = await statusesOf(tx, ticket.projectId);
   const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
   await recordChanges(tx, ticket, userId, now, [

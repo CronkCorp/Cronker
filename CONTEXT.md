@@ -69,7 +69,7 @@ A User's after-the-fact judgement on a Ticket an agent completed: **Unverified**
 _Avoid_: Approval, sign-off, QA
 
 **Question**:
-What a Run asks a User when it ends with its *needs you* Outcome. Answering it with a Comment reply moves the Ticket back to the Status of the Step that asked, so a new Run picks the answer up. Runs never wait for an answer.
+What a Run asks a User when it ends with its *needs you* Outcome. Answering it with a Comment reply moves the Ticket back to the Status of the Step that asked, so a new Run picks the answer up. Runs never wait for an answer. Past a Step's round limit Cronk applies *needs you* itself, with its own Question, whether or not a Run ended there; it waits with the Ticket in the Assignee's Inbox until a User moves it.
 _Avoid_: Prompt, clarification, blocker
 
 **Label**:

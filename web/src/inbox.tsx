@@ -128,9 +128,16 @@ function ItemDetail({ item }: { item: InboxItem }) {
       );
     case "needsYou":
       return (
-        <small>
-          Handed back to you in {item.status.name}: the {item.step.name} Step finished with {item.outcome}
-        </small>
+        <>
+          <small>
+            Handed back to you in {item.status.name}: the {item.step.name} Step finished with {item.outcome}
+          </small>
+          {item.question && (
+            <blockquote className="question">
+              <p>Cronk asks: {item.question}</p>
+            </blockquote>
+          )}
+        </>
       );
     case "review":
       return <small>Waiting for your review in {item.status.name}</small>;

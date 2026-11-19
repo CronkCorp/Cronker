@@ -46,11 +46,13 @@ You are signed in, and Cronk offers to connect GitHub.
 
 ## 3. Create the GitHub App (optional)
 
-The GitHub App lets people sign in with GitHub. One App serves the whole installation.
+The GitHub App lets people sign in with GitHub, and lets Cronk read the Pull Requests of the Repositories it's installed on and hear about them through webhooks. One App serves the whole installation.
 
-On the **Connect GitHub** screen (or later, as an Admin, on the **GitHub** page), choose **Create GitHub App**. To own it from a GitHub organization rather than your own account, name the organization first. GitHub shows the App Cronk asks for, named after Cronk's address and allowed to read email addresses; you may rename it. Confirm, and GitHub sends you back to Cronk, which stores the App's credentials.
+On the **Connect GitHub** screen (or later, as an Admin, on the **GitHub** page), choose **Create GitHub App**. To own it from a GitHub organization rather than your own account, name the organization first. GitHub shows the App Cronk asks for, named after Cronk's address: allowed to read email addresses, and to read metadata, pull requests, checks and commit statuses (never to write), subscribed to pull request, pull request review, check run, check suite and status events, with its webhook pointing at Cronk. You may rename it. Confirm, and GitHub sends you back to Cronk, which stores the App's credentials and webhook secret.
 
-The **GitHub** page now names the App. Sign out and back in with **Sign in with GitHub** to check it: the first time, GitHub links your account to your User by its verified primary email.
+The **GitHub** page now names the App, and says it has everything Cronk needs. Sign out and back in with **Sign in with GitHub** to check it: the first time, GitHub links your account to your User by its verified primary email. Install the App from its page on GitHub on the accounts and organizations whose Repositories Cronk should read; the **GitHub** page lists the installations and their Repositories.
+
+**An App created for sign-in only**, before Cronk read Pull Requests, can't be changed by Cronk. As an Admin, the **GitHub** page asks GitHub what the App has and lists what it lacks: the permissions and events to add, and the webhook URL and secret to paste, with a link to the App's settings on GitHub. Add them there and reload the page. GitHub never shows a webhook secret, so the webhook stays listed until a delivery arrives signed with Cronk's; to check at once, redeliver one from the App's Advanced settings on GitHub. GitHub then asks the owner of each installation to accept the new permissions; the page lists the installations that haven't yet.
 
 To skip it, choose **Skip for now**; email and password sign-in is enough for everything below.
 

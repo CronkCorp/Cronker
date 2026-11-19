@@ -17,6 +17,8 @@ test("set up with a GitHub App, add someone by GitHub login, and they sign in wi
   // The stand-in GitHub creates the App and sends the browser back.
   await expect(page.getByRole("status")).toContainText("The GitHub App is created");
   await expect(page.getByRole("link", { name: cronk.github.apps[0]!.name })).toBeVisible();
+  await expect(page.getByText("The App has every permission, event and webhook setting Cronk needs")).toBeVisible();
+  await expect(page.getByText("The App isn't installed anywhere yet")).toBeVisible();
 
   await page.getByRole("link", { name: "Members" }).click();
   await page.getByLabel("GitHub login").fill("bea");

@@ -9,6 +9,7 @@ import type { Config } from "./config.js";
 import type { Context } from "./context.js";
 import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
+import { InstallationTokens } from "./github/installations.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
@@ -42,7 +43,7 @@ export async function createCronk({ config, clock = systemClock, logStream, runn
   });
   try {
     await migrate(db);
-    const context: Context = { config, db, clock, live: new Live(), runners: {} };
+    const context: Context = { config, db, clock, live: new Live(), runners: {}, installationTokens: new InstallationTokens(clock) };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
