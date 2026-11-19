@@ -725,6 +725,8 @@ const relationGroups: { kind: RelationKind; label: string }[] = [
   { kind: "relatesTo", label: "Relates to" },
 ];
 
+const relationLabel = (kind: RelationKind) => relationGroups.find((g) => g.kind === kind)!.label;
+
 function TicketLink({ ticket }: { ticket: TicketRef }) {
   return (
     <Link to={`/tickets/${ticket.id}`} className="ticket-link">
@@ -749,10 +751,11 @@ function Relations({
   onChanged: () => void;
 }) {
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Kept after adding, for adding several of one kind in a row.
+  const [kind, setKind] = useState<RelationKind>("blockedBy");
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     const ticketKey = field(form, "ticket").trim();
-    await api.relate(ticket.id, { kind: field(form, "kind") as RelationKind, ticketKey });
-    // Keeps the kind chosen, for adding several of one kind in a row.
+    await api.relate(ticket.id, { kind, ticketKey });
     (element.elements.namedItem("ticket") as HTMLInputElement).value = "";
     onChanged();
   });
@@ -826,13 +829,17 @@ function Relations({
       <FormError error={removeError} />
       <form onSubmit={onSubmit} className="side-form">
         <div className="side-form-row">
-          <select name="kind" defaultValue="blockedBy" aria-label="Relation">
-            {relationGroups.map(({ kind, label }) => (
-              <option key={kind} value={kind}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <Picker
+            label="Relation"
+            options={relationGroups.map(({ kind, label }) => ({ value: kind, label }))}
+            selected={[kind]}
+            onPick={(picked) => setKind(picked as RelationKind)}
+            trigger={
+              <Button size="small" aria-haspopup="listbox" aria-label={`Relation ${relationLabel(kind)}`}>
+                {relationLabel(kind)} <span aria-hidden="true">▾</span>
+              </Button>
+            }
+          />
           <input name="ticket" required list="relation-tickets" placeholder={`Key, such as ${ticket.key}`} aria-label="Ticket" className="mono" />
         </div>
         <datalist id="relation-tickets">
