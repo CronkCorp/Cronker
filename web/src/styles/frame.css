@@ -242,6 +242,10 @@
 .centered-card > h1 {
   font-size: 20px;
 }
+/* Buttons size to their label; only the sign-in form's span the card (docs/ui.md). */
+.centered-card > .button {
+  justify-self: start;
+}
 .centered-card .button-github {
   width: 100%;
 }

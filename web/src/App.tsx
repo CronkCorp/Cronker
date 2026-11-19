@@ -21,12 +21,12 @@ import { DocumentScreen, WorkspaceDocuments } from "./documents.js";
 import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
-import { navigate, replace, usePath } from "./router.js";
+import { Link, navigate, replace, usePath } from "./router.js";
 import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
+import { Actions, Button, buttonClass, EmptyState, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 type Screen =
@@ -306,6 +306,9 @@ function SignedIn({
     return true;
   };
 
+  // The password page is a centred card outside the frame; it leads back to the Workspace on screen.
+  if (path === "/password") return <ChangePassword back={current ? `/workspaces/${current.id}` : "/"} />;
+
   let page: ReactNode;
   if (path === "/workspaces/new") {
     page = (
@@ -316,8 +319,6 @@ function SignedIn({
         }}
       />
     );
-  } else if (path === "/password") {
-    page = <ChangePassword />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {
@@ -440,8 +441,8 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   );
 }
 
-function ChangePassword() {
-  usePlace(null);
+/** The signed-in User's password: a centred card outside the frame, like the other pages about signing in. */
+function ChangePassword({ back }: { back: string }) {
   const [done, setDone] = useState(false);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
     setDone(false);
@@ -450,26 +451,26 @@ function ChangePassword() {
     setDone(true);
   });
   return (
-    <div className="page page-settings">
-      <PageHead crumbs={[{ label: "Account" }]} title="Password" />
-      <Panel>
-        <form onSubmit={onSubmit}>
-          <Field label="Current password">
-            <input name="currentPassword" type="password" required autoComplete="current-password" />
-          </Field>
-          <Field label="New password" hint="At least 8 characters. Changing it ends your other sign-ins.">
-            <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
-          </Field>
-          <FormError error={error} />
-          <Actions>
-            <Button type="submit" variant="primary" disabled={busy}>
-              Change password
-            </Button>
-            <Saved shown={done}>Password changed. Your other sign-ins have ended.</Saved>
-          </Actions>
-        </form>
-      </Panel>
-    </div>
+    <Centered title="Change your password">
+      <form onSubmit={onSubmit}>
+        <Field label="Current password">
+          <input name="currentPassword" type="password" required autoComplete="current-password" />
+        </Field>
+        <Field label="New password" hint="At least 8 characters. Changing it ends your other sign-ins.">
+          <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
+        </Field>
+        <FormError error={error} />
+        <Actions>
+          <Button type="submit" variant="primary" disabled={busy}>
+            Change password
+          </Button>
+          <Saved shown={done}>Password changed. Your other sign-ins have ended.</Saved>
+        </Actions>
+      </form>
+      <Link to={back} className={buttonClass("ghost")}>
+        Back to Cronk
+      </Link>
+    </Centered>
   );
 }
 
