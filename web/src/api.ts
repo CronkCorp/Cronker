@@ -592,9 +592,9 @@ export interface Completion {
 /** Which page tree: a Project's, or the Workspace's. */
 export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
 
-export interface Comparison {
-  from: VersionWithBody;
-  to: VersionWithBody;
+export interface Comparison<V extends VersionWithBody = VersionWithBody> {
+  from: V;
+  to: V;
   lines: { change: "same" | "removed" | "added"; text: string }[];
 }
 
@@ -618,6 +618,14 @@ export interface TermVersion {
   avoid: string[];
   actor: Actor;
   savedAt: string;
+}
+
+/** Two of a Term's Versions: their definitions compared line by line, and their words to avoid one by one. */
+export interface TermComparison {
+  from: TermVersion;
+  to: TermVersion;
+  lines: { change: "same" | "removed" | "added"; text: string }[];
+  avoid: { change: "same" | "removed" | "added"; text: string }[];
 }
 
 export interface TermContent {
@@ -838,6 +846,9 @@ export const api = {
   editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
+  termVersion: (termId: string, number: number) => call<TermVersion>("GET", `${term(termId)}/versions/${number}`),
+  compareTermVersions: (termId: string, from: number, to: number) =>
+    call<TermComparison>("GET", `${term(termId)}/versions/compare?from=${from}&to=${to}`),
   attachments: (owner: AttachmentOwner) => call<Attachment[]>("GET", attachmentsPath(owner)),
   attach: (owner: AttachmentOwner, file: File) =>
     call<Attachment>("POST", `${attachmentsPath(owner)}?name=${encodeURIComponent(file.name)}`, file),
