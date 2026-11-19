@@ -280,12 +280,7 @@ export function TermScreen({
               onCancel={() => setEditing(false)}
             />
           ) : (
-            <article className="panel" aria-label={term.name}>
-              <div className="prose">
-                {term.definition.trim() ? <Markdown text={term.definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
-                <Avoid words={term.avoid} />
-              </div>
-            </article>
+            <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
           )}
         </div>
         <aside className="side" aria-label="Term details">
@@ -384,9 +379,22 @@ function Editor({
   );
 }
 
-/** The Term's Versions, newest first, each opening to what it said. */
+/** A Term as it reads, as a Document's body does: its definition at 15px at a 720px measure, then the words to avoid. */
+function TermBody({ name, definition, avoid }: { name: string; definition: string; avoid: string[] }) {
+  return (
+    <article className="panel document-body" aria-label={name}>
+      <div className="prose">
+        {definition.trim() ? <Markdown text={definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
+        <Avoid words={avoid} />
+      </div>
+    </article>
+  );
+}
+
+/** The Term's Versions, newest first, in a side list as a Document's are: each opens to what it said. */
 function Versions({ term }: { term: Term }) {
   const [versions, setVersions] = useState<TermVersion[] | null>(null);
+  const [shown, setShown] = useState<TermVersion | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
     api.termVersions(term.id).then(setVersions, (e: Error) => setFailure(e.message));
@@ -399,22 +407,25 @@ function Versions({ term }: { term: Term }) {
       <ol className="version-list">
         {[...versions].reverse().map((version) => (
           <li key={version.number}>
-            <details className="version-details">
-              <summary>
-                Version {version.number}{" "}
-                <span className="version-by">
-                  <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
-                </span>
-              </summary>
-              <div className="version-body">
-                <strong>{version.name}</strong>
-                <Markdown text={version.definition} mentions={[]} />
-                <Avoid words={version.avoid} />
-              </div>
-            </details>
+            <span className="version-item">
+              <Button variant="ghost" size="small" onClick={() => setShown(version)}>
+                Version {version.number}
+              </Button>
+              <span className="version-by">
+                <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
+              </span>
+            </span>
           </li>
         ))}
       </ol>
+      <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.name}` : ""} wide>
+        {shown && (
+          <>
+            <VersionMeta version={shown} />
+            <TermBody name={shown.name} definition={shown.definition} avoid={shown.avoid} />
+          </>
+        )}
+      </Dialog>
     </section>
   );
 }

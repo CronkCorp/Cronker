@@ -904,16 +904,6 @@
   gap: 6px;
   font-size: 12px;
 }
-.version-details summary {
-  cursor: pointer;
-}
-.version-body {
-  display: grid;
-  gap: var(--space-1);
-  margin-top: var(--space-2);
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--border);
-}
 .document-body {
   padding: var(--space-5);
 }
