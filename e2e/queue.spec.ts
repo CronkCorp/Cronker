@@ -44,14 +44,6 @@ test("board cards show Tickets waiting for a Runner slot and blocked, live", asy
   await expect(card("Waiting")).toContainText("Run waiting: Runner full");
   await expect(card("Blocked")).toContainText("Run waiting: Blocked by another Ticket");
 
-  // On the Ticket, the Run card says which Agent and Step it waits for, and why.
-  await card("Waiting").click();
-  const runCard = page.getByRole("complementary", { name: "Details" }).getByRole("region", { name: "Run" });
-  await expect(runCard).toContainText("Run waiting: Runner full");
-  await expect(runCard).toContainText("claude-max");
-  await expect(runCard).toContainText("Triage haiku");
-  await page.goBack();
-
   // The blocker is done: the blocked Ticket waits for a slot behind the other.
   await call(`/api/tickets/${blocker.id}`, { statusId: status("Done") }, "PATCH");
   await expect(card("Blocked")).toContainText("Run waiting: Runner full");

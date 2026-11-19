@@ -411,6 +411,12 @@ function FieldForm({ label, id, children, onSave }: { label: string; id: string;
 
 const none = <span className="muted">None</span>;
 
+/** Autonomous Delegation as picked; a Ticket not yet delegated has neither and takes the Project's. */
+const autonomy = [
+  { value: "on", on: true, shown: "On", hint: "a Step may complete it" },
+  { value: "off", on: false, shown: "Off", hint: "each Step stops for a User" },
+];
+
 /** The Ticket's fields, each edited in place with a picker. */
 function Fields({
   ticket,
@@ -508,23 +514,20 @@ function Fields({
       )}
       <FieldPicker
         label="Autonomous Delegation"
-        value={
-          ticket.autonomousDelegation === null ? (
-            <span className="muted">The Project's, once delegated</span>
-          ) : ticket.autonomousDelegation ? (
-            "On"
-          ) : (
-            "Off"
-          )
-        }
-        options={[
-          { value: "on", label: "On", content: <span>On <span className="muted small">· a Step may complete it</span></span> },
-          { value: "off", label: "Off", content: <span>Off <span className="muted small">· each Step stops for a User</span></span> },
-        ]}
-        selected={ticket.autonomousDelegation === null ? [] : [ticket.autonomousDelegation ? "on" : "off"]}
+        value={autonomy.find((a) => a.on === ticket.autonomousDelegation)?.shown ?? <span className="muted">The Project's, once delegated</span>}
+        options={autonomy.map(({ value, shown, hint }) => ({
+          value,
+          label: shown,
+          content: (
+            <span>
+              {shown} <span className="muted small">· {hint}</span>
+            </span>
+          ),
+        }))}
+        selected={autonomy.filter((a) => a.on === ticket.autonomousDelegation).map((a) => a.value)}
         onPick={(picked) => {
-          const next = picked === "on";
-          if (next !== ticket.autonomousDelegation) void onSave({ autonomousDelegation: next });
+          const on = autonomy.find((a) => a.value === picked)!.on;
+          if (on !== ticket.autonomousDelegation) void onSave({ autonomousDelegation: on });
         }}
       />
       <FieldPicker
@@ -613,7 +616,7 @@ function Verification({
         ? "leave it here for you to move"
         : "send it back to a Step whose Status has since been removed, which Cronk refuses";
   return (
-    <section aria-label="Verification" className="field-row-group verification">
+    <section aria-label="Verification" className="verification">
       <div className="field-row">
         <span className="field-row-label">Verification</span>
         {ticket.verification === "verified" ? <Chip tone="ok">Verified</Chip> : <Chip tone="info">Unverified</Chip>}
@@ -895,7 +898,6 @@ function LinkedDocuments({
   onChanged: () => void;
 }) {
   const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
-  const [unlinkError, setUnlinkError] = useState<string | null>(null);
   const [treesError, setTreesError] = useState<string | null>(null);
   // Page trees aren't live, so they are read again on opening the list and after each link.
   const loadTrees = useCallback(() => {
@@ -912,23 +914,20 @@ function LinkedDocuments({
   }, [ticket.projectId, workspaceId]);
   useEffect(loadTrees, [loadTrees]);
   const [error, setError] = useState<string | null>(null);
-  const link = async (documentId: string) => {
+  const [busy, setBusy] = useState(false);
+  /** Links or unlinks one Document at a time, showing why it was refused. */
+  const change = async (save: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
-      await api.linkDocument(ticket.id, documentId);
+      await save();
       loadTrees();
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-  const unlink = async (documentId: string) => {
-    setUnlinkError(null);
-    try {
-      await api.unlinkDocument(ticket.id, documentId);
-      onChanged();
-    } catch (e) {
-      setUnlinkError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   };
   const isLinked = new Set(linked.map((d) => d.id));
@@ -943,14 +942,13 @@ function LinkedDocuments({
             <li key={document.id}>
               <Link to={`/documents/${document.id}`}>{document.title}</Link>
               {document.projectId === null && <span className="muted small"> Workspace</span>}{" "}
-              <Button variant="ghost" size="small" onClick={() => void unlink(document.id)}>
+              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => api.unlinkDocument(ticket.id, document.id))}>
                 Unlink
               </Button>
             </li>
           ))}
         </ul>
       )}
-      <FormError error={unlinkError} />
       <FormError error={treesError} />
       <div>
         <Picker
@@ -964,9 +962,9 @@ function LinkedDocuments({
                 ]
               : []
           }
-          onPick={(id) => void link(id)}
+          onPick={(id) => void change(() => api.linkDocument(ticket.id, id))}
           trigger={
-            <Button size="small" aria-haspopup="listbox">
+            <Button size="small" aria-haspopup="listbox" disabled={busy}>
               Link a Document…
             </Button>
           }

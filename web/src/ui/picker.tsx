@@ -13,20 +13,7 @@ export interface PickerOption {
 
 type Shown = PickerOption & { create?: boolean };
 
-/**
- * A popover list opened by its trigger, with type-to-filter. Once something is typed, Enter picks the first match;
- * a picker that takes new values (Labels) offers the typed text too.
- */
-export function Picker({
-  label,
-  trigger,
-  options,
-  selected = [],
-  onPick,
-  onCreate,
-  multiple = false,
-  onOpenChange,
-}: {
+interface PickerProps {
   /** Names the list and its filter. */
   label: string;
   /** The button that opens the list. */
@@ -40,7 +27,22 @@ export function Picker({
   /** Picking toggles and keeps the list open. */
   multiple?: boolean;
   onOpenChange?: (open: boolean) => void;
-}) {
+}
+
+/**
+ * A popover list opened by its trigger, with type-to-filter. Once something is typed, Enter picks the first match;
+ * a picker that takes new values (Labels) offers the typed text too.
+ */
+export function Picker({
+  label,
+  trigger,
+  options,
+  selected = [],
+  onPick,
+  onCreate,
+  multiple = false,
+  onOpenChange,
+}: PickerProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -108,7 +110,7 @@ export function Picker({
     const start = index;
     while (index < shown.length && shown[index]!.group === group) index += 1;
     items.push(
-      <li key={`group:${group}`} role="presentation" className="picker-group">
+      <li key={`group:${start}`} role="presentation" className="picker-group">
         <span className="picker-group-label" id={`${id}-group-${start}`} aria-hidden="true">
           {group}
         </span>
@@ -159,28 +161,14 @@ export function Picker({
 
 /** A Ticket field edited in place: its label, and its value, which opens a `Picker` when clicked. */
 export function FieldPicker({
-  label,
   value,
-  options,
-  selected,
-  onPick,
-  onCreate,
-  multiple = false,
   disabled = false,
   title,
   before,
-}: {
-  label: string;
+  ...picker
+}: Omit<PickerProps, "trigger" | "onOpenChange"> & {
   /** The current value as shown on the field. */
   value: ReactNode;
-  options: PickerOption[];
-  /** The values currently chosen, marked in the list. */
-  selected: string[];
-  onPick: (value: string) => void;
-  /** Takes typed text as a new value. */
-  onCreate?: (text: string) => void;
-  /** Picking toggles and keeps the list open. */
-  multiple?: boolean;
   disabled?: boolean;
   /** Why the field can't be changed, when disabled. */
   title?: string;
@@ -191,17 +179,12 @@ export function FieldPicker({
   return (
     <div className="field-row">
       <span className="field-row-label" id={`${id}-label`}>
-        {label}
+        {picker.label}
       </span>
       <span className="field-row-value">
         {before}
         <Picker
-          label={label}
-          options={options}
-          selected={selected}
-          onPick={onPick}
-          onCreate={onCreate}
-          multiple={multiple}
+          {...picker}
           trigger={
             <button
               type="button"
