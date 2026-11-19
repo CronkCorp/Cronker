@@ -16,7 +16,7 @@ import {
   type TicketSummary,
   type Workspace,
 } from "./api.js";
-import { field, useSubmit } from "./forms.js";
+import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
@@ -25,8 +25,9 @@ import { ProjectDocuments } from "./documents.js";
 import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
+import { SettingsLayout } from "./ui/settings.js";
 import { Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
 
@@ -191,12 +192,32 @@ export function ProjectScreen({
           title="Project settings"
           actions={<ProjectMenu project={project} />}
         />
-        <StatusesSettings project={project} onChange={setProject} />
-        <StepsSettings project={project} onChange={setProject} />
-        <BriefPreview project={project} />
-        <DelegationSettings project={project} onChange={setProject} />
-        <RepositoriesSettings project={project} />
-        <PullRequestAutomationSettings project={project} onChange={setProject} />
+        <SettingsLayout
+          sections={[
+            {
+              id: "statuses",
+              label: "Statuses and Steps",
+              children: (
+                <>
+                  <StatusesSettings project={project} onChange={setProject} />
+                  <StepsSettings project={project} onChange={setProject} />
+                  <BriefPreview project={project} />
+                </>
+              ),
+            },
+            {
+              id: "delegation",
+              label: "Delegation defaults",
+              children: <DelegationSettings project={project} onChange={setProject} />,
+            },
+            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} /> },
+            {
+              id: "pull-request-automation",
+              label: "Pull Request automation",
+              children: <PullRequestAutomationSettings project={project} onChange={setProject} />,
+            },
+          ]}
+        />
       </div>
     );
   }
@@ -546,26 +567,15 @@ function List({
   );
 }
 
-/** Changes the Project's settings, one toggle at a time, with what went wrong. */
+/** Changes the Project's settings, one toggle at a time, with what went wrong or "Saved.". */
 function useProjectEdit(project: Project, onChange: (project: Project) => void) {
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const toggle = async (edit: ProjectEdit) => {
-    setBusy(true);
-    setError(null);
-    try {
-      onChange(await api.editProject(project.id, edit));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return { error, busy, toggle };
+  const { error, busy, saved, save } = useSave();
+  const toggle = (edit: ProjectEdit) => save(async () => onChange(await api.editProject(project.id, edit)));
+  return { error, busy, saved, toggle };
 }
 
 function DelegationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
-  const { error, busy, toggle } = useProjectEdit(project, onChange);
+  const { error, busy, saved, toggle } = useProjectEdit(project, onChange);
   return (
     <Panel
       title="Delegation defaults"
@@ -591,12 +601,13 @@ function DelegationSettings({ project, onChange }: { project: Project; onChange:
         Tickets first delegated get Autonomous Delegation
       </label>
       <FormError error={error} />
+      <Saved shown={saved} />
     </Panel>
   );
 }
 
 function PullRequestAutomationSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
-  const { error, busy, toggle } = useProjectEdit(project, onChange);
+  const { error, busy, saved, toggle } = useProjectEdit(project, onChange);
   return (
     <Panel
       title="Pull Request automation"
@@ -613,25 +624,14 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
         Merges complete their Tickets
       </label>
       <FormError error={error} />
+      <Saved shown={saved} />
     </Panel>
   );
 }
 
 function StatusesSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const run = async (change: () => Promise<Project>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      onChange(await change());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { error, busy, saved, save } = useSave();
+  const run = (change: () => Promise<Project>) => save(async () => onChange(await change()));
 
   const add = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -683,6 +683,7 @@ function StatusesSettings({ project, onChange }: { project: Project; onChange: (
           <Button type="submit" variant="primary" disabled={busy}>
             Add Status
           </Button>
+          <Saved shown={saved} />
         </Actions>
       </form>
     </Panel>

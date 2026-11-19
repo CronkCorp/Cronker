@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
-import { field, useSubmit } from "./forms.js";
-import { Actions, Button, Check, Field, FormError, Panel } from "./ui/controls.js";
+import { field, useSave, useSubmit } from "./forms.js";
+import { Actions, Button, Check, Field, FormError, Panel, Saved } from "./ui/controls.js";
 import { StatusPill } from "./ui/labels.js";
 
 /**
@@ -51,24 +51,14 @@ function StepItem({
   onChange: (project: Project) => void;
 }) {
   const [draft, setDraft] = useState<Step | null>(status.step);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+  const { error, busy, saved, save, clear } = useSave();
   // Show the Step as Cronk has it whenever it changes there, here or elsewhere. Compared by
   // value: reloading the Project for a change elsewhere mustn't throw away an unsaved draft.
-  const saved = JSON.stringify(status.step);
-  useEffect(() => setDraft(JSON.parse(saved) as Step | null), [saved]);
+  const kept = JSON.stringify(status.step);
+  useEffect(() => setDraft(JSON.parse(kept) as Step | null), [kept]);
 
-  const run = async (change: () => Promise<Project>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      onChange(await change());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const run = (change: () => Promise<Project>) => save(async () => onChange(await change()));
 
   const summary = status.step
     ? [
@@ -80,27 +70,30 @@ function StepItem({
 
   return (
     <li>
-      <details open={draft !== null && status.step === null}>
+      {/* Opened by the User, it stays open after saving, so "Saved." shows beside the buttons. */}
+      <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
         <summary>
           <StatusPill kind={status.kind} name={status.name} /> <span className="muted small">{summary}</span>
         </summary>
         <FormError error={error} />
         {draft === null ? (
-          <div>
+          <Actions>
             <Button onClick={() => setDraft(newStep(project, status))}>Add a Step to {status.name}</Button>
-          </div>
+            <Saved shown={saved} />
+          </Actions>
         ) : (
           <StepForm
             project={project}
             status={status}
             draft={draft}
             busy={busy}
+            saved={saved}
             onDraft={setDraft}
             onSave={() => run(() => api.putStep(project.id, status.id, draft))}
             onCancel={() => {
               // A refusal of the draft goes with it.
               setDraft(status.step);
-              setError(null);
+              clear();
             }}
             onRemove={() => run(() => api.removeStep(project.id, status.id))}
           />
@@ -115,6 +108,7 @@ function StepForm({
   status,
   draft,
   busy,
+  saved,
   onDraft,
   onSave,
   onCancel,
@@ -124,6 +118,7 @@ function StepForm({
   status: Status;
   draft: Step;
   busy: boolean;
+  saved: boolean;
   onDraft: (step: Step) => void;
   onSave: () => Promise<void>;
   onCancel: () => void;
@@ -291,6 +286,7 @@ function StepForm({
             Cancel
           </Button>
         )}
+        <Saved shown={saved} />
       </Actions>
     </form>
   );
