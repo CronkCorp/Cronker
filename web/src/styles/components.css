@@ -258,14 +258,7 @@ textarea.markdown-source {
   gap: var(--space-2);
   margin-left: auto;
 }
-.page-head-eyebrow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: 13px;
-}
+.page-head-eyebrow,
 .page-head-meta {
   display: flex;
   flex-wrap: wrap;

@@ -407,7 +407,7 @@
 .side-row {
   display: grid;
   justify-items: start;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .fields {

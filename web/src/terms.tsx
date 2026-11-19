@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Place, type ProjectSummary, type Term, type TermVersion, type Workspace } from "./api.js";
-import { VersionMeta } from "./documents.js";
+import { DocumentBody, VersionMeta } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
@@ -384,23 +384,20 @@ function Editor({
   );
 }
 
-/**
- * A Term as it reads, as a Document's body does: its definition at 15px at a 720px measure, then the words to avoid.
- * The read view, the editor's preview and a Version's dialog all draw it this way. Named, it is an article.
- */
+/** A Term as it reads, drawn as a Document's body is: its definition, then the words to avoid. Named, it is an article. */
 function TermBody({ name, definition, avoid }: { name?: string; definition: string; avoid: string[] }) {
-  const content = (
-    <div className="prose">
-      {definition.trim() ? <Markdown text={definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
-      <Avoid words={avoid} />
-    </div>
-  );
-  return name ? (
-    <article className="panel document-body" aria-label={name}>
-      {content}
-    </article>
-  ) : (
-    <div className="panel document-body">{content}</div>
+  return (
+    <DocumentBody
+      body={definition}
+      label={name}
+      after={<Avoid words={avoid} />}
+      empty={
+        <div className="prose">
+          <p className="muted">No definition yet.</p>
+          <Avoid words={avoid} />
+        </div>
+      }
+    />
   );
 }
 
