@@ -27,7 +27,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Segmented, workspaceCrumb } from "./ui/controls.js";
-import { Chip, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
+import { Chip, ModelLabel, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
 
 /** The Workspace's Projects, and a form to create one. */
@@ -418,7 +418,7 @@ function Board({
   };
 
   const collapsed = (status: Status) => collapsible(status) && !opened.has(status.id);
-  const columns = project.statuses.map((status) => (collapsed(status) ? "44px" : "minmax(0, 1fr)")).join(" ");
+  const columns = project.statuses.map((status) => (collapsed(status) ? "36px" : "minmax(0, 1fr)")).join(" ");
   return (
     <>
       <FormError error={error} />
@@ -466,7 +466,11 @@ function Board({
                   {status.name}
                 </h2>
                 {!collapsible(status) && <span className="column-count">{inStatus.length}</span>}
-                {status.step && !isCollapsed && <span className="model-label">{status.step.model}</span>}
+                {status.step && !isCollapsed && (
+                  <span className="column-step">
+                    <ModelLabel model={status.step.model} />
+                  </span>
+                )}
               </header>
               {!isCollapsed && (
                 <div className="column-cards">

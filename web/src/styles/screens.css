@@ -122,10 +122,12 @@
   color: var(--muted);
 }
 
-/* Board: open columns share the width, Done and Canceled start collapsed. */
+/* Board: open columns share the width, tight enough that the default nine Statuses fit a 1280px screen; a
+   column's name wraps rather than being cut off. Done and
+   Canceled start collapsed. */
 .board {
   display: grid;
-  gap: var(--space-2);
+  gap: 6px;
   align-items: start;
 }
 .column {
@@ -134,7 +136,7 @@
   min-width: 0;
   min-height: 60vh;
   align-content: start;
-  padding: var(--space-2);
+  padding: 6px;
   border: 1px solid transparent;
   border-radius: var(--radius-panel);
   background: var(--surface-2);
@@ -145,31 +147,29 @@
 }
 .column-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 2px 6px;
   min-height: 26px;
   padding: 0 2px;
 }
 .column-name {
   min-width: 0;
-  overflow: hidden;
   font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .column-count {
   color: var(--muted);
   font-size: 12px;
 }
-.column-head {
-  overflow: hidden;
+/* The Step's model label sits on a line of its own under the name, kept even without one so cards line up. */
+.column:not(.column-collapsed) .column-head {
+  min-height: 40px;
+  align-content: start;
 }
-.column-head .model-label {
-  min-width: 0;
-  margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.column-step {
+  flex-basis: 100%;
+  padding-left: 12px;
 }
 .column-toggle {
   display: inline-flex;
@@ -199,14 +199,15 @@
   display: grid;
   gap: var(--space-2);
 }
-/* Key and Priority share the first line when they fit; title and meta take a line each. */
+/* Key and Priority share the first line, Priority beside the key and under it when they don't fit; title and meta
+   take a line each. */
 .card {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px var(--space-2);
   min-width: 0;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   background: var(--surface);
@@ -223,7 +224,6 @@
 }
 .card-priority {
   order: 2;
-  margin-left: auto;
 }
 .card-priority:empty {
   display: none;
