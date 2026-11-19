@@ -12,6 +12,11 @@ export interface Place {
   projectId: string | null;
 }
 
+/** A Place with what Users call it: the Project's key, or the Workspace's name. */
+export interface NamedPlace extends Place {
+  label: string;
+}
+
 /**
  * Where knowledge is kept: a Project, or the Workspace beneath its Projects. Each is reached from its own path, and
  * `find` resolves the request's Project or Workspace in the caller's view, or answers not found.
@@ -22,20 +27,20 @@ export function knowledgePlaces(db: Db) {
       path: "/api/projects/:projectId",
       params: Type.Object({ projectId: Type.String() }),
       name: "a Project's",
-      async find(request: FastifyRequest, caller: Caller): Promise<Place> {
+      async find(request: FastifyRequest, caller: Caller): Promise<NamedPlace> {
         const project = await findProject(db, caller, (request.params as { projectId: string }).projectId);
         if (!project) throw projectNotFound();
-        return { workspaceId: project.workspaceId, projectId: project.id };
+        return { workspaceId: project.workspaceId, projectId: project.id, label: project.key };
       },
     },
     {
       path: "/api/workspaces/:workspaceId",
       params: Type.Object({ workspaceId: Type.String() }),
       name: "the Workspace's",
-      async find(request: FastifyRequest, caller: Caller): Promise<Place> {
+      async find(request: FastifyRequest, caller: Caller): Promise<NamedPlace> {
         const workspace = await findWorkspace(db, caller, (request.params as { workspaceId: string }).workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
-        return { workspaceId: workspace.id, projectId: null };
+        return { workspaceId: workspace.id, projectId: null, label: workspace.name };
       },
     },
   ];

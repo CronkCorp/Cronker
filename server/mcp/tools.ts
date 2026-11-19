@@ -75,8 +75,9 @@ export function buildMcpServer(api: Api): McpServer {
       instructions:
         "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
         "each Project and of the Workspace, as Terms in their glossaries (a Project's glossary is its Terms over the " +
-        "Workspace's), and recorded choices as numbered Decisions of each Project and of the Workspace. You act as one " +
-        `Agent. ${rights}`,
+        "Workspace's), and recorded choices as numbered Decisions of each Project and of the Workspace; " +
+        "`export_knowledge` gives both as `GLOSSARY.md` and `docs/adr/` files to commit into your branch. You act as " +
+        `one Agent. ${rights}`,
     },
   );
 
@@ -709,6 +710,23 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ decision, ...edit }) => answer(() => send("PATCH", decisionPath(decision), edit)),
+  );
+
+  server.registerTool(
+    "export_knowledge",
+    {
+      title: "Export Terms and Decisions",
+      description:
+        "The files to commit into your branch: `GLOSSARY.md`, then `docs/adr/NNNN-<slug>.md` for each Decision by " +
+        "number, each with its path and Markdown content. A Project's `GLOSSARY.md` is its glossary, its Terms over " +
+        "the Workspace's, alphabetical, and its Decisions are its own; with no Project given, the Workspace's own " +
+        "Terms and Decisions. Write each file at its path; Cronk never commits to a Repository itself.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(await placePath(project, "export"))),
   );
 
   server.registerTool(
