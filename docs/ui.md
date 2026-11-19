@@ -208,7 +208,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 ### Signed-out pages, the password page and the consent screen
 
 - **Centred cards outside the frame:** sign-in, setup and its Connect GitHub step, the one-time link pages (joining a Workspace, setting a password), the password page and the OAuth consent screen. Each shows Cronk's mark above a card at most 400px wide holding the `h1` and the form.
-- **Sign in** and **Sign in with GitHub** span the card: the only full-width buttons in Cronk. Every other button sizes to its label, in an action row with the primary first, such as the consent screen's Connect, then Don't connect.
+- **Sign in** and **Sign in with GitHub** span the card: the only full-width buttons in Cronk. Every other button sizes to its label, and a form's buttons share an action row with the primary first, such as the consent screen's Connect, then Don't connect.
 - **The password page** leads back to the Workspace on screen with "Back to Cronk".
 
 ## Live updates

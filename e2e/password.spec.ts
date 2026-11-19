@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test, widthOf } from "./fixtures.js";
 
 test("a User changes their password on its own page outside the frame, then goes back", async ({ page, cronk }) => {
   await cronk.request("POST", "/api/setup", {
@@ -22,7 +22,7 @@ test("a User changes their password on its own page outside the frame, then goes
 
   // A way back, sized to its label like every button outside the sign-in form.
   const back = page.getByRole("link", { name: "Back to Cronk" });
-  expect((await back.boundingBox())!.width).toBeLessThan((await page.getByLabel("New password").boundingBox())!.width / 2);
+  expect(await widthOf(back)).toBeLessThan((await widthOf(page.getByLabel("New password"))) / 2);
   await back.click();
   await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
 });

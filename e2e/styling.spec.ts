@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, test, widthOf as width } from "./fixtures.js";
 
 // The look itself is checked by screenshots in review (docs/ui.md); these check what a screenshot
 // can't: that the faces come from Cronk itself, and that the page follows the system's light or dark setting.
@@ -42,8 +42,6 @@ for (const [colorScheme, ground] of [
 
 // docs/ui.md: buttons size to their label and are never full width outside sign-in forms.
 test("only the sign-in form's buttons span their card; other signed-out pages' buttons fit their label", async ({ page, cronk }) => {
-  const width = async (locator: ReturnType<typeof page.getByRole>) => (await locator.boundingBox())!.width;
-
   await page.goto(cronk.url);
   const setupField = await width(page.getByLabel("Setup code"));
   expect(await width(page.getByRole("button", { name: "Set up" }))).toBeLessThan(setupField / 2);
