@@ -39,3 +39,10 @@ test("many Cronks upgraded at once each answer at their new url, which is their 
 
   await expectEachAnswersAtItsOwnPublicAddress();
 });
+
+test("stopping a Cronk again, as an afterEach does when the next start failed, does nothing", async () => {
+  const cronk = await startCronk();
+  await cronk.stop();
+
+  await expect(cronk.stop()).resolves.toBeUndefined();
+});

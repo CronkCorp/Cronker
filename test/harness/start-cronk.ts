@@ -64,6 +64,7 @@ export interface StartedCronk {
   upgrade(): Promise<void>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
   command(...args: string[]): Promise<CommandResult>;
+  /** Closes Cronk and drops what it was started with; stopping it again does nothing. */
   stop(): Promise<void>;
 }
 
@@ -166,6 +167,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   let cronk: Cronk;
   // Whether `cronk` is closed, as it is when `upgrade()` could not start the next one, so `stop()` closes it only once.
   let closed = false;
+  let stopped: Promise<void> | undefined;
   try {
     cronk = await boot(options.migrateBefore);
   } catch (error) {
@@ -222,9 +224,13 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
         );
       });
     },
-    async stop() {
-      if (!closed) await cronk.close();
-      await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
+    stop() {
+      // A test's afterEach may stop this Cronk again when the next test's start failed: the second stop does nothing.
+      stopped ??= (async () => {
+        if (!closed) await cronk.close();
+        await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
+      })();
+      return stopped;
     },
   };
 }
