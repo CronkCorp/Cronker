@@ -11,7 +11,8 @@ import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../work/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
-import { Brief, buildBrief, completes, offeredOutcomes } from "./brief.js";
+import { moveByCronk } from "../pipeline/cronk-moves.js";
+import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
@@ -205,9 +206,10 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     skipped.add(status.id);
     const target = statuses.find((s) => s.id === outcome.statusId)!;
     await tx.query(
-      "update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null where id = $1",
+      "update tickets set status_id = $2, status_entered_at = $3 where id = $1",
       [ticketId, target.id, now],
     );
+    await tx.query("delete from needs_you where ticket_id = $1", [ticketId]);
     const named = ({ id, name }: Status) => ({ id, name });
     await recordChanges(tx, { id: ticketId, workspaceId: ticket.workspaceId }, { kind: "cronk" }, now, [
       { field: "stepSkipped", from: null, to: { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name } },
@@ -496,8 +498,6 @@ function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
   });
 }
 
-const times = (n: number) => (n === 1 ? "once" : `${n} times`);
-
 /** Whether a Ticket with these Labels passes the Label rule, matching Labels ignoring case. */
 function passes(rule: LabelRule | null, labels: string[]): boolean {
   if (!rule) return true;
@@ -515,7 +515,7 @@ export async function finishRun(
   runId: string,
   input: { outcome: string; question?: string; report?: string },
 ): Promise<Run> {
-  const { db, clock, live } = context;
+  const { db, clock } = context;
   return transaction(db, async (tx) => {
     const found = await findRunRow(tx, caller, runId);
     if (!found) throw runNotFound();
@@ -559,75 +559,29 @@ export async function finishRun(
       });
     }
 
-    // An Outcome counting as a round adds one for this Ticket and Step, until the count has reached the
-    // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
-    let applied = outcome;
-    let question = input.question ?? null;
-    let questionBy: QuestionBy | null = question === null ? null : "agent";
-    if (outcome.countsAsRound && step) {
-      const { rows } = await tx.query<{ stepId: string; count: number | null }>(
-        `select steps.id as "stepId", round_counts.count from steps
-         left join round_counts on round_counts.step_id = steps.id and round_counts.ticket_id = $2
-         where steps.status_id = $1`,
-        [run.statusId, ticket.id],
-      );
-      const { stepId, count } = rows[0]!;
-      if ((count ?? 0) >= step.roundLimit) {
-        applied = step.outcomes.find((o) => o.needsYou)!;
-        question =
-          `${run.step.name} sent ${ticket.key} back by ${outcome.name} ${times(step.roundLimit)}, its round limit, ` +
-          "so it comes to you instead. Read the latest Reports, then move it on yourself.";
-        questionBy = "cronk";
-      } else {
-        await tx.query(
-          `insert into round_counts (workspace_id, ticket_id, step_id, count) values ($1, $2, $3, 1)
-           on conflict (ticket_id, step_id) do update set count = round_counts.count + 1`,
-          [ticket.workspaceId, ticket.id, stepId],
-        );
-      }
-    }
-
-    const now = clock.now();
-    await freeSlot(context, tx, run.id);
-    await tx.query(
-      `update runs set state = 'finished', outcome = $2, question = $3, question_by = $4, ended_at = $5 where id = $1`,
-      [run.id, applied.name, question, questionBy, now],
-    );
-    if (input.report !== undefined) {
-      await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
-    }
-    // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, stays on the Run.
-    if (applied.needsYou && questionBy === "agent") {
-      const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
-      await askQuestion(context, tx, ticket, asking, question!, now);
-    }
-    if (applied.statusId !== ticket.statusId) {
-      // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
-      await tx.query("update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = $4 where id = $1", [
-        ticket.id,
-        applied.statusId,
-        now,
-        applied.needsYou ? run.id : null,
-      ]);
-      const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
-      await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [
-        { field: "status", from: named(ticket.statusId), to: named(applied.statusId) },
-      ]);
-      await startUnblocked(context, tx, [ticket.id]);
-    }
-    if (completes(applied, statuses)) {
+    const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
+    await moveByCronk(context, tx, ticket, {
+      target: { step: { statusId: run.statusId!, name: run.step.name }, outcome },
+      by: { kind: "agent", id: caller.id, runId: run.id },
+      runId: run.id,
       // A Run completing its Ticket leaves it Unverified, until a User Accepts or Reopens it.
-      await tx.query("update tickets set verification = 'unverified', completed_from_status_id = $2 where id = $1", [
-        ticket.id,
-        run.statusId,
-      ]);
-      await recordChanges(tx, ticket, { kind: "agent", id: caller.id, runId: run.id }, now, [
-        { field: "verification", from: ticket.verification, to: "unverified" },
-      ]);
-    }
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-    // Moving into a Status by an Outcome counts as entering it.
-    await startRunIfNeeded(context, tx, ticket.id, now);
+      verification: "unverified",
+      decided: async ({ outcome: applied, question: cronksQuestion }) => {
+        const question = cronksQuestion ?? input.question ?? null;
+        const questionBy: QuestionBy | null = cronksQuestion !== null ? "cronk" : question === null ? null : "agent";
+        await freeSlot(context, tx, run.id);
+        await tx.query(
+          `update runs set state = 'finished', outcome = $2, question = $3, question_by = $4, ended_at = $5 where id = $1`,
+          [run.id, applied!.name, question, questionBy, clock.now()],
+        );
+        if (input.report !== undefined) {
+          await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
+        }
+        // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, stays with the
+        // Ticket's needs you.
+        if (applied!.needsYou && questionBy === "agent") await askQuestion(context, tx, ticket, asking, question!, clock.now());
+      },
+    });
     return present((await findRunRow(tx, caller, run.id))!);
   });
 }

@@ -1,0 +1,128 @@
+import type { Context } from "../context.js";
+import type { Tx } from "../db.js";
+import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
+import { recordChanges, type ChangeActor } from "../work/changes.js";
+import { statusesOf } from "../work/projects.js";
+import type { Outcome } from "../work/steps.js";
+
+/**
+ * Pipeline: a Ticket moved by Cronk, on a Run's behalf or with none, applying the loop's rules in one place.
+ * Cronk records the Change, stops a Run still running on the Ticket, counts a round for a Step whose Outcome sends
+ * work back (applying that Step's *needs you* Outcome instead, with Cronk's own Question, past its round limit),
+ * completes the Ticket as Verified or Unverified when it moves to a Done Status, and starts the next Run.
+ */
+
+/** The Ticket a move by Cronk moves, locked by the caller's transaction. */
+export interface MovedTicket {
+  id: string;
+  key: string;
+  workspaceId: string;
+  projectId: string;
+  statusId: string;
+  verification: "unverified" | "verified" | null;
+}
+
+/** Where a move by Cronk sends the Ticket: by an Outcome of a Step, or straight to a Status. */
+export type CronkMoveTarget =
+  | {
+      /** The Step whose Outcome it is, by its Status, with its name as shown in Cronk's Question. */
+      step: { statusId: string; name: string };
+      outcome: Outcome;
+    }
+  | {
+      statusId: string;
+      /** The Status of the Step that produced the work, where Reopen sends a completed Ticket; null for none. */
+      completedFrom: string | null;
+    };
+
+export interface CronkMove {
+  target: CronkMoveTarget;
+  /** Who the Changes are by: the Agent of the Run finishing, during it, or Cronk itself. */
+  by: ChangeActor;
+  /** The Run that ended with the Outcome, if one did: a *needs you* Outcome names it as the Run that handed the Ticket back. */
+  runId?: string;
+  /** Why a Run still running on the Ticket stops, as a User's move stops it; it is left alone without one. */
+  stopReason?: string;
+  /** How a move to a Done Status completes the Ticket. */
+  verification: "unverified" | "verified";
+  /**
+   * Called once the rounds have decided the Outcome that applies, before the Ticket moves: Cronk's Question is
+   * set when it applied the Step's *needs you* Outcome past the round limit.
+   */
+  decided?: (decision: CronkMoveDecision) => Promise<void>;
+}
+
+/** What a move by Cronk applied: the Outcome, null for a move straight to a Status, and Cronk's own Question, if it asked one. */
+export interface CronkMoveDecision {
+  outcome: Outcome | null;
+  question: string | null;
+}
+
+const times = (n: number) => (n === 1 ? "once" : `${n} times`);
+
+/** Moves the Ticket as Cronk, as `CronkMove` says. Call it in the transaction that locked the Ticket. */
+export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket, move: CronkMove): Promise<CronkMoveDecision> {
+  const statuses = await statusesOf(tx, ticket.projectId);
+  const { target } = move;
+  const decision: CronkMoveDecision = { outcome: "outcome" in target ? target.outcome : null, question: null };
+  if ("outcome" in target) {
+    const step = statuses.find((s) => s.id === target.step.statusId)?.step;
+    // An Outcome counting as a round adds one for this Ticket and Step, until the count has reached the
+    // Step's round limit: then *needs you* applies instead, with Cronk's own Question.
+    if (target.outcome.countsAsRound && step) {
+      const { rows } = await tx.query<{ stepId: string; count: number | null }>(
+        `select steps.id as "stepId", round_counts.count from steps
+         left join round_counts on round_counts.step_id = steps.id and round_counts.ticket_id = $2
+         where steps.status_id = $1`,
+        [target.step.statusId, ticket.id],
+      );
+      const { stepId, count } = rows[0]!;
+      if ((count ?? 0) >= step.roundLimit) {
+        decision.outcome = step.outcomes.find((o) => o.needsYou)!;
+        decision.question =
+          `${target.step.name} sent ${ticket.key} back by ${target.outcome.name} ${times(step.roundLimit)}, its round limit, ` +
+          "so it comes to you instead. Read the latest Reports, then move it on yourself.";
+      } else {
+        await tx.query(
+          `insert into round_counts (workspace_id, ticket_id, step_id, count) values ($1, $2, $3, 1)
+           on conflict (ticket_id, step_id) do update set count = round_counts.count + 1`,
+          [ticket.workspaceId, ticket.id, stepId],
+        );
+      }
+    }
+  }
+  await move.decided?.(decision);
+
+  const now = context.clock.now();
+  if (move.stopReason !== undefined) await stopRunningRun(context, tx, ticket.id, move.stopReason, now);
+  const to = decision.outcome?.statusId ?? (target as { statusId: string }).statusId;
+  if (to !== ticket.statusId) {
+    await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticket.id, to, now]);
+    // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
+    await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
+    if (decision.outcome?.needsYou && "step" in target) {
+      await tx.query(
+        `insert into needs_you (ticket_id, workspace_id, run_id, outcome, step_status_id, step_status_name, question)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [ticket.id, ticket.workspaceId, move.runId ?? null, decision.outcome.name, target.step.statusId, target.step.name, decision.question],
+      );
+    }
+    const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
+    await recordChanges(tx, ticket, move.by, now, [{ field: "status", from: named(ticket.statusId), to: named(to) }]);
+    await startUnblocked(context, tx, [ticket.id]);
+  }
+  if (statuses.find((s) => s.id === to)!.kind === "done") {
+    // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.
+    const completedFrom = "step" in target ? target.step.statusId : target.completedFrom;
+    await tx.query("update tickets set verification = $2, completed_from_status_id = $3 where id = $1", [
+      ticket.id,
+      move.verification,
+      completedFrom,
+    ]);
+    await recordChanges(tx, ticket, move.by, now, [{ field: "verification", from: ticket.verification, to: move.verification }]);
+  }
+  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  // Moving into a Status counts as entering it.
+  await startRunIfNeeded(context, tx, ticket.id, now);
+  return decision;
+}

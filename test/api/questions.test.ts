@@ -275,4 +275,36 @@ describe("needs you at a round limit", () => {
       expect.objectContaining({ status: { id: status("In Review"), name: "In Review" }, outcome: "needs you" }),
     );
   });
+
+  test("Cronk's own Question shows with the Ticket in the Assignee's Inbox, until it moves", async () => {
+    const setup = await investigating();
+    const { workspace, ada, project, ticket, asAgent, status } = setup;
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Code review");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Code review")}/step`, ada, { ...step, roundLimit: 1 });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+    const finishRunning = async (outcome: string) => {
+      const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+      const running = runs.find((r: { state: string }) => r.state === "running");
+      await ok("POST", `/api/runs/${running.id}/finish`, asAgent, { outcome });
+    };
+    const inbox = () => ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    // One round back to Implement, then Code review again reaches its limit of one.
+    await finishRunning("changes");
+    await finishRunning("done");
+    await finishRunning("changes");
+
+    expect((await inbox()).items[0]).toEqual({
+      kind: "needsYou",
+      ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1" }),
+      status: { id: status("In Review"), name: "In Review" },
+      outcome: "needs you",
+      step: { statusId: status("Code review"), name: "Code review" },
+      question:
+        "Code review sent CRONK-1 back by changes once, its round limit, so it comes to you instead. " +
+        "Read the latest Reports, then move it on yourself.",
+    });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+    expect((await inbox()).items.map((i: { kind: string }) => i.kind)).toEqual([]);
+  });
 });
