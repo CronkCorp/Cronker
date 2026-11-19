@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -280,5 +280,71 @@ describe("deleting a Document", () => {
     await ok("PATCH", `/api/documents/${setup.id}`, ada, { parentId: null });
     expect((await call("DELETE", `/api/documents/${guides.id}`, ada)).status).toBe(204);
     expect(await treeOf(tree, ada)).toEqual(["Setup"]);
+  });
+});
+
+describe("Project and Workspace page trees", () => {
+  test("the Workspace has its own page tree, separate from each Project's", async () => {
+    const { ada, workspace, project, asAgent } = await workspaceWithProject();
+    const workspaceTree = `/api/workspaces/${workspace.id}/documents`;
+    const projectTree = `/api/projects/${project.id}/documents`;
+
+    const handbook = await call("POST", workspaceTree, asAgent, { title: "Handbook" });
+    await ok("POST", projectTree, ada, { title: "Architecture" });
+
+    expect(handbook.status).toBe(201);
+    expect(handbook.json).toEqual(expect.objectContaining({ workspaceId: workspace.id, projectId: null, parentId: null }));
+    expect(await treeOf(workspaceTree, ada)).toEqual(["Handbook"]);
+    expect(await treeOf(projectTree, asAgent)).toEqual(["Architecture"]);
+  });
+
+  test("a Document's parent is always in its own page tree", async () => {
+    const { ada, workspace, project } = await workspaceWithProject();
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const handbook = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Handbook" });
+    const elsewhere = await ok("POST", `/api/projects/${other.id}/documents`, ada, { title: "Elsewhere" });
+    const architecture = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Architecture" });
+
+    const created = await call("POST", `/api/projects/${project.id}/documents`, ada, { title: "Setup", parentId: handbook.id });
+    const moved = await call("PATCH", `/api/documents/${architecture.id}`, ada, { parentId: elsewhere.id });
+    const movedUp = await call("PATCH", `/api/documents/${handbook.id}`, ada, { parentId: architecture.id });
+
+    for (const refused of [created, moved, movedUp]) {
+      expect([refused.status, refused.json.error.code]).toEqual([409, "parent_outside_tree"]);
+    }
+  });
+
+  test("nothing crosses Workspaces: another Workspace's Documents answer as not found", async () => {
+    const { ada, workspace, project, asAgent } = await workspaceWithProject();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Secret plan" });
+    const handbook = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Handbook" });
+    const second = await ok("POST", "/api/workspaces", ada, { name: "Bob's Workspace" });
+    const bob = await addMember(cronk, ada.cookie, second.id, "bob@example.com");
+    const theirs = await ok("POST", `/api/workspaces/${second.id}/documents`, bob, { title: "Bob's notes" });
+    const bobsAgent = await ok("POST", `/api/workspaces/${second.id}/agents`, bob, { name: "bob-bot" });
+    const { secret } = await ok("POST", `/api/agents/${bobsAgent.id}/tokens`, bob, { name: "laptop", access: "full" });
+    const asBobsAgent = { headers: { authorization: `Bearer ${secret}` } };
+
+    for (const as of [{ cookie: bob.cookie }, asBobsAgent]) {
+      for (const [method, path, body] of [
+        ["GET", `/api/documents/${document.id}`],
+        ["GET", `/api/documents/${document.id}/versions`],
+        ["GET", `/api/documents/${document.id}/versions/1`],
+        ["GET", `/api/documents/${document.id}/versions/compare?from=1&to=1`],
+        ["PATCH", `/api/documents/${document.id}`, { baseVersion: 1, body: "Mine now." }],
+        ["DELETE", `/api/documents/${document.id}`],
+        ["GET", `/api/projects/${project.id}/documents`],
+        ["POST", `/api/projects/${project.id}/documents`, { title: "Planted" }],
+        ["GET", `/api/workspaces/${workspace.id}/documents`],
+        ["POST", `/api/workspaces/${workspace.id}/documents`, { title: "Planted" }],
+      ] as const) {
+        const response = await call(method, path, as, body);
+        expect(response.status, `${method} ${path}`).toBe(404);
+      }
+    }
+    const intoTheirs = await call("PATCH", `/api/documents/${theirs.id}`, bob, { parentId: handbook.id });
+    expect(intoTheirs.status).toBe(409);
+    expect(await treeOf(`/api/projects/${project.id}/documents`, asAgent)).toEqual(["Secret plan"]);
+    expect((await ok("GET", `/api/documents/${document.id}`, ada)).version.number).toBe(1);
   });
 });

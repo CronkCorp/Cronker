@@ -1,8 +1,10 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
+import type { FastifyRequest } from "fastify";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ErrorBody } from "../http/errors.js";
-import { requireCaller } from "../identity/callers.js";
+import { ApiError, ErrorBody } from "../http/errors.js";
+import { requireCaller, type Caller } from "../identity/callers.js";
+import { findWorkspace } from "../workspaces/workspaces.js";
 import { findProject, projectNotFound } from "../work/projects.js";
 import {
   compareVersions,
@@ -16,6 +18,7 @@ import {
   findDocument,
   readVersion,
   treeOf,
+  type Tree,
   Version,
   versionsOf,
   VersionWithBody,
@@ -46,53 +49,74 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
 
   return async (app) => {
-    app.post(
-      "/api/projects/:projectId/documents",
+    // A Project's page tree and the Workspace's are reached the same way, each from its own path.
+    const trees = [
       {
-        schema: {
-          tags,
-          summary: "Create a Document in a Project's page tree",
-          description:
-            "Creates the Document under a parent of the Project's page tree, or at its top, at Version 1 by its Actor.",
-          params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({
-            title: Title,
-            body: Type.Optional(Body),
-            parentId: Type.Optional(ParentId),
-            position: Type.Optional(Position),
-          }),
-          response: { 201: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        path: "/api/projects/:projectId/documents",
+        params: Type.Object({ projectId: Type.String() }),
+        name: "a Project's",
+        async find(request: FastifyRequest, caller: Caller): Promise<Tree> {
+          const project = await findProject(db, caller, (request.params as { projectId: string }).projectId);
+          if (!project) throw projectNotFound();
+          return { workspaceId: project.workspaceId, projectId: project.id };
         },
       },
-      async (request, reply) => {
-        const caller = await requireCaller(context, request);
-        const project = await findProject(db, caller, request.params.projectId);
-        if (!project) throw projectNotFound();
-        const { body = "", ...input } = request.body;
-        const tree = { workspaceId: project.workspaceId, projectId: project.id };
-        return reply.code(201).send(await createDocument(context, caller, tree, { ...input, body }));
+      {
+        path: "/api/workspaces/:workspaceId/documents",
+        params: Type.Object({ workspaceId: Type.String() }),
+        name: "the Workspace's",
+        async find(request: FastifyRequest, caller: Caller): Promise<Tree> {
+          const workspace = await findWorkspace(db, caller, (request.params as { workspaceId: string }).workspaceId);
+          if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
+          return { workspaceId: workspace.id, projectId: null };
+        },
       },
-    );
+    ];
+    for (const tree of trees) {
+      const { params } = tree;
 
-    app.get(
-      "/api/projects/:projectId/documents",
-      {
-        schema: {
-          tags,
-          summary: "A Project's page tree",
-          description:
-            "The Project's Documents without their bodies, in tree order: each right after its parent, siblings by " +
-            "their place.",
-          params: Type.Object({ projectId: Type.String() }),
-          response: { 200: Type.Array(DocumentSummary), 401: ErrorBody, 404: ErrorBody },
+      app.get(
+        tree.path,
+        {
+          schema: {
+            tags,
+            summary: `${tree.name[0]!.toUpperCase()}${tree.name.slice(1)} page tree`,
+            description:
+              "Its Documents without their bodies, in tree order: each right after its parent, siblings by their " +
+              "place. A Project's page tree and the Workspace's are separate.",
+            params,
+            response: { 200: Type.Array(DocumentSummary), 401: ErrorBody, 404: ErrorBody },
+          },
         },
-      },
-      async (request) => {
-        const project = await findProject(db, await requireCaller(context, request), request.params.projectId);
-        if (!project) throw projectNotFound();
-        return treeOf(db, { workspaceId: project.workspaceId, projectId: project.id });
-      },
-    );
+        async (request) => treeOf(db, await tree.find(request, await requireCaller(context, request))),
+      );
+
+      app.post(
+        tree.path,
+        {
+          schema: {
+            tags,
+            summary: `Create a Document in ${tree.name} page tree`,
+            description:
+              "Creates the Document under a parent of the same page tree, or at its top, at Version 1 by its Actor.",
+            params,
+            body: Type.Object({
+              title: Title,
+              body: Type.Optional(Body),
+              parentId: Type.Optional(ParentId),
+              position: Type.Optional(Position),
+            }),
+            response: { 201: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          },
+        },
+        async (request, reply) => {
+          const caller = await requireCaller(context, request);
+          const { body = "", ...input } = request.body;
+          const created = await createDocument(context, caller, await tree.find(request, caller), { ...input, body });
+          return reply.code(201).send(created);
+        },
+      );
+    }
 
     app.get(
       "/api/documents/:documentId",
