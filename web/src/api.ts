@@ -380,6 +380,8 @@ export interface NeedsYouItem {
   status: { id: string; name: string };
   outcome: string;
   step: { statusId: string | null; name: string };
+  /** Cronk's own Question, when it applied needs you past the Step's round limit. */
+  question?: string;
 }
 
 /** A Ticket whose latest Run failed, was lost or couldn't start, waiting for Retry. */

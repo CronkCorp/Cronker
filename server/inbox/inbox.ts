@@ -25,18 +25,28 @@ export const QuestionItem = Type.Object({
   question: Question,
 });
 
-/** A Ticket a Run's *needs you* Outcome moved, handing it back to its Assignee, until it moves again. */
+/**
+ * A Ticket a Step's *needs you* Outcome moved, handing it back to its Assignee, until it moves again: a Run
+ * finished with it, or Cronk applied it past the Step's round limit, with or without a Run.
+ */
 export const NeedsYouItem = Type.Object({
   kind: Type.Literal("needsYou"),
   ticket: TicketSummary,
   status: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "Where the Outcome moved it." }),
-  outcome: Type.String({ description: "The name of the needs you Outcome the Run finished with." }),
+  outcome: Type.String({ description: "The name of the needs you Outcome that applied." }),
   step: Type.Object(
     {
       statusId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], { description: "Null once the Status is removed." }),
-      name: Type.String({ description: "The Status's name when the Run started." }),
+      name: Type.String({ description: "The Status's name when its Run started, or when Cronk applied the Outcome without one." }),
     },
-    { description: "The Step whose Run handed the Ticket back, by the Status it sits on." },
+    { description: "The Step whose Outcome handed the Ticket back, by the Status it sits on." },
+  ),
+  question: Type.Optional(
+    Type.String({
+      description:
+        "Cronk's own Question, when it applied the Step's needs you Outcome past its round limit. An Agent's Question " +
+        "is an Inbox item of its own.",
+    }),
   ),
 });
 
@@ -95,22 +105,24 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     statusName: string;
     inReview: boolean;
     completedBy: { id: string; name: string } | null;
-    handedBack: { outcome: string; step: { statusId: string | null; name: string } } | null;
+    handedBack: { outcome: string; step: { statusId: string | null; name: string }; question?: string } | null;
   };
   const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
        statuses.kind = 'review' as "inReview",
        case when completed_by.id is not null then json_build_object('id', completed_by.id, 'name', completed_by.name)
          end as "completedBy",
-       case when runs.id is not null then json_build_object(
-         'outcome', runs.outcome, 'step', json_build_object('statusId', runs.status_id, 'name', runs.status_name)
-       ) end as "handedBack"
+       case when needs_you.ticket_id is not null then json_build_object(
+         'outcome', needs_you.outcome,
+         'step', json_build_object('statusId', needs_you.step_status_id, 'name', needs_you.step_status_name)
+       )::jsonb || case when needs_you.question is null then '{}' else jsonb_build_object('question', needs_you.question) end
+       end as "handedBack"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
-     left join runs on runs.id = tickets.needs_you_run_id
+     left join needs_you on needs_you.ticket_id = tickets.id
      left join statuses completed_by on completed_by.id = tickets.completed_from_status_id
      where tickets.workspace_id = $1 and tickets.assignee_id = $2
-       and (statuses.kind = 'review' or runs.id is not null or tickets.id = any($3) or tickets.verification = 'unverified')
+       and (statuses.kind = 'review' or needs_you.ticket_id is not null or tickets.id = any($3) or tickets.verification = 'unverified')
      order by projects.key, tickets.number`,
     [workspaceId, userId, questions.map((q) => q.ticketId)],
   );

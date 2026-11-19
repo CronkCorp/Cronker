@@ -605,8 +605,6 @@ export async function editTicket(
        former_assignee_id = case when $6::uuid is null then former_assignee_id end,
        due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
        status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
-       -- Moving the Ticket ends its waiting from a needs you Outcome.
-       needs_you_run_id = case when status_id = $9 then needs_you_run_id end,
        autonomous_delegation = $13, verification = $14,
        completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end,
        discovery_waits = $15
@@ -629,6 +627,8 @@ export async function editTicket(
         next.discovered?.waiting ?? false,
       ],
     );
+    // Moving the Ticket ends its waiting from a needs you Outcome.
+    if (next.statusId !== ticket.statusId) await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
     await recordChanges(tx, ticket, actor, now, changes);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     if (next.parentId !== ticket.parentId) {

@@ -55,11 +55,11 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     }
     const now = clock.now();
     await tx.query(
-      `update tickets set status_id = $2, status_entered_at = $3, needs_you_run_id = null,
-         verification = null, completed_from_status_id = null
+      `update tickets set status_id = $2, status_entered_at = $3, verification = null, completed_from_status_id = null
        where id = $1`,
       [ticket.id, to.id, now],
     );
+    await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
     // Sent back by a User, like a move by hand, it starts its rounds afresh.
     await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     await insertComment(context, tx, ticket, { kind: "user", id: user.id }, comment, null);
