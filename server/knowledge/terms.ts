@@ -1,0 +1,208 @@
+import { Type, type Static } from "typebox";
+import type { Context } from "../context.js";
+import { transaction, type Db, type Tx } from "../db.js";
+import { ApiError } from "../http/errors.js";
+import { isUuid } from "../http/ids.js";
+import type { Caller } from "../identity/callers.js";
+import { inView, type Viewer } from "../identity/viewers.js";
+import { Actor, actorColumn } from "../work/actors.js";
+import type { Tree } from "./documents.js";
+
+/**
+ * Terms: glossary entries naming one concept each, kept by a Project or by the Workspace. Each save makes a Version
+ * recording its Actor; the Term shows its current Version.
+ */
+
+/** Which glossary a Term is in: a Project's own, or the Workspace's when `projectId` is null. */
+export type Glossary = Tree;
+
+const content = {
+  name: Type.String(),
+  definition: Type.String({ description: "Markdown." }),
+  avoid: Type.Array(Type.String(), { description: "Words to avoid in its place, in the order given." }),
+};
+
+export const Term = Type.Object({
+  id: Type.String({ format: "uuid" }),
+  workspaceId: Type.String({ format: "uuid" }),
+  projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Project whose Term it is, or null for the Workspace's.",
+  }),
+  ...content,
+  version: Type.Object(
+    {
+      number: Type.Integer({ minimum: 1, description: "Counts up from 1 with each save of the Term." }),
+      actor: Actor,
+      savedAt: Type.String({ format: "date-time" }),
+    },
+    { description: "The current Version, which a save names as its base." },
+  ),
+});
+export type Term = Static<typeof Term>;
+
+type Row = Omit<Term, "version"> & { version: Omit<Term["version"], "savedAt"> & { savedAt: string } };
+
+const columns = `terms.id, terms.workspace_id as "workspaceId", terms.project_id as "projectId", versions.name,
+  versions.definition, versions.avoid,
+  json_build_object('number', versions.number, 'actor', ${actorColumn("users", "agents")},
+    'savedAt', versions.saved_at) as version`;
+
+const fromTerms = `terms
+  join term_versions versions on versions.term_id = terms.id and versions.number = terms.version
+  left join users on users.id = versions.actor_user_id
+  left join agents on agents.id = versions.actor_agent_id`;
+
+const present = (row: Row): Term => ({
+  ...row,
+  version: { ...row.version, savedAt: new Date(row.version.savedAt).toISOString() },
+});
+
+/** A Term in the Viewer's view; otherwise nothing, as if it didn't exist. */
+export async function findTerm(db: Db | Tx, viewer: Viewer, termId: string): Promise<Term | undefined> {
+  if (!isUuid(termId)) return undefined;
+  const view = inView(viewer, "terms.workspace_id", "$2");
+  const { rows } = await db.query<Row>(`select ${columns} from ${fromTerms} where terms.id = $1 and ${view.sql}`, [
+    termId,
+    view.value,
+  ]);
+  return rows[0] && present(rows[0]);
+}
+
+export function termNotFound(): ApiError {
+  return new ApiError(404, "not_found", "No such Term.");
+}
+
+export interface TermContent {
+  name: string;
+  definition: string;
+  avoid: string[];
+}
+
+async function insertVersion(
+  tx: Tx,
+  term: { id: string; workspaceId: string },
+  number: number,
+  content: TermContent,
+  actor: Caller,
+  now: Date,
+): Promise<void> {
+  await tx.query(
+    `insert into term_versions (term_id, number, workspace_id, name, definition, avoid, actor_user_id, actor_agent_id, saved_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      term.id,
+      number,
+      term.workspaceId,
+      content.name,
+      content.definition,
+      content.avoid,
+      actor.kind === "user" ? actor.id : null,
+      actor.kind === "agent" ? actor.id : null,
+      now,
+    ],
+  );
+}
+
+/** Creates a Term in the glossary at Version 1 by its Actor. */
+export async function createTerm({ db, clock }: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<Term> {
+  return transaction(db, async (tx) => {
+    const now = clock.now();
+    const { rows } = await tx.query<{ id: string }>(
+      `insert into terms (workspace_id, project_id, name, version, created_at) values ($1, $2, $3, 1, $4) returning id`,
+      [glossary.workspaceId, glossary.projectId, input.name, now],
+    );
+    const id = rows[0]!.id;
+    await insertVersion(tx, { id, workspaceId: glossary.workspaceId }, 1, input, actor, now);
+    return (await findTerm(tx, actor, id))!;
+  });
+}
+
+/** One saved state of a Term, recording which Actor saved it. */
+export const TermVersion = Type.Object({
+  number: Type.Integer({ minimum: 1, description: "Counts up from 1 with each save of the Term." }),
+  ...content,
+  actor: Actor,
+  savedAt: Type.String({ format: "date-time" }),
+});
+export type TermVersion = Static<typeof TermVersion>;
+
+type VersionRow = Omit<TermVersion, "savedAt"> & { savedAt: Date };
+
+const versionColumns = `versions.number, versions.name, versions.definition, versions.avoid,
+  ${actorColumn("users", "agents")} as actor, versions.saved_at as "savedAt"`;
+
+const fromVersions = `term_versions versions
+  left join users on users.id = versions.actor_user_id
+  left join agents on agents.id = versions.actor_agent_id`;
+
+const presentVersion = (row: VersionRow): TermVersion => ({ ...row, savedAt: row.savedAt.toISOString() });
+
+async function versionOf(db: Db | Tx, termId: string, number: number): Promise<TermVersion | undefined> {
+  const { rows } = await db.query<VersionRow>(
+    `select ${versionColumns} from ${fromVersions} where versions.term_id = $1 and versions.number = $2`,
+    [termId, number],
+  );
+  return rows[0] && presentVersion(rows[0]);
+}
+
+/** A Term's row, locked until the transaction ends, so writes to it queue up. */
+async function lockTerm(tx: Tx, viewer: Viewer, termId: string): Promise<(Glossary & { id: string; version: number }) | undefined> {
+  if (!isUuid(termId)) return undefined;
+  const view = inView(viewer, "workspace_id", "$2");
+  const { rows } = await tx.query<Glossary & { id: string; version: number }>(
+    `select id, workspace_id as "workspaceId", project_id as "projectId", version from terms
+     where id = $1 and ${view.sql} for update`,
+    [termId, view.value],
+  );
+  return rows[0];
+}
+
+export interface TermEdit extends Partial<TermContent> {
+  /** The number of the Version the save is based on. */
+  baseVersion: number;
+}
+
+/**
+ * Saves a Term as its next Version by the Actor, keeping what the edit leaves out. The save must be based on the
+ * current Version: one based on an outdated Version is refused with the current one, so its Actor can see what
+ * changed.
+ */
+export async function editTerm({ db, clock }: Context, actor: Caller, termId: string, edit: TermEdit): Promise<Term> {
+  return transaction(db, async (tx) => {
+    const locked = await lockTerm(tx, actor, termId);
+    if (!locked) throw termNotFound();
+    const current = (await versionOf(tx, locked.id, locked.version))!;
+    if (edit.baseVersion !== current.number) {
+      throw new ApiError(
+        409,
+        "outdated_version",
+        `The Term is at Version ${current.number}, but this save is based on Version ${edit.baseVersion}.`,
+        {
+          rule: "A save based on an outdated Version is refused, so it never overwrites a change its Actor hasn't seen.",
+          advice: "Merge your change into the current Version, given as `current`, and save again based on it.",
+        },
+        { current },
+      );
+    }
+    const number = current.number + 1;
+    const content = {
+      name: edit.name ?? current.name,
+      definition: edit.definition ?? current.definition,
+      avoid: edit.avoid ?? current.avoid,
+    };
+    await insertVersion(tx, locked, number, content, actor, clock.now());
+    await tx.query("update terms set version = $2, name = $3 where id = $1", [locked.id, number, content.name]);
+    return (await findTerm(tx, actor, locked.id))!;
+  });
+}
+
+/** A Term's Versions, oldest first. */
+export async function versionsOf(db: Db, viewer: Viewer, termId: string): Promise<TermVersion[]> {
+  const term = await findTerm(db, viewer, termId);
+  if (!term) throw termNotFound();
+  const { rows } = await db.query<VersionRow>(
+    `select ${versionColumns} from ${fromVersions} where versions.term_id = $1 order by versions.number`,
+    [term.id],
+  );
+  return rows.map(presentVersion);
+}
