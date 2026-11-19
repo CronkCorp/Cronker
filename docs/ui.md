@@ -106,7 +106,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Decision status** (`<DecisionStatusPill>`): 11px uppercase pill. Proposed is outlined `--warn`, Accepted filled `--ok-soft` with `--ok` text, Superseded outlined `--info`, Rejected outlined `--muted`, and Deprecated dashed `--muted`.
 - **Pull Request state** (`<PullRequestState>`): 11px uppercase pill. Draft dashed `--muted`, Open outlined `--ok`, Merged filled `--agent-soft` with `--agent` text, Closed outlined `--danger`. **Checks** show as counts: ✓ in `--ok`, ✗ in `--danger`, ● running in `--warn`.
 - **Diff** (`<Diff>`): mono lines on `--surface`, removed lines on `--danger-soft` and struck through, added on `--ok-soft`, with a header naming the two Versions.
-- **Live indicator** (`<LiveIndicator>`): a green dot with "Live" on views that are streaming. It turns into a muted "Reconnecting…" while the stream is away.
+- **Live indicator** (`<LiveIndicator>`): a green dot with "Live" on views that are streaming, first among the page head's switchers. It turns into a muted "Reconnecting…" while the stream is away. It is a status named "Live updates", so assistive technology reads out the change.
 
 ## Screens
 
@@ -224,8 +224,8 @@ Server-sent events keep open views current: each Workspace has its stream, and a
 
 - New entries appear in place (timeline entries at the end, Inbox items in their group), with a short `--accent` ring that fades over about 2s. The page never scrolls on its own unless the User is already at the end.
 - A changed field updates where it is shown, such as the side panel, a card on the board or the Run card. Nothing reloads the whole page or flashes empty while reloading.
-- An item the User is acting on is never removed under them. If it is resolved elsewhere, it stays visible as "Resolved elsewhere", with its actions disabled and a link to its Ticket, until the User moves on.
-- Every streaming view shows the Live indicator, and reconnecting reloads its lists.
+- An item the User is acting on is never removed under them. If it is resolved elsewhere, it stays visible as "Resolved elsewhere", with its actions disabled and a link to its Ticket, until the User moves on. A Document or Term deleted elsewhere while open stays shown under a `warn` banner, "Deleted elsewhere", without its actions and with a link back to its list.
+- Every streaming view shows the Live indicator, and reconnecting reloads its lists. The streaming views are the board and list, a Ticket, the Inbox, Runners, and Documents, Terms and Decisions: their lists, and each one's own page.
 
 ## Changing this document
 

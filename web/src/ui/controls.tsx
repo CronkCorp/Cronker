@@ -258,7 +258,7 @@ export function RunnersLiveIndicator() {
 
 function LiveStatus({ state }: { state: LiveState }) {
   return (
-    <span className={`live live-${state}`}>
+    <span role="status" aria-label="Live updates" className={`live live-${state}`}>
       <span className="live-dot" aria-hidden="true" />
       {state === "live" ? "Live" : "Reconnecting…"}
     </span>

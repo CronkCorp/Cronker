@@ -7,7 +7,8 @@ import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead } from "./ui/controls.js";
+import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
@@ -67,12 +68,18 @@ function Glossary({
     ? terms.filter((t) => t.name.toLowerCase().includes(typed) || t.avoid.some((word) => word.toLowerCase().includes(typed)))
     : terms;
   const own = terms.filter((t) => (project ? t.projectId === project.id : true)).length;
+  const arrived = useArrivals(terms.map((t) => t.id));
   return (
     <div className="page">
       <PageHead
         crumbs={knowledgeCrumbs(workspace, project, "Terms")}
         title="Terms"
-        switcher={<ScopeSwitch workspace={workspace} project={project} kind="glossary" />}
+        switcher={
+          <>
+            <LiveIndicator workspaceId={workspace.id} />
+            <ScopeSwitch workspace={workspace} project={project} kind="glossary" />
+          </>
+        }
         actions={
           <>
             <ExportLink place={place} />
@@ -104,7 +111,7 @@ function Glossary({
             const overrides = project && term.projectId === project.id && workspaceTerms.some((w) => sameName(w.name, term.name));
             const replaced = replacedIn.filter((p) => p.terms.some((t) => sameName(t.name, term.name)));
             return (
-              <article key={term.id} className="term" aria-labelledby={`term-${term.id}`}>
+              <article key={term.id} className={`term${arrived.has(term.id) ? " arrived" : ""}`} aria-labelledby={`term-${term.id}`}>
                 <header className="term-head">
                   <h2 id={`term-${term.id}`}>
                     <Link to={`/terms/${term.id}`}>{term.name}</Link>
@@ -171,12 +178,21 @@ export function ProjectGlossary({ workspace, project }: { workspace: Workspace; 
   usePlace("terms", project.id);
   const [data, setData] = useState<{ terms: Term[]; workspaceTerms: Term[] } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  useEffect(() => {
-    Promise.all([api.glossary(project.id), api.terms({ kind: "workspace", id: workspace.id })]).then(
-      ([terms, workspaceTerms]) => setData({ terms, workspaceTerms }),
-      (e: Error) => setFailure(e.message),
-    );
-  }, [project.id, workspace.id]);
+  const latest = useLatest();
+  const load = useCallback(
+    () =>
+      latest(
+        Promise.all([api.glossary(project.id), api.terms({ kind: "workspace", id: workspace.id })]),
+        ([terms, workspaceTerms]) => setData({ terms, workspaceTerms }),
+        (e) => setFailure(e.message),
+      ),
+    [project.id, workspace.id, latest],
+  );
+  useEffect(load, [load]);
+  // The Project's glossary shows the Workspace's Terms too, so a change to either is shown.
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "term.changed" && (event.projectId === null || event.projectId === project.id))) load();
+  });
   if (failure) return <FormError error={failure} />;
   if (!data) return <p className="muted">Loading…</p>;
   return <Glossary workspace={workspace} project={project} terms={data.terms} workspaceTerms={data.workspaceTerms} replacedIn={[]} />;
@@ -187,13 +203,25 @@ export function WorkspaceGlossary({ workspace }: { workspace: Workspace }) {
   usePlace("terms");
   const [data, setData] = useState<{ terms: Term[]; replacedIn: { project: ProjectSummary; terms: Term[] }[] } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  useEffect(() => {
-    (async () => {
-      const [terms, projects] = await Promise.all([api.terms({ kind: "workspace", id: workspace.id }), api.projects(workspace.id)]);
-      const replacedIn = await Promise.all(projects.map(async (project) => ({ project, terms: await api.terms({ kind: "project", id: project.id }) })));
-      setData({ terms, replacedIn });
-    })().catch((e: Error) => setFailure(e.message));
-  }, [workspace.id]);
+  const latest = useLatest();
+  const load = useCallback(
+    () =>
+      latest(
+        (async () => {
+          const [terms, projects] = await Promise.all([api.terms({ kind: "workspace", id: workspace.id }), api.projects(workspace.id)]);
+          const replacedIn = await Promise.all(projects.map(async (project) => ({ project, terms: await api.terms({ kind: "project", id: project.id }) })));
+          return { terms, replacedIn };
+        })(),
+        setData,
+        (e) => setFailure(e.message),
+      ),
+    [workspace.id, latest],
+  );
+  useEffect(load, [load]);
+  // A Project's Term can replace one of the Workspace's, so every Term change is shown here.
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || event.type === "term.changed" || event.type === "project.created") load();
+  });
   if (failure) return <FormError error={failure} />;
   if (!data) return <p className="muted">Loading…</p>;
   return <Glossary workspace={workspace} project={null} terms={data.terms} workspaceTerms={data.terms} replacedIn={data.replacedIn} />;
@@ -215,6 +243,9 @@ export function TermScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  /** Deleted by someone else while shown: it stays on screen, marked, until the User moves on. */
+  const [gone, setGone] = useState(false);
+  const deletingHere = useRef(false);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
   usePlace("terms", term?.projectId ?? null);
@@ -229,6 +260,13 @@ export function TermScreen({
     );
   }, [termId, workspace.id]);
   useEffect(load, [load]);
+  const latestTerm = useLatest();
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type !== "reconnected" && !(event.type === "term.changed" && event.termId === termId)) return;
+    latestTerm(api.term(termId), setTerm, (e) => {
+      if (e instanceof ApiError && e.status === 404 && !deletingHere.current) setGone(true);
+    });
+  });
   const projectId = term?.projectId ?? null;
   useEffect(() => {
     if (projectId) api.project(projectId).then(setProject, () => setProject(null));
@@ -251,8 +289,10 @@ export function TermScreen({
             <VersionMeta version={term.version} />
           </>
         }
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={
-          !editing && (
+          !editing &&
+          !gone && (
             <>
               <Menu label="More of this Term">
                 <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
@@ -266,6 +306,13 @@ export function TermScreen({
           )
         }
       />
+      {gone && (
+        <Banner tone="warn" label="Deleted elsewhere">
+          <p>
+            Deleted elsewhere: this Term is no longer in its glossary. <Link to={glossaryPage(place)}>Back to Terms</Link>
+          </p>
+        </Banner>
+      )}
       {editing ? (
         <Editor
           term={term}
@@ -290,7 +337,12 @@ export function TermScreen({
         title={`Delete the Term ${term.name}?`}
         confirm="Delete"
         onConfirm={async () => {
-          await api.deleteTerm(term.id);
+          deletingHere.current = true;
+          try {
+            await api.deleteTerm(term.id);
+          } finally {
+            deletingHere.current = false;
+          }
           navigate(glossaryPage(place));
         }}
       >

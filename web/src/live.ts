@@ -16,10 +16,16 @@ export type LiveEvent =
   | { type: "attachments.changed"; documentId: string }
   /** A Pull Request linked to a Ticket, or one linked to it changed its title, branch, state, checks or reviews. */
   | { type: "pull_requests.changed"; projectId: string; ticketId: string }
+  /** A Document in a page tree, the Workspace's (`projectId` null) or a Project's, was created, saved, moved or deleted. */
+  | { type: "document.changed"; projectId: string | null; documentId: string }
+  /** A Term in a glossary was created, saved or deleted. */
+  | { type: "term.changed"; projectId: string | null; termId: string }
+  /** A Decision in a register was recorded or saved. */
+  | { type: "decision.changed"; projectId: string | null; decisionId: string }
   /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
   | { type: "reconnected" };
 
-const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed"];
+const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "document.changed", "term.changed", "decision.changed"];
 
 /** What the User's own Runners' stream tells: a Run started or ended on one, or its queue paused or resumed. */
 export type RunnerEvent = { type: "runner.changed"; runnerId: string } | { type: "reconnected" };
