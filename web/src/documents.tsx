@@ -409,8 +409,9 @@ export function Editor<T>({
       <FormError error={attachError} />
       {!current && <FormError error={error} />}
       <Actions>
-        <Button type="submit" variant="primary" disabled={busy}>
-          Save as Version {base + 1}
+        {/* Until the draft is based on the Version saved meanwhile, a save would only be refused again. */}
+        <Button type="submit" variant="primary" disabled={busy || current !== null}>
+          Save as Version {(current?.number ?? base) + 1}
         </Button>
         <Button variant="ghost" onClick={onCancel}>
           Cancel
