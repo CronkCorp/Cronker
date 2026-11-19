@@ -125,3 +125,42 @@ test("a Pull Request's row shows its review state: changes requested, approved, 
   await expect(row).toContainText("Merged");
   await expect(row).toContainText("Merged by @ada");
 });
+
+test("a Ticket in a Review Status shows its Pull Requests as cards in the main column, naming every check's state", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const call = async (path: string, body?: unknown, method = "POST") => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call(`/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const ticket = await call(`/api/projects/${project.id}/tickets`, { title: "Rate-limit sign-in" });
+  const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
+  const delivered = { installation: { id: installation.id }, repository, pull_request: { id: 501, number: 212, title: "CRONK-1: rate-limit sign-in",
+    state: "open", draft: false, merged: false, html_url: "https://github.com/cronkcorp/cronker/pull/212", head: { ref: "cronk-1-sign-in-limit", sha: "c1" },
+    updated_at: "2026-01-01T09:00:00Z" } };
+  await cronk.github.deliver(app, "pull_request", { ...delivered, action: "opened" });
+  const checks = [[1, "lint", "completed", "success"], [2, "test", "completed", "failure"], [3, "e2e", "in_progress", null]] as const;
+  for (const [id, name, status, conclusion] of checks) {
+    await cronk.github.deliver(app, "check_run", { ...delivered, action: "completed",
+      check_run: { id, name, head_sha: "c1", status, conclusion, html_url: `https://github.com/cronkcorp/cronker/runs/${id}` } });
+  }
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  await expect(page.getByRole("region", { name: "Pull Requests" })).toBeVisible();
+  // Outside a Review Status they show only in the side panel.
+  await expect(page.getByRole("region", { name: "Code to review" })).toHaveCount(0);
+
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  await call(`/api/tickets/${ticket.id}`, { statusId: inReview }, "PATCH");
+  const cards = page.getByRole("region", { name: "Code to review" });
+  await expect(cards.getByRole("heading", { name: "Code to review" })).toBeVisible();
+  const card = cards.getByRole("article", { name: "#212 CRONK-1: rate-limit sign-in" });
+  await expect(card).toContainText("cronk-1-sign-in-limit");
+  await expect(card.getByText("Open", { exact: true })).toBeVisible();
+  await expect(card.getByRole("listitem")).toHaveText(["✗ test failed", "● e2e running", "✓ lint passed"]);
+  await expect(card.getByRole("link", { name: "test" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/runs/2");
+});
