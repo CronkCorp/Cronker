@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, openProjectSettings, test } from "./fixtures.js";
 import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
 
 test("add a Repository the App is installed on to a Project, see its rename, and remove it", async ({ page, cronk }) => {
@@ -16,8 +16,8 @@ test("add a Repository the App is installed on to a Project, see its rename, and
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("link", { name: "Cronker" }).click();
-  await page.getByRole("link", { name: "Settings" }).click();
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await openProjectSettings(page);
 
   const repositories = page.getByRole("region", { name: "Repositories" });
   await expect(repositories.getByText("The Project lists no Repositories yet.")).toBeVisible();

@@ -11,7 +11,9 @@ test("a Ticket shows the Pull Requests naming its key, with their state and chec
   const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
   const project = await created.json();
   await cronk.request("POST", `/api/projects/${project.id}/repositories`, { cookie, body: { id: cronker.id } });
-  await cronk.request("POST", `/api/projects/${project.id}/tickets`, { cookie, body: { title: "Show Pull Requests" } });
+  const ticket = await (
+    await cronk.request("POST", `/api/projects/${project.id}/tickets`, { cookie, body: { title: "Show Pull Requests" } })
+  ).json();
   const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
   const pullRequest = (fields: { draft: boolean; updated_at: string }) => ({
     action: fields.draft ? "opened" : "ready_for_review",
@@ -34,7 +36,7 @@ test("a Ticket shows the Pull Requests naming its key, with their state and chec
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("link", { name: "Cronker" }).click();
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
   await page.getByRole("link", { name: /CRONK-1/ }).click();
 
   const pullRequests = page.getByRole("region", { name: "Pull Requests" });
@@ -51,4 +53,11 @@ test("a Ticket shows the Pull Requests naming its key, with their state and chec
   });
   await expect(pullRequests.getByText("Open")).toBeVisible();
   await expect(pullRequests.getByLabel("1 failed: test")).toBeVisible();
+
+  // In a Review Status, each Pull Request also shows as a card with its branch and every check.
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { statusId: inReview } });
+  const card = page.getByRole("region", { name: "Code to review" }).getByRole("article", { name: "#7 CRONK-1: list Pull Requests" });
+  await expect(card).toContainText("cronk-1-list");
+  await expect(card.getByRole("listitem")).toHaveText(["✗ test failed"]);
 });

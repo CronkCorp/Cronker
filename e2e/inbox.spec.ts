@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, fieldPicker, test } from "./fixtures.js";
 
 test("the Inbox lists Tickets waiting for review, and it and its count update live", async ({ page, cronk }) => {
   const credentials = { email: "ada@example.com", password: "correct horse battery" };
@@ -34,16 +34,22 @@ test("the Inbox lists Tickets waiting for review, and it and its count update li
   await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
   const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
   await expect(items).toHaveCount(1);
+  const detail = page.getByRole("region", { name: "Selected item" });
   await expect(items.first()).toContainText("Waiting for your review in In Review");
-  await expect(items.first().getByRole("link", { name: "CRONK-1 Review me" })).toBeVisible();
+  await expect(detail.getByRole("link", { name: "CRONK-1 Review me" })).toBeVisible();
 
   await edit({ title: "Review me now" });
-  await expect(items.first().getByRole("link", { name: "CRONK-1 Review me now" })).toBeVisible();
+  await expect(items.first()).toContainText("Review me now");
+  await expect(detail.getByRole("link", { name: "CRONK-1 Review me now" })).toBeVisible();
 
+  // Resolved elsewhere, the selected item stays until the User moves on, its actions off.
   await edit({ statusId: status("Done") });
-  await expect(items).toHaveCount(0);
-  await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
+  await expect(items).toHaveCount(1);
+  await expect(items.first()).toContainText("Resolved elsewhere");
+  await expect(detail.getByRole("note", { name: "Resolved elsewhere" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
 });
 
 test("a Run's Question waits in the Inbox, can be dismissed, and is answered by a reply on the Ticket", async ({ page, cronk }) => {
@@ -81,21 +87,24 @@ test("a Run's Question waits in the Inbox, can be dismissed, and is answered by 
   await inboxLink.click();
   const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
   await expect(items).toHaveCount(2);
-  await expect(items.first()).toContainText("claude-max asks, from the Triage Step");
-  await expect(items.first().locator("strong", { hasText: "blue" })).toBeVisible();
+  const detail = page.getByRole("region", { name: "Selected item" });
+  await expect(items.first()).toContainText("Should the button be blue or green?");
+  await expect(detail).toContainText("claude-max asks, from the Triage Step");
+  await expect(detail.locator("strong", { hasText: "blue" })).toBeVisible();
   await expect(items.nth(1)).toContainText("Handed back to you in Backlog: the Triage Step finished with needs you");
 
-  await items.first().getByRole("button", { name: "Dismiss" }).click();
+  // Dismissing selects the next item.
+  await detail.getByRole("button", { name: "Dismiss" }).click();
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("Handed back to you in Backlog");
+  await expect(items.first()).toHaveAttribute("aria-current", "true");
 
-  await items.first().getByRole("link", { name: "CRONK-1 Pick a colour" }).click();
-  const question = page.locator(".comment", { hasText: "Should the button be" });
+  await detail.getByRole("link", { name: "CRONK-1 Pick a colour" }).click();
+  const question = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Question from claude-max" });
   await expect(question.getByText("Question", { exact: true })).toBeVisible();
-  await question.getByRole("button", { name: "Reply" }).click();
-  await question.getByLabel("Reply").fill("Green.");
-  await question.getByRole("button", { name: "Send reply" }).click();
-  await expect(page.getByLabel("Status")).toHaveValue(status("Triage"));
+  await question.getByLabel("Answer").fill("Green.");
+  await question.getByRole("button", { name: "Post answer" }).click();
+  await expect(fieldPicker(page, "Status")).toContainText("Triage");
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
 });
 
@@ -129,7 +138,7 @@ test("a failed Run waits in the Inbox, and Retry starts a fresh one", async ({ p
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("Its Triage Run failed: The session crashed.");
 
-  await items.first().getByRole("button", { name: "Retry CRONK-1" }).click();
+  await page.getByRole("region", { name: "Selected item" }).getByRole("button", { name: "Retry CRONK-1" }).click();
   await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
   expect(cronk.runner.starts).toHaveLength(2);
 });
@@ -168,9 +177,10 @@ test("a Discovered Ticket an Agent filed waits in the Inbox until dismissed", as
   const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("Discovered by claude-max while on CRONK-1");
-  await expect(items.first().getByRole("link", { name: "CRONK-2 Flaky parser" })).toBeVisible();
+  const detail = page.getByRole("region", { name: "Selected item" });
+  await expect(detail.getByRole("link", { name: "CRONK-2 Flaky parser" })).toBeVisible();
 
-  await items.first().getByRole("button", { name: "Dismiss CRONK-2" }).click();
+  await detail.getByRole("button", { name: "Dismiss CRONK-2" }).click();
   await expect(page.getByText("Nothing is waiting on you.")).toBeVisible();
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
 });

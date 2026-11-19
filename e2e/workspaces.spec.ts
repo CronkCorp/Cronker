@@ -21,15 +21,18 @@ async function setUpAndSignIn(page: Page, cronk: StartedCronk) {
 test("create a second Workspace and switch between them", async ({ page, cronk }) => {
   await setUpAndSignIn(page, cronk);
 
-  await page.getByRole("link", { name: "New Workspace" }).click();
+  await page.getByRole("button", { name: "Workspace: Ada's Workspace" }).click();
+  await page.getByRole("menuitem", { name: "New Workspace" }).click();
   await page.getByLabel("Workspace name").fill("Friends");
   await page.getByRole("button", { name: "Create Workspace" }).click();
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
 
-  await page.getByLabel("Workspace", { exact: true }).selectOption({ label: "Ada's Workspace" });
+  await page.getByRole("button", { name: "Workspace: Friends" }).click();
+  await page.getByRole("menuitem", { name: "Ada's Workspace" }).click();
   await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
 
-  await page.getByLabel("Workspace", { exact: true }).selectOption({ label: "Friends" });
+  await page.getByRole("button", { name: "Workspace: Ada's Workspace" }).click();
+  await page.getByRole("menuitem", { name: "Friends" }).click();
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Friends" })).toBeVisible();
@@ -41,8 +44,7 @@ test("create a second Workspace and switch between them", async ({ page, cronk }
   await expect(page.getByRole("heading", { name: "Party" })).toBeVisible();
   await page.reload();
   await expect(page.getByRole("heading", { name: "Party" })).toBeVisible();
-  await expect(page.getByLabel("Workspace", { exact: true })).toHaveValue(/.+/);
-  await expect(page.getByRole("banner").getByRole("link", { name: "Friends" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Workspace: Friends" })).toBeVisible();
 });
 
 test("an Admin adds a User by email, who joins through the link", async ({ page, cronk, browser }) => {
@@ -72,7 +74,9 @@ test("an Admin adds a User by email, who joins through the link", async ({ page,
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Make Admin" }).click();
   await expect(row.getByRole("button", { name: "Remove Admin" })).toBeVisible();
-  await row.getByRole("button", { name: "Remove from Workspace" }).click();
+  await row.getByRole("button", { name: "More for bea@example.com" }).click();
+  await page.getByRole("menuitem", { name: "Remove from Workspace" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove" }).click();
   await expect(row).toHaveCount(0);
 });
 

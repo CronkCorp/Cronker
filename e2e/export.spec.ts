@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { unzip } from "../test/harness/zip.js";
 import { expect, test } from "./fixtures.js";
 
-test("download a Project's Terms and Decisions as a zip from its Glossary and Decisions tabs", async ({ page, cronk }) => {
+test("download a Project's Terms and Decisions as a zip from its Terms and Decisions pages", async ({ page, cronk }) => {
   await cronk.request("POST", "/api/setup", {
     body: {
       setupCode: cronk.setupCode(),
@@ -22,12 +22,14 @@ test("download a Project's Terms and Decisions as a zip from its Glossary and De
   const projectUrl = page.url();
 
   await page.goto(`${projectUrl}/glossary`);
-  await page.getByLabel("New Term name").fill("Ticket");
-  await page.getByRole("textbox", { name: "Definition", exact: true }).fill("A unit of work.");
+  await page.getByRole("button", { name: "New Term" }).click();
+  await page.getByRole("dialog").getByLabel("Name").fill("Ticket");
+  await page.getByRole("dialog").getByRole("textbox", { name: "Definition", exact: true }).fill("A unit of work.");
   await page.getByRole("button", { name: "Create Term" }).click();
   await expect(page.getByRole("heading", { name: "Ticket", exact: true })).toBeVisible();
   await page.goto(`${projectUrl}/decisions`);
-  await page.getByLabel("New Decision title").fill("Use Postgres");
+  await page.getByRole("button", { name: "New Decision" }).click();
+  await page.getByRole("dialog").getByLabel("Title").fill("Use Postgres");
   await page.getByRole("button", { name: "Record Decision" }).click();
   await expect(page.getByRole("heading", { name: "Use Postgres" })).toBeVisible();
 

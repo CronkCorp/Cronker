@@ -1,12 +1,18 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App.js";
-// The IBM Plex faces, bundled from npm and served by Cronk itself: never from a CDN (docs/ui.md).
+// The faces are bundled with Cronk and served by it, never from a CDN: installations may be offline.
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/400-italic.css";
+import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
 import "@fontsource/ibm-plex-mono/400.css";
-import "./styles.css";
+import "@fontsource/ibm-plex-mono/500.css";
+import { App } from "./App.js";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/components.css";
+import "./styles/frame.css";
+import "./styles/screens.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

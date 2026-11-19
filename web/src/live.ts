@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Live updates: one server-sent event stream per Workspace, shared by every screen that
@@ -23,41 +23,82 @@ const eventTypes = ["project.created", "project.changed", "statuses.changed", "t
 
 type Listener = (event: LiveEvent) => void;
 
-const streams = new Map<string, { source: EventSource; listeners: Set<Listener> }>();
+/** Whether a stream is connected, or away and reconnecting. */
+export type LiveState = "live" | "reconnecting";
 
-function listen(workspaceId: string, listener: Listener): () => void {
+interface Stream {
+  source: EventSource;
+  listeners: Set<Listener>;
+  state: LiveState;
+  stateListeners: Set<(state: LiveState) => void>;
+}
+
+const streams = new Map<string, Stream>();
+
+function open(workspaceId: string): Stream {
   let stream = streams.get(workspaceId);
   if (!stream) {
     const source = new EventSource(`/api/workspaces/${encodeURIComponent(workspaceId)}/events`);
-    const listeners = new Set<Listener>();
-    const emit = (event: LiveEvent) => listeners.forEach((l) => l(event));
+    const created: Stream = { source, listeners: new Set(), state: "live", stateListeners: new Set() };
+    const emit = (event: LiveEvent) => created.listeners.forEach((l) => l(event));
+    const setState = (state: LiveState) => {
+      created.state = state;
+      created.stateListeners.forEach((l) => l(state));
+    };
     let opened = false;
     source.addEventListener("open", () => {
+      setState("live");
       if (opened) emit({ type: "reconnected" });
       opened = true;
     });
+    source.addEventListener("error", () => setState("reconnecting"));
     for (const type of eventTypes) {
       source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent));
     }
-    stream = { source, listeners };
+    stream = created;
     streams.set(workspaceId, stream);
   }
-  const { source, listeners } = stream;
-  listeners.add(listener);
+  return stream;
+}
+
+/** Closes a stream once nothing listens to it any more. */
+function release(workspaceId: string, stream: Stream) {
+  if (stream.listeners.size === 0 && stream.stateListeners.size === 0) {
+    stream.source.close();
+    streams.delete(workspaceId);
+  }
+}
+
+function listen(workspaceId: string, listener: Listener): () => void {
+  const stream = open(workspaceId);
+  stream.listeners.add(listener);
   return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) {
-      source.close();
-      streams.delete(workspaceId);
-    }
+    stream.listeners.delete(listener);
+    release(workspaceId, stream);
   };
+}
+
+/** Whether the Workspace's stream is live or reconnecting, for the Live indicator. */
+export function useLiveState(workspaceId: string): LiveState {
+  const [state, setState] = useState<LiveState>(() => streams.get(workspaceId)?.state ?? "live");
+  useEffect(() => {
+    const stream = open(workspaceId);
+    setState(stream.state);
+    stream.stateListeners.add(setState);
+    return () => {
+      stream.stateListeners.delete(setState);
+      release(workspaceId, stream);
+    };
+  }, [workspaceId]);
+  return state;
 }
 
 /** Calls `onEvent` with each event of the Workspace's stream while the component is shown. */
 export function useLiveEvents(workspaceId: string, onEvent: Listener): void {
   const current = useRef(onEvent);
   current.current = onEvent;
-  useEffect(() => listen(workspaceId, (event) => current.current(event)), [workspaceId]);
+  // Nothing streams without a Workspace, such as for a User who belongs to none.
+  useEffect(() => (workspaceId ? listen(workspaceId, (event) => current.current(event)) : undefined), [workspaceId]);
 }
 
 /**
@@ -79,4 +120,33 @@ export function useLatest(): <T>(fetch: Promise<T>, apply: (value: T) => void, f
       (error: Error) => call === latest.current && fail?.(error),
     );
   }, []);
+}
+
+/**
+ * Which of the shown entries arrived since the view first loaded, for the short accent ring that marks a new entry.
+ * Counting starts once the view is `ready`, so what its first load brings isn't marked. An entry stays marked for
+ * about 2s.
+ */
+export function useArrivals(keys: string[], ready = true): Set<string> {
+  const seen = useRef<Set<string> | null>(null);
+  const [arrived, setArrived] = useState<Set<string>>(new Set());
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const joined = keys.join("\n");
+  useEffect(() => {
+    const now = joined ? joined.split("\n") : [];
+    if (!ready) return;
+    if (seen.current === null) {
+      seen.current = new Set(now);
+      return;
+    }
+    const fresh = now.filter((key) => !seen.current!.has(key));
+    now.forEach((key) => seen.current!.add(key));
+    if (fresh.length === 0) return;
+    setArrived((shown) => new Set([...shown, ...fresh]));
+    timers.current.push(
+      setTimeout(() => setArrived((shown) => new Set([...shown].filter((key) => !fresh.includes(key)))), 2000),
+    );
+  }, [joined, ready]);
+  return arrived;
 }

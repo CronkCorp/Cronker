@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, type GitHubApp, type GitHubChecklist, type GitHubInstallation, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { Centered, usePlace } from "./frame.js";
+import { Actions, Banner, Button, buttonClass, Field, FormError, PageHead, Panel } from "./ui/controls.js";
 import { returnAfterSignIn } from "./storage.js";
-import { Button, buttonClass } from "./button.js";
 
 /** What the codes Cronk sends the browser back with mean, for whoever is signing in or creating the App. */
 const githubErrors: Record<string, string> = {
@@ -57,7 +58,7 @@ export function GitHubSignIn({ label = "Sign in with GitHub", returnTo }: { labe
   if (!app) return null;
   return (
     <a
-      className={buttonClass("secondary")}
+      className={`${buttonClass("secondary")} button-github`}
       href="/api/github/sign-in"
       onClick={() => {
         // GitHub sends the browser back to `/`; carry on from here once signed in.
@@ -75,14 +76,15 @@ function CreateAppForm({ submitLabel }: { submitLabel: string }) {
   });
   return (
     <form onSubmit={onSubmit}>
-      <label>
-        GitHub organization (leave empty for your own account)
+      <Field label="GitHub organization" hint="Leave it empty for your own account.">
         <input name="organization" autoComplete="off" pattern="[A-Za-z0-9\-]+" />
-      </label>
-      {error && <p role="alert">{error}</p>}
-      <Button variant="primary" type="submit" disabled={busy}>
-        {submitLabel}
-      </Button>
+      </Field>
+      <FormError error={error} />
+      <Actions>
+        <Button type="submit" variant="primary" disabled={busy}>
+          {submitLabel}
+        </Button>
+      </Actions>
     </form>
   );
 }
@@ -90,19 +92,16 @@ function CreateAppForm({ submitLabel }: { submitLabel: string }) {
 /** The step after setup: create the GitHub App now, or skip it. */
 export function GitHubSetupStep({ onSkip }: { onSkip: () => void }) {
   return (
-    <main className="centered">
-      <h1>Connect GitHub</h1>
-      <p>
+    <Centered title="Connect GitHub">
+      <p className="muted">
         Cronk is set up and you're signed in. Create the installation's GitHub App now so people can sign in with
         GitHub, or skip this and do it later from the GitHub page.
       </p>
       <CreateAppForm submitLabel="Create GitHub App" />
-      <p>
-        <Button variant="ghost" type="button" onClick={onSkip}>
-          Skip for now
-        </Button>
-      </p>
-    </main>
+      <Button variant="ghost" onClick={onSkip}>
+        Skip for now
+      </Button>
+    </Centered>
   );
 }
 
@@ -127,7 +126,7 @@ const eventNames: Record<string, string> = {
 
 function PermissionList({ permissions }: { permissions: Record<string, string> }) {
   return (
-    <ul>
+    <ul className="checklist">
       {Object.entries(permissions).map(([name, access]) => (
         <li key={name}>
           {permissionNames[name] ?? name}: {access === "read" ? "Read-only" : access}
@@ -144,23 +143,24 @@ function AppChecklist() {
   useEffect(() => {
     api.githubChecklist().then(setChecklist, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
-  if (error) return <p role="alert">Couldn't ask GitHub what the App has: {error}</p>;
-  if (!checklist) return <p>Asking GitHub what the App has…</p>;
+  if (error) return <FormError error={`Couldn't ask GitHub what the App has: ${error}`} />;
+  if (!checklist) return <p className="muted">Asking GitHub what the App has…</p>;
 
   const { settingsUrl, missingPermissions, missingEvents, webhook, installationsNotAccepted } = checklist;
   const appComplete = Object.keys(missingPermissions).length === 0 && missingEvents.length === 0 && !webhook;
   return (
-    <section aria-labelledby="checklist-heading">
-      <h2 id="checklist-heading">What the App needs</h2>
+    <Panel title="What the App needs" id="checklist">
       {appComplete ? (
-        <p>The App has every permission, event and webhook setting Cronk needs.</p>
+        <p>✓ The App has every permission, event and webhook setting Cronk needs.</p>
       ) : (
         <>
+          <Banner tone="warn">
           <p>
             The App lacks some of what Cronk needs to read Pull Requests and hear from GitHub. GitHub can't change an
             existing App from Cronk, so add these in <a href={settingsUrl}>the App's settings on GitHub</a>, save, and
             reload this page.
           </p>
+          </Banner>
           {Object.keys(missingPermissions).length > 0 && (
             <>
               <h3>Permissions</h3>
@@ -170,7 +170,7 @@ function AppChecklist() {
           {missingEvents.length > 0 && (
             <>
               <h3>Subscribe to events</h3>
-              <ul>
+              <ul className="checklist">
                 {missingEvents.map((event) => (
                   <li key={event}>{eventNames[event] ?? event}</li>
                 ))}
@@ -181,20 +181,16 @@ function AppChecklist() {
             <>
               <h3>Webhook</h3>
               <p>Check Active, and paste:</p>
-              <div className="issued-link">
-              <label>
-                Webhook URL
-                <input readOnly value={webhook.url} onFocus={(event) => event.currentTarget.select()} />
-              </label>
-              <label>
-                Webhook secret
-                <input readOnly value={webhook.secret} onFocus={(event) => event.currentTarget.select()} />
-              </label>
-              <small>
-                Only Admins see the secret. Cronk refuses deliveries not signed with it. GitHub never shows a secret, so
-                this stays listed until a delivery arrives signed with it; to check at once, redeliver one from the
-                App's Advanced settings on GitHub.
-              </small>
+              <div className="issued">
+                <Field label="Webhook URL">
+                  <input readOnly value={webhook.url} className="mono" onFocus={(event) => event.currentTarget.select()} />
+                </Field>
+                <Field
+                  label="Webhook secret"
+                  hint="Only Admins see the secret. Cronk refuses deliveries not signed with it. GitHub never shows a secret, so this stays listed until a delivery arrives signed with it; to check at once, redeliver one from the App's Advanced settings on GitHub."
+                >
+                  <input readOnly value={webhook.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
+                </Field>
               </div>
             </>
           )}
@@ -204,7 +200,7 @@ function AppChecklist() {
         <>
           <h3>Installations that haven't accepted</h3>
           <p>Each installation's owner on GitHub accepts the App's new permissions on its page there. Until then, Cronk can't read its Pull Requests.</p>
-          <ul>
+          <ul className="checklist">
             {installationsNotAccepted.map((installation) => (
               <li key={installation.htmlUrl}>
                 <a href={installation.htmlUrl}>{installation.account}</a> lacks
@@ -214,7 +210,7 @@ function AppChecklist() {
           </ul>
         </>
       )}
-    </section>
+    </Panel>
   );
 }
 
@@ -226,32 +222,33 @@ function Installations({ app }: { app: GitHubApp }) {
     api.githubInstallations().then(setInstallations, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
   return (
-    <section aria-labelledby="installations-heading">
-      <h2 id="installations-heading">Installations</h2>
+    <Panel title="Installations" id="installations" description="The accounts and organizations the App is installed on, and the Repositories each covers.">
       {error ? (
-        <p role="alert">Couldn't ask GitHub where the App is installed: {error}</p>
+        <FormError error={`Couldn't ask GitHub where the App is installed: ${error}`} />
       ) : !installations ? (
-        <p>Asking GitHub where the App is installed…</p>
+        <p className="muted">Asking GitHub where the App is installed…</p>
       ) : installations.length === 0 ? (
         <p>
           The App isn't installed anywhere yet. Install it from <a href={app.htmlUrl}>its page on GitHub</a> on the
           accounts and organizations whose Repositories Cronk should read.
         </p>
       ) : (
-        <ul>
+        <ul className="side-list">
           {installations.map((installation) => (
             <li key={installation.account}>
-              {installation.account}: {installation.repositories.map((r) => r.fullName).join(", ") || "no Repositories"}
+              <strong>{installation.account}</strong>:{" "}
+              <span className="mono small">{installation.repositories.map((r) => r.fullName).join(", ") || "no Repositories"}</span>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </Panel>
   );
 }
 
 /** The installation's GitHub App: who it is, or, for Admins, creating it. */
 export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
+  usePlace("github");
   const [app, setApp] = useState<GitHubApp | null | undefined>(undefined);
   const [outcome] = useState(() => {
     const error = takeQueryParameter("error");
@@ -264,31 +261,32 @@ export function GitHubPage({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   const isAdmin = workspaces.some((w) => w.isAdmin);
 
   return (
-    <section className="github-page">
-      <h1>GitHub</h1>
-      {outcome.error && <p role="alert">{outcome.error}</p>}
-      {outcome.created && <p role="status">The GitHub App is created. People can now sign in with GitHub.</p>}
+    <div className="page page-settings">
+      <PageHead crumbs={[{ label: "Installation" }]} title="GitHub" />
+      <FormError error={outcome.error} />
+      {outcome.created && (
+        <p role="status" className="saved">
+          The GitHub App is created. People can now sign in with GitHub.
+        </p>
+      )}
       {app === undefined ? (
-        <p>Loading…</p>
+        <p className="muted">Loading…</p>
       ) : app ? (
         <>
+          <Panel title="The App" id="app">
           <p>
             This installation's GitHub App is <a href={app.htmlUrl}>{app.name}</a>, under the GitHub account {app.githubAccount}. People
             sign in with GitHub through it, and Cronk reads the Pull Requests of the Repositories it's installed on.
           </p>
+          </Panel>
           {isAdmin && <AppChecklist />}
           <Installations app={app} />
         </>
       ) : (
-        <>
-          <p>This installation has no GitHub App yet, so nobody can sign in with GitHub.</p>
-          {isAdmin ? (
-            <CreateAppForm submitLabel="Create GitHub App" />
-          ) : (
-            <p>An Admin can create it.</p>
-          )}
-        </>
+        <Panel title="The App" id="app" description="This installation has no GitHub App yet, so nobody can sign in with GitHub.">
+          {isAdmin ? <CreateAppForm submitLabel="Create GitHub App" /> : <p className="muted">An Admin can create it.</p>}
+        </Panel>
       )}
-    </section>
+    </div>
   );
 }

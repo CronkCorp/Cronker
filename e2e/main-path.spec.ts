@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, fieldPicker, newTicket, pick, test } from "./fixtures.js";
 
 // The main path a new installation is used along, end to end in the browser, with the fake Runner
 // standing in for claude.ai. Only the Agent's own calls (finishing its Runs) and setting up the fake
@@ -15,7 +15,8 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await page.getByLabel("Workspace name").fill("Ada's Workspace");
   await page.getByRole("button", { name: "Set up" }).click();
   await page.getByRole("button", { name: "Skip for now" }).click();
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByRole("button", { name: "ada@example.com" }).click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();
@@ -26,6 +27,7 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   const fake = await cronk.request("POST", "/api/runners", { cookie, body: { name: "Fake", kind: "fake" } });
   expect(fake.status).toBe(201);
   await page.getByRole("link", { name: "Agents" }).click();
+  await page.getByRole("button", { name: "New Agent" }).click();
   await page.getByLabel("Agent name").fill("claude-max");
   await page.getByRole("button", { name: "Create Agent" }).click();
   await page.getByRole("link", { name: "claude-max" }).click();
@@ -36,14 +38,14 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   const secret = await page.getByLabel("Token cloud").inputValue();
 
   // A Project and a Ticket on its board.
-  await page.getByRole("link", { name: "Ada's Workspace" }).click();
+  await page.getByRole("button", { name: "Workspace: Ada's Workspace" }).click();
+  await page.getByRole("menuitem", { name: "Ada's Workspace" }).click();
   await page.getByLabel("Project name").fill("Cronker");
   await page.getByLabel("Key").fill("CRONK");
   await page.getByRole("button", { name: "Create Project" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
-  await page.getByLabel("New Ticket title").fill("Make it so");
-  await page.getByRole("button", { name: "Create Ticket" }).click();
+  await newTicket(page, "Make it so");
   const card = board.getByRole("link", { name: /CRONK-1 Make it so/ });
   await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Make it so/ })).toBeVisible();
   const boardUrl = page.url();
@@ -51,14 +53,16 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   // Delegate it, with Autonomous Delegation, and send it to Triage: the first Run starts.
   await card.click();
   const ticketId = new URL(page.url()).pathname.split("/").pop();
-  await page.getByLabel("Delegate to an Agent").click();
-  await expect(page.getByLabel("Delegated to claude-max")).toBeChecked();
-  const autonomous = page.getByLabel("Autonomous Delegation: a Step may complete it, as Unverified");
+  await pick(page, "Delegate", "claude-max");
+  await expect(fieldPicker(page, "Delegate")).toContainText("claude-max");
+  const autonomous = page.getByLabel("Autonomous Delegation");
   await autonomous.click();
   await expect(autonomous).toBeChecked();
-  await page.getByLabel("Status").selectOption("Triage");
+  await pick(page, "Status", "Triage");
   const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline).toContainText("claude-max ran the Triage Step on haiku: running");
+  const runs = (step: string, model: string) =>
+    timeline.getByRole("listitem").filter({ hasText: `${step} · claude-max · ${model}` });
+  await expect(runs("Triage", "haiku").filter({ hasText: "Run running" })).toHaveCount(1);
   expect(cronk.runner.starts).toHaveLength(1);
 
   /** The Agent finishes the Ticket's running Run, as a Run's last call does. */
@@ -79,17 +83,21 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await expect(inboxLink).toHaveAccessibleName("Inbox, 2 waiting");
   await inboxLink.click();
   const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
-  await expect(items.first()).toContainText("claude-max asks, from the Triage Step");
-  await expect(items.first().locator("strong", { hasText: "blue" })).toBeVisible();
+  const detail = page.getByRole("region", { name: "Selected item" });
+  await expect(items.first()).toContainText("Should the button be blue or green?");
+  await expect(detail).toContainText("claude-max asks, from the Triage Step");
+  await expect(detail.locator("strong", { hasText: "blue" })).toBeVisible();
 
   // Answering it with a reply sends the Ticket back to Triage, where a new Run picks the answer up.
-  await items.first().getByRole("link", { name: "CRONK-1 Make it so" }).click();
-  const question = page.locator(".comment", { hasText: "Should the button be" });
-  await question.getByRole("button", { name: "Reply" }).click();
-  await question.getByLabel("Reply").fill("Green.");
-  await question.getByRole("button", { name: "Send reply" }).click();
-  await expect(page.getByLabel("Status").locator("option:checked")).toHaveText("Triage");
-  await expect(timeline.getByText("claude-max ran the Triage Step on haiku: running")).toHaveCount(1);
+  await detail.getByRole("link", { name: "CRONK-1 Make it so" }).click();
+  const question = timeline.getByRole("article", { name: "Question from claude-max" });
+  await expect(question).toContainText("Waiting for an answer");
+  await question.getByLabel("Answer").fill("Green.");
+  await question.getByRole("button", { name: "Post answer" }).click();
+  await expect(fieldPicker(page, "Status")).toContainText("Triage");
+  await expect(question).toContainText("Answered");
+  await expect(runs("Triage", "haiku").filter({ hasText: "Run running" })).toHaveCount(1);
+  await expect(runs("Triage", "haiku").filter({ hasText: "Run finished" })).toContainText("needs you → Backlog");
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
   expect(cronk.runner.starts).toHaveLength(2);
 
@@ -111,6 +119,8 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
 
   // Under Autonomous Delegation the Code review Step completes it, Unverified, into the Inbox.
   await finish({ outcome: "complete" });
+  // Done starts collapsed to its dot and count.
+  await lane("Done").getByRole("button", { name: "Done, 1 Ticket" }).click();
   await expect(cardIn("Done")).toBeVisible();
   expect(cronk.runner.starts.map((s) => s.model)).toEqual(["haiku", "haiku", "sonnet", "opus", "sonnet"]);
   await expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting");
@@ -119,7 +129,7 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await expect(items.first()).toContainText("Completed by the Code review Step, Unverified");
 
   // Accepting it verifies it and empties the Inbox.
-  await items.first().getByRole("link", { name: "CRONK-1 Make it so" }).click();
+  await detail.getByRole("link", { name: "CRONK-1 Make it so" }).click();
   const verification = page.getByRole("region", { name: "Verification" });
   await verification.getByRole("button", { name: "Accept" }).click();
   await expect(verification).toContainText("Verified");

@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type Place, type Term, type TermVersion, type Workspace } from "./api.js";
+import { api, ApiError, type Place, type ProjectSummary, type Term, type TermVersion, type Workspace } from "./api.js";
+import { VersionMeta } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
+import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
+import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
-import { Button } from "./button.js";
+import { Actor } from "./ui/actor.js";
+import { Actions, Banner, Button, EmptyState, Field, FormError, PageHead, RelativeTime } from "./ui/controls.js";
+import { Diff, lineDiff } from "./ui/diff.js";
+import { Chip } from "./ui/labels.js";
+import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
-/** Where a glossary is shown: a Project's Glossary tab, or the Workspace's Glossary page. */
+/** Where a glossary is shown: a Project's Terms page, or the Workspace's. */
 const glossaryPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/glossary` : `/workspaces/${place.id}/glossary`);
 
 /** Words to avoid as typed: separated by commas, each trimmed, blanks dropped. */
@@ -16,30 +23,116 @@ const wordsToAvoid = (text: string) =>
     .map((word) => word.trim())
     .filter(Boolean);
 
-const versionLine = (version: { number: number; actor: { name: string }; savedAt: string }) =>
-  `Version ${version.number} by ${version.actor.name}, ${new Date(version.savedAt).toLocaleString()}`;
-
-/** Terms as a glossary: each with its definition and the words to avoid; marked when it is the Workspace's. */
-function TermList({ terms, markWorkspace }: { terms: Term[]; markWorkspace: boolean }) {
+/** "Avoid:" and the words, struck through. */
+function Avoid({ words }: { words: string[] }) {
+  if (words.length === 0) return null;
   return (
-    <section aria-label="Glossary" className="glossary">
-      {terms.length === 0 && <p>No Terms yet.</p>}
-      {terms.map((term) => (
-        <article key={term.id} className="term">
-          <h2>
-            <Link to={`/terms/${term.id}`}>{term.name}</Link>
-          </h2>
-          {markWorkspace && term.projectId === null && <p className="muted">Workspace Term</p>}
-          {term.definition.trim() && <Markdown text={term.definition} mentions={[]} />}
-          {term.avoid.length > 0 && <p className="muted">Avoid: {term.avoid.join(", ")}</p>}
-        </article>
+    <p className="avoid">
+      Avoid:{" "}
+      {words.map((word, index) => (
+        <span key={word}>
+          <s>{word}</s>
+          {index < words.length - 1 && ", "}
+        </span>
       ))}
-    </section>
+    </p>
   );
 }
 
-/** A form creating a Term in the Project or the Workspace, then showing it. */
-function NewTerm({ place }: { place: Place }) {
+const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Terms as a glossary: each with its scope and Version, its definition and the words to avoid. A Project's Term that
+ * replaces a Workspace Term of the same name says so, and on the Workspace's page a Term says where it is replaced.
+ */
+function Glossary({
+  workspace,
+  project,
+  terms,
+  workspaceTerms,
+  replacedIn,
+}: {
+  workspace: Workspace;
+  project: ProjectSummary | null;
+  terms: Term[];
+  /** The Workspace's own Terms, which a Project's override. */
+  workspaceTerms: Term[];
+  /** For the Workspace's page: each Project's own Terms, by Project. */
+  replacedIn: { project: ProjectSummary; terms: Term[] }[];
+}) {
+  const [filter, setFilter] = useState("");
+  const [creating, setCreating] = useState(false);
+  const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
+  const typed = filter.trim().toLowerCase();
+  const shown = typed
+    ? terms.filter((t) => t.name.toLowerCase().includes(typed) || t.avoid.some((word) => word.toLowerCase().includes(typed)))
+    : terms;
+  const own = terms.filter((t) => (project ? t.projectId === project.id : true)).length;
+  return (
+    <div className="page">
+      <PageHead
+        crumbs={knowledgeCrumbs(workspace, project, "Terms")}
+        title="Terms"
+        switcher={<ScopeSwitch workspace={workspace} project={project} kind="glossary" />}
+        actions={
+          <>
+            <ExportLink place={place} />
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              New Term
+            </Button>
+          </>
+        }
+      />
+      <div className="filter-bar">
+        <input
+          type="search"
+          aria-label="Filter Terms"
+          placeholder="Filter Terms and words to avoid"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        <span className="muted small">
+          {terms.length} Term{terms.length === 1 ? "" : "s"}
+          {project && ` · ${own} from this Project, ${terms.length - own} from the Workspace`}
+        </span>
+      </div>
+      {terms.length === 0 ? (
+        <EmptyState title="No Terms yet.">New Term names a concept, defines it and lists the words to avoid for it.</EmptyState>
+      ) : (
+        <section aria-label="Glossary" className="panel panel-flush glossary">
+          {shown.length === 0 && <p className="glossary-none muted">No Term matches “{filter.trim()}”.</p>}
+          {shown.map((term) => {
+            const overrides = project && term.projectId === project.id && workspaceTerms.some((w) => sameName(w.name, term.name));
+            const replaced = replacedIn.filter((p) => p.terms.some((t) => sameName(t.name, term.name)));
+            return (
+              <article key={term.id} className="term" aria-labelledby={`term-${term.id}`}>
+                <header className="term-head">
+                  <h2 id={`term-${term.id}`}>
+                    <Link to={`/terms/${term.id}`}>{term.name}</Link>
+                  </h2>
+                  {overrides && <Chip tone="info">Overrides the Workspace Term</Chip>}
+                  {replaced.map((p) => (
+                    <Chip key={p.project.id} tone="info">
+                      Replaced in {p.project.key}
+                    </Chip>
+                  ))}
+                  <span className="term-scope">{term.projectId === null ? "Workspace" : (project?.key ?? "Project")}</span>
+                  <span className="term-version">Version {term.version.number}</span>
+                </header>
+                {term.definition.trim() && <Markdown text={term.definition} mentions={[]} />}
+                <Avoid words={term.avoid} />
+              </article>
+            );
+          })}
+        </section>
+      )}
+      <NewTerm place={place} open={creating} onOpenChange={setCreating} />
+    </div>
+  );
+}
+
+/** A dialog creating a Term in the Project or the Workspace, then showing it. */
+function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createTerm(place, {
       name: field(form, "name"),
@@ -49,72 +142,62 @@ function NewTerm({ place }: { place: Place }) {
     navigate(`/terms/${created.id}`);
   });
   return (
-    <form onSubmit={onSubmit} className="term-form">
-      <h2>New Term</h2>
-      <label>
-        New Term name
-        <input name="name" required maxLength={200} />
-      </label>
-      <label>
-        Definition
-        <textarea name="definition" rows={3} />
-      </label>
-      <label>
-        Words to avoid
-        <input name="avoid" placeholder="Separated by commas" />
-      </label>
-      <Button variant="primary" type="submit" disabled={busy}>
-        Create Term
-      </Button>
-      {error && <p role="alert">{error}</p>}
-    </form>
+    <Dialog open={open} onOpenChange={onOpenChange} title={place.kind === "project" ? "New Project Term" : "New Workspace Term"}>
+      <form onSubmit={onSubmit}>
+        <Field label="Name">
+          <input name="name" required maxLength={200} autoFocus />
+        </Field>
+        <Field label="Definition">
+          <textarea name="definition" rows={4} className="markdown-source" />
+        </Field>
+        <Field label="Words to avoid" hint="Separated by commas.">
+          <input name="avoid" placeholder="Issue, task" />
+        </Field>
+        <FormError error={error} />
+        <DialogActions>
+          <DialogClose asChild>
+            <Button>Cancel</Button>
+          </DialogClose>
+          <Button type="submit" variant="primary" disabled={busy}>
+            Create Term
+          </Button>
+        </DialogActions>
+      </form>
+    </Dialog>
   );
 }
 
-/** Loads a list of Terms, showing failures and the wait. */
-function useTerms(load: () => Promise<Term[]>, key: string) {
-  const [terms, setTerms] = useState<Term[] | null>(null);
+/** A Project's glossary: its Terms over the Workspace's, same-named ones replaced. */
+export function ProjectGlossary({ workspace, project }: { workspace: Workspace; project: ProjectSummary }) {
+  usePlace("terms", project.id);
+  const [data, setData] = useState<{ terms: Term[]; workspaceTerms: Term[] } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
-    load().then(setTerms, (e: Error) => setFailure(e.message));
-  }, [key]);
-  return { terms, failure };
+    Promise.all([api.glossary(project.id), api.terms({ kind: "workspace", id: workspace.id })]).then(
+      ([terms, workspaceTerms]) => setData({ terms, workspaceTerms }),
+      (e: Error) => setFailure(e.message),
+    );
+  }, [project.id, workspace.id]);
+  if (failure) return <FormError error={failure} />;
+  if (!data) return <p className="muted">Loading…</p>;
+  return <Glossary workspace={workspace} project={project} terms={data.terms} workspaceTerms={data.workspaceTerms} replacedIn={[]} />;
 }
 
-/** A Project's glossary: its Terms over the Workspace's, same-named ones replaced; and a form for a Project Term. */
-export function ProjectGlossary({ projectId }: { projectId: string }) {
-  const { terms, failure } = useTerms(() => api.glossary(projectId), projectId);
-  if (failure) return <p role="alert">{failure}</p>;
-  if (!terms) return <p>Loading…</p>;
-  return (
-    <>
-      <ExportLink place={{ kind: "project", id: projectId }} />
-      <p className="muted">The Project's Terms over the Workspace's: a Project Term replaces a Workspace Term of the same name.</p>
-      <TermList terms={terms} markWorkspace />
-      <NewTerm place={{ kind: "project", id: projectId }} />
-    </>
-  );
-}
-
-/** The Workspace's own Terms, under every Project's. */
+/** The Workspace's own Terms, under every Project's, each saying which Projects replace it. */
 export function WorkspaceGlossary({ workspace }: { workspace: Workspace }) {
-  const { terms, failure } = useTerms(() => api.terms({ kind: "workspace", id: workspace.id }), workspace.id);
-  return (
-    <>
-      <h1>{workspace.name} Glossary</h1>
-      <ExportLink place={{ kind: "workspace", id: workspace.id }} />
-      {failure ? (
-        <p role="alert">{failure}</p>
-      ) : !terms ? (
-        <p>Loading…</p>
-      ) : (
-        <>
-          <TermList terms={terms} markWorkspace={false} />
-          <NewTerm place={{ kind: "workspace", id: workspace.id }} />
-        </>
-      )}
-    </>
-  );
+  usePlace("terms");
+  const [data, setData] = useState<{ terms: Term[]; replacedIn: { project: ProjectSummary; terms: Term[] }[] } | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      const [terms, projects] = await Promise.all([api.terms({ kind: "workspace", id: workspace.id }), api.projects(workspace.id)]);
+      const replacedIn = await Promise.all(projects.map(async (project) => ({ project, terms: await api.terms({ kind: "project", id: project.id }) })));
+      setData({ terms, replacedIn });
+    })().catch((e: Error) => setFailure(e.message));
+  }, [workspace.id]);
+  if (failure) return <FormError error={failure} />;
+  if (!data) return <p className="muted">Loading…</p>;
+  return <Glossary workspace={workspace} project={null} terms={data.terms} workspaceTerms={data.terms} replacedIn={data.replacedIn} />;
 }
 
 /** A Term: read it, edit it, browse its Versions, and delete it. */
@@ -129,10 +212,13 @@ export function TermScreen({
   onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
   const [term, setTerm] = useState<Term | null>(null);
+  const [project, setProject] = useState<ProjectSummary | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
+  usePlace("terms", term?.projectId ?? null);
 
   const load = useCallback(() => {
     api.term(termId).then(
@@ -144,47 +230,87 @@ export function TermScreen({
     );
   }, [termId, workspace.id]);
   useEffect(load, [load]);
+  const projectId = term?.projectId ?? null;
+  useEffect(() => {
+    if (projectId) api.project(projectId).then(setProject, () => setProject(null));
+  }, [projectId]);
 
-  if (failure) return <p role="alert">{failure}</p>;
-  if (!term) return <p>Loading…</p>;
+  if (failure) return <FormError error={failure} />;
+  if (!term) return <p className="muted">Loading…</p>;
   const place: Place = term.projectId ? { kind: "project", id: term.projectId } : { kind: "workspace", id: term.workspaceId };
+  const crumbs = knowledgeCrumbs(workspace, project, <Link to={glossaryPage(place)}>Terms</Link>);
   return (
-    <article className="document">
-      <p>
-        <Link to={glossaryPage(place)}>{place.kind === "project" ? "Project Glossary" : "Workspace Glossary"}</Link>
-      </p>
-      <h1>{term.name}</h1>
-      <p className="muted">{versionLine(term.version)}</p>
-      {editing ? (
-        <Editor
-          term={term}
-          onSaved={(next) => {
-            setTerm(next);
-            setEditing(false);
-          }}
-          onRebased={load}
-          onCancel={() => setEditing(false)}
-        />
-      ) : (
-        <>
-          <div className="actions">
-            <Button variant="secondary" type="button" onClick={() => setEditing(true)}>
-              Edit
-            </Button>
-          </div>
-          {term.definition.trim() ? <Markdown text={term.definition} mentions={[]} /> : <p className="muted">No definition.</p>}
-          {term.avoid.length > 0 && <p>Avoid: {term.avoid.join(", ")}</p>}
-          <Delete term={term} onDeleted={() => navigate(glossaryPage(place))} />
-        </>
-      )}
-      <Versions key={term.version.number} term={term} />
-    </article>
+    <div className="page">
+      <PageHead
+        crumbs={crumbs}
+        title={term.name}
+        large
+        meta={
+          <>
+            <span>{term.projectId === null ? "Workspace Term" : `${project?.key ?? "Project"} Term`}</span>
+            <span aria-hidden="true">·</span>
+            <VersionMeta version={term.version} />
+          </>
+        }
+        actions={
+          !editing && (
+            <>
+              <Menu label="More of this Term">
+                <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
+                  Delete Term
+                </MenuItem>
+              </Menu>
+              <Button variant="primary" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            </>
+          )
+        }
+      />
+      <div className="page-split">
+        <div className="page">
+          {editing ? (
+            <Editor
+              term={term}
+              onSaved={(next) => {
+                setTerm(next);
+                setEditing(false);
+              }}
+              onRebased={load}
+              onCancel={() => setEditing(false)}
+            />
+          ) : (
+            <article className="panel" aria-label={term.name}>
+              <div className="prose">
+                {term.definition.trim() ? <Markdown text={term.definition} mentions={[]} /> : <p className="muted">No definition yet.</p>}
+                <Avoid words={term.avoid} />
+              </div>
+            </article>
+          )}
+        </div>
+        <aside className="side" aria-label="Term details">
+          <Versions key={term.version.number} term={term} />
+        </aside>
+      </div>
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title={`Delete the Term ${term.name}?`}
+        confirm="Delete"
+        onConfirm={async () => {
+          await api.deleteTerm(term.id);
+          navigate(glossaryPage(place));
+        }}
+      >
+        It goes with all its Versions{term.projectId ? ", and the Workspace's Term of the same name, if any, applies again" : ""}.
+      </ConfirmDialog>
+    </div>
   );
 }
 
 /**
  * The Term's name, definition and words to avoid, editable. A save names the Version it's based on; one based on
- * an outdated Version is refused with the current one, shown beside the draft so its changes can be merged in.
+ * an outdated Version is refused with the current one, shown above the draft so its changes can be folded in.
  */
 function Editor({
   term,
@@ -212,99 +338,79 @@ function Editor({
     }
   });
   return (
-    <form onSubmit={onSubmit} className="term-form">
-      <label>
-        Name
-        <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label>
-        Definition
-        <textarea value={definition} rows={6} onChange={(e) => setDefinition(e.target.value)} />
-      </label>
-      <label>
-        Words to avoid
-        <input value={avoid} placeholder="Separated by commas" onChange={(e) => setAvoid(e.target.value)} />
-      </label>
-      {error && <p role="alert">{error}</p>}
+    <form onSubmit={onSubmit} className="panel">
       {current && (
-        <section aria-label="Current Version" className="conflict">
-          <h2>{versionLine(current)}</h2>
-          <p className="muted">Merge its changes into your draft, then save based on it.</p>
-          <dl>
-            <dt>Name</dt>
-            <dd>{current.name}</dd>
-            <dt>Definition</dt>
-            <dd>
-              <pre>{current.definition}</pre>
-            </dd>
-            <dt>Words to avoid</dt>
-            <dd>{current.avoid.join(", ") || "None"}</dd>
-          </dl>
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => {
-              setBase(current.number);
-              setCurrent(null);
-              onRebased();
-            }}
-          >
-            Base my draft on Version {current.number}
-          </Button>
-        </section>
+        <Banner tone="info" label="Saved meanwhile">
+          <p>
+            <strong>{current.actor.name}</strong> saved Version {current.number} while you were editing, so your save was
+            refused. Your draft is kept: fold their changes into it, then save again.
+          </p>
+          <p>
+            Their name: <strong>{current.name}</strong>. Their words to avoid: {current.avoid.join(", ") || "none"}.
+          </p>
+          <Diff from="Your definition" to={`Version ${current.number}`} lines={lineDiff(definition, current.definition)} label="Their changes" />
+          <div>
+            <Button
+              onClick={() => {
+                setBase(current.number);
+                setCurrent(null);
+                onRebased();
+              }}
+            >
+              Base my draft on Version {current.number}
+            </Button>
+          </div>
+        </Banner>
       )}
-      <div className="actions">
-        <Button variant="primary" type="submit" disabled={busy}>
-          Save
+      <Field label="Name">
+        <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} />
+      </Field>
+      <Field label="Definition">
+        <textarea value={definition} rows={6} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
+      </Field>
+      <Field label="Words to avoid" hint="Separated by commas.">
+        <input value={avoid} onChange={(e) => setAvoid(e.target.value)} />
+      </Field>
+      {!current && <FormError error={error} />}
+      <Actions>
+        <Button type="submit" variant="primary" disabled={busy}>
+          Save as Version {base + 1}
         </Button>
-        <Button variant="ghost" type="button" onClick={onCancel}>
+        <Button variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
-      </div>
+      </Actions>
     </form>
   );
 }
 
-function Delete({ term, onDeleted }: { term: Term; onDeleted: () => void }) {
-  const { error, busy, onSubmit } = useSubmit(async () => {
-    if (!window.confirm(`Delete the Term ${term.name} and all its Versions?`)) return;
-    await api.deleteTerm(term.id);
-    onDeleted();
-  });
-  return (
-    <>
-      <form onSubmit={onSubmit} className="inline">
-        <Button variant="secondary" type="submit" disabled={busy}>
-          Delete Term
-        </Button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-    </>
-  );
-}
-
-/** The Term's Versions, oldest first, each with what it said. */
+/** The Term's Versions, newest first, each opening to what it said. */
 function Versions({ term }: { term: Term }) {
   const [versions, setVersions] = useState<TermVersion[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
     api.termVersions(term.id).then(setVersions, (e: Error) => setFailure(e.message));
   }, [term.id]);
-  if (failure) return <p role="alert">{failure}</p>;
+  if (failure) return <FormError error={failure} />;
   if (!versions) return null;
   return (
-    <section aria-label="Versions" className="versions">
-      <h2>Versions</h2>
-      <ol>
-        {versions.map((version) => (
+    <section aria-label="Versions" className="panel side-section">
+      <h2 className="side-title">Versions</h2>
+      <ol className="version-list">
+        {[...versions].reverse().map((version) => (
           <li key={version.number}>
-            <details>
-              <summary>{versionLine(version)}</summary>
-              <p>
+            <details className="version-details">
+              <summary>
+                Version {version.number}{" "}
+                <span className="version-by">
+                  <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
+                </span>
+              </summary>
+              <div className="version-body">
                 <strong>{version.name}</strong>
-              </p>
-              <pre>{version.definition}</pre>
-              {version.avoid.length > 0 && <p className="muted">Avoid: {version.avoid.join(", ")}</p>}
+                <Markdown text={version.definition} mentions={[]} />
+                <Avoid words={version.avoid} />
+              </div>
             </details>
           </li>
         ))}

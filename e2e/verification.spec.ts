@@ -1,4 +1,4 @@
-import { expect, test } from "./fixtures.js";
+import { expect, fieldPicker, pick, test } from "./fixtures.js";
 
 test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed", async ({ page, cronk }) => {
   const credentials = { email: "ada@example.com", password: "correct horse battery" };
@@ -40,41 +40,44 @@ test("turn on Autonomous Delegation, and Accept or Reopen what a Run completed",
   await expect(settings.getByLabel("Tickets first delegated get Autonomous Delegation")).toBeChecked();
 
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
-  const autonomous = page.getByLabel("Autonomous Delegation: a Step may complete it, as Unverified");
+  const autonomous = page.getByLabel("Autonomous Delegation");
   await expect(autonomous).not.toBeChecked();
-  await page.getByLabel("Delegate to an Agent").click();
+  await pick(page, "Delegate", "claude-max");
   await expect(autonomous).toBeChecked();
-  await page.getByLabel("Status").selectOption("Code review");
+  await pick(page, "Status", "Code review");
   const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline).toContainText("claude-max ran the Code review Step on sonnet: running");
+  const runs = timeline.getByRole("listitem").filter({ hasText: "Code review · claude-max · sonnet" });
+  await expect(runs.filter({ hasText: "Run running" })).toHaveCount(1);
 
   // The Run completes the Ticket: it shows as Unverified, in the Inbox too.
   await finish("complete");
   const verification = page.getByRole("region", { name: "Verification" });
-  await expect(verification).toContainText("claude-max's Run of the Code review Step completed this. It is Unverified");
-  await expect(page.getByLabel("Status")).toBeDisabled();
+  await expect(verification).toContainText("Unverified");
+  await expect(verification).toContainText("claude-max's Run of the Code review Step completed this.");
+  await expect(fieldPicker(page, "Status")).toBeDisabled();
   const inboxLink = page.getByRole("navigation").getByRole("link", { name: /^Inbox/ });
   await expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting");
 
   // Reopen needs a Comment; it sends the Ticket back to Code review, where a new Run starts.
-  await verification.getByRole("button", { name: "Reopen" }).click();
-  await expect(verification.getByLabel("Why reopen it?")).toBeFocused();
-  await verification.getByLabel("Why reopen it?").fill("The tests don't pass.");
-  await verification.getByRole("button", { name: "Reopen" }).click();
-  await expect(page.getByLabel("Status")).toHaveValue(status("Code review"));
-  await expect(page.getByRole("region", { name: "Comments" })).toContainText("The tests don't pass.");
+  await verification.getByRole("button", { name: "Reopen…" }).click();
+  const reopen = page.getByRole("dialog", { name: "Reopen CRONK-1" });
+  await expect(reopen.getByLabel("Why reopen it?")).toBeFocused();
+  await reopen.getByLabel("Why reopen it?").fill("The tests don't pass.");
+  await reopen.getByRole("button", { name: "Reopen" }).click();
+  await expect(fieldPicker(page, "Status")).toContainText("Code review");
+  await expect(timeline.getByRole("article", { name: "Comment by ada@example.com" })).toContainText("The tests don't pass.");
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
-  await expect(timeline.getByText("claude-max ran the Code review Step on sonnet: running")).toHaveCount(1);
+  await expect(runs.filter({ hasText: "Run running" })).toHaveCount(1);
 
   await finish("complete");
   await inboxLink.click();
   const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("Completed by the Code review Step, Unverified");
-  await items.first().getByRole("link", { name: "CRONK-1 Make it so" }).click();
+  await page.getByRole("region", { name: "Selected item" }).getByRole("link", { name: "CRONK-1 Make it so" }).click();
 
   await page.getByRole("region", { name: "Verification" }).getByRole("button", { name: "Accept" }).click();
   await expect(page.getByRole("region", { name: "Verification" })).toContainText("Verified");
-  await expect(page.getByLabel("Status")).toBeEnabled();
+  await expect(fieldPicker(page, "Status")).toBeEnabled();
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
 });
