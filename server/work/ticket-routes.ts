@@ -8,7 +8,7 @@ import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
 import { Report, reportsOn, writeReport } from "../knowledge/reports.js";
-import { acceptTicket, reopenTicket } from "./verification.js";
+import { acceptTicket, Completion, completionOf, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
@@ -267,6 +267,25 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return reopenTicket(context, user, request.params.ticketId, request.body.comment);
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/completion",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "What completed a Ticket, and where Reopen sends it",
+          description:
+            "For a Ticket a Run or a merged Pull Request completed (Unverified or Verified): the merged Pull Request and who " +
+            "merged it, if a merge did, and where Reopen sends it. Null for a Ticket nothing completed.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Union([Completion, Type.Null()]), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        return completionOf(context.db, caller, request.params.ticketId);
       },
     );
 

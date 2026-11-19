@@ -13,7 +13,8 @@ export const ChangedBy = Type.Union([
  * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null). `stepSkipped`
  * marks Cronk passing the Ticket on past a Step it didn't pass, before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
- * unlinked (to null), as `{ id, title }` titled then.
+ * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
+ * before the `status` and `verification` Changes moving it.
  */
 export const changeFields = [
   "created",
@@ -36,6 +37,7 @@ export const changeFields = [
   "verification",
   "dismissed",
   "linkedDocument",
+  "merged",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 
@@ -49,7 +51,9 @@ export const Change = Type.Object({
       "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
-      "and the default Outcome the Ticket moved on by.",
+      "and the default Outcome the Ticket moved on by. A `merged` Change goes from null to " +
+      "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
+      "login of the GitHub account that merged it, or null when GitHub named none.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {

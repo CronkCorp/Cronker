@@ -208,6 +208,10 @@ describe("Verification", () => {
 
   test("a User Reopens it with a Comment saying why, sending it back to the Step that completed it for a new Run", async () => {
     const { ada, ticket, status } = await completedUnverified();
+    expect(await ok("GET", `/api/tickets/${ticket.id}/completion`, ada)).toEqual({
+      merge: null,
+      reopen: { kind: "back", status: { id: status("Code review"), name: "Code review" } },
+    });
 
     const reopened = await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "The tests don't pass." });
 
@@ -331,6 +335,7 @@ describe("the Inbox", () => {
           ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", verification: "unverified" }),
           status: { id: status("Done"), name: "Done" },
           completedBy: { id: status("Code review"), name: "Code review" },
+          completedWithoutStep: false,
         },
       ],
     });

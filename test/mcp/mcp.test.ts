@@ -167,6 +167,7 @@ describe("MCP with an Agent token", () => {
         url: "https://github.com/cronkcorp/cronker/pull/7",
         state: "draft",
         checks: [{ name: "test", state: "failed", url: null }],
+        mergedBy: null,
         producingStep: null,
       },
     ]);

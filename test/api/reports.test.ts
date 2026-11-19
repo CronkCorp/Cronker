@@ -26,15 +26,34 @@ async function ok(method: string, path: string, as: Request, body?: unknown) {
 }
 
 /**
+ * A Ticket in the Project's Backlog as milestone 1's Cronk created it. Creating one reads the Project's settings, which
+ * migrations after the one under test add, so on a database migrated short of it the Ticket is staged instead.
+ */
+async function stagedTicket(project: { id: string; workspaceId: string; statuses: { id: string; name: string }[] }, userId: string) {
+  const id = "5d1e2f30-4a5b-4c6d-8e7f-a0b1c2d3e4f5";
+  const backlog = project.statuses.find((s) => s.name === "Backlog")!.id;
+  await cronk!.stage(
+    `insert into tickets (id, workspace_id, project_id, number, title, description, status_id, created_by, created_at, status_entered_at)
+     values ($1, $2, $3, 1, 'Make it so', '', $4, $5, '2026-01-01T09:00:00Z', '2026-01-01T09:00:00Z')`,
+    [id, project.workspaceId, project.id, backlog, userId],
+  );
+  await cronk!.stage("update projects set next_ticket_number = 2 where id = $1", [project.id]);
+  return { id };
+}
+
+/**
  * Ada with a Project on the default board and a Ticket CRONK-1 her Agent `claude-max` is running a Triage Run on,
  * through her fake Runner.
  */
 async function runningRun(options: StartCronkOptions = {}) {
   cronk = await startCronk(options);
-  const { workspace } = await setUp(cronk);
+  const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
-  const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
+  const ticket =
+    options.migrateBefore === undefined
+      ? await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" })
+      : await stagedTicket(project, user.id);
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });

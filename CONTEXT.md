@@ -65,7 +65,7 @@ A Delegation in which a Step may complete the Ticket itself instead of stopping 
 _Avoid_: Auto mode, unattended mode, YOLO mode
 
 **Verification**:
-A User's after-the-fact judgement on a Ticket an agent completed: **Unverified** until a User **Accepts** it (Verified) or **Reopens** it with a Comment saying why, sending it back to the Status of the Step that completed it. An Unverified Ticket counts as finished for what it blocks.
+A User's after-the-fact judgement on a Ticket an agent or a merge completed: **Unverified** until a User **Accepts** it (Verified) or **Reopens** it with a Comment saying why, sending it back to the Status of the Step that completed it (for a merge, the Step whose Run opened the Pull Request), or, when no Step produced the work, leaving it where it is. An Unverified Ticket counts as finished for what it blocks.
 _Avoid_: Approval, sign-off, QA
 
 **Question**:
@@ -137,7 +137,7 @@ A GitHub repository that one or more Projects list as holding their code, reache
 _Avoid_: Repo (in the product), codebase
 
 **Pull Request**:
-A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains. A merge by a User of the Ticket's Workspace completes the Ticket as Verified; any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified.
+A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains. A merge by a User of the Ticket's Workspace completes the Ticket as Verified; any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified. A Project can turn this **Pull Request automation** off, so merges complete nothing.
 _Avoid_: PR (in the product), merge request, change
 
 ### Actors
