@@ -1,7 +1,8 @@
+import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Tx } from "../db.js";
+import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { userViewer } from "../identity/viewers.js";
+import { userViewer, type Viewer } from "../identity/viewers.js";
 import type { User } from "../identity/user.js";
 import { startRunIfNeeded } from "../runs/runs.js";
 import { recordChanges } from "./changes.js";
@@ -100,4 +101,66 @@ async function unverifiedTicket(
     );
   }
   return ticket;
+}
+
+const StatusRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
+
+/** What completed a Ticket, and what Reopen would do with it while it is Unverified. */
+export const Completion = Type.Object({
+  merge: Type.Union(
+    [
+      Type.Object({
+        pullRequest: Type.Object({
+          id: Type.Integer({ description: "GitHub's id for the Pull Request." }),
+          repository: Type.String(),
+          number: Type.Integer(),
+          title: Type.String(),
+          url: Type.String(),
+        }),
+        mergedBy: Type.Union([Type.String(), Type.Null()], {
+          description: "The login of the GitHub account that merged it; null when GitHub named none.",
+        }),
+      }),
+      Type.Null(),
+    ],
+    { description: "The merged Pull Request that completed the Ticket; null when a Run's Step completed it." },
+  ),
+  reopen: Type.Union(
+    [
+      Type.Object({ kind: Type.Literal("back"), status: StatusRef }, {
+        description: "Reopen sends it back to this Status: of the Step that completed it, or that produced the merged Pull Request.",
+      }),
+      Type.Object({ kind: Type.Literal("stays") }, { description: "No Step produced the work, so Reopen leaves it where it is." }),
+      Type.Object({ kind: Type.Literal("refused") }, {
+        description: "The Status Reopen would send it back to has been removed, so Reopen is refused.",
+      }),
+    ],
+    { description: "Where Reopen sends the Ticket." },
+  ),
+});
+export type Completion = Static<typeof Completion>;
+
+/** What completed the Ticket and where Reopen sends it; null for a Ticket nothing completed, or that has moved on since. */
+export async function completionOf(db: Db, viewer: Viewer, ticketId: string): Promise<Completion | null> {
+  const ticket = await findTicketRow(db, viewer, ticketId);
+  if (!ticket) throw ticketNotFound();
+  if (ticket.verification === null) return null;
+  const { rows } = await db.query<{ merge: Completion["merge"]; back: { id: string; name: string } | null; withoutStep: boolean }>(
+    `select case when pull_requests.id is null then null else json_build_object(
+         'pullRequest', json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
+           'number', pull_requests.number, 'title', pull_requests.title, 'url', pull_requests.url),
+         'mergedBy', pull_requests.merged_by_login) end as merge,
+       case when back.id is null then null else json_build_object('id', back.id, 'name', back.name) end as back,
+       tickets.completed_without_step as "withoutStep"
+     from tickets
+     left join pull_requests on pull_requests.id = tickets.completed_by_pull_request_id
+     left join statuses back on back.id = tickets.completed_from_status_id
+     where tickets.id = $1`,
+    [ticket.id],
+  );
+  const { merge, back, withoutStep } = rows[0]!;
+  return {
+    merge,
+    reopen: back ? { kind: "back", status: back } : withoutStep ? { kind: "stays" } : { kind: "refused" },
+  };
 }

@@ -181,10 +181,12 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       ? { id: pr.merged_by.id, login: pr.merged_by.login }
       : null;
   // Whether Cronk knew the Pull Request merged already, so only the delivery of its merge completes Tickets.
-  const { rows: known } = await tx.query<{ state: PullRequestState }>("select state from pull_requests where id = $1 for update", [
+  const { rows: before } = await tx.query<{ state: PullRequestState }>("select state from pull_requests where id = $1 for update", [
     pr.id,
   ]);
-  const { rowCount: kept } = await tx.query(
+  const wasMerged = before[0]?.state === "merged";
+  // Kept only when no newer delivery came first.
+  const { rowCount: newest } = await tx.query(
     `insert into pull_requests (id, repository_id, repository_full_name, number, title, branch, head_sha, state, url,
        merged_by_login, updated_at)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
@@ -218,7 +220,7 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       [pr.id, repository.id, keys, opened, context.clock.now()],
     );
   }
-  if (kept && state === "merged" && known[0]?.state !== "merged") {
+  if (newest && state === "merged" && !wasMerged) {
     await completeMergedTickets(context, tx, {
       pullRequest: { id: pr.id, repository: repository.full_name, number: pr.number, title: pr.title, url: pr.html_url },
       mergedBy,

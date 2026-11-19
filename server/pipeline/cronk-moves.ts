@@ -52,6 +52,8 @@ export interface CronkMove {
   stopReason?: string;
   /** How a move to a Done Status completes the Ticket. */
   verification: "unverified" | "verified";
+  /** The merged Pull Request completing the Ticket, by GitHub's id, when a merge moves it. */
+  pullRequestId?: number;
   /**
    * Called once the rounds have decided the Outcome that applies, before the Ticket moves, at the time the move
    * records: a finishing Run ends here. Cronk's Question is set when it applied the Step's *needs you* Outcome
@@ -124,8 +126,10 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
     const completedFrom = target.kind === "outcome" ? target.step.statusId : target.completedFrom;
     const withoutStep = target.kind === "status" && target.withoutStep === true;
     await tx.query(
-      "update tickets set verification = $2, completed_from_status_id = $3, completed_without_step = $4 where id = $1",
-      [ticket.id, move.verification, completedFrom, withoutStep],
+      `update tickets set verification = $2, completed_from_status_id = $3, completed_without_step = $4,
+         completed_by_pull_request_id = $5
+       where id = $1`,
+      [ticket.id, move.verification, completedFrom, withoutStep, move.pullRequestId ?? null],
     );
     await recordChanges(tx, ticket, move.by, now, [{ field: "verification", from: ticket.verification, to: move.verification }]);
   }

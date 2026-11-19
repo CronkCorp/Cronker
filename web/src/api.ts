@@ -557,6 +557,16 @@ export interface PullRequest {
   producingStep: { runId: string; statusId: string | null; name: string } | null;
 }
 
+/** What completed a Ticket, and where Reopen sends it. */
+export interface Completion {
+  /** The merged Pull Request that completed it; null when a Run's Step did. */
+  merge: {
+    pullRequest: { id: number; repository: string; number: number; title: string; url: string };
+    mergedBy: string | null;
+  } | null;
+  reopen: { kind: "back"; status: { id: string; name: string } } | { kind: "stays" } | { kind: "refused" };
+}
+
 /** Which page tree: a Project's, or the Workspace's. */
 export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
 
@@ -779,6 +789,8 @@ export const api = {
   approveConnect: (requestId: string, agentId: string) =>
     call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
+  completion: (ticketId: string) =>
+    call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkedDocuments: (ticketId: string) =>

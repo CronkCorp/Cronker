@@ -10,3 +10,7 @@ alter table projects add column pull_request_automation boolean not null default
 -- Reopen leaves it where it is instead of sending it back to a Step's Status. Read only while
 -- the Ticket is Unverified; every completion sets it.
 alter table tickets add column completed_without_step boolean not null default false;
+
+-- The merged Pull Request that completed a Ticket, if a merge did. Read only while the Ticket
+-- is Unverified or Verified; every completion sets it.
+alter table tickets add column completed_by_pull_request_id bigint references pull_requests (id);

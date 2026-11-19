@@ -541,8 +541,8 @@ describe("Merges", () => {
     expect(run).toMatchObject({ state: "stopped", endReason: "@mallory merged cronkcorp/cronker#7, completing CRONK-1." });
     expect(cronk.runner.stops.map((s) => s.runId)).toEqual([run.id]);
     const changes = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
-    const cronks = changes.filter((c: { actor: { kind: string } }) => c.actor.kind === "cronk");
-    expect(cronks.map((c: { field: string; from: unknown; to: unknown }) => [c.field, c.from, c.to])).toEqual([
+    const byCronk = changes.filter((c: { actor: { kind: string } }) => c.actor.kind === "cronk");
+    expect(byCronk.map((c: { field: string; from: unknown; to: unknown }) => [c.field, c.from, c.to])).toEqual([
       [
         "merged",
         null,
@@ -570,6 +570,15 @@ describe("Merges", () => {
     const mallory = { login: "mallory", id: 666 };
     await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged({ id: 501, number: 7, title: "CRONK-1", branch: "a" }, mallory)));
     await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged({ id: 502, number: 8, title: "CRONK-2", branch: "b" }, mallory)));
+
+    // Each says what completed it and where Reopen sends it.
+    const completionOf = async (id: string) => (await cronk.request("GET", `/api/tickets/${id}/completion`, { cookie })).json();
+    const mergeOf = (number: number) => ({
+      pullRequest: { id: 500 + number - 6, repository: "cronkcorp/cronker", number, title: `CRONK-${number - 6}`, url: `https://github.com/cronkcorp/cronker/pull/${number}` },
+      mergedBy: "mallory",
+    });
+    expect(await completionOf(produced.id)).toEqual({ merge: mergeOf(7), reopen: { kind: "back", status: { id: implement, name: "Implement" } } });
+    expect(await completionOf(byHand.id)).toEqual({ merge: mergeOf(8), reopen: { kind: "stays" } });
 
     const reopen = (id: string) =>
       cronk.request("POST", `/api/tickets/${id}/reopen`, { cookie, body: { comment: "Not quite." } });
@@ -607,8 +616,8 @@ describe("Merges", () => {
     await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "mallory", id: 666 })));
     const reopened = await cronk.request("POST", `/api/tickets/${ticket.id}/reopen`, { cookie, body: { comment: "Not done." } });
     expect(reopened.status).toBe(200);
-    const inProgress = statusNamed(project, "Implement");
-    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { statusId: inProgress } });
+    const implement = statusNamed(project, "Implement");
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { statusId: implement } });
 
     await deliver(
       app,
@@ -616,7 +625,7 @@ describe("Merges", () => {
       pullRequestEvent("edited", installation, cronker, merged(pr, { login: "mallory", id: 666 }, { title: "CRONK-1 renamed", updatedAt: "2026-01-01T13:00:00Z" })),
     );
 
-    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: inProgress, verification: null });
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: implement, verification: null });
   });
 });
 

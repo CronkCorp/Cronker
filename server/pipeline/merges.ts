@@ -47,16 +47,19 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
   const name = `${pullRequest.repository}#${pullRequest.number}`;
   const merger = mergedBy ? `@${mergedBy.login}` : "GitHub";
   for (const { doneStatusId, producingStatusId, produced, byMember, ...ticket } of tickets) {
-    const now = context.clock.now();
-    await recordChanges(tx, ticket, { kind: "cronk" }, now, [
-      { field: "merged", from: null, to: { pullRequest, mergedBy: mergedBy?.login ?? null } },
-    ]);
     await moveByCronk(context, tx, ticket, {
       target: { kind: "status", statusId: doneStatusId, completedFrom: producingStatusId, withoutStep: !produced },
       by: { kind: "cronk" },
       stopReason: `${merger} merged ${name}, completing ${ticket.key}.`,
       // Only a User of the Ticket's Workspace merging it themselves vouches for the work.
       verification: byMember && !merge.autoMerged ? "verified" : "unverified",
+      pullRequestId: pullRequest.id,
+      // Recorded at the move's time, ahead of the Changes moving it.
+      beforeMove: async (_decision, now) => {
+        await recordChanges(tx, ticket, { kind: "cronk" }, now, [
+          { field: "merged", from: null, to: { pullRequest, mergedBy: mergedBy?.login ?? null } },
+        ]);
+      },
     });
   }
 }
