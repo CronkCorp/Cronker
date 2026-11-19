@@ -404,6 +404,8 @@ export interface ReviewItem {
   kind: "review";
   ticket: TicketSummary;
   status: { id: string; name: string };
+  /** The Ticket's latest Report, or null when it has none. */
+  report: { id: string; title: string } | null;
   /** When it began waiting: when the Ticket entered its Review Status. */
   since: string;
 }
@@ -417,6 +419,8 @@ export interface UnverifiedItem {
   completedBy: { id: string; name: string } | null;
   /** Whether no Step produced the work, as with a merge of a Pull Request a User opened. */
   completedWithoutStep: boolean;
+  /** The Ticket's latest Report, or null when it has none. */
+  report: { id: string; title: string } | null;
   /** When it began waiting: when the Ticket was completed, by a Run or a merge, moving it to its Done Status. */
   since: string;
 }
