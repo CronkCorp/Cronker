@@ -39,7 +39,7 @@ import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { Actions, Button, daySeparator, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
-import { FieldPicker } from "./ui/picker.js";
+import { FieldPicker, Picker } from "./ui/picker.js";
 
 /**
  * A Ticket: its title, description and Attachments, one timeline of its Comments, Reports, Runs and Changes, and
@@ -885,12 +885,17 @@ function LinkedDocuments({
     );
   }, [ticket.projectId, workspaceId]);
   useEffect(loadTrees, [loadTrees]);
-  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
-    await api.linkDocument(ticket.id, field(form, "document"));
-    element.reset();
-    loadTrees();
-    onChanged();
-  });
+  const [error, setError] = useState<string | null>(null);
+  const link = async (documentId: string) => {
+    setError(null);
+    try {
+      await api.linkDocument(ticket.id, documentId);
+      loadTrees();
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
   const unlink = async (documentId: string) => {
     setUnlinkError(null);
     try {
@@ -921,36 +926,26 @@ function LinkedDocuments({
       )}
       <FormError error={unlinkError} />
       <FormError error={treesError} />
-      <form onSubmit={onSubmit} className="side-form">
-        <select name="document" required defaultValue="" onFocus={loadTrees} aria-label="Link a Document">
-          <option value="" disabled>
-            Link a Document…
-          </option>
-          {offered &&
-            (
-              [
-                ["This Project", offered.project],
-                ["The Workspace", offered.workspace],
-              ] as const
-            ).map(
-              ([label, documents]) =>
-                documents.length > 0 && (
-                  <optgroup key={label} label={label}>
-                    {documents.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.title}
-                      </option>
-                    ))}
-                  </optgroup>
-                ),
-            )}
-        </select>
-        <div>
-          <Button type="submit" size="small" disabled={busy}>
-            Link
-          </Button>
-        </div>
-      </form>
+      <div>
+        <Picker
+          label="Link a Document"
+          onOpenChange={(open) => open && loadTrees()}
+          options={
+            offered
+              ? [
+                  ...offered.project.map((d) => ({ value: d.id, label: d.title, group: "This Project" })),
+                  ...offered.workspace.map((d) => ({ value: d.id, label: d.title, group: "The Workspace" })),
+                ]
+              : []
+          }
+          onPick={(id) => void link(id)}
+          trigger={
+            <Button size="small" aria-haspopup="listbox">
+              Link a Document…
+            </Button>
+          }
+        />
+      </div>
       <FormError error={error} />
     </section>
   );

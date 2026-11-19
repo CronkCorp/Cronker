@@ -872,6 +872,22 @@ textarea.markdown-source {
   color: var(--accent);
   font-size: 12px;
 }
+.picker-group > ul {
+  padding: 0;
+  list-style: none;
+}
+.picker-group + .picker-group {
+  margin-top: var(--space-1);
+}
+.picker-group-label {
+  display: block;
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
 .picker-empty {
   padding: 6px 8px;
   color: var(--muted);
