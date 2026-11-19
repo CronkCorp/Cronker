@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
+import { sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
 
@@ -42,6 +43,30 @@ export const ProducingStep = Type.Object({
 });
 export type ProducingStep = Static<typeof ProducingStep>;
 
+export const SentBack = Type.Union(
+  [
+    Type.Object({
+      kind: Type.Literal("check"),
+      name: Type.String({ description: "The failed check run's name, or the commit status's context." }),
+      sha: Type.String({ description: "The commit it failed on, then the Pull Request's latest." }),
+      url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows it, if it says." }),
+      at: Type.String({ format: "date-time" }),
+    }),
+    Type.Object({
+      kind: Type.Literal("review"),
+      reviewer: Type.Union([Type.String(), Type.Null()], { description: "The login of the GitHub account that requested changes." }),
+      url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows the review, if it says." }),
+      at: Type.String({ format: "date-time" }),
+    }),
+  ],
+  {
+    description:
+      "What last sent this Ticket back to its producing Step from this Pull Request: a failing check on its latest commit, " +
+      "or a review requesting changes.",
+  },
+);
+export type SentBack = Static<typeof SentBack>;
+
 export const PullRequest = Type.Object({
   id: Type.Integer({ description: "GitHub's id for the Pull Request." }),
   repository: Type.String({ description: "Its Repository's `owner/name` as GitHub last reported it with the Pull Request." }),
@@ -61,6 +86,7 @@ export const PullRequest = Type.Object({
     description:
       "The Step of the Run that was running on this Ticket when GitHub reported the Pull Request opened, or null if none was, as when a User opened it.",
   }),
+  sentBack: Type.Union([SentBack, Type.Null()], { description: "Null until a failure on it sends the Ticket back." }),
 });
 export type PullRequest = Static<typeof PullRequest>;
 
@@ -68,13 +94,21 @@ export type PullRequest = Static<typeof PullRequest>;
 export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): Promise<PullRequest[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  const { rows } = await db.query<Omit<PullRequest, "id" | "checks"> & { id: string; repositoryId: string; sha: string }>(
+  const { rows } = await db.query<Omit<PullRequest, "id" | "checks" | "sentBack"> & {
+    id: string;
+    repositoryId: string;
+    sha: string;
+    sentBack: SentBack | null;
+  }>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId", pull_requests.head_sha as sha,
        pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.title,
        pull_requests.branch, pull_requests.url, pull_requests.state, pull_requests.merged_by_login as "mergedBy",
        case when runs.id is null then null
          else json_build_object('runId', runs.id, 'statusId', runs.status_id, 'name', runs.status_name) end
-         as "producingStep"
+         as "producingStep",
+       (select sent_back.failure || jsonb_build_object('at', sent_back.sent_at) from sent_back
+        where sent_back.pull_request_id = pull_requests.id and sent_back.ticket_id = pull_request_links.ticket_id
+        order by sent_back.seq desc limit 1) as "sentBack"
      from pull_request_links
      join pull_requests on pull_requests.id = pull_request_links.pull_request_id
      left join runs on runs.id = pull_request_links.producing_run_id
@@ -87,7 +121,13 @@ export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): 
     rows.map((r) => ({ repositoryId: r.repositoryId, sha: r.sha })),
   );
   // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
-  return rows.map(({ id, repositoryId, sha, ...row }, i) => ({ id: Number(id), ...row, checks: checks[i]! }));
+  return rows.map(({ id, repositoryId, sha, sentBack, ...row }, i) => ({
+    id: Number(id),
+    ...row,
+    checks: checks[i]!,
+    // jsonb carries the time as Postgres writes it; the API writes every time the same way.
+    sentBack: sentBack && { ...sentBack, at: new Date(sentBack.at).toISOString() },
+  }));
 }
 
 /** The checks on each of several commits, by name. */
@@ -164,7 +204,8 @@ async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Pr
  * GitHub's `pull_request` event. A Pull Request of a Repository some Project lists is kept as
  * the delivery reports it, unless Cronk already knows a newer state, and links to the Tickets
  * its title and branch name now. A delivery of its opening records, for each Ticket it links,
- * the Run running on that Ticket then: the producing Step's.
+ * the Run running on that Ticket then: the producing Step's. A check that failed on its latest
+ * commit before Cronk heard of the push sends the Tickets back now.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, pull_request: pr } = payload as {
@@ -220,6 +261,21 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       [pr.id, repository.id, keys, opened, context.clock.now()],
     );
   }
+  // A check can fail on a pushed commit before GitHub reports the push: once it is the latest commit, it sends back.
+  if (newest && (state === "open" || state === "draft")) {
+    const { rows: failed } = await tx.query<{ name: string; url: string | null }>(
+      `select name, url from commit_checks where repository_id = $1 and sha = $2 and state = 'failed'
+       order by source_id limit 1`,
+      [repository.id, pr.head.sha],
+    );
+    if (failed[0]) {
+      await sendBackForFailure(context, tx, { id: pr.id, repository: repository.full_name, number: pr.number, url: pr.html_url }, {
+        kind: "check",
+        sha: pr.head.sha,
+        ...failed[0],
+      });
+    }
+  }
   if (newest && state === "merged" && !wasMerged) {
     await completeMergedTickets(context, tx, {
       pullRequest: { id: pr.id, repository: repository.full_name, number: pr.number, title: pr.title, url: pr.html_url },
@@ -247,7 +303,8 @@ const statusStates: Record<string, CheckState> = { pending: "pending", success: 
 /**
  * Keeps one check of a commit, unless Cronk knows a later one of that name: a newer check run
  * or status by GitHub's id, or a later stage of the same check run. Commits of Repositories no
- * Project lists are ignored. The Pull Requests whose latest commit it is are announced.
+ * Project lists are ignored. The Pull Requests whose latest commit it is are announced, and a
+ * failed check sends the Tickets an open one links back to work.
  */
 async function recordCheck(
   context: Context,
@@ -265,10 +322,22 @@ async function recordCheck(
     [check.repositoryId, check.sha, check.kind, check.name, check.sourceId, check.state, check.stage, check.url],
   );
   if (!rowCount) return;
-  const { rows } = await tx.query<{ id: string }>("select id from pull_requests where repository_id = $1 and head_sha = $2", [
-    check.repositoryId,
-    check.sha,
-  ]);
+  const { rows } = await tx.query<{ id: string; repository: string; number: number; url: string; open: boolean }>(
+    `select id, repository_full_name as repository, number, url, state in ('open', 'draft') as open
+     from pull_requests where repository_id = $1 and head_sha = $2 order by id`,
+    [check.repositoryId, check.sha],
+  );
+  if (check.state === "failed") {
+    for (const { id, repository, number, url, open } of rows) {
+      if (!open) continue;
+      await sendBackForFailure(context, tx, { id: Number(id), repository, number, url }, {
+        kind: "check",
+        name: check.name,
+        sha: check.sha,
+        url: check.url,
+      });
+    }
+  }
   await announce(context, tx, rows.map((r) => Number(r.id)));
 }
 
@@ -316,4 +385,32 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
     stage: 0,
     url: typeof url === "string" ? url : null,
   });
+};
+
+/**
+ * GitHub's `pull_request_review` event: a review submitted on a Pull Request Cronk knows. One
+ * requesting changes, whoever wrote it, sends the Tickets an open Pull Request links back to work.
+ */
+export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payload }) => {
+  const { action, review, pull_request: pr } = payload as {
+    action?: string;
+    review?: { id?: unknown; state?: unknown; html_url?: unknown; user?: { login?: unknown } | null };
+    pull_request?: { id?: unknown };
+  };
+  if (action !== "submitted" || typeof review?.id !== "number" || typeof pr?.id !== "number") return;
+  if (typeof review.state !== "string" || review.state.toLowerCase() !== "changes_requested") return;
+  const { rows } = await tx.query<{ repository: string; number: number; url: string }>(
+    `select repository_full_name as repository, number, url from pull_requests
+     where id = $1 and state in ('open', 'draft')`,
+    [pr.id],
+  );
+  const known = rows[0];
+  if (!known) return;
+  await sendBackForFailure(context, tx, { id: pr.id, ...known }, {
+    kind: "review",
+    id: review.id,
+    reviewer: typeof review.user?.login === "string" ? review.user.login : null,
+    url: typeof review.html_url === "string" ? review.html_url : null,
+  });
+  await announce(context, tx, [pr.id]);
 };

@@ -4,7 +4,7 @@ import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { appToken, findApp, webhookSecret } from "./app.js";
 import { appDeliveries, redeliver } from "./client.js";
-import { onCheckRunEvent, onPullRequestEvent, onStatusEvent } from "./pull-requests.js";
+import { onCheckRunEvent, onPullRequestEvent, onPullRequestReviewEvent, onStatusEvent } from "./pull-requests.js";
 import { onRepositoryEvent } from "./repositories.js";
 
 /**
@@ -28,6 +28,7 @@ export type EventHandler = (context: Context, tx: Tx, delivery: Delivery) => Pro
 const handlers: Record<string, EventHandler> = {
   repository: onRepositoryEvent,
   pull_request: onPullRequestEvent,
+  pull_request_review: onPullRequestReviewEvent,
   check_run: onCheckRunEvent,
   status: onStatusEvent,
 };

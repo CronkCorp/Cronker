@@ -295,7 +295,8 @@ export interface Comment {
   ticketId: string;
   replyToId: string | null;
   body: string;
-  actor: Actor;
+  /** Who wrote it: a User, an Agent, or Cronk itself, as when a failing check sent the Ticket back. */
+  actor: ChangeActor;
   createdAt: string;
   mentions: Mention[];
   /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
@@ -571,6 +572,11 @@ export interface PullRequest {
   mergedBy: string | null;
   /** The Step of the Run running on the Ticket when GitHub reported it opened. */
   producingStep: { runId: string; statusId: string | null; name: string } | null;
+  /** What last sent the Ticket back to its producing Step from this Pull Request, if anything did. */
+  sentBack:
+    | { kind: "check"; name: string; sha: string; url: string | null; at: string }
+    | { kind: "review"; reviewer: string | null; url: string | null; at: string }
+    | null;
 }
 
 /** What completed a Ticket, and where Reopen sends it. */
