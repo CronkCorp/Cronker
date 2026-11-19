@@ -29,6 +29,10 @@ export const RunnerRecord = Type.Object({
     minimum: 1,
     description: "How many Runs it keeps running at once; Tickets needing a Run beyond it wait for a slot.",
   }),
+  running: Type.Integer({
+    minimum: 0,
+    description: "How many of its Runs are running now, counted against its limit.",
+  }),
   pausedUntil: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
     description:
       "While its Runs' service rate limits it: until when its queue is paused, so none of its waiting Tickets start. " +
@@ -51,7 +55,9 @@ type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers"> & {
 };
 const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
   'createdAt', t.created_at)`;
-const columns = `id, name, kind, run_limit as limit, paused_until as "pausedUntil", created_at as "createdAt",
+const columns = `id, name, kind, run_limit as limit,
+  (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
+  paused_until as "pausedUntil", created_at as "createdAt",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
 const present = (row: Row): RunnerRecord => ({
