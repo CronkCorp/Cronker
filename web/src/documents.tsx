@@ -56,16 +56,28 @@ export const versionLine = (version: { number: number; actor: { name: string } }
   `Version ${version.number} by ${version.actor.name}`;
 
 /**
- * A Document's or Decision's body as it reads: Markdown in a panel, 15px at a 720px measure. The read view, the
+ * A Document's, Decision's or Term's body as it reads: Markdown in a panel, 15px at a 720px measure. The read view, the
  * editor's preview and a Version's dialog all draw it this way, so the preview shows what saving will look like.
  */
-export function DocumentBody({ body, label, empty }: { body: string; label?: string; empty?: ReactNode }) {
+export function DocumentBody({
+  body,
+  label,
+  empty,
+  after,
+}: {
+  body: string;
+  label?: string;
+  empty?: ReactNode;
+  /** What follows the body at the same measure, such as a Term's words to avoid. */
+  after?: ReactNode;
+}) {
   const content =
     empty && !body.trim() ? (
       empty
     ) : (
       <div className="prose">
         <Markdown text={body} mentions={[]} />
+        {after}
       </div>
     );
   return label ? (

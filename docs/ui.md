@@ -29,7 +29,7 @@ The web client follows this file since the styling pass at the end of milestone 
   - The signed-in User, which opens a menu: Password and Sign out.
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Password, New Workspace or a page that isn't there, marks none.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
-- **Page head:** breadcrumbs (13px, muted), then a row holding the `h1`, the view switcher and the actions. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
+- **Page head:** breadcrumbs (13px, muted), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
 - **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, which used to sit on Members), so the sidebar's Settings has a page of its own.
 - **A Ticket's or Document's Project:** a page tells the frame which item it belongs to and which Project it is in (`usePlace`), and the sidebar's Documents, Terms and Decisions then lead to that Project's.
 
@@ -192,6 +192,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Terms page:** reads like a glossary. The page head holds a Workspace / Project scope switch, then Export and **New Term**. A filter box matches names and words to avoid.
 - **Each Term:** the name, "Overrides the Workspace Term" in `--info` where it does (on a Workspace Term, "Replaced in CRONK"), its scope and Version. Then the definition, and "Avoid:" with the words struck through.
+- **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside the Term's Versions, each of which opens to what it said. The editor holds the Name, the definition's Markdown beside its preview, and the words to avoid, with "Save as Version N" first.
 - The screenshots' groups, Protected marks and Suggestion counts belong to the old Cronk.
 
 ### Decisions
@@ -199,7 +200,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 ![Decisions](ui/decisions.png)
 
 - **Register:** the page head holds the same scope switch, then **Export** and **New Decision**. Below it, status filter chips with counts, and a table of number, title, status and date. A superseded Decision carries "→ 0007" after its title.
-- **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it. Only Users see the status actions.
+- **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value. Only Users see the status actions.
 
 ### Agents and Runners
 

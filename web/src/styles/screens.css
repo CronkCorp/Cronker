@@ -403,12 +403,12 @@
 .side-form input {
   font-size: 12px;
 }
+/* A Decision's side panel: each label over its value, which keeps its own width, so a status stays a pill. */
 .side-row {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 32px;
+  justify-items: start;
+  gap: var(--space-1);
+  min-width: 0;
 }
 .fields {
   gap: 0;
@@ -903,16 +903,6 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-}
-.version-details summary {
-  cursor: pointer;
-}
-.version-body {
-  display: grid;
-  gap: var(--space-1);
-  margin-top: var(--space-2);
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--border);
 }
 .document-body {
   padding: var(--space-5);
