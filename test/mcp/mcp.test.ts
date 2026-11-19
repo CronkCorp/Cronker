@@ -517,6 +517,7 @@ describe("MCP with an Agent token", () => {
     const current = await call(client, "read_term", { term: term.json.id });
     const compared = await call(client, "compare_term_versions", { term: term.json.id, from: 1, to: 2 });
     const missing = await call(client, "read_term", { term: term.json.id, version: 3 });
+    const missingCompared = await call(client, "compare_term_versions", { term: term.json.id, from: 1, to: 3 });
 
     expect(first.json).toEqual(expect.objectContaining({ number: 1, name: "Brief", avoid: ["Prompt"] }));
     expect(current.json).toEqual(expect.objectContaining({ name: "Run brief", version: expect.objectContaining({ number: 2 }) }));
@@ -526,6 +527,7 @@ describe("MCP with an Agent token", () => {
       { change: "added", text: "system prompt" },
     ]);
     expect(missing).toEqual({ isError: true, json: expect.objectContaining({ code: "not_found" }) });
+    expect(missingCompared).toEqual({ isError: true, json: expect.objectContaining({ code: "not_found" }) });
   });
 
   test("an Agent attaches files as base64 to a Document and its own Comment, and reads a Ticket's Attachments", async () => {

@@ -592,10 +592,16 @@ export interface Completion {
 /** Which page tree: a Project's, or the Workspace's. */
 export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
 
+/** A line of two texts compared: in both, only the earlier one, or only the later one. */
+export interface ComparedLine {
+  change: "same" | "removed" | "added";
+  text: string;
+}
+
 export interface Comparison<V extends VersionWithBody = VersionWithBody> {
   from: V;
   to: V;
-  lines: { change: "same" | "removed" | "added"; text: string }[];
+  lines: ComparedLine[];
 }
 
 /** A Term naming one concept, with its definition and the words to avoid, kept by a Project or by the Workspace. */
@@ -624,8 +630,8 @@ export interface TermVersion {
 export interface TermComparison {
   from: TermVersion;
   to: TermVersion;
-  lines: { change: "same" | "removed" | "added"; text: string }[];
-  avoid: { change: "same" | "removed" | "added"; text: string }[];
+  lines: ComparedLine[];
+  avoid: ComparedLine[];
 }
 
 export interface TermContent {

@@ -8,7 +8,7 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Place } from "./places.js";
-import { ComparedLine, compareLines } from "./compare.js";
+import { ComparedLine, compareLines, compareWords } from "./compare.js";
 import { outdatedVersion } from "./versions.js";
 
 /**
@@ -255,13 +255,6 @@ export async function compareTermVersions(
     lines: compareLines(from.definition, to.definition),
     avoid: compareWords(from.avoid, to.avoid),
   };
-}
-
-/** Two lists of words compared as lines, so a word that is in neither list adds no empty line. */
-function compareWords(before: string[], after: string[]): ComparedLine[] {
-  if (before.length === 0) return after.map((text) => ({ change: "added", text }));
-  if (after.length === 0) return before.map((text) => ({ change: "removed", text }));
-  return compareLines(before.join("\n"), after.join("\n"));
 }
 
 /** The glossary's own Terms, by name ignoring case. */

@@ -166,9 +166,11 @@ describe("Terms", () => {
     await ok("PATCH", `/api/terms/${term.id}`, ada, { baseVersion: 2, definition: "Instructions.\nEach Run has its own." });
 
     const compared = await ok("GET", `/api/terms/${term.id}/versions/compare?from=1&to=3`, asAgent);
+    const second = await ok("GET", `/api/terms/${term.id}/versions/2`, ada);
 
     expect(compared.from).toEqual(expect.objectContaining({ number: 1, name: "Brief", definition: "Instructions.\nOne per Run." }));
     expect(compared.to).toEqual(expect.objectContaining({ number: 3, name: "Run brief", avoid: ["Prompt", "system prompt"] }));
+    expect(second).toEqual(expect.objectContaining({ number: 2, name: "Run brief", definition: "Instructions.\nOne per Run." }));
     expect(compared.lines).toEqual([
       { change: "same", text: "Instructions." },
       { change: "removed", text: "One per Run." },
@@ -180,6 +182,7 @@ describe("Terms", () => {
       { change: "added", text: "system prompt" },
     ]);
   });
+
   test("a Version the Term doesn't have is refused, read alone or compared", async () => {
     const { ada, project } = await workspaceWithProject();
     const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Brief" });
