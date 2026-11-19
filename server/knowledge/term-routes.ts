@@ -6,7 +6,21 @@ import { requireCaller } from "../identity/callers.js";
 import { findProject, projectNotFound } from "../work/projects.js";
 import { knowledgePlaces } from "./places.js";
 import { OutdatedVersionBody } from "./versions.js";
-import { createTerm, deleteTerm, editTerm, findTerm, glossaryOf, Term, termNotFound, termsOf, TermVersion, versionsOf } from "./terms.js";
+import {
+  compareTermVersions,
+  createTerm,
+  deleteTerm,
+  editTerm,
+  findTerm,
+  glossaryOf,
+  readTermVersion,
+  Term,
+  TermComparison,
+  termNotFound,
+  termsOf,
+  TermVersion,
+  versionsOf,
+} from "./terms.js";
 
 const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 const Definition = Type.String({ maxLength: 20_000, description: "Markdown." });
@@ -16,8 +30,7 @@ const Avoid = Type.Array(Type.String({ minLength: 1, maxLength: 200, pattern: "\
 });
 const tags = ["Terms"];
 const TermParams = Type.Object({ termId: Type.String() });
-
-
+const VersionNumber = Type.Integer({ minimum: 1 });
 
 /** Trims the name and each word to avoid, as they are kept. */
 const tidy = <T extends { name?: string; avoid?: string[] }>(input: T): T => ({
@@ -146,6 +159,38 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => versionsOf(db, await requireCaller(context, request), request.params.termId),
+    );
+
+    app.get(
+      "/api/terms/:termId/versions/compare",
+      {
+        schema: {
+          tags,
+          summary: "Compare two of a Term's Versions",
+          description:
+            "Both Versions, with their names; their definitions compared line by line from `from` to `to`; and their " +
+            "words to avoid compared one by one.",
+          params: TermParams,
+          querystring: Type.Object({ from: VersionNumber, to: VersionNumber }),
+          response: { 200: TermComparison, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => compareTermVersions(db, await requireCaller(context, request), request.params.termId, request.query),
+    );
+
+    app.get(
+      "/api/terms/:termId/versions/:number",
+      {
+        schema: {
+          tags,
+          summary: "One of a Term's Versions",
+          description: "What the Version said: its name, definition and words to avoid, with the Actor who saved it and when.",
+          params: Type.Object({ termId: Type.String(), number: VersionNumber }),
+          response: { 200: TermVersion, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) =>
+        readTermVersion(db, await requireCaller(context, request), request.params.termId, request.params.number),
     );
 
     app.delete(
