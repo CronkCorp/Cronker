@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
+import { disposition } from "../http/disposition.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import {
@@ -25,13 +26,6 @@ const inertTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"
  */
 const servedType = (mediaType: string) =>
   inertTypes.has(mediaType) ? (mediaType === "text/plain" ? "text/plain; charset=utf-8" : mediaType) : "application/octet-stream";
-
-/** A `Content-Disposition` that saves the file under its name, with an ASCII fallback for older clients. */
-function disposition(name: string): string {
-  const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
-  const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
-}
 
 const owners: { kind: OwnerKind; path: string; param: string; name: string }[] = [
   { kind: "ticket", path: "/api/tickets/:ticketId/attachments", param: "ticketId", name: "a Ticket" },

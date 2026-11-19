@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type Place, type Term, type TermVersion, type Workspace } from "./api.js";
+import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
@@ -87,6 +88,7 @@ export function ProjectGlossary({ projectId }: { projectId: string }) {
   if (!terms) return <p>Loading…</p>;
   return (
     <>
+      <ExportLink place={{ kind: "project", id: projectId }} />
       <p className="muted">The Project's Terms over the Workspace's: a Project Term replaces a Workspace Term of the same name.</p>
       <TermList terms={terms} markWorkspace />
       <NewTerm place={{ kind: "project", id: projectId }} />
@@ -100,6 +102,7 @@ export function WorkspaceGlossary({ workspace }: { workspace: Workspace }) {
   return (
     <>
       <h1>{workspace.name} Glossary</h1>
+      <ExportLink place={{ kind: "workspace", id: workspace.id }} />
       {failure ? (
         <p role="alert">{failure}</p>
       ) : !terms ? (

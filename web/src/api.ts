@@ -314,6 +314,11 @@ export function attachmentUrl(id: string): string {
   return `/api/attachments/${encodeURIComponent(id)}/content`;
 }
 
+/** Where a Project's or the Workspace's Terms and Decisions download from, as a zip of `GLOSSARY.md` and `docs/adr/`. */
+export function exportUrl(place: Place): string {
+  return `${placePath(place)}/export.zip`;
+}
+
 /** Whether a URL is where an Attachment downloads from. */
 export function isAttachmentUrl(url: string): boolean {
   return /^\/api\/attachments\/[^/]+\/content$/.test(url);

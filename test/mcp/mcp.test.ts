@@ -86,6 +86,7 @@ describe("MCP with an Agent token", () => {
       "edit_document",
       "edit_term",
       "edit_ticket",
+      "export_knowledge",
       "file_ticket",
       "finish",
       "link_document",
@@ -487,6 +488,25 @@ describe("MCP with an Agent token", () => {
     await cronk.request("PATCH", `/api/decisions/${postgres.json.id}`, { cookie, body: { baseVersion: 2, status: "accepted" } });
     const current = await call(client, "read_decision", { decision: postgres.json.id });
     expect(current.json).toEqual(expect.objectContaining({ status: "accepted", body: "It's boring.\nIt works." }));
+  });
+
+  test("an Agent exports a Project's or the Workspace's Terms and Decisions as files to commit into its branch", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    await call(client, "create_term", { name: "Ticket", definition: "A unit of work." });
+    await call(client, "create_term", { project: "CRONK", name: "Board", definition: "The Statuses as columns." });
+    await call(client, "propose_decision", { project: "CRONK", title: "Use Postgres", body: "It's boring." });
+
+    const project = await call(client, "export_knowledge", { project: "cronk" });
+    const workspace = await call(client, "export_knowledge", {});
+
+    expect(project.json).toEqual({
+      files: [
+        { path: "GLOSSARY.md", content: "# Glossary\n\n**Board**:\nThe Statuses as columns.\n\n**Ticket**:\nA unit of work.\n" },
+        { path: "docs/adr/0001-use-postgres.md", content: "# Use Postgres\n\nStatus: proposed\n\nIt's boring.\n" },
+      ],
+    });
+    expect(workspace.json).toEqual({ files: [{ path: "GLOSSARY.md", content: "# Glossary\n\n**Ticket**:\nA unit of work.\n" }] });
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {
