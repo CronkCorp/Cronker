@@ -491,7 +491,7 @@ export function buildMcpServer(api: Api): McpServer {
           : document
             ? documentPath(document)
             : `/api/comments/${encodeURIComponent(comment!)}`;
-        const file = { bytes: Buffer.from(content, "base64"), mediaType: mediaType ?? "application/octet-stream" };
+        const file = { bytes: Buffer.from(content, "base64"), mediaType: mediaType?.trim() || "application/octet-stream" };
         return send("POST", `${path}/attachments?name=${encodeURIComponent(name)}`, undefined, file);
       }),
   );
