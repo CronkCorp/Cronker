@@ -1049,6 +1049,38 @@
   margin-left: auto;
   flex: none;
 }
+.runner-card {
+  gap: var(--space-4);
+}
+.runner-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.runner-card-head h2 {
+  font-size: 15px;
+}
+.runner-usage {
+  margin-left: auto;
+  font-size: 13px;
+}
+.runner-usage strong {
+  font-size: 16px;
+}
+.runner-limit > .field {
+  flex: 0 0 120px;
+}
+.runner-triggers {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.runner-trigger-form {
+  display: grid;
+  gap: var(--space-2);
+}
 .agent-tokens {
   display: flex;
   flex-wrap: wrap;

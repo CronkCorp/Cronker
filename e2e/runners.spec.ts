@@ -1,6 +1,6 @@
 import { expect, pick, test } from "./fixtures.js";
 
-test("set up a subscription Runner, point an Agent at it, and follow a Run to its claude.ai session", async ({
+test("set up a subscription Runner, point an Agent at it, and follow a Run to its claude.ai session, then remove the trigger", async ({
   page,
   cronk,
 }) => {
@@ -55,4 +55,15 @@ test("set up a subscription Runner, point an Agent at it, and follow a Run to it
     "https://claude.ai/code/session_01STANDIN",
   );
   expect(cronk.claude.fires.map((f) => f.triggerId)).toEqual(["trig_haiku"]);
+
+  // Removing a trigger loses its token for good, so it asks first.
+  await page.getByRole("link", { name: "Runners" }).click();
+  const haiku = runner.getByRole("row", { name: /haiku/ });
+  await haiku.getByRole("button", { name: "Remove" }).click();
+  const confirm = page.getByRole("dialog", { name: "Remove the haiku trigger?" });
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(haiku).toHaveCount(1);
+  await haiku.getByRole("button", { name: "Remove" }).click();
+  await confirm.getByRole("button", { name: "Remove" }).click();
+  await expect(runner).toContainText("No triggers yet");
 });
