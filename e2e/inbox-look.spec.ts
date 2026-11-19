@@ -72,3 +72,40 @@ test("on a phone the Inbox's list and detail stack, and selecting an item opens 
   await expect(items.nth(2)).toHaveAttribute("aria-current", "true");
   await expect(detail).toBeHidden();
 });
+
+test("a Run gone wrong and a Discovered Ticket each read as sentences in the detail", async ({ page, cronk }) => {
+  const credentials = { email: "ada@example.com", password: "correct horse battery" };
+  const { workspace } = await (
+    await cronk.request("POST", "/api/setup", { body: { ...credentials, setupCode: cronk.setupCode(), workspaceName: "Ada's Workspace" } })
+  ).json();
+  const cookie = (await cronk.request("POST", "/api/sign-in", { body: credentials })).headers.get("set-cookie")!.split(";")[0]!;
+  const call = async (method: string, path: string, body?: unknown, headers?: Record<string, string>) =>
+    (await cronk.request(method, path, headers ? { headers, body } : { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Rate-limit sign-in" });
+  await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: status("Triage") });
+  const [run] = await call("GET", `/api/tickets/${ticket.id}/runs`);
+  await call("POST", `/api/projects/${project.id}/tickets`, { title: "Flaky parser", runId: run.id }, { authorization: `Bearer ${secret}` });
+  await cronk.runner.endWithoutFinishing(run.id, "The session crashed.");
+
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill(credentials.email);
+  await page.getByLabel("Password").fill(credentials.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("navigation").getByRole("link", { name: /^Inbox/ }).click();
+  const items = page.getByRole("list", { name: "Inbox" }).getByRole("listitem");
+  const detail = page.getByRole("region", { name: "Selected item" });
+  await expect(items).toHaveCount(2);
+
+  await expect(detail).toContainText("Its Triage Run failed: The session crashed.");
+  expect(await detail.innerText()).not.toContain("crashed..");
+  await expect(detail).toContainText(/claude-max ran it on haiku, started/);
+
+  await items.nth(1).getByRole("button").click();
+  await expect(detail).toContainText(/while on CRONK-1: delegate, move or dismiss it\./);
+});

@@ -116,6 +116,9 @@ function summary(item: InboxItem): string {
   }
 }
 
+/** A line as a sentence: a full stop at its end, unless it already ends with one, as a Run's reason may. */
+const sentence = (line: string) => (/[.!?]$/.test(line) ? line : `${line}.`);
+
 /** An item's snippet in the list: the Question, or the Report's title on a Ticket to review or verify, else its summary. */
 const snippet = (item: InboxItem) =>
   (item.kind === "review" || item.kind === "unverified") && item.report ? `Report: ${item.report.title}` : summary(item);
@@ -427,7 +430,7 @@ function ItemBody({
     case "needsYou":
       return (
         <>
-          <p className="detail-line">{summary(item)}.</p>
+          <p className="detail-line">{sentence(summary(item))}</p>
           {item.question && (
             <div className="bubble bubble-question">
               <p>Cronk asks: {item.question}</p>
@@ -439,7 +442,7 @@ function ItemBody({
     case "review":
       return (
         <>
-          <p className="detail-line">{summary(item)}.</p>
+          <p className="detail-line">{sentence(summary(item))}</p>
           <TicketStatus ticket={ticket} />
           <TicketPullRequests ticketId={ticket.id} />
           <LatestReport ticketId={ticket.id} />
@@ -448,7 +451,7 @@ function ItemBody({
     case "unverified":
       return (
         <>
-          <p className="detail-line">{summary(item)}.</p>
+          <p className="detail-line">{sentence(summary(item))}</p>
           <LatestReport ticketId={ticket.id} />
         </>
       );
@@ -613,7 +616,7 @@ function RunGoneWrong({
   return (
     <>
       <p className="detail-line">
-        <RunState state={item.run.state} /> {summary(item)}.
+        <RunState state={item.run.state} /> {sentence(summary(item))}
       </p>
       {found && (
         <p className="detail-line">
@@ -754,7 +757,7 @@ function Reassign({
   }, [workspace.id]);
   return (
     <>
-      <p className="detail-line">{summary(item)}.</p>
+      <p className="detail-line">{sentence(summary(item))}</p>
       <FieldPicker
         label="Assignee"
         value={<span className="muted">Nobody</span>}

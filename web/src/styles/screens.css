@@ -846,12 +846,10 @@
 .detail-head a {
   font-weight: 600;
 }
+/* A line of prose with Actors and pills in it: inline, so punctuation sits against the words before it. */
 .detail-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
   font-size: 13px;
+  line-height: 1.9;
 }
 .inline-select {
   width: auto !important;
