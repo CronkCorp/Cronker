@@ -47,7 +47,7 @@ export function Attachments({
   canAttach?: boolean;
   /** Smaller thumbnails, as under a Comment. */
   compact?: boolean;
-  /** Where else files may be dropped or pasted, beside the picker. */
+  /** A line beside the picker saying where else files may be dropped or pasted, such as anywhere on the Ticket. */
   dropHint?: string;
   onChanged: () => void;
 }) {
