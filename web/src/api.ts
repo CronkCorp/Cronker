@@ -474,6 +474,44 @@ export interface Comparison {
   lines: { change: "same" | "removed" | "added"; text: string }[];
 }
 
+export const decisionStatuses = ["proposed", "accepted", "rejected", "deprecated", "superseded"] as const;
+export type DecisionStatus = (typeof decisionStatuses)[number];
+
+/** One saved state of a Decision: its text and status, recording the Actor who saved it. */
+export interface DecisionVersion extends Version {
+  status: DecisionStatus;
+  supersededById: string | null;
+}
+
+/** A Decision as its list shows it, without its body. */
+export interface DecisionSummary {
+  id: string;
+  workspaceId: string;
+  /** Null for the Workspace's own. */
+  projectId: string | null;
+  number: number;
+  title: string;
+  status: DecisionStatus;
+  /** The Decision replacing it, while superseded. */
+  supersededById: string | null;
+  version: DecisionVersion;
+}
+
+export interface Decision extends DecisionSummary {
+  body: string;
+}
+
+export interface DecisionEdit {
+  baseVersion: number;
+  title?: string;
+  body?: string;
+  status?: DecisionStatus;
+  supersededById?: string | null;
+}
+
+/** Whose knowledge: a Project's, or the Workspace's own. */
+export type Scope = Tree;
+
 /** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
 export interface ConnectRequest {
   client: { id: string; name: string | null };
@@ -620,13 +658,29 @@ export const api = {
   version: (documentId: string, number: number) => call<VersionWithBody>("GET", `${doc(documentId)}/versions/${number}`),
   compareVersions: (documentId: string, from: number, to: number) =>
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
+  decisions: (scope: Scope) => call<DecisionSummary[]>("GET", scopePath(scope, "decisions")),
+  createDecision: (scope: Scope, input: { title: string; body?: string }) =>
+    call<Decision>("POST", scopePath(scope, "decisions"), input),
+  decision: (id: string) => call<Decision>("GET", decision(id)),
+  editDecision: (id: string, edit: DecisionEdit) => call<Decision>("PATCH", decision(id), edit),
+  decisionVersions: (id: string) => call<DecisionVersion[]>("GET", `${decision(id)}/versions`),
+  decisionVersion: (id: string, number: number) =>
+    call<DecisionVersion & { body: string }>("GET", `${decision(id)}/versions/${number}`),
+  compareDecisionVersions: (id: string, from: number, to: number) =>
+    call<Comparison>("GET", `${decision(id)}/versions/compare?from=${from}&to=${to}`),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 
 function treePath(tree: Tree) {
-  return tree.kind === "project"
-    ? `/api/projects/${encodeURIComponent(tree.id)}/documents`
-    : `${ws(tree.id)}/documents`;
+  return scopePath(tree, "documents");
+}
+
+function scopePath(scope: Scope, what: string) {
+  return scope.kind === "project" ? `/api/projects/${encodeURIComponent(scope.id)}/${what}` : `${ws(scope.id)}/${what}`;
+}
+
+function decision(id: string) {
+  return `/api/decisions/${encodeURIComponent(id)}`;
 }
 
 function doc(id: string) {

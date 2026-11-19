@@ -538,3 +538,25 @@ td.actions {
 .page-tree form {
   margin-top: 1rem;
 }
+.decision-list table {
+  margin-bottom: 1rem;
+}
+.decision-status {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.875rem;
+}
+.decision-status.accepted {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.decision-status.rejected {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.decision .status-form,
+.decision .versions {
+  margin-top: 1.25rem;
+}
