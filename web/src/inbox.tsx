@@ -151,7 +151,7 @@ const typing = (event: KeyboardEvent) => {
     event.metaKey ||
     event.ctrlKey ||
     event.altKey ||
-    !!target?.closest("input, textarea, select, [contenteditable=true]") ||
+    !!target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])") ||
     !!document.querySelector("[role=dialog]")
   );
 };
