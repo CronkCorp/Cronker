@@ -379,6 +379,26 @@ describe("A Pull Request's review state", () => {
     expect((await pullRequestsOf(ticket.id, cookie))[0].reviewState).toBeNull();
   });
 
+  test("a review delivered before Cronk hears of its Pull Request shows once it does; one in a Repository no Project lists is not kept", async () => {
+    const { cookie, app, installation, project, cronker, website } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Early review" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    const elsewhere = { id: 502, number: 8, title: "CRONK-1 elsewhere", branch: "b" };
+
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 70, state: "approved", reviewer: "bea" }));
+    await deliver(app, "pull_request_review", reviewEvent(installation, website, elsewhere, { id: 71, state: "approved", reviewer: "bea" }));
+    expect(await pullRequestsOf(ticket.id, cookie)).toEqual([]);
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    // Listed only now, the other Repository's Pull Request shows without the review delivered before.
+    await post(cookie, `/api/projects/${project.id}/repositories`, { id: website.id });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, website, elsewhere));
+
+    expect((await pullRequestsOf(ticket.id, cookie)).map((p: { number: number; reviewState: unknown }) => [p.number, p.reviewState])).toEqual([
+      [7, { state: "approved", reviewer: "bea", url: "https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-70" }],
+      [8, null],
+    ]);
+  });
+
   test("requested changes show whatever the Ticket's Status, without sending it back, and the Workspace hears of it", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "In Backlog" });

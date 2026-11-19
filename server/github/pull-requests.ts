@@ -414,29 +414,25 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
 };
 
 /**
- * GitHub's `pull_request_review` event: a review submitted on, or dismissed from, a Pull Request Cronk knows.
- * Each reviewer's latest approval or request for changes is kept, whatever the Tickets' Statuses and whoever
- * opened the Pull Request, until a later one replaces it or GitHub dismisses it; reviews that only comment
- * change nothing. A request for changes, whoever wrote it, also sends the Tickets an open Pull Request links
+ * GitHub's `pull_request_review` event: a review submitted on, or dismissed from, a Pull Request in a
+ * Repository some Project lists. Each reviewer's latest approval or request for changes is kept, whatever the
+ * Tickets' Statuses and whoever opened the Pull Request, even before Cronk hears of the Pull Request, until a
+ * later one replaces it or GitHub dismisses it; reviews that only comment change nothing. A request for changes, whoever wrote it, also sends the Tickets an open Pull Request links
  * back to work.
  */
 export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payload }) => {
-  const { action, review, pull_request: pr } = payload as {
+  const { action, repository, review, pull_request: pr } = payload as {
     action?: string;
+    repository?: { id?: unknown };
     review?: { id?: unknown; state?: unknown; html_url?: unknown; user?: { login?: unknown } | null };
     pull_request?: { id?: unknown };
   };
   if ((action !== "submitted" && action !== "dismissed") || typeof review?.id !== "number" || typeof pr?.id !== "number") return;
+  if (typeof repository?.id !== "number") return;
   if (typeof review.state !== "string") return;
   const state = action === "dismissed" ? "dismissed" : review.state.toLowerCase();
   if (state !== "dismissed" && !(reviewStates as readonly string[]).includes(state)) return;
-  const { rows } = await tx.query<{ repository: string; number: number; url: string; open: boolean }>(
-    `select repository_full_name as repository, number, url, state in ('open', 'draft') as open
-     from pull_requests where id = $1`,
-    [pr.id],
-  );
-  const known = rows[0];
-  if (!known) return;
+  if (!(await isListed(tx, repository.id))) return;
   const reviewer = typeof review.user?.login === "string" ? review.user.login : null;
   const url = typeof review.html_url === "string" ? review.html_url : null;
   let changed = false;
@@ -454,7 +450,14 @@ export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payl
     );
     changed = rowCount !== 0;
   }
-  if (state === "changes_requested" && known.open) {
+  // Only a Pull Request Cronk knows links Tickets to send back.
+  const { rows } = await tx.query<{ repository: string; number: number; url: string; open: boolean }>(
+    `select repository_full_name as repository, number, url, state in ('open', 'draft') as open
+     from pull_requests where id = $1`,
+    [pr.id],
+  );
+  const known = rows[0];
+  if (state === "changes_requested" && known?.open) {
     const sent = await sendBackForFailure(context, tx, { id: pr.id, repository: known.repository, number: known.number, url: known.url }, {
       kind: "review",
       id: review.id,
