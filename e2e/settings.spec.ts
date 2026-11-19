@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures.js";
-import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
+import { addMember, createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
 
 // docs/ui.md: every settings page is one layout, a list of its sections beside them, and stays open after saving.
@@ -105,6 +105,7 @@ test("Workspace settings, Members and the GitHub page share the settings layout"
   const cookie = await signIn(cronk);
   cronk.github.signedInAs = cronk.github.account("ada-gh");
   await createGitHubApp(cronk, cookie);
+  await addMember(cronk, cookie, workspace.id, "cy@example.com");
 
   await page.goto(`${cronk.url}/workspaces/${workspace.id}/settings`);
   await expect(sections(page).getByRole("link")).toHaveText(["Name", "Lost Runs"]);
@@ -118,6 +119,12 @@ test("Workspace settings, Members and the GitHub page share the settings layout"
   await page.getByLabel("Email").fill("bea@example.com");
   await page.getByRole("button", { name: "Add by email" }).click();
   await expect(sections(page).getByRole("link")).toHaveText(["Add a member", "Added, not joined yet", "Members"]);
+  const members = page.getByRole("region", { name: "Members", exact: true });
+  await expect(members.getByRole("status")).toHaveCount(0);
+  const cy = members.getByRole("row").filter({ hasText: "cy@example.com" });
+  await cy.getByRole("button", { name: "Make Admin" }).click();
+  await expect(members.getByRole("status")).toHaveText("Saved.");
+  await expect(cy.getByRole("button", { name: "Remove Admin" })).toBeVisible();
 
   await page.goto(`${cronk.url}/github`);
   await expect(sections(page).getByRole("link")).toHaveText(["The App", "What the App needs", "Installations"]);

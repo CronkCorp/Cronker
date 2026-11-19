@@ -208,7 +208,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Workspace settings, Members and GitHub
 
-- **In the settings layout:** the Workspace's Settings with its Name and Lost Runs; Members with Add a member (for Admins), Added, not joined yet (while there are any) and Members; GitHub with The App, What the App needs (its upgrade checklist, for Admins) and Installations.
+- **In the settings layout:** the Workspace's Settings with its Name and Lost Runs; Members with Add a member (for Admins), Added, not joined yet (while there are any) and Members, which says "Saved." after Make Admin or Remove Admin; GitHub with The App, What the App needs (its upgrade checklist, for Admins) and Installations.
 
 ### Signed-out pages and the consent screen
 

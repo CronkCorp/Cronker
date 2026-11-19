@@ -518,7 +518,7 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
       <SettingsLayout
         sections={[
           {
-            id: "name",
+            id: "workspace-name",
             label: "Name",
             children: (
               <Panel title="Name" id="workspace-name">
@@ -537,30 +537,26 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
               </Panel>
             ),
           },
-          ...(settings
-            ? [
-                {
-                  id: "lost-runs",
-                  label: "Lost Runs",
-                  children: (
-                    <Panel title="Lost Runs" id="lost-runs" description="A Run nothing has named for this long is lost, and waits in its Assignee's Inbox for Retry.">
-                      <form onSubmit={changeSettings.onSubmit}>
-                        <Field label="Lost-Run threshold (minutes)">
-                          <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
-                        </Field>
-                        <FormError error={changeSettings.error} />
-                        <Actions>
-                          <Button type="submit" variant="primary" disabled={changeSettings.busy}>
-                            Save threshold
-                          </Button>
-                          <Saved shown={savedThreshold} />
-                        </Actions>
-                      </form>
-                    </Panel>
-                  ),
-                },
-              ]
-            : []),
+          !!settings && {
+            id: "lost-runs",
+            label: "Lost Runs",
+            children: (
+              <Panel title="Lost Runs" id="lost-runs" description="A Run nothing has named for this long is lost, and waits in its Assignee's Inbox for Retry.">
+                <form onSubmit={changeSettings.onSubmit}>
+                  <Field label="Lost-Run threshold (minutes)">
+                    <input name="lostRunMinutes" type="number" min={1} max={10080} required defaultValue={settings.lostRunMinutes} />
+                  </Field>
+                  <FormError error={changeSettings.error} />
+                  <Actions>
+                    <Button type="submit" variant="primary" disabled={changeSettings.busy}>
+                      Save threshold
+                    </Button>
+                    <Saved shown={savedThreshold} />
+                  </Actions>
+                </form>
+              </Panel>
+            ),
+          },
         ]}
       />
     </div>
@@ -584,6 +580,7 @@ function Members({
   const [notice, setNotice] = useState<ReactNode>(null);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<Member | null>(null);
+  const [savedAdmin, setSavedAdmin] = useState(false);
   const refresh = useCallback(() => {
     api.members(workspace.id).then(setMembers, (e: Error) => setError(e.message));
     if (workspace.isAdmin) api.pendingAdds(workspace.id).then(setPending, (e: Error) => setError(e.message));
@@ -594,6 +591,7 @@ function Members({
   const act = async (action: () => Promise<void>) => {
     setError(null);
     setNotice(null);
+    setSavedAdmin(false);
     try {
       await action();
     } catch (e) {
@@ -627,87 +625,79 @@ function Members({
       <FormError error={error} />
       <SettingsLayout
         sections={[
-          ...(workspace.isAdmin
-            ? [
-                {
-                  id: "add-member",
-                  label: "Add a member",
-                  children: (
-                    <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
-                      <div className="form-columns">
-                        <form onSubmit={add.onSubmit}>
-                          <Field label="Email">
-                            <input name="email" type="email" required autoComplete="off" />
-                          </Field>
-                          <FormError error={add.error} />
-                          <Actions>
-                            <Button type="submit" variant="primary" disabled={add.busy}>
-                              Add by email
-                            </Button>
-                          </Actions>
-                        </form>
-                        <form onSubmit={addByGitHub.onSubmit}>
-                          <Field label="GitHub login">
-                            <input name="login" required autoComplete="off" />
-                          </Field>
-                          <FormError error={addByGitHub.error} />
-                          <Actions>
-                            <Button type="submit" variant="primary" disabled={addByGitHub.busy}>
-                              Add by GitHub login
-                            </Button>
-                          </Actions>
-                        </form>
-                      </div>
-                      {notice}
-                    </Panel>
-                  ),
-                },
-              ]
-            : []),
-          ...(pending.length > 0
-            ? [
-                {
-                  id: "pending-adds",
-                  label: "Added, not joined yet",
-                  children: (
-                    <Panel title="Added, not joined yet" id="pending-adds" className="panel-table">
-                      <table aria-labelledby="pending-adds-heading">
-                        <tbody>
-                          {pending.map((add) => (
-                            <tr key={`${add.user.id} ${add.addedVia}`}>
-                              <td>
-                                <span className="actor">
-                                  <Avatar actor={{ kind: "user", name: nameOf(add.user) }} />
-                                  {nameOf(add.user)}
-                                </span>
-                              </td>
-                              <td className="muted small">
-                                {add.addedVia === "email"
-                                  ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
-                                  : "by GitHub login, joins at their next sign-in"}
-                              </td>
-                              <td className="cell-actions">
-                                <Button
-                                  size="small"
-                                  onClick={() =>
-                                    act(async () => {
-                                      await api.cancelPendingAdd(workspace.id, add.user.id);
-                                      refresh();
-                                    })
-                                  }
-                                >
-                                  Cancel add
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </Panel>
-                  ),
-                },
-              ]
-            : []),
+          workspace.isAdmin && {
+            id: "add-member",
+            label: "Add a member",
+            children: (
+              <Panel title="Add a member" id="add-member" description="By email, they get a one-time link to join; by GitHub login, they join at their next sign-in with GitHub.">
+                <div className="form-columns">
+                  <form onSubmit={add.onSubmit}>
+                    <Field label="Email">
+                      <input name="email" type="email" required autoComplete="off" />
+                    </Field>
+                    <FormError error={add.error} />
+                    <Actions>
+                      <Button type="submit" variant="primary" disabled={add.busy}>
+                        Add by email
+                      </Button>
+                    </Actions>
+                  </form>
+                  <form onSubmit={addByGitHub.onSubmit}>
+                    <Field label="GitHub login">
+                      <input name="login" required autoComplete="off" />
+                    </Field>
+                    <FormError error={addByGitHub.error} />
+                    <Actions>
+                      <Button type="submit" variant="primary" disabled={addByGitHub.busy}>
+                        Add by GitHub login
+                      </Button>
+                    </Actions>
+                  </form>
+                </div>
+                {notice}
+              </Panel>
+            ),
+          },
+          pending.length > 0 && {
+            id: "pending-adds",
+            label: "Added, not joined yet",
+            children: (
+              <Panel title="Added, not joined yet" id="pending-adds" className="panel-table">
+                <table aria-labelledby="pending-adds-heading">
+                  <tbody>
+                    {pending.map((add) => (
+                      <tr key={`${add.user.id} ${add.addedVia}`}>
+                        <td>
+                          <span className="actor">
+                            <Avatar actor={{ kind: "user", name: nameOf(add.user) }} />
+                            {nameOf(add.user)}
+                          </span>
+                        </td>
+                        <td className="muted small">
+                          {add.addedVia === "email"
+                            ? `by email, link valid until ${new Date(add.expiresAt).toLocaleString()}`
+                            : "by GitHub login, joins at their next sign-in"}
+                        </td>
+                        <td className="cell-actions">
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              act(async () => {
+                                await api.cancelPendingAdd(workspace.id, add.user.id);
+                                refresh();
+                              })
+                            }
+                          >
+                            Cancel add
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Panel>
+            ),
+          },
           {
             id: "members",
             label: "Members",
@@ -738,6 +728,7 @@ function Members({
                               onClick={() =>
                                 act(async () => {
                                   await api.setAdmin(workspace.id, member.user.id, !member.isAdmin);
+                                  setSavedAdmin(true);
                                   refresh();
                                   if (member.user.id === user.id) onChanged();
                                 })
@@ -767,6 +758,7 @@ function Members({
                   </tbody>
                 </table>
               )}
+              <Saved shown={savedAdmin} />
               {!workspace.isAdmin && notice}
             </Panel>
             ),
