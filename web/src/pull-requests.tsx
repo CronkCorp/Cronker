@@ -88,13 +88,20 @@ function SentBackBy({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["s
   );
 }
 
-const checkWords = { passed: "✓", failed: "✗", pending: "●", neutral: "–" } as const;
+/** Each check's mark and the word for its state, failing first: what waits on the User comes first. */
+const checkStates = {
+  failed: { mark: "✗", word: "failed", order: 0 },
+  pending: { mark: "●", word: "running", order: 1 },
+  passed: { mark: "✓", word: "passed", order: 2 },
+  neutral: { mark: "–", word: "neutral", order: 3 },
+} as const;
 
 /** For a Ticket in a Review Status: a card per Pull Request with its branch, state, review state and every check. */
 export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[] }) {
   if (pullRequests.length === 0) return null;
   return (
     <section aria-label="Code to review" className="pr-cards">
+      <h2>Code to review</h2>
       {pullRequests.map((pr) => (
         <article key={pr.id} className="panel pr-card" aria-label={`#${pr.number} ${pr.title}`}>
           <header className="pr-card-head">
@@ -117,16 +124,18 @@ export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[]
             )}
           </p>
           {pr.checks.length > 0 && (
-            <ul className="side-list">
-              {pr.checks.map((check) => (
-                <li key={check.name} className="pr-check">
-                  <span className={`check-${check.state}`} aria-hidden="true">
-                    {checkWords[check.state]}
-                  </span>{" "}
-                  <ExternalLink url={check.url}>{check.name}</ExternalLink>
-                  <span className="sr-only"> {check.state}</span>
-                </li>
-              ))}
+            <ul className="pr-checks">
+              {[...pr.checks]
+                .sort((a, b) => checkStates[a.state].order - checkStates[b.state].order)
+                .map((check) => (
+                  <li key={check.name} className="pr-check">
+                    <span className={`check-${check.state}`} aria-hidden="true">
+                      {checkStates[check.state].mark}
+                    </span>{" "}
+                    <ExternalLink url={check.url}>{check.name}</ExternalLink>{" "}
+                    <span className="pr-check-state">{checkStates[check.state].word}</span>
+                  </li>
+                ))}
             </ul>
           )}
         </article>

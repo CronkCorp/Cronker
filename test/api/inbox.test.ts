@@ -65,6 +65,7 @@ describe("Tickets waiting for review", () => {
           kind: "review",
           ticket: expect.objectContaining({ id: ticket.id, key: "CRONK-1", title: "Check the Inbox" }),
           status: { id: statusId("In Review"), name: "In Review" },
+          report: null,
           since: "2026-01-01T09:00:00.000Z",
         },
       ],
@@ -139,6 +140,55 @@ describe("Tickets waiting for review", () => {
     await editTicket(ada.cookie, ticket.id, { statusId: statusId("Implement"), assigneeId: ada.id });
 
     expect(await inbox(ada.cookie, workspace.id)).toEqual({ count: 0, items: [] });
+  });
+});
+
+describe("the latest Report on a Ticket to review or verify", () => {
+  /** An Agent of Ada's on a fake Runner, writing Reports and finishing its running Run on a Ticket. */
+  async function agentOf(cookie: string, workspaceId: string) {
+    const call = async (method: string, path: string, body: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+    const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await call("POST", `/api/workspaces/${workspaceId}/agents`, { name: "claude-max" });
+    await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+    const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const headers = { authorization: `Bearer ${secret}` };
+    const report = async (ticketId: string, title: string) =>
+      expect((await cronk.request("POST", `/api/tickets/${ticketId}/reports`, { headers, body: { title, body: "…" } })).status).toBe(201);
+    const finish = async (ticketId: string, outcome: string) => {
+      const runs = await (await cronk.request("GET", `/api/tickets/${ticketId}/runs`, { cookie })).json();
+      const running = runs.find((r: { state: string }) => r.state === "running");
+      expect((await cronk.request("POST", `/api/runs/${running.id}/finish`, { headers, body: { outcome } })).status).toBe(200);
+    };
+    return { agent, report, finish };
+  }
+
+  test("a Ticket waiting for review carries its latest Report, for the Inbox to show its title", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const { agent, report, finish } = await agentOf(ada.cookie, workspace.id);
+    const ticket = await createTicket(ada.cookie, project.id, "Cache the board");
+    await editTicket(ada.cookie, ticket.id, { delegateId: agent.id, statusId: statusId("Code review") });
+    await report(ticket.id, "First look");
+    await report(ticket.id, "Code review report");
+    await finish(ticket.id, "approve");
+
+    const [item] = (await inbox(ada.cookie, workspace.id)).items;
+    expect(item).toMatchObject({ kind: "review", report: { id: expect.any(String), title: "Code review report" } });
+  });
+
+  test("an Unverified completion carries its latest Report, and an item without one carries none", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const { agent, report, finish } = await agentOf(ada.cookie, workspace.id);
+    const completed = await createTicket(ada.cookie, project.id, "Ship the export");
+    await editTicket(ada.cookie, completed.id, { delegateId: agent.id, autonomousDelegation: true, statusId: statusId("Code review") });
+    await report(completed.id, "Export report");
+    await finish(completed.id, "complete");
+    const unreported = await createTicket(ada.cookie, project.id, "Check by hand");
+    await editTicket(ada.cookie, unreported.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+
+    const { items } = await inbox(ada.cookie, workspace.id);
+    const of = (ticketId: string) => items.find((i: { ticket: { id: string } }) => i.ticket.id === ticketId);
+    expect(of(completed.id)).toMatchObject({ kind: "unverified", report: { title: "Export report" } });
+    expect(of(unreported.id)).toMatchObject({ kind: "review", report: null });
   });
 });
 
