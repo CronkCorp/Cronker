@@ -7,7 +7,8 @@ test("add a Repository the App is installed on to a Project, see its rename, and
   cronk.github.signedInAs = cronk.github.account("ada-gh");
   await createGitHubApp(cronk, cookie);
   const app = cronk.github.apps[0]!;
-  const [cronker] = cronk.github.install(app, "cronkcorp", ["cronker", "website"]).repositories;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker", "website"]);
+  const cronker = installation.repositories[0]!;
   const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
   const project = await created.json();
 
@@ -26,9 +27,12 @@ test("add a Repository the App is installed on to a Project, see its rename, and
   await expect(repositories.getByLabel("Repository to add").getByRole("option")).toHaveText(["cronkcorp/website"]);
 
   // Renamed on GitHub, the Repository shows its new name live.
+  cronker.name = "cronk";
+  cronker.fullName = "cronkcorp/cronk";
   await cronk.github.deliver(app, "repository", {
     action: "renamed",
-    repository: { id: cronker!.id, name: "cronk", full_name: "cronkcorp/cronk" },
+    installation: { id: installation.id },
+    repository: { id: cronker.id, name: "cronk", full_name: "cronkcorp/cronk" },
   });
   await expect(repositories.getByRole("listitem")).toHaveText(["cronkcorp/cronkRemove"]);
 

@@ -48,7 +48,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
     <section aria-labelledby="repositories-heading" className="settings">
       <h2 id="repositories-heading">Repositories</h2>
       <p className="muted">
-        The GitHub repositories holding this Project's code. Their Pull Requests link to the Tickets whose keys they name.
+        The GitHub Repositories holding this Project's code. Their Pull Requests link to the Tickets whose keys they name.
       </p>
       {error && <p role="alert">{error}</p>}
       {repositories && repositories.length === 0 && <p>The Project lists no Repositories yet.</p>}
@@ -68,8 +68,8 @@ export function RepositoriesSettings({ project }: { project: Project }) {
               {repository.keyClash && (
                 <p role="note" className="warning">
                   A Project of another Workspace also lists {repository.fullName} under the key {project.key}, so a Pull Request
-                  naming {project.key}-1 links to Tickets of both Projects. Which Project isn't shown, since it isn't in this
-                  Workspace.
+                  naming a key such as {project.key}-12 links to Tickets in both Projects. Which Project isn't shown, since it
+                  isn't in this Workspace.
                 </p>
               )}
             </li>

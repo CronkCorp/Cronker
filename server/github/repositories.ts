@@ -5,7 +5,8 @@ import { ApiError } from "../http/errors.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject, projectNotFound, type ProjectSummary } from "../work/projects.js";
 import type { Viewer } from "../identity/viewers.js";
-import { listInstallations } from "./installations.js";
+import { repositoryById } from "./client.js";
+import { listInstallations, tokenFor } from "./installations.js";
 import type { EventHandler } from "./webhooks.js";
 
 /**
@@ -122,21 +123,30 @@ export async function removeRepository(context: Context, userId: string, project
 
 /**
  * GitHub's `repository` event: a rename or transfer changes the owner/name shown for a
- * Repository any Project lists. Other actions, and Repositories no Project lists, change nothing.
+ * Repository a Project lists. Deliveries can arrive late or out of order, so the name is
+ * read from GitHub as it is now, falling back to the delivery's own only when the App's
+ * installation no longer covers the Repository, as after a transfer to another owner.
+ * Other actions, and Repositories no Project lists, change nothing.
  */
-export const onRepositoryEvent: EventHandler = async ({ clock, live }, tx, { payload }) => {
-  const { action, repository } = payload as { action?: string; repository?: { id?: unknown; full_name?: unknown } };
+export const onRepositoryEvent: EventHandler = async (context, tx, { payload }) => {
+  const { action, repository, installation } = payload as {
+    action?: string;
+    repository?: { id?: unknown; full_name?: unknown };
+    installation?: { id?: unknown };
+  };
   if (action !== "renamed" && action !== "transferred") return;
   if (typeof repository?.id !== "number" || typeof repository.full_name !== "string") return;
-  const { rowCount } = await tx.query("update repositories set full_name = $2, updated_at = $3 where id = $1", [
-    repository.id,
-    repository.full_name,
-    clock.now(),
-  ]);
-  if (rowCount === 0) return;
+  const { rows: known } = await tx.query("select from repositories where id = $1 for update", [repository.id]);
+  if (known.length === 0) return;
+  const current =
+    typeof installation?.id === "number"
+      ? await repositoryById(context.config, await tokenFor(context, installation.id), repository.id)
+      : undefined;
+  const fullName = current?.full_name ?? repository.full_name;
+  await tx.query("update repositories set full_name = $2, updated_at = $3 where id = $1", [repository.id, fullName, context.clock.now()]);
   const { rows } = await tx.query<{ projectId: string; workspaceId: string }>(
     `select project_id as "projectId", workspace_id as "workspaceId" from project_repositories where repository_id = $1`,
     [repository.id],
   );
-  for (const { projectId, workspaceId } of rows) live.publish(tx, workspaceId, { type: "project.changed", projectId });
+  for (const { projectId, workspaceId } of rows) context.live.publish(tx, workspaceId, { type: "project.changed", projectId });
 };

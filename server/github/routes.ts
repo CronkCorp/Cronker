@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
+import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
 import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
@@ -9,7 +10,6 @@ import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
 import { addRepository, removeRepository, repositoriesOf, Repository } from "./repositories.js";
 import { receiveDelivery } from "./webhooks.js";
-import { requireCaller } from "../identity/callers.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
 const webhookBodyLimit = 25 * 1024 * 1024;

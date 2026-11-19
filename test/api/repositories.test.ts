@@ -76,10 +76,7 @@ describe("Repositories on a Project", () => {
 
   test("a Repository no installation of the App covers is refused", async () => {
     const { cookie, project } = await projectWithApp();
-    const elsewhere = cronk.github.install(cronk.github.apps[0]!, "someone", ["theirs"]).repositories[0]!;
-    cronk.github.installations.pop();
-
-    const added = await cronk.request("POST", `/api/projects/${project.id}/repositories`, { cookie, body: { id: elsewhere.id } });
+    const added = await cronk.request("POST", `/api/projects/${project.id}/repositories`, { cookie, body: { id: 424242 } });
 
     expect(added.status).toBe(409);
     expect((await added.json()).error.code).toBe("repository_not_installed");
@@ -175,13 +172,14 @@ describe("Projects sharing a key on one Repository", () => {
 
 describe("Repositories renamed or transferred on GitHub", () => {
   test("a rename updates the name the Project shows", async () => {
-    const { cookie, app, project, cronker } = await projectWithApp();
+    const { cookie, app, installation, project, cronker } = await projectWithApp();
     await post(cookie, `/api/projects/${project.id}/repositories`, { id: cronker.id });
 
     cronker.name = "cronk";
     cronker.fullName = "cronkcorp/cronk";
     const delivered = await cronk.github.deliver(app, "repository", {
       action: "renamed",
+      installation: { id: installation.id },
       changes: { repository: { name: { from: "cronker" } } },
       repository: { id: cronker.id, name: "cronk", full_name: "cronkcorp/cronk", owner: { login: "cronkcorp" } },
     });
@@ -190,12 +188,33 @@ describe("Repositories renamed or transferred on GitHub", () => {
     expect(await repositoriesOf(project.id, cookie)).toEqual([{ id: cronker.id, fullName: "cronkcorp/cronk", keyClash: false }]);
   });
 
+  test("a rename delivered late, after a newer one, leaves the newer name", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithApp();
+    await post(cookie, `/api/projects/${project.id}/repositories`, { id: cronker.id });
+    const renamed = (name: string) => ({
+      action: "renamed",
+      installation: { id: installation.id },
+      repository: { id: cronker.id, name, full_name: `cronkcorp/${name}`, owner: { login: "cronkcorp" } },
+    });
+
+    // Renamed twice on GitHub, cronker to cronker-two to cronk; the first rename's delivery arrives last.
+    cronker.name = "cronk";
+    cronker.fullName = "cronkcorp/cronk";
+    await cronk.github.deliver(app, "repository", renamed("cronk"));
+    await cronk.github.deliver(app, "repository", renamed("cronker-two"));
+
+    expect(await repositoriesOf(project.id, cookie)).toEqual([{ id: cronker.id, fullName: "cronkcorp/cronk", keyClash: false }]);
+  });
+
   test("a transfer to another owner updates the name the Project shows", async () => {
-    const { cookie, app, project, cronker } = await projectWithApp();
+    const { cookie, app, installation, project, cronker } = await projectWithApp();
     await post(cookie, `/api/projects/${project.id}/repositories`, { id: cronker.id });
 
+    // Transferred to an account the App isn't installed on, so GitHub no longer shows it to Cronk.
+    installation.repositories.splice(installation.repositories.indexOf(cronker), 1);
     await cronk.github.deliver(app, "repository", {
       action: "transferred",
+      installation: { id: installation.id },
       changes: { owner: { from: { user: { login: "cronkcorp" } } } },
       repository: { id: cronker.id, name: "cronker", full_name: "ada-gh/cronker", owner: { login: "ada-gh" } },
     });

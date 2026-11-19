@@ -192,3 +192,10 @@ export async function installationRepositories({ github }: Config, token: string
     (body) => (body as { repositories: { id: number; full_name: string }[] }).repositories,
   );
 }
+
+/** A repository by GitHub's id, as an installation covering it sees it now; nothing if it no longer covers it. */
+export async function repositoryById({ github }: Config, token: string, id: number): Promise<{ id: number; full_name: string } | undefined> {
+  const response = await call(under(github.apiUrl, `/repositories/${id}`), { headers: { authorization: `Bearer ${token}` } });
+  if (response.status === 404 || response.status === 403) return undefined;
+  return jsonOf<{ id: number; full_name: string }>(response, "/repositories");
+}
