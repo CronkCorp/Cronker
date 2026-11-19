@@ -9,6 +9,7 @@ import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, Mani
 import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
 import { addRepository, removeRepository, repositoriesOf, Repository } from "./repositories.js";
+import { PullRequest, pullRequestsOf } from "./pull-requests.js";
 import { receiveDelivery } from "./webhooks.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
@@ -182,6 +183,21 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         await removeRepository(context, user.id, request.params.projectId, request.params.repositoryId);
         return reply.code(204).send(null);
       },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/pull-requests",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Pull Requests",
+          description:
+            "Pull Requests of the Repositories its Project lists whose branch or title names the Ticket's key, oldest link first, each with its state, the checks on its latest commit and its producing Step.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(PullRequest), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => pullRequestsOf(db, await requireCaller(context, request), request.params.ticketId),
     );
 
     // The webhook endpoint reads its body as bytes, since the signature covers exactly those.

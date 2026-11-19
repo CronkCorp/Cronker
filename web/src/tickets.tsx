@@ -10,6 +10,8 @@ import {
   labelRuleShown,
   type LabelRule,
   type LinkedDocument,
+  type Check,
+  type PullRequest,
   type DocumentSummary,
   type Member,
   type Priority,
@@ -62,6 +64,7 @@ export function TicketScreen({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
   const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
+  const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +80,7 @@ export function TicketScreen({
   const latestRuns = useLatest();
   const latestRelations = useLatest();
   const latestLinkedDocuments = useLatest();
+  const latestPullRequests = useLatest();
   const latestProjectTickets = useLatest();
   const fail = (e: Error) => setFailure(e.message);
   const loadTimeline = useCallback(() => {
@@ -90,6 +94,10 @@ export function TicketScreen({
   const loadComments = useCallback(
     () => latestComments(api.comments(ticketId), setComments, fail),
     [ticketId, latestComments],
+  );
+  const loadPullRequests = useCallback(
+    () => latestPullRequests(api.pullRequests(ticketId), setPullRequests, fail),
+    [ticketId, latestPullRequests],
   );
   const loadLinks = useCallback(() => {
     latestRelations(api.relations(ticketId), setRelations, fail);
@@ -118,7 +126,8 @@ export function TicketScreen({
     latestRuns(api.runs(ticketId), setRuns, fail);
     loadAttachments();
     loadLinks();
-  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks]);
+    loadPullRequests();
+  }, [ticketId, workspace.id, latestTicket, latestComments, latestReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -129,6 +138,7 @@ export function TicketScreen({
       loadTimeline();
       loadLinks();
     }
+    if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
     if (all || (thisTicket && event.type === "comment.added")) latestComments(api.comments(ticketId), setComments, fail);
     if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) {
       latestReports(api.reports(ticketId), setReports, fail);
@@ -228,15 +238,18 @@ export function TicketScreen({
           <Comments ticket={ticket} user={user} comments={comments} onAdded={addComment} onChanged={loadComments} />
           <Timeline changes={timeline} runs={runs} />
         </div>
-        <Fields
-          ticket={ticket}
-          project={project}
-          members={members}
-          agents={agents}
-          user={user}
-          projectTickets={projectTickets.filter((t) => t.id !== ticket.id)}
-          onSave={save}
-        />
+        <div className="side">
+          <PullRequests pullRequests={pullRequests} />
+          <Fields
+            ticket={ticket}
+            project={project}
+            members={members}
+            agents={agents}
+            user={user}
+            projectTickets={projectTickets.filter((t) => t.id !== ticket.id)}
+            onSave={save}
+          />
+        </div>
       </div>
     </article>
   );
@@ -644,6 +657,57 @@ function Relations({
         </Button>
       </form>
       {error && <p role="alert">{error}</p>}
+    </section>
+  );
+}
+
+const pullRequestStateShown: Record<PullRequest["state"], string> = {
+  open: "Open",
+  draft: "Draft",
+  merged: "Merged",
+  closed: "Closed",
+};
+
+/**
+ * The Pull Requests whose branch or title names the Ticket's key, each with its state and how many of the checks on
+ * its latest commit passed, failed and are still running, each check named in the counts' tooltip. Shown only once
+ * there is one; GitHub's webhooks keep them up to date.
+ */
+function PullRequests({ pullRequests }: { pullRequests: PullRequest[] }) {
+  if (pullRequests.length === 0) return null;
+  return (
+    <section aria-label="Pull Requests" className="pull-requests">
+      <h2>Pull Requests</h2>
+      <ul>
+        {pullRequests.map((pr) => {
+          const count = (state: Check["state"]) => pr.checks.filter((c) => c.state === state);
+          const counts = [
+            { state: "passed", mark: "✓", checks: count("passed") },
+            { state: "failed", mark: "✗", checks: count("failed") },
+            { state: "pending", mark: "●", checks: count("pending") },
+          ].filter((c) => c.checks.length > 0);
+          return (
+            <li key={pr.id}>
+              <a href={pr.url} target="_blank" rel="noreferrer">
+                <span className="muted">#{pr.number}</span> {pr.title}
+              </a>
+              <div className="pull-request-meta">
+                <span className={`pull-request-state ${pr.state}`}>{pullRequestStateShown[pr.state]}</span>
+                {counts.map((c) => (
+                  <span
+                    key={c.state}
+                    className={`check-count ${c.state}`}
+                    title={c.checks.map((check) => check.name).join(", ")}
+                    aria-label={`${c.checks.length} ${c.state}: ${c.checks.map((check) => check.name).join(", ")}`}
+                  >
+                    {c.mark} {c.checks.length}
+                  </span>
+                ))}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }
