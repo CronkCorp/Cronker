@@ -68,7 +68,7 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 
 ## Milestones
 
-1. **The loop.** Sign-in, Workspaces, Projects, Admins, Agents and tokens; Tickets with all kept fields; the board with Status kinds, Steps, Briefs, Outcomes, round limits and Label rules; Delegation, Autonomous Delegation, Verification, Questions, the Inbox, Reports, live updates; the HTTP API and MCP with OAuth; the subscription Runner with Run states and limits. Dogfooding starts here.
+1. **The loop.** *Built.* Sign-in, Workspaces, Projects, Admins, Agents and tokens; Tickets with all kept fields; the board with Status kinds, Steps, Briefs, Outcomes, round limits and Label rules; Delegation, Autonomous Delegation, Verification, Questions, the Inbox, Reports, live updates; the HTTP API and MCP with OAuth; the subscription Runner with Run states and limits. Dogfooding starts here: `docs/setup.md` sets an installation up.
 2. **Code and knowledge.** The GitHub App and Pull Requests, Documents with Versions, Linked Documents, Attachments, Terms and Decisions with export.
 3. **More Runners and the rest.** The Managed Agents Runner with fetched Transcripts, the Transcript hook, Artifacts, search.
 

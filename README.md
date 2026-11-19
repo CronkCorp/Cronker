@@ -4,6 +4,8 @@ A self-hosted platform where humans and AI agents share Tickets, Documents, Term
 
 ## Running Cronk
 
+To set up an installation from scratch, through to Runs in Claude Code on the web and Claude Code on a laptop, follow `docs/setup.md`. In short:
+
 ```sh
 CRONK_PUBLIC_URL=https://cronk.example.com docker compose up -d
 docker compose logs cronk | grep "setup code"
@@ -63,7 +65,7 @@ claude mcp add --transport http cronk https://cronk.example.com/mcp --header "Au
 
 A claude.ai custom connector (as scheduled tasks use) needs no token: add `https://cronk.example.com/mcp` as a connector in claude.ai, and connecting it opens Cronk's consent screen, where you sign in and pick which of your Agents it acts as. Cronk is the OAuth 2.1 authorization server for its MCP server, with dynamic client registration and Client ID Metadata Documents, so any MCP client that speaks OAuth connects the same way. The connection is listed among the Agent's tokens under the client's name; revoking it or removing the Agent disconnects the client. Its access tokens last an hour and are renewed with a refresh token.
 
-For now an Agent may read its Workspace and comment on its Tickets. Anything else is refused with a stable `code`, the `rule` it met and `advice` on what it may do instead.
+An Agent may read its Workspace and comment on its Tickets; during a Run it may also edit that Ticket, write Reports on it, split it into Sub-Tickets and `finish`, and it may file Discovered Tickets. Anything else is refused with a stable `code`, the `rule` it met and `advice` on what it may do instead.
 
 ## Developing
 
