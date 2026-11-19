@@ -115,7 +115,7 @@ A plain file, such as an image or log, attached to a Ticket, Document or Comment
 _Avoid_: Upload, asset, file
 
 **Term**:
-A glossary entry naming one concept: its name, definition and the words to avoid. A Project Term replaces a Workspace Term of the same name.
+One concept named in a glossary: its name, definition and the words to avoid. A Project Term replaces a Workspace Term of the same name.
 _Avoid_: Glossary entry, definition
 
 **Decision**:
