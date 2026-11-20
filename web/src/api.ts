@@ -781,14 +781,14 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SearchKind = "ticket" | "document" | "report" | "term" | "decision";
+export type SearchKind = "ticket" | "document" | "report" | "term" | "decision" | "transcript";
 
 export interface SearchResult {
   kind: SearchKind;
   id: string;
   title: string;
   projectId: string | null;
-  /** A Ticket's own key, or the key of the Ticket a Report is on. */
+  /** A Ticket's own key, or the key of the Ticket a Report is on or a Transcript's Run was on. */
   ticketKey: string | null;
   /** Where it matched, the matching words marked. */
   snippet: { text: string; match: boolean }[];

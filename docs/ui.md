@@ -228,8 +228,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 ### Search
 
 - **Results page** (`/workspaces/<id>/search?q=…`, with `&project=<id>` when narrowed): breadcrumbs to the Workspace, "Search" as the `h1` with "Results for “…”" under it, and a Project filter (All Projects, or one by key and name). It marks no sidebar item.
-- **Grouped by kind:** Tickets, Documents, Reports, Terms and Decisions, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out. A kind gives its best 20 at most; a full group says so under it, and to narrow the search for others. While a search loads, the last one's results are cleared.
-- **A result:** its title as a link (a Ticket's or Report's Ticket key before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
+- **Grouped by kind:** Tickets, Documents, Reports, Terms, Decisions and Transcripts, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out. A kind gives its best 20 at most; a full group says so under it, and to narrow the search for others. While a search loads, the last one's results are cleared.
+- **A result:** its title as a link (a Ticket's, Report's or Run's Transcript's Ticket key before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
 - **Nothing found:** an empty state saying nothing matches, and how to write a search: a phrase in quotes, `or` between alternatives, `-word` to leave out.
 
 ### Agents and Runners
