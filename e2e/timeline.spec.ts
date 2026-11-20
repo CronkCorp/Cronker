@@ -43,7 +43,7 @@ async function inReview(cronk: StartedCronk) {
 
 test("a merge conflict's send-back shows as Cronk's Comment naming the merge, and Cronk's move names the merge and the conflict", async ({ page, cronk }) => {
   const { ticket, deliver, cronker } = await inReview(cronk);
-  cronk.github.pullRequest(cronker, { number: 212, base: "main", baseSha: "m1", mergeable: [false] });
+  cronk.github.pullRequest(cronker, 212, { base: "main", baseSha: "m1", answers: [false] });
   await deliver("pull_request", {
     action: "closed",
     pull_request: { id: 502, number: 214, title: "Speed up the board", state: "closed", draft: false, merged: true, merge_commit_sha: "m1",

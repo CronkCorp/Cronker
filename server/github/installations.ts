@@ -135,18 +135,8 @@ function ignoringCase(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/**
- * Every installation of the App, by account, with the Repositories it covers by `owner/name`, both
- * ignoring case, so every client lists them alike. What GitHub said within the last five minutes
- * is used again, unless `refresh` asks GitHub afresh.
- */
-export async function listInstallations(context: Context, { refresh = false } = {}): Promise<Installation[]> {
-  const listed = (await keptInstallations(context, refresh)).map(({ account, repositories }) => ({ account, repositories }));
-  return listed.sort((a, b) => ignoringCase(a.account, b.account));
-}
-
-/** Every installation of the App, by id, with the Repositories it covers, as kept for five minutes unless `refresh`. */
-async function keptInstallations(context: Context, refresh: boolean): Promise<(ListedInstallation & Installation)[]> {
+/** The App's installations, as GitHub said within the last five minutes unless `refresh` asks afresh. */
+async function installationsListed(context: Context, refresh: boolean): Promise<ListedInstallation[]> {
   const { config, installationListings: kept } = context;
   const installations = await kept.installations.get(
     "all",
@@ -155,26 +145,47 @@ async function keptInstallations(context: Context, refresh: boolean): Promise<(L
   );
   // An installation removed from GitHub isn't listed again, so nothing it covered is kept.
   kept.repositories.keepOnly(installations.map((i) => i.id));
-  return Promise.all(
-    installations.map(async (installation) => ({
-      ...installation,
-      repositories: await kept.repositories.get(
-        installation.id,
-        async () =>
-          (await installationRepositories(config, await tokenFor(context, installation.id)))
-            .map((r) => ({ id: r.id, fullName: r.full_name }))
-            .sort((a, b) => ignoringCase(a.fullName, b.fullName)),
-        refresh,
-      ),
-    })),
+  return installations;
+}
+
+/** The Repositories one installation covers, as GitHub said within the last five minutes unless `refresh` asks afresh. */
+async function repositoriesCovered(context: Context, installationId: number, refresh: boolean): Promise<ListedRepository[]> {
+  return context.installationListings.repositories.get(
+    installationId,
+    async () =>
+      (await installationRepositories(context.config, await tokenFor(context, installationId)))
+        .map((r) => ({ id: r.id, fullName: r.full_name }))
+        .sort((a, b) => ignoringCase(a.fullName, b.fullName)),
+    refresh,
   );
 }
 
 /**
- * A token of the installation covering the Repository, by GitHub's id, to act on it as the App; nothing if no
- * installation covers it. What GitHub said of the installations within the last five minutes is used again.
+ * The installation of the App covering the Repository, by GitHub's id, if one does. What GitHub said within the last
+ * five minutes is used first; GitHub is asked afresh when that names none.
  */
-export async function tokenForRepository(context: Context, repositoryId: number): Promise<string | undefined> {
-  const installation = (await keptInstallations(context, false)).find((i) => i.repositories.some((r) => r.id === repositoryId));
-  return installation && tokenFor(context, installation.id);
+export async function installationCovering(context: Context, repositoryId: number): Promise<number | undefined> {
+  for (const refresh of [false, true]) {
+    for (const installation of await installationsListed(context, refresh)) {
+      if ((await repositoriesCovered(context, installation.id, refresh)).some((r) => r.id === repositoryId)) return installation.id;
+    }
+  }
+  return undefined;
 }
+
+/**
+ * Every installation of the App, by account, with the Repositories it covers by `owner/name`, both
+ * ignoring case, so every client lists them alike. What GitHub said within the last five minutes
+ * is used again, unless `refresh` asks GitHub afresh.
+ */
+export async function listInstallations(context: Context, { refresh = false } = {}): Promise<Installation[]> {
+  const installations = await installationsListed(context, refresh);
+  const listed = await Promise.all(
+    installations.map(async (installation) => ({
+      account: installation.account,
+      repositories: await repositoriesCovered(context, installation.id, refresh),
+    })),
+  );
+  return listed.sort((a, b) => ignoringCase(a.account, b.account));
+}
+

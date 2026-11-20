@@ -46,6 +46,43 @@ export interface StandInRepository {
   name: string;
   /** `owner/name`. */
   fullName: string;
+  /** Whether its settings allow each merge method; GitHub allows all three unless a test says otherwise. */
+  mergeMethods?: Partial<Record<MergeMethod, boolean>>;
+}
+
+export type MergeMethod = "merge" | "squash" | "rebase";
+
+/** A Pull Request as GitHub's API answers about it and merges it, apart from the webhook deliveries a test sends. */
+export interface StandInPullRequest {
+  repository: StandInRepository;
+  number: number;
+  headSha: string;
+  state: "open" | "closed";
+  draft: boolean;
+  merged: boolean;
+  /** Whether GitHub says it can be merged: null while GitHub is still working it out, as after a push. */
+  mergeable: boolean | null;
+  /** The base branch's name; `main` by default. */
+  base: string;
+  /** The base branch's commit GitHub worked mergeability out against; `b0` by default. */
+  baseSha: string;
+  /**
+   * When set, what each ask about it answers in turn instead of `mergeable`, the last one staying: whether it can be
+   * merged (null while GitHub works it out), alone or worked out against another base commit than `baseSha`.
+   */
+  answers: (boolean | null | { mergeable: boolean | null; baseSha: string })[];
+}
+
+/** A merge GitHub made at the App's request. */
+export interface StandInMerge {
+  /** `owner/name`. */
+  repository: string;
+  number: number;
+  method: MergeMethod;
+  /** The head commit the merge request named, if it named one. */
+  sha: string | null;
+  /** The installation whose token asked for it. */
+  installationId: number;
 }
 
 export interface StandInInstallation {
@@ -58,21 +95,6 @@ export interface StandInInstallation {
   repositories: StandInRepository[];
   /** The owner accepts the App's current permissions and events, as on the installation's page on GitHub. */
   accept(): void;
-}
-
-/** What GitHub answers about a Pull Request: its base branch, and whether it can merge into it. */
-export interface StandInPullRequest {
-  number: number;
-  /** The base branch's name. */
-  base: string;
-  /** The base branch's latest commit GitHub compared against. */
-  baseSha: string;
-  /**
-   * What each ask for the Pull Request answers about its mergeability, in turn, the last repeating: `true` merges
-   * cleanly, `false` conflicts, `null` while GitHub is still working it out; with `baseSha`, worked out against that
-   * base commit instead.
-   */
-  mergeable: (boolean | null | { mergeable: boolean | null; baseSha: string })[];
 }
 
 export interface IssuedToken {
@@ -127,11 +149,15 @@ export interface StandInGitHub {
   install(app: StandInApp, account: string, repositories?: string[]): StandInInstallation;
   /** Every installation token GitHub issued, in order. */
   tokensIssued: IssuedToken[];
+  /** Adds, or changes, a Pull Request of the repository as GitHub's API answers about it; open and mergeable by default. */
+  pullRequest(repository: StandInRepository, number: number, fields?: Partial<Omit<StandInPullRequest, "repository" | "number">>): StandInPullRequest;
+  /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
+  merges: StandInMerge[];
   /**
-   * Sets what GitHub answers about a Pull Request of a repository. One it wasn't told of merges cleanly into
-   * `main` at `b0`.
+   * Called once GitHub has made a merge, before it answers the request, as when GitHub's webhook delivery of the
+   * merge reaches Cronk before the answer does.
    */
-  pullRequest(repository: StandInRepository, pullRequest: StandInPullRequest): void;
+  onMerge: ((merge: StandInMerge) => Promise<void>) | null;
   /**
    * Sends one of the App's webhook deliveries to its webhook URL, as GitHub does: the event's
    * name, a delivery id and the body's `X-Hub-Signature-256`. Returns Cronk's answer.
@@ -195,6 +221,8 @@ function page<T>(url: URL, items: T[]): { items: T[]; link?: string } {
   return { items: slice, link: `<${next}>; rel="next"` };
 }
 
+const allows = (repository: StandInRepository, method: MergeMethod) => repository.mergeMethods?.[method] ?? true;
+
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(chunk as Buffer);
@@ -240,7 +268,11 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         account,
         permissions: { ...app.permissions },
         events: [...app.events],
-        repositories: repositories.map((name) => ({ id: nextId++, name, fullName: `${account}/${name}` })),
+        repositories: repositories.map((name) => ({
+          id: nextId++,
+          name,
+          fullName: `${account}/${name}`,
+        })),
         accept() {
           installation.permissions = { ...app.permissions };
           installation.events = [...app.events];
@@ -250,9 +282,26 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       return installation;
     },
     tokensIssued: [],
-    pullRequest(repository, pullRequest) {
-      pullRequests.set(`${repository.id}#${pullRequest.number}`, { ...pullRequest, mergeable: [...pullRequest.mergeable] });
+    pullRequest(repository, number, fields = {}) {
+      const key = `${repository.id}#${number}`;
+      const pullRequest = pullRequests.get(key) ?? {
+        repository,
+        number,
+        headSha: "aaaa",
+        state: "open",
+        draft: false,
+        merged: false,
+        mergeable: true,
+        base: "main",
+        baseSha: "b0",
+        answers: [],
+      };
+      Object.assign(pullRequest, fields);
+      pullRequests.set(key, pullRequest);
+      return pullRequest;
     },
+    merges: [],
+    onMerge: null,
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
       return send(app, { guid: id, event, payload, redelivery: false }, secret, fails);
     },
@@ -536,30 +585,58 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         owner: { login: repository.fullName.split("/")[0] },
         private: true,
         html_url: `${github.url}/${repository.fullName}`,
+        allow_merge_commit: allows(repository, "merge"),
+        allow_squash_merge: allows(repository, "squash"),
+        allow_rebase_merge: allows(repository, "rebase"),
       });
     }
 
-    // API: a Pull Request by its repository's `owner/name` and its number, with a token of an installation covering it.
-    const pull = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(path);
-    if (request.method === "GET" && pull) {
+    // API: a Pull Request, and merging it, with a token of an installation that covers its repository.
+    const pulls = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/merge)?$/.exec(path);
+    if (pulls && ((request.method === "GET" && !pulls[3]) || (request.method === "PUT" && pulls[3]))) {
       const issued = bearer ? installationTokens.get(bearer) : undefined;
       const installation = github.installations.find((i) => i.id === issued?.installationId);
       if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
-      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(pull[1]!).toLowerCase());
-      if (!repository) return json(response, 404, { message: "Not Found" });
-      const number = Number(pull[2]);
-      const known = pullRequests.get(`${repository.id}#${number}`) ?? { number, base: "main", baseSha: "b0", mergeable: [true] };
-      // Each ask takes the next answer; the last one stays.
-      const next = known.mergeable.length > 1 ? known.mergeable.shift()! : known.mergeable[0]!;
-      const { mergeable, baseSha } = typeof next === "object" && next !== null ? next : { mergeable: next, baseSha: known.baseSha };
-      return json(response, 200, {
-        number,
-        state: "open",
-        html_url: `${github.url}/${repository.fullName}/pull/${number}`,
-        base: { ref: known.base, sha: baseSha },
-        mergeable,
-        mergeable_state: mergeable === null ? "unknown" : mergeable ? "clean" : "dirty",
-      });
+      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(pulls[1]!).toLowerCase());
+      const pullRequest = repository && pullRequests.get(`${repository.id}#${pulls[2]}`);
+      if (!repository || !pullRequest) return json(response, 404, { message: "Not Found" });
+      if (request.method === "GET") {
+        const next = pullRequest.answers.length > 1 ? pullRequest.answers.shift()! : pullRequest.answers[0];
+        const answer =
+          next === undefined
+            ? { mergeable: pullRequest.mergeable, baseSha: pullRequest.baseSha }
+            : typeof next === "object" && next !== null
+              ? next
+              : { mergeable: next, baseSha: pullRequest.baseSha };
+        const mergeable = pullRequest.state === "open" ? answer.mergeable : null;
+        return json(response, 200, {
+          number: pullRequest.number,
+          state: pullRequest.state,
+          draft: pullRequest.draft,
+          merged: pullRequest.merged,
+          mergeable,
+          mergeable_state: mergeable === null ? "unknown" : mergeable ? "clean" : "dirty",
+          head: { sha: pullRequest.headSha },
+          base: { ref: pullRequest.base, sha: answer.baseSha },
+        });
+      }
+      const body = JSON.parse((await readBody(request)) || "{}") as { merge_method?: MergeMethod; sha?: string };
+      const method = body.merge_method ?? "merge";
+      if (!allows(repository, method)) {
+        return json(response, 405, { message: `${method === "merge" ? "Merge commits are" : `${method} merges are`} not allowed on this repository.` });
+      }
+      if (pullRequest.state !== "open" || pullRequest.draft || pullRequest.mergeable !== true) {
+        return json(response, 405, { message: "Pull Request is not mergeable" });
+      }
+      if (body.sha !== undefined && body.sha !== pullRequest.headSha) {
+        return json(response, 409, { message: "Head branch was modified. Review and try the merge again." });
+      }
+      pullRequest.state = "closed";
+      pullRequest.merged = true;
+      const merge = { repository: repository.fullName, number: pullRequest.number, method, sha: body.sha ?? null, installationId: installation.id };
+      github.merges.push(merge);
+      await github.onMerge?.(merge);
+      return json(response, 200, { sha: randomBytes(20).toString("hex"), merged: true, message: "Pull Request successfully merged" });
     }
 
     return json(response, 404, { message: "Not Found" });

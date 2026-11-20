@@ -1,0 +1,46 @@
+GET /api/workspaces/<id>/search?q=webhook
+
+[
+  {
+    "kind": "ticket",
+    "id": "d3c96d6d-bf01-4e0c-a0cf-d192d7686225",
+    "title": "Flaky webhook",
+    "projectId": "eff8282e-0074-4699-91c4-f96f050b9e2a",
+    "ticketKey": "CRONK-1",
+    "snippet": [
+      {
+        "text": "The ",
+        "match": false
+      },
+      {
+        "text": "webhook",
+        "match": true
+      },
+      {
+        "text": " retries twice on deploy.",
+        "match": false
+      }
+    ]
+  },
+  {
+    "kind": "transcript",
+    "id": "49df5f65-df54-4ab0-a6d2-fe5b62fded29",
+    "title": "Transcript of the Triage Run",
+    "projectId": "eff8282e-0074-4699-91c4-f96f050b9e2a",
+    "ticketKey": "CRONK-1",
+    "snippet": [
+      {
+        "text": "The ",
+        "match": false
+      },
+      {
+        "text": "webhook",
+        "match": true
+      },
+      {
+        "text": " fires before the deploy finishes, so GitHub retries it.",
+        "match": false
+      }
+    ]
+  }
+]

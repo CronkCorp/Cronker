@@ -1,7 +1,7 @@
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
-import { pullRequestMergeability } from "../github/client.js";
-import { tokenForRepository } from "../github/installations.js";
+import { pullRequestOnGitHub } from "../github/client.js";
+import { installationCovering, tokenFor } from "../github/installations.js";
 import { listsPullRequestsRepository } from "./cronk-moves.js";
 import { sendBackForFailure, sendBackForKnownFailures } from "./sending-back.js";
 
@@ -32,17 +32,21 @@ export type Mergeability =
 
 /**
  * Asks GitHub whether the Pull Request, by its Repository's id and `owner/name` and its number, merges cleanly into its
- * base branch. Asking is what starts GitHub working it out, so a first answer is often null. The one conflict check
- * Cronk makes, wherever it needs one.
+ * base branch. Asking is what starts GitHub working it out, so a first answer is often null. It reads the same
+ * `pullRequestOnGitHub` answer through the same installation as the Merge Step's `merge_pull_request` does
+ * (`runs/merging.ts`), so both judge a conflict alike.
  */
 export async function askMergeability(
   context: Context,
   pullRequest: { repositoryId: number; repository: string; number: number },
 ): Promise<Mergeability> {
   try {
-    const token = await tokenForRepository(context, pullRequest.repositoryId);
-    const answer = token && (await pullRequestMergeability(context.config, token, pullRequest.repository, pullRequest.number));
-    return answer ? { kind: "answered", ...answer } : { kind: "unseen" };
+    const installationId = await installationCovering(context, pullRequest.repositoryId);
+    if (installationId === undefined) return { kind: "unseen" };
+    const token = await tokenFor(context, installationId);
+    const answer = await pullRequestOnGitHub(context.config, token, pullRequest.repository, pullRequest.number);
+    if (!answer || typeof answer.base?.ref !== "string" || typeof answer.base.sha !== "string") return { kind: "unseen" };
+    return { kind: "answered", mergeable: typeof answer.mergeable === "boolean" ? answer.mergeable : null, base: answer.base };
   } catch {
     return { kind: "unanswered" };
   }

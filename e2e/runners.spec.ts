@@ -1,4 +1,5 @@
-import { expect, pick, test } from "./fixtures.js";
+import { setUp, signIn } from "../test/harness/flows.js";
+import { expect, pick, signInInBrowser, test } from "./fixtures.js";
 
 test("set up a subscription Runner, point an Agent at it, and follow a Run to its claude.ai session, then remove the trigger", async ({
   page,
@@ -109,4 +110,40 @@ test("remove a Runner after confirming what stops working, leaving its Agent to 
   await page.goto(`${cronk.url}/workspaces/${workspace.id}/agents/${agent.id}`);
   await expect(page.getByLabel("Runner")).toHaveValue("");
   await expect(page.getByText("Choose a Runner for its Runs to start.")).toBeVisible();
+});
+
+test("a subscription Runner shows the Transcript hook's snippet with Cronk's address, and makes a Transcript hook token revoked on its own", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const runner = await call("POST", "/api/runners", { name: "Claude Max", kind: "subscription" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  await call("POST", `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+  await signInInBrowser(page, cronk);
+
+  await page.getByRole("link", { name: "Runners" }).click();
+  const hook = page.getByRole("region", { name: "Claude Max" }).getByRole("group", { name: "Transcript hook" });
+  const snippet = hook.getByLabel("settings.json snippet");
+  await expect(snippet).toContainText(`curl -fsS '${cronk.url}/hooks/transcript.mjs'`);
+  await expect(snippet).toContainText(`CRONK_URL='${cronk.url}'`);
+  await expect(snippet).toContainText('"Stop"');
+  await expect(snippet).toContainText('"PostToolUse"');
+  await expect(hook).toContainText("Hooks only run in cloud sessions with one Repository");
+  await expect(hook).toContainText(`add ${new URL(cronk.url).host} to its Limited allowlist`);
+
+  await hook.getByRole("button", { name: "Make a Transcript hook token for claude-max" }).click();
+  await expect(hook.getByLabel("CRONK_TOKEN for claude-max")).toHaveValue(/^cronk_agent_/);
+
+  // It is one of the Agent's tokens, revoked on its own there.
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/agents`);
+  await page.getByRole("button", { name: "Manage tokens" }).click();
+  const tokens = page.getByRole("dialog", { name: "Tokens of claude-max" });
+  await tokens.getByRole("row", { name: /Transcript hook/ }).getByRole("button", { name: "Revoke" }).click();
+  await page.getByRole("dialog", { name: "Revoke Transcript hook?" }).getByRole("button", { name: "Revoke" }).click();
+  await expect(tokens.getByRole("row", { name: /Transcript hook/ })).toHaveCount(0);
+  await expect(tokens.getByRole("row", { name: /laptop/ })).toHaveCount(1);
 });

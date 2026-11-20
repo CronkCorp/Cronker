@@ -127,12 +127,12 @@
 
 /* Board: open columns share the width but keep a card's readable width; when they don't fit, the board scrolls
    sideways itself while the page head and filters stay put. A column's name wraps rather than being cut off.
-   Done and Canceled start collapsed. */
+   Done and Canceled start collapsed. Every column stretches to the tallest one's height, so the board ends in one
+   straight line and a short column's empty lower part still takes a dropped card. */
 .board {
   position: relative; /* holds collapsed columns' visually hidden names, so they scroll with it, not the page */
   display: flex;
   gap: var(--space-2);
-  align-items: flex-start;
   overflow-x: auto;
 }
 .column {
@@ -1087,6 +1087,41 @@
   margin-left: auto;
   flex: none;
 }
+/* An Agent's own Transcripts on its page: session, the Tickets it named, then its size and upload, a row each. */
+.agent-transcripts {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+.agent-transcripts li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.agent-transcripts li:first-child {
+  border-top: none;
+}
+.agent-transcript-session {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+.agent-transcript-tickets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.agent-transcripts li > :last-child {
+  margin-left: auto;
+}
 .runner-card {
   gap: var(--space-4);
 }
@@ -1116,6 +1151,29 @@
   border-top: 1px solid var(--border);
 }
 .runner-trigger-form {
+  display: grid;
+  gap: var(--space-2);
+}
+.runner-hook {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.runner-hook-steps {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-5);
+}
+.runner-hook-snippet {
+  display: grid;
+  gap: var(--space-2);
+}
+.runner-hook-snippet pre {
+  font-size: 12px;
+}
+.runner-hook-token {
   display: grid;
   gap: var(--space-2);
 }
@@ -1169,6 +1227,16 @@
   gap: var(--space-2);
 }
 
+/* Artifacts: a Project's or the Workspace's, each its title over its description. */
+.artifact-list td:first-child {
+  width: auto;
+}
+.artifact-list-description {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Artifact: the page itself in its sandboxed frame, its files beside it. */
 .artifact-description {
   max-width: 720px;
@@ -1201,6 +1269,23 @@
 .artifact-file-size {
   margin-left: auto;
   white-space: nowrap;
+}
+.compared-files {
+  display: grid;
+  gap: var(--space-5);
+}
+.compared-file {
+  display: grid;
+  gap: var(--space-2);
+}
+.compared-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 /* Search results: one group per kind, each result its title, where it is kept and where it matched. */
