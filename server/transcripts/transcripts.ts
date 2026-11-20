@@ -222,6 +222,25 @@ export async function findTranscript({ db }: Context, viewer: Viewer, transcript
   return present(row);
 }
 
+/**
+ * The Agent's own Transcripts, of its sessions that matched no Run, such as Claude Code connected by hand; the
+ * last uploaded first. A Run's Transcript is listed with its Run instead.
+ */
+export async function agentTranscripts({ db }: Context, viewer: Viewer, agentId: string): Promise<Transcript[]> {
+  const view = inView(viewer, "agents.workspace_id", "$2");
+  const agent = isUuid(agentId)
+    ? await db.query(`select 1 from agents where agents.id = $1 and ${view.sql}`, [agentId, view.value])
+    : { rowCount: 0 };
+  if (agent.rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
+  const { rows } = await db.query<Row>(
+    `select ${columns} from transcripts join agents on agents.id = transcripts.agent_id
+     where transcripts.agent_id = $1 and transcripts.run_id is null
+     order by transcripts.uploaded_at desc, transcripts.id`,
+    [agentId],
+  );
+  return rows.map(present);
+}
+
 /** A page of a Transcript's entries, in order, after the given position. */
 export async function entriesOf(
   context: Context,

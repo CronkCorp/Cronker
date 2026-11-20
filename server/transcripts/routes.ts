@@ -6,7 +6,7 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { convertClaudeCode } from "./claude-code.js";
-import { entriesOf, EntryPage, findTranscript, Transcript, uploadTranscript } from "./transcripts.js";
+import { agentTranscripts, entriesOf, EntryPage, findTranscript, Transcript, uploadTranscript } from "./transcripts.js";
 
 /** The largest upload Cronk reads; what it keeps of one is capped further (ADR 0006). */
 const uploadLimitBytes = 256 * 1024 * 1024;
@@ -53,6 +53,22 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
         );
         return reply.code(created ? 201 : 200).send(transcript);
       },
+    );
+
+    app.get(
+      "/api/agents/:agentId/transcripts",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "An Agent's own Transcripts",
+          description:
+            "The Transcripts of the Agent's sessions that matched no Run, such as Claude Code connected by hand, the " +
+            "last uploaded first. A Run's Transcript is listed with its Run instead.",
+          params: Type.Object({ agentId: Type.String() }),
+          response: { 200: Type.Array(Transcript), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => agentTranscripts(context, await requireCaller(context, request), request.params.agentId),
     );
 
     const TranscriptParams = Type.Object({ transcriptId: Type.String() });

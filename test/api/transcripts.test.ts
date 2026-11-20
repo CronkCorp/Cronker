@@ -372,3 +372,34 @@ describe("a Run's Transcript", () => {
     expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: null }]);
   });
 });
+
+describe("hand-connected Claude Code", () => {
+  test("an upload whose session matches no Run is kept as the Agent's own Transcript, listed on the Agent", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const ofRun = await uploaded("session_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+
+    const first = await uploaded("laptop-1", [userSays("What's on CRONK-1?", 1)], asAgent);
+    cronk.clock.advance(60_000);
+    const second = await uploaded("laptop-2", [userSays("Hello.", 1), assistantSays("Hi.", 2)], asAgent);
+
+    expect(ofRun.runId).not.toBeNull();
+    expect(first).toMatchObject({ sessionId: "laptop-1", runId: null });
+    // Newest upload first; a Run's Transcript is listed with its Run, not here.
+    expect(await ok("GET", `/api/agents/${agent.id}/transcripts`, ada)).toEqual([second, first]);
+  });
+
+  test("an Agent of another Workspace can't list an Agent's Transcripts", async () => {
+    const { agent, asAgent } = await adaWithAgent();
+    await uploaded("laptop-1", [userSays("Hello.", 1)], asAgent);
+    const ada = { cookie: await signIn(cronk) };
+    const other = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
+    const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
+    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "t", access: "read" });
+
+    const listed = await call("GET", `/api/agents/${agent.id}/transcripts`, { headers: { authorization: `Bearer ${secret}` } });
+
+    expect(listed.status).toBe(404);
+  });
+});
