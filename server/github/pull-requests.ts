@@ -261,8 +261,8 @@ async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Pr
  * its title and branch name now. A delivery of its opening records, for each Ticket it links,
  * the Run that was running on that Ticket when GitHub says the Pull Request opened, even if
  * the delivery arrives after that Run ended: the producing Step's. A check that failed on its latest
- * commit before Cronk heard of the push sends the Tickets back now. A merge has Cronk ask whether the other open Pull
- * Requests on its base branch now conflict.
+ * commit before Cronk heard of the push sends the Tickets back now. GitHub's first delivery naming a merge's commit,
+ * whoever made the merge, has Cronk ask whether the other open Pull Requests on its base branch now conflict.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, pull_request: pr } = payload as {
@@ -279,10 +279,13 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       ? { id: pr.merged_by.id, login: pr.merged_by.login }
       : null;
   // Whether Cronk knew the Pull Request merged already, so only the delivery of its merge completes Tickets.
-  const { rows: before } = await tx.query<{ state: PullRequestState }>("select state from pull_requests where id = $1 for update", [
-    pr.id,
-  ]);
+  const { rows: before } = await tx.query<{ state: PullRequestState; mergeCommit: string | null }>(
+    `select state, merge_commit_sha as "mergeCommit" from pull_requests where id = $1 for update`,
+    [pr.id],
+  );
   const wasMerged = before[0]?.state === "merged";
+  // Whether Cronk knew the merge's commit already: only GitHub's deliveries name it, even of a merge a Run asked for.
+  const knewMergeCommit = before[0]?.mergeCommit != null;
   // Kept only when no newer delivery came first.
   const { rowCount: newest } = await tx.query(
     `insert into pull_requests (id, repository_id, repository_full_name, number, title, branch, head_sha, state, url,
@@ -339,9 +342,10 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       mergedBy,
       autoMerged: pr.auto_merge !== null && pr.auto_merge !== undefined,
     });
-    // GitHub sends nothing when the merge makes another Pull Request conflict, so Cronk asks.
-    await checkAfterMerge(context, tx, pr.id);
   }
+  // GitHub sends nothing when the merge makes another Pull Request conflict, so Cronk asks, once it knows the merge's
+  // commit: on GitHub's first delivery naming it, whether Cronk or GitHub's delivery recorded the merge first.
+  if (newest && state === "merged" && !knewMergeCommit) await checkAfterMerge(context, tx, pr.id);
   await announce(context, tx, [pr.id]);
 };
 
