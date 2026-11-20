@@ -1,11 +1,11 @@
 import { createGitHubApp } from "../test/harness/flows.js";
-import { expect, fieldPicker, newTicket, pick, test } from "./fixtures.js";
+import { expect, fieldPicker, newTicket, openProjectSettings, pick, test } from "./fixtures.js";
 
 // The main path a new installation is used along, end to end in the browser, with the fake Runner
 // standing in for claude.ai and the stand-in GitHub for GitHub. Only the Agent's own calls (finishing its
-// Runs), setting up the fake Runner, which the web client doesn't offer, and the GitHub App with its
+// Runs and merging), setting up the fake Runner, which the web client doesn't offer, and the GitHub App with its
 // Repository, which other walks cover, go straight to the API; GitHub's webhooks come from the stand-in.
-test("set up Cronk, delegate a Ticket, answer its Question, watch it move through the Steps, merge it and Accept it", async ({
+test("set up Cronk, delegate a Ticket, answer its Question, watch it move through the Steps, have the Merge Step merge it and Accept it", async ({
   page,
   cronk,
 }) => {
@@ -58,6 +58,14 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   const projectId = new URL(page.url()).pathname.split("/").pop();
   const listed = await cronk.request("POST", `/api/projects/${projectId}/repositories`, { cookie, body: { id: cronker.id } });
   expect(listed.status).toBe(201);
+
+  // As its Admin, Ada lets agents merge the Project's Autonomous Delegation Tickets.
+  await openProjectSettings(page);
+  const merges = page.getByRole("region", { name: "Merges by agents" });
+  await merges.getByLabel("Agents may merge Autonomous Delegation Tickets' Pull Requests").click();
+  await expect(merges.getByRole("status")).toHaveText("Saved.");
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Cronker" })).toBeVisible();
   /** GitHub reports the Implement Run's Pull Request, as its webhook does. */
   const pullRequest = async (action: string, fields: Record<string, unknown>) => {
     const delivered = await cronk.github.deliver(app, "pull_request", {
@@ -148,37 +156,59 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await expect(cardIn("Investigate")).toContainText("Run running");
   await finish({ outcome: "done" });
   await expect(cardIn("Implement")).toContainText("Run running");
-  // The Implement Run opens a Pull Request naming the Ticket's key.
+  // The Implement Run opens a Pull Request naming the Ticket's key, and its check passes.
   await pullRequest("opened", { updated_at: "2026-01-01T09:00:00Z" });
+  const checked = await cronk.github.deliver(app, "check_run", {
+    action: "completed",
+    installation: { id: installation.id },
+    repository: { id: cronker.id, full_name: cronker.fullName },
+    check_run: { id: 1, name: "test", head_sha: "c1", status: "completed", conclusion: "success", html_url: null },
+  });
+  expect(checked.status).toBe(200);
+  cronk.github.pullRequest(cronker, 7, { headSha: "c1", mergeable: true });
   await finish({ outcome: "done" });
   await expect(cardIn("Code review")).toContainText("Run running");
   await finish({ outcome: "approve" });
-  await expect(cardIn("In Review")).toBeVisible();
+  await expect(cardIn("Merge")).toContainText("Run running");
 
-  // Merged on GitHub by someone who isn't a User here, the Pull Request completes the Ticket, Unverified, into
-  // the Inbox: the card moves to Done without a reload.
-  await pullRequest("closed", {
-    state: "closed",
-    merged: true,
-    merged_by: { login: "mallory", id: 666, type: "User" },
-    updated_at: "2026-01-01T10:00:00Z",
+  // The Merge Step's Run merges the Pull Request through Cronk, which completes the Ticket, Unverified, into the
+  // Inbox: the card moves to Done without a reload.
+  const mergeRun = (await (await cronk.request("GET", `/api/tickets/${ticketId}/runs`, { cookie })).json()).at(-1);
+  const merged = await cronk.request("POST", `/api/runs/${mergeRun.id}/merge`, {
+    headers: { authorization: `Bearer ${secret}` },
+    body: { pullRequestId: 501 },
   });
+  expect(merged.status).toBe(200);
+  expect(cronk.github.merges).toEqual([
+    { repository: "cronkcorp/cronker", number: 7, method: "merge", sha: "c1", installationId: installation.id },
+  ]);
   // Done starts collapsed to its dot and count.
   await lane("Done").getByRole("button", { name: "Done, 1 Ticket" }).click();
   await expect(cardIn("Done")).toBeVisible();
-  expect(cronk.runner.starts.map((s) => s.model)).toEqual(["haiku", "haiku", "sonnet", "opus", "sonnet"]);
+  // GitHub's own delivery of the merge, as the App's bot, completes nothing again.
+  await pullRequest("closed", {
+    state: "closed",
+    merged: true,
+    merged_by: { login: "cronk-app[bot]", id: 4242, type: "Bot" },
+    updated_at: "2026-01-01T10:00:00Z",
+  });
+  expect(cronk.runner.starts.map((s) => s.model)).toEqual(["haiku", "haiku", "sonnet", "opus", "sonnet", "haiku"]);
   await expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting");
   await inboxLink.click();
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("Completed by the Implement Step, Unverified");
 
-  // Accepting it verifies it and empties the Inbox.
   await detail.getByRole("link", { name: "CRONK-1 Make it so" }).click();
-  await expect(timeline).toContainText("completed it: @mallory merged cronkcorp/cronker#7 CRONK-1: make it so");
+  await expect(timeline).toContainText(
+    "claude-max merged cronkcorp/cronker#7 CRONK-1: make it so, completing it, moving it to Done as Unverified in its Merge Run",
+  );
+  await expect(runs("Merge", "haiku").filter({ hasText: "Run finished" })).toContainText("merged");
   const verification = page.getByRole("region", { name: "Verification" });
   await expect(verification).toContainText(
-    "@mallory merged cronkcorp/cronker#7, completing this. It is Unverified until you Accept it, or Reopen it to send it back to the Implement Step.",
+    "claude-max's Run of the Merge Step merged cronkcorp/cronker#7, completing this. It is Unverified until you Accept it, or Reopen it to send it back to the Implement Step.",
   );
+
+  // Accepting it verifies it and empties the Inbox.
   await verification.getByRole("button", { name: "Accept" }).click();
   await expect(verification).toContainText("Verified");
   await expect(inboxLink).toHaveAccessibleName("Inbox, nothing waiting");
