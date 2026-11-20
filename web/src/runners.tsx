@@ -1,21 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ProjectSummary, type Runner, type Trigger, type WorkspaceSummary } from "./api.js";
+import { api, type Agent, type ProjectSummary, type Runner, type Trigger, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
 import { Actions, Banner, Button, clockTime, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
-import { ConfirmDialog } from "./ui/overlays.js";
+import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
 /**
  * The User's own Runners: ways for Cronk to start their Agents' Runs with their own credentials.
  * A subscription Runner fires one claude.ai scheduled task per model label, optionally per Project.
- * Each card's count of running Runs and its pause stay current from the User's Runners stream.
+ * Each card's count of running Runs and its pause stay current from the User's Runners stream, and a removed
+ * Runner's card drops out of every open Runners page.
  */
 export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   usePlace("runners");
   const [runners, setRunners] = useState<Runner[] | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const latest = useLatest();
   const refresh = useCallback(() => {
@@ -29,9 +31,15 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
       (lists) => setProjects(lists.flat()),
       (e: Error) => setError(e.message),
     );
+    // Which Agents use each Runner, named when removing it asks first. Only the User's own Agents use their Runners.
+    Promise.all(workspaces.map((w) => api.agents(w.id))).then(
+      (lists) => setAgents(lists.flat()),
+      (e: Error) => setError(e.message),
+    );
   }, [workspaces]);
   const replace = (updated: Runner) =>
     setRunners((all) => all?.map((r) => (r.id === updated.id ? updated : r)) ?? null);
+  const drop = (removed: Runner) => setRunners((all) => all?.filter((r) => r.id !== removed.id) ?? null);
 
   const create = useSubmit(async (form, element) => {
     await api.createRunner({ name: field(form, "name"), kind: "subscription" });
@@ -54,7 +62,16 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
       ) : runners.length === 0 ? (
         <EmptyState title="No Runners yet.">Set one up below, then point your Agents at it from their pages.</EmptyState>
       ) : (
-        runners.map((runner) => <RunnerSettings key={runner.id} runner={runner} projects={projects} onChanged={replace} />)
+        runners.map((runner) => (
+          <RunnerSettings
+            key={runner.id}
+            runner={runner}
+            projects={projects}
+            agents={agents.filter((a) => a.runnerId === runner.id)}
+            onChanged={replace}
+            onRemoved={drop}
+          />
+        ))
       )}
       <Panel title="Set up a Runner" id="new-runner">
         <form onSubmit={create.onSubmit}>
@@ -76,13 +93,19 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
 function RunnerSettings({
   runner,
   projects,
+  agents,
   onChanged,
+  onRemoved,
 }: {
   runner: Runner;
   projects: ProjectSummary[];
+  /** The Agents pointed at it. */
+  agents: Agent[];
   onChanged: (runner: Runner) => void;
+  onRemoved: (runner: Runner) => void;
 }) {
   const [removingTrigger, setRemovingTrigger] = useState<Trigger | null>(null);
+  const [removing, setRemoving] = useState(false);
   const [limitSaved, setLimitSaved] = useState(false);
   const limit = useSubmit(async (form) => {
     setLimitSaved(false);
@@ -115,7 +138,29 @@ function RunnerSettings({
         <span className="runner-usage">
           <strong>{runner.running}</strong> of <strong>{runner.limit}</strong> <span className="muted">running</span>
         </span>
+        <Menu label={`More for ${runner.name}`}>
+          <MenuItem tone="danger" onSelect={() => setRemoving(true)}>
+            Remove…
+          </MenuItem>
+        </Menu>
       </header>
+      <ConfirmDialog
+        open={removing}
+        onOpenChange={setRemoving}
+        title={`Remove ${runner.name}?`}
+        confirm="Remove"
+        onConfirm={async () => {
+          await api.removeRunner(runner.id);
+          onRemoved(runner);
+        }}
+      >
+        {agents.length === 0
+          ? "No Agent uses it."
+          : `${listed(agents.map((a) => a.name))} ${agents.length === 1 ? "is" : "are"} left with no Runner, so ${agents.length === 1 ? "its" : "their"} Runs can't start until you choose another.`}{" "}
+        {runner.triggers.length > 0 &&
+          `Its ${listed(runner.triggers.map((t) => t.model))} ${runner.triggers.length === 1 ? "trigger goes" : "triggers go"} with it, tokens and all.`}{" "}
+        Past Runs keep their history. It can't be removed while one of its Runs is running.
+      </ConfirmDialog>
       {pausedUntil && (
         <Banner tone="warn" label="Paused">
           <p role="status">
@@ -230,4 +275,9 @@ function RunnerSettings({
       )}
     </section>
   );
+}
+
+/** Names in a sentence: "a", "a and b", "a, b and c". */
+function listed(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
