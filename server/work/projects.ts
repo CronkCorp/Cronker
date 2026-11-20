@@ -3,7 +3,9 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inView, userViewer, type Viewer } from "../identity/viewers.js";
+import { recheckWaiting, waitingTickets } from "../runs/runs.js";
+import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
 import { defaultRoundLimit, Step, stepsOf, writeStep } from "./steps.js";
 
@@ -45,6 +47,11 @@ export const Project = Type.Object({
       "changes sends them back from a Review Status to their producing Step. On by default; off, merges and failures only update " +
       "the Pull Request's state.",
   }),
+  agentsMayMerge: Type.Boolean({
+    description:
+      "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation; off, every Merge Step " +
+      "skips itself. Off by default; only an Admin changes it.",
+  }),
   statuses: Type.Array(Status),
 });
 export type Project = Static<typeof Project>;
@@ -57,6 +64,7 @@ const defaultStatuses: { name: string; kind: StatusKind }[] = [
   { name: "Investigate", kind: "active" },
   { name: "Implement", kind: "active" },
   { name: "Code review", kind: "active" },
+  { name: "Merge", kind: "active" },
   { name: "In Review", kind: "review" },
   { name: "Done", kind: "done" },
   { name: "Canceled", kind: "canceled" },
@@ -96,7 +104,7 @@ export async function findProject(
   const { rows } = await db.query<Omit<Project, "statuses">>(
     `select ${summaryColumns}, projects.new_tickets_delegated as "newTicketsDelegated",
        projects.autonomous_delegation_default as "autonomousDelegationDefault",
-       projects.pull_request_automation as "pullRequestAutomation"
+       projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge"
      from projects where projects.id = $1 and ${view.sql}
      ${lock ? "for update of projects" : ""}`,
     [projectId, view.value],
@@ -137,8 +145,9 @@ export async function createProject(
     }
     const statuses = await statusesOf(tx, project.id);
     const idOf = (name: string) => statuses.find((s) => s.name === name)!.id;
-    for (const [name, { brief, model, labelRule, outcomes }] of Object.entries(defaultSteps)) {
+    for (const [name, { kind, brief, model, labelRule, outcomes }] of Object.entries(defaultSteps)) {
       const step: Step = {
+        kind: kind ?? "ordinary",
         brief,
         model,
         roundLimit: defaultRoundLimit,
@@ -159,37 +168,59 @@ export async function createProject(
       newTicketsDelegated: false,
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
+      agentsMayMerge: false,
       statuses: await statusesOf(tx, project.id),
     };
   });
 }
 
-/** Changes a Project's settings. */
+/** The settings a User changes on a Project. */
+export interface ProjectEdit {
+  newTicketsDelegated?: boolean;
+  autonomousDelegationDefault?: boolean;
+  pullRequestAutomation?: boolean;
+  /** Only an Admin of the Project's Workspace may give this, whatever its value. */
+  agentsMayMerge?: boolean;
+}
+
+/** Changes a Project's settings, as a User. */
 export async function editProject(
-  { db, live }: Context,
-  viewer: Viewer,
+  context: Context,
+  userId: string,
   projectId: string,
-  edit: { newTicketsDelegated?: boolean; autonomousDelegationDefault?: boolean; pullRequestAutomation?: boolean },
+  edit: ProjectEdit,
 ): Promise<Project> {
+  const { db, live } = context;
   return transaction(db, async (tx) => {
+    const viewer = userViewer(userId);
     const project = await findProject(tx, viewer, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (edit.agentsMayMerge !== undefined && !(await requireMember(db, userId, project.workspaceId)).isAdmin) {
+      throw new ApiError(403, "not_admin", "Only an Admin of this Workspace can change whether agents may merge.");
+    }
     const next = {
       newTicketsDelegated: edit.newTicketsDelegated ?? project.newTicketsDelegated,
       autonomousDelegationDefault: edit.autonomousDelegationDefault ?? project.autonomousDelegationDefault,
       pullRequestAutomation: edit.pullRequestAutomation ?? project.pullRequestAutomation,
+      agentsMayMerge: edit.agentsMayMerge ?? project.agentsMayMerge,
     };
     if (
       next.newTicketsDelegated !== project.newTicketsDelegated ||
       next.autonomousDelegationDefault !== project.autonomousDelegationDefault ||
-      next.pullRequestAutomation !== project.pullRequestAutomation
+      next.pullRequestAutomation !== project.pullRequestAutomation ||
+      next.agentsMayMerge !== project.agentsMayMerge
     ) {
       await tx.query(
-        `update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3, pull_request_automation = $4
+        `update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3, pull_request_automation = $4,
+           agents_may_merge = $5
          where id = $1`,
-        [project.id, next.newTicketsDelegated, next.autonomousDelegationDefault, next.pullRequestAutomation],
+        [project.id, next.newTicketsDelegated, next.autonomousDelegationDefault, next.pullRequestAutomation, next.agentsMayMerge],
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+    }
+    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now.
+    if (next.agentsMayMerge !== project.agentsMayMerge) {
+      recheckWaiting(context, tx, await waitingTickets(tx, "tickets.project_id = $1", [project.id]));
     }
     return (await findProject(tx, viewer, project.id))!;
   });

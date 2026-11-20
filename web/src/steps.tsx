@@ -1,5 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { api, labelRuleShown, type Brief, type LabelRule, type Outcome, type Project, type Status, type Step } from "./api.js";
+import {
+  api,
+  labelRuleShown,
+  type Brief,
+  type LabelRule,
+  type Outcome,
+  type Project,
+  type Status,
+  type Step,
+  type StepKind,
+} from "./api.js";
 import { field, useSave, useSubmit } from "./forms.js";
 import { Actions, Button, Check, Field, FormError, Panel, Saved } from "./ui/controls.js";
 import { StatusPill } from "./ui/labels.js";
@@ -13,6 +23,7 @@ function newStep(project: Project, status: Status): Step {
   const next = project.statuses[at + 1] ?? project.statuses[0]!;
   const firstOther = project.statuses.find((s) => s.id !== status.id)!;
   return {
+    kind: "ordinary",
     brief: "",
     model: "sonnet",
     roundLimit: 2,
@@ -30,7 +41,7 @@ export function StepsSettings({ project, onChange }: { project: Project; onChang
     <Panel
       title="Steps"
       id="steps"
-      description="A delegated Ticket entering a Status with a Step gets a Run, which ends by choosing one of the Step's Outcomes. One its Label rule doesn't let through gets no Run and moves on by the default Outcome. Tickets in a Status without a Step wait for a User."
+      description="A delegated Ticket entering a Status with a Step gets a Run, which ends by choosing one of the Step's Outcomes. One its Label rule doesn't let through gets no Run and moves on by the default Outcome, as does one a Merge Step skips: every Ticket without Autonomous Delegation, and all of them while agents may not merge. Tickets in a Status without a Step wait for a User."
     >
       <ul className="steps">
         {project.statuses.map((status) => (
@@ -62,6 +73,7 @@ function StepItem({
 
   const summary = status.step
     ? [
+        ...(status.step.kind === "merge" ? ["Merge Step"] : []),
         status.step.model,
         `${status.step.outcomes.length} Outcomes`,
         ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : []),
@@ -155,6 +167,12 @@ function StepForm({
         />
       </Field>
       <div className="form-row">
+        <Field label={`Kind of Step for ${of}`}>
+          <select value={draft.kind} onChange={(e) => onDraft({ ...draft, kind: e.target.value as StepKind })}>
+            <option value="ordinary">Ordinary</option>
+            <option value="merge">Merge</option>
+          </select>
+        </Field>
         <Field label={`Model for ${of}`}>
           <input
             className="mono"

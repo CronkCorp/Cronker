@@ -145,9 +145,10 @@ export type RunNeed = "started" | "waiting" | "none";
  * A Ticket that needs a Run but is blocked, or whose Runner has no slot for it, waits instead: a slot
  * goes to the highest Priority waiting Ticket first, then to the one that entered its Status first.
  *
- * A delegated Ticket that doesn't pass the Step's Label rule gets no Run: Cronk moves it on by the
- * Step's default Outcome, which counts as entering that Status in turn. A chain of skips that comes
- * back to a Status it already passed stops there, so the Ticket waits for a User.
+ * A delegated Ticket that doesn't pass the Step's Label rule, or a Merge Step's rule (Autonomous Delegation in a
+ * Project with agents may merge on), gets no Run: Cronk moves it on by the Step's default Outcome, which counts as
+ * entering that Status in turn. A chain of skips that comes back to a Status it already passed stops there, so the
+ * Ticket waits for a User.
  */
 export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<RunNeed> {
   return enterStatus(context, tx, ticketId, now, new Set());
@@ -166,6 +167,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     delegateId: string | null;
     delegateRemoved: boolean;
     autonomousDelegation: boolean | null;
+    agentsMayMerge: boolean;
     agentName: string | null;
     runnerId: string | null;
     runnerOwnerId: string | null;
@@ -177,7 +179,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
        tickets.labels, tickets.delegate_id as "delegateId", agents.removed_at is not null as "delegateRemoved",
-       tickets.autonomous_delegation as "autonomousDelegation", agents.name as "agentName", runners.id as "runnerId",
+       tickets.autonomous_delegation as "autonomousDelegation", projects.agents_may_merge as "agentsMayMerge",
+       agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
        tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
      from tickets join projects on projects.id = tickets.project_id
@@ -205,7 +208,9 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.
   if (!status.step || !mayHaveStep(status.kind)) return needsNone();
-  if (!passes(status.step.labelRule, ticket.labels)) {
+  // A Merge Step skips itself unless an agent may merge this Ticket; otherwise the Label rule decides.
+  const mergeRule = status.step.kind === "merge" ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true) : null;
+  if (mergeRule || !passes(status.step.labelRule, ticket.labels)) {
     const outcome = status.step.outcomes.find((o) => o.default)!;
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
     skipped.add(status.id);
@@ -217,7 +222,13 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     await tx.query("delete from needs_you where ticket_id = $1", [ticketId]);
     const named = ({ id, name }: Status) => ({ id, name });
     await recordChanges(tx, { id: ticketId, workspaceId: ticket.workspaceId }, { kind: "cronk" }, now, [
-      { field: "stepSkipped", from: null, to: { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name } },
+      {
+        field: "stepSkipped",
+        from: null,
+        to: mergeRule
+          ? { status: named(status), labelRule: null, mergeRule, outcome: outcome.name }
+          : { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name },
+      },
       { field: "status", from: named(status), to: named(target) },
     ]);
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
@@ -528,6 +539,16 @@ function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
     // Best effort: the Run has ended in Cronk whatever its Runner says.
     await runner.stop!({ runId: run.runId, reference }).catch(() => {});
   });
+}
+
+/**
+ * Why a Merge Step skips itself for a Ticket, if it does: its Project has agents may merge off, or the Ticket lacks
+ * Autonomous Delegation (ADR 0005).
+ */
+function mergeRefusal(agentsMayMerge: boolean, autonomous: boolean): "agentsMayMergeOff" | "noAutonomousDelegation" | null {
+  if (!agentsMayMerge) return "agentsMayMergeOff";
+  if (!autonomous) return "noAutonomousDelegation";
+  return null;
 }
 
 /** Whether a Ticket with these Labels passes the Label rule, matching Labels ignoring case. */

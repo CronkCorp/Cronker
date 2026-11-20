@@ -514,7 +514,7 @@ describe("Label rules", () => {
     await ok("PUT", `/api/projects/${project.id}/statuses/${status(statusName)}/step`, ada, { ...step, labelRule });
   }
 
-  test("a Ticket labelled no-review skips Code review: no Run, and it moves on by approve, which Cronk records", async () => {
+  test("a Ticket labelled no-review skips Code review: no Run, and it moves on by approve, which Cronk records, then past Merge", async () => {
     const { ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, labels: ["No-Review"] });
 
@@ -524,7 +524,7 @@ describe("Label rules", () => {
     expect(await runsOf(ticket.id, ada)).toEqual([]);
     expect(cronk.runner.starts).toEqual([]);
     const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
-    expect(timeline.slice(-3)).toEqual([
+    expect(timeline.slice(-5)).toEqual([
       expect.objectContaining({
         actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }),
         field: "status",
@@ -544,6 +544,14 @@ describe("Label rules", () => {
         actor: { kind: "cronk", name: "Cronk" },
         field: "status",
         from: { id: status("Code review"), name: "Code review" },
+        to: { id: status("Merge"), name: "Merge" },
+      }),
+      // The default board's Merge Step skips itself too: agents may not merge in a new Project.
+      expect.objectContaining({ actor: { kind: "cronk", name: "Cronk" }, field: "stepSkipped" }),
+      expect.objectContaining({
+        actor: { kind: "cronk", name: "Cronk" },
+        field: "status",
+        from: { id: status("Merge"), name: "Merge" },
         to: { id: status("In Review"), name: "In Review" },
       }),
     ]);

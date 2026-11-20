@@ -1043,12 +1043,21 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
   relatesTo: { added: "related this to", removed: "removed the relation to" },
 };
 
-/** What a `stepSkipped` Change records: the Status whose Step was skipped, its Label rule and the default Outcome. */
+/**
+ * What a `stepSkipped` Change records: the Status whose Step was skipped, its Label rule and the default Outcome; a
+ * Merge Step that skipped itself records no Label rule but why it did.
+ */
 interface StepSkipped {
   status: { id: string; name: string };
-  labelRule: LabelRule;
+  labelRule: LabelRule | null;
+  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation";
   outcome: string;
 }
+
+const mergeRulesShown = {
+  agentsMayMergeOff: "agents may not merge in this Project",
+  noAutonomousDelegation: "no Autonomous Delegation",
+};
 
 /** What a `merged` Change records: the Pull Request as it was then, and the login of the GitHub account that merged it. */
 interface Merged {
@@ -1078,8 +1087,10 @@ function described(change: Change): string {
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "stepSkipped") {
-    const { status, labelRule, outcome } = change.to as StepSkipped;
-    return `skipped the ${status.name} Step (${labelRuleShown(labelRule)}), moving on by ${outcome}`;
+    const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
+    // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
+    const why = mergeRule ? mergeRulesShown[mergeRule] : labelRuleShown(labelRule!);
+    return `skipped the ${status.name} Step (${why}), moving on by ${outcome}`;
   }
   if (change.field === "description") return "changed the Description";
   if (change.field === "linkedDocument") {

@@ -40,7 +40,7 @@ test("Done and Canceled board columns start collapsed to their dot and count, an
   await expect(lane("Done").getByRole("link", { name: /CRONK-1 Shipped/ })).toBeHidden();
 });
 
-/** A Project named Cronker with twelve Statuses, three more than the default board's, as Ada sees it at 1280px. */
+/** A Project named Cronker with thirteen Statuses, three more than the default board's, as Ada sees it at 1280px. */
 async function crowdedBoard(page: Page, cronk: StartedCronk) {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { workspace } = await setUp(cronk);
@@ -49,7 +49,7 @@ async function crowdedBoard(page: Page, cronk: StartedCronk) {
   const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
   // Before Done, so they come after In Review.
   for (const name of ["Design", "Release", "Staging"]) {
-    await call("POST", `/api/projects/${project.id}/statuses`, { name, kind: "active", position: 7 });
+    await call("POST", `/api/projects/${project.id}/statuses`, { name, kind: "active", position: 8 });
   }
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
   const open = async () => {
@@ -78,7 +78,7 @@ test("a board whose Statuses don't fit scrolls sideways itself, its columns stil
   const { board, lane } = await open();
 
   // Every open column keeps a card's readable width; Done and Canceled stay collapsed to their dot and count.
-  const columns = ["Backlog", "Triage", "Ready", "Investigate", "Implement", "Code review", "In Review", "Design", "Release", "Staging"];
+  const columns = ["Backlog", "Triage", "Ready", "Investigate", "Implement", "Code review", "Merge", "In Review", "Design", "Release", "Staging"];
   for (const name of columns) {
     expect((await lane(name).boundingBox())!.width, `${name} keeps a readable width`).toBeGreaterThanOrEqual(240);
   }
@@ -86,7 +86,13 @@ test("a board whose Statuses don't fit scrolls sideways itself, its columns stil
     expect((await lane(name).boundingBox())!.width, `${name} stays collapsed`).toBeLessThan(60);
   }
   // Each open column's name, and its Step's model label, are shown whole rather than cut off.
-  const models: Record<string, string> = { Triage: "haiku", Investigate: "sonnet", Implement: "opus", "Code review": "sonnet" };
+  const models: Record<string, string> = {
+    Triage: "haiku",
+    Investigate: "sonnet",
+    Implement: "opus",
+    "Code review": "sonnet",
+    Merge: "haiku",
+  };
   const whole = (shown: Locator) => shown.evaluate((e) => e.scrollWidth <= e.clientWidth);
   for (const name of columns) {
     expect(await whole(lane(name).getByRole("heading", { name })), `${name} is named in full`).toBe(true);

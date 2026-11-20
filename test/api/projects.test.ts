@@ -17,13 +17,20 @@ const defaultBoard = [
   { name: "Investigate", kind: "active" },
   { name: "Implement", kind: "active" },
   { name: "Code review", kind: "active" },
+  { name: "Merge", kind: "active" },
   { name: "In Review", kind: "review" },
   { name: "Done", kind: "done" },
   { name: "Canceled", kind: "canceled" },
 ];
 
 /** The default board's Steps, by the Status they're on, and the model each wants. */
-const stepModels: Record<string, string> = { Triage: "haiku", Investigate: "sonnet", Implement: "opus", "Code review": "sonnet" };
+const stepModels: Record<string, string> = {
+  Triage: "haiku",
+  Investigate: "sonnet",
+  Implement: "opus",
+  "Code review": "sonnet",
+  Merge: "haiku",
+};
 
 describe("creating a Project", () => {
   test("a new Project has a name, a key and the default board's Statuses with their kinds", async () => {
@@ -45,6 +52,7 @@ describe("creating a Project", () => {
       newTicketsDelegated: false,
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
+      agentsMayMerge: false,
       statuses: defaultBoard.map((status) => ({
         id: expect.any(String),
         ...status,
@@ -158,6 +166,7 @@ describe("editing a Project's Statuses", () => {
       "Investigate:active",
       "Implement:active",
       "Code review:active",
+      "Merge:active",
       "In Review:review",
       "Done:done",
       "Canceled:canceled",
@@ -216,6 +225,7 @@ describe("editing a Project's Statuses", () => {
       "Triage:active",
       "Implement:active",
       "Code review:active",
+      "Merge:active",
       "In Review:review",
       "Done:done",
     ]);
@@ -253,6 +263,7 @@ describe("editing a Project's Statuses", () => {
       "Ready",
       "Implement",
       "Code review",
+      "Merge",
       "In Review",
       "Done",
       "Canceled",
@@ -371,19 +382,19 @@ describe("Status refusals", () => {
 
     const added = await cronk.request("POST", `/api/projects/${project.id}/statuses`, {
       cookie,
-      body: { name: "Later", kind: "backlog", position: 10 },
+      body: { name: "Later", kind: "backlog", position: 11 },
     });
     expect(added.status).toBe(400);
     expect(await added.json()).toEqual({
-      error: { code: "invalid_position", message: "A position on this board is from 0 to 9." },
+      error: { code: "invalid_position", message: "A position on this board is from 0 to 10." },
     });
 
     const moved = await cronk.request("PATCH", `/api/projects/${project.id}/statuses/${statusId("Ready")}`, {
       cookie,
-      body: { position: 9 },
+      body: { position: 10 },
     });
     expect(moved.status).toBe(400);
-    expect((await moved.json()).error.message).toBe("A position on this board is from 0 to 8.");
+    expect((await moved.json()).error.message).toBe("A position on this board is from 0 to 9.");
   });
 
   test("an unknown Status kind is refused", async () => {
