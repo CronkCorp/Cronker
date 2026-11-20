@@ -739,10 +739,7 @@ textarea.markdown-source {
   font-size: 13px;
   text-decoration: none;
   cursor: pointer;
-}
-/* The control clips its segments, so the focus ring sits inside the segment. */
-.menu-choice .segmented-item:focus-visible {
-  outline-offset: -2px;
+  outline: none;
 }
 .menu-item[data-highlighted] {
   background: var(--surface-2);

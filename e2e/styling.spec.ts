@@ -30,9 +30,12 @@ test("the IBM Plex faces load from Cronk itself, never from another host", async
   expect([...hosts]).toEqual([new URL(cronk.url).host]);
 });
 
+const lightGround = "rgb(243, 244, 241)";
+const darkGround = "rgb(18, 21, 19)";
+
 for (const [colorScheme, ground] of [
-  ["light", "rgb(243, 244, 241)"],
-  ["dark", "rgb(18, 21, 19)"],
+  ["light", lightGround],
+  ["dark", darkGround],
 ] as const) {
   test(`the page ground follows the system's ${colorScheme} setting`, async ({ page, cronk }) => {
     await page.emulateMedia({ colorScheme });
@@ -41,10 +44,6 @@ for (const [colorScheme, ground] of [
     await expect(page.locator("body")).toHaveCSS("background-color", ground);
   });
 }
-
-// docs/ui.md: buttons size to their label and are never full width outside sign-in forms.
-const lightGround = "rgb(243, 244, 241)";
-const darkGround = "rgb(18, 21, 19)";
 
 test("a User's theme choice wins over the system's setting", async ({ page, cronk }) => {
   await setUp(cronk);
@@ -75,8 +74,16 @@ test("a User's theme choice wins over the system's setting", async ({ page, cron
   await expect(page.locator("body")).toHaveCSS("background-color", lightGround);
   await page.reload();
   await expect(page.locator("body")).toHaveCSS("background-color", lightGround);
+
+  // At phone width the User sits in the sidebar's menu, and the theme is chosen there the same way.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await sidebar.getByRole("button", { name: "Menu" }).click();
+  await sidebar.getByRole("button", { name: "ada@example.com" }).click();
+  await theme("Dark").click();
+  await expect(page.locator("body")).toHaveCSS("background-color", darkGround);
 });
 
+// docs/ui.md: buttons size to their label and are never full width outside sign-in forms.
 test("only the sign-in form's buttons span their card; other signed-out pages' buttons fit their label", async ({ page, cronk }) => {
   await page.goto(cronk.url);
   const setupField = await width(page.getByLabel("Setup code"));
