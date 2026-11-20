@@ -91,6 +91,7 @@ export function buildBrief(
       "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
     `- File anything you find that isn't part of ${ticketKey}'s work with \`file_ticket\`, giving your Run id: it waits ` +
       `for ${ticketKey}'s Assignee as a Discovered Ticket.`,
+    `- Give your Run id when you create an Artifact with \`create_artifact\`, so it is linked to ${ticketKey}.`,
     "- Don't merge pull requests on GitHub directly.",
   ].join("\n");
 

@@ -900,6 +900,8 @@ function Relations({
 interface Linkable {
   /** The kind's name, such as "Document". */
   noun: string;
+  /** What linking one is called, such as "Link a Document". */
+  linkLabel: string;
   /** Where one is shown. */
   page: (id: string) => string;
   /** Those of the Ticket's Project and of the Workspace that could be linked. */
@@ -910,6 +912,7 @@ interface Linkable {
 
 const linkedDocuments: Linkable = {
   noun: "Document",
+  linkLabel: "Link a Document",
   page: (id) => `/documents/${id}`,
   offered: async (projectId, workspaceId) => {
     const [project, workspace] = await Promise.all([
@@ -924,6 +927,7 @@ const linkedDocuments: Linkable = {
 
 const linkedArtifacts: Linkable = {
   noun: "Artifact",
+  linkLabel: "Link an Artifact",
   page: (id) => `/artifacts/${id}`,
   offered: async (projectId, workspaceId) => {
     const [project, workspace] = await Promise.all([
@@ -1006,7 +1010,7 @@ function Linked({
       <FormError error={choicesError} />
       <div>
         <Picker
-          label={`Link a${/^[AEIOU]/.test(kind.noun) ? "n" : ""} ${kind.noun}`}
+          label={kind.linkLabel}
           onOpenChange={(open) => open && loadChoices()}
           options={
             offered
@@ -1019,7 +1023,7 @@ function Linked({
           onPick={(id) => void change(() => kind.link(ticket.id, id))}
           trigger={
             <Button size="small" aria-haspopup="listbox" disabled={busy}>
-              Link a{/^[AEIOU]/.test(kind.noun) ? "n" : ""} {kind.noun}…
+              {kind.linkLabel}…
             </Button>
           }
         />

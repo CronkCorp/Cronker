@@ -11,7 +11,7 @@ import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { describeSize, forgetAttachments } from "../attachments/attachments.js";
 import { ownerName } from "../agents/tokens.js";
-import { findTicketRow, runningRunOf } from "../work/tickets.js";
+import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
 import { insertLink } from "./linked-artifacts.js";
 
 /**
@@ -302,9 +302,11 @@ export async function createArtifact(
       await insertVersion(tx, { id, workspaceId: place.workspaceId }, 1, content, actor, now);
       context.live.publish(tx, place.workspaceId, { type: "artifact.changed", projectId: place.projectId, artifactId: id });
       const created = (await findArtifact(tx, actor, id))!;
-      if (run) {
+      if (run && actor.kind === "agent") {
         const ticket = (await findTicketRow(tx, actor, run.ticketId, { lock: true }))!;
-        await insertLink(context, tx, ticket, { kind: "agent", id: actor.id, runId: run.id }, created);
+        // Asked again under the Ticket's lock, so a Run stopped meanwhile, as by a move, refuses the create.
+        const runId = await runOfAgent(tx, actor, ticket);
+        await insertLink(context, tx, ticket, { kind: "agent", id: actor.id, runId }, created);
       }
       return created;
     }),
