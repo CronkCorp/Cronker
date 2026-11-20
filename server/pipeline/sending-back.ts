@@ -88,6 +88,9 @@ export async function sendBackForFailure(
      -- A Status that has lost its Step since produces nothing to send back to.
      join steps on steps.status_id = producing.id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation and statuses.kind = 'review'
+       -- A Project that removed the Repository since keeps the link, but its Pull Requests no longer move its Tickets.
+       and exists (select from pull_requests join project_repositories on project_repositories.repository_id = pull_requests.repository_id
+                   where pull_requests.id = $1 and project_repositories.project_id = tickets.project_id)
      order by tickets.id
      for update of tickets`,
     [pullRequest.id],

@@ -736,6 +736,47 @@ describe("Merges", () => {
     expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, state: "merged", mergedBy: "bea" }]);
   });
 
+  test("a merge completes nothing in a Project that removed the Repository since, though its Pull Request still shows there", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    // Another Project keeps listing the Repository, so Cronk still hears of its Pull Requests.
+    const website = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Website", key: "WEB" });
+    await post(cookie, `/api/projects/${website.id}/repositories`, { id: cronker.id });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Left behind" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/repositories/${cronker.id}`, { cookie });
+    expect(removed.status).toBe(204);
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "mallory", id: 666 })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: ticket.statusId, verification: null });
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, state: "merged" }]);
+  });
+
+  test("one merge completes a Ticket as Verified in the merger's Workspace and as Unverified in another, each Change naming the merger", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const ours = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Ours" });
+    // Ada's second Workspace, which Bea isn't in, has a Project of the same key on the Repository.
+    const other = await post(cookie, "/api/workspaces", { name: "Side project" });
+    const theirProject = await post(cookie, `/api/workspaces/${other.id}/projects`, { name: "Side", key: "CRONK" });
+    await post(cookie, `/api/projects/${theirProject.id}/repositories`, { id: cronker.id });
+    const theirs = await post(cookie, `/api/projects/${theirProject.id}/tickets`, { title: "Theirs" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ours.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
+    expect(await ticketOf(theirs.id, cookie)).toMatchObject({ statusId: statusNamed(theirProject, "Done"), verification: "unverified" });
+    for (const ticket of [ours, theirs]) {
+      const timeline = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
+      expect(timeline.find((c: { field?: string }) => c.field === "merged")).toMatchObject({
+        actor: { kind: "cronk" },
+        to: { pullRequest: { repository: "cronkcorp/cronker", number: 7 }, mergedBy: "bea" },
+      });
+    }
+  });
+
   test("only the delivery of the merge completes: a later delivery about the merged Pull Request leaves a reopened Ticket alone", async () => {
     const { cookie, app, installation, project, cronker } = await projectWithRepository();
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Reopened" });
@@ -1004,6 +1045,19 @@ describe("Failures sending work back", () => {
     await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
 
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Backlog") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("a Ticket of a Project that removed the Repository since is not sent back", async () => {
+    const { workspace, cookie, app, installation, project, cronker, ticket, pr, status } = await inReview();
+    const website = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Website", key: "WEB" });
+    await post(cookie, `/api/projects/${website.id}/repositories`, { id: cronker.id });
+    expect((await cronk.request("DELETE", `/api/projects/${project.id}/repositories/${cronker.id}`, { cookie })).status).toBe(204);
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
     expect(await commentsOf(ticket.id, cookie)).toEqual([]);
   });
 
