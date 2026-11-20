@@ -33,7 +33,7 @@ Finish with **done** once the Report gives the implementation what it needs. Fin
 const implement = `Implement this Ticket's work.
 
 - Read the Ticket, its Comments and the Reports of earlier Runs, the investigation's above all.
-- Make the change on a branch named after the Ticket's key, with tests, and open a pull request whose title starts with the key.
+- Make the change on a branch named \`<type>/<KEY>-<slug>\`, with tests: \`<type>\` is \`feat\`, \`fix\`, \`docs\`, \`chore\` or \`refactor\`, \`<KEY>\` the Ticket's key and \`<slug>\` a few words of its title, such as \`fix/CRONK-12-lost-runs\`. Open a pull request whose title starts with the key.
 - If the Ticket already has an open Pull Request, push to its branch instead of opening another.
 - Leave a Comment on the Ticket linking the pull request and saying anything a reviewer should know.
 
