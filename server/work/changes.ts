@@ -50,7 +50,9 @@ export const Change = Type.Object({
       "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
-      "and the default Outcome the Ticket moved on by. A `merged` Change goes from null to " +
+      "and the default Outcome the Ticket moved on by. A Merge Step that skipped itself records `labelRule` null and " +
+      "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, otherwise " +
+      "`noAutonomousDelegation`. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
       "login of the GitHub account that merged it, or null when GitHub named none. A `sentBack` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it, either a check " +

@@ -15,6 +15,7 @@ import {
   type TicketFilter,
   type TicketSummary,
   type Workspace,
+  type WorkspaceSummary,
 } from "./api.js";
 import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
@@ -125,7 +126,7 @@ export function ProjectScreen({
   view,
   onOtherWorkspace,
 }: {
-  workspace: Workspace;
+  workspace: WorkspaceSummary;
   projectId: string;
   view: View;
   /** Offered a Project of another Workspace; returns whether the screen switches to that Workspace. */
@@ -215,6 +216,11 @@ export function ProjectScreen({
               id: "pull-request-automation",
               label: "Pull Request automation",
               children: <PullRequestAutomationSettings project={project} onChange={setProject} />,
+            },
+            {
+              id: "merges-by-agents",
+              label: "Merges by agents",
+              children: <MergesByAgentsSettings workspace={workspace} project={project} onChange={setProject} />,
             },
           ]}
         />
@@ -626,6 +632,38 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
         />
         Merges complete their Tickets, and failures send them back
       </label>
+      <FormError error={error} />
+      <Saved shown={saved} />
+    </Panel>
+  );
+}
+
+function MergesByAgentsSettings({
+  workspace,
+  project,
+  onChange,
+}: {
+  workspace: WorkspaceSummary;
+  project: Project;
+  onChange: (project: Project) => void;
+}) {
+  const { error, busy, saved, toggle } = useProjectEdit(project, onChange);
+  return (
+    <Panel
+      title="Merges by agents"
+      id="merges-by-agents"
+      description="A Merge Step skips itself, passing the Ticket on by its default Outcome, unless the Ticket has Autonomous Delegation and agents may merge here. Then its Run may merge the Ticket's Pull Request, completing it as Unverified."
+    >
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.agentsMayMerge}
+          disabled={busy || !workspace.isAdmin}
+          onChange={(e) => void toggle({ agentsMayMerge: e.target.checked })}
+        />
+        Agents may merge Autonomous Delegation Tickets' Pull Requests
+      </label>
+      {!workspace.isAdmin && <p className="muted small">Only an Admin of this Workspace changes this.</p>}
       <FormError error={error} />
       <Saved shown={saved} />
     </Panel>

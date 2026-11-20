@@ -43,6 +43,7 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
 
   await expect(summary("Triage")).toContainText("haiku, 2 Outcomes");
   await expect(summary("Code review")).toContainText("sonnet, 4 Outcomes, skipped by no-review");
+  await expect(summary("Merge")).toContainText("Merge Step, haiku, 3 Outcomes");
   await expect(steps.getByText("No Step: Tickets here wait for a User")).toHaveCount(5);
 
   // Done and Canceled Statuses never have a Step: the refusal shows on the Status.
@@ -74,6 +75,11 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   await steps.getByLabel("Label for the rule of Ready").fill("planned");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
   await expect(summary("Ready")).toContainText("opus, 2 Outcomes, requires planned");
+
+  // A Status of the Project's own takes a Merge Step too.
+  await steps.getByLabel("Kind of Step for Ready").selectOption("Merge: skipped unless an agent may merge the Ticket");
+  await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
+  await expect(summary("Ready")).toContainText("Merge Step, opus, 2 Outcomes, requires planned");
 
   await expect(steps.getByLabel("Model for Investigate")).toHaveValue("opus");
   await steps.getByRole("button", { name: "Save the Step on Investigate" }).click();

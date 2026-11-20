@@ -1,4 +1,4 @@
-import type { LabelRule } from "./steps.js";
+import type { LabelRule, StepKind } from "./steps.js";
 
 /**
  * The Steps of the default board every new Project starts with, by the name of the Status
@@ -6,6 +6,7 @@ import type { LabelRule } from "./steps.js";
  * defaults: each Project edits its own copy.
  */
 export interface DefaultStep {
+  kind?: StepKind;
   brief: string;
   model: string;
   labelRule?: LabelRule;
@@ -46,6 +47,13 @@ const codeReview = `Review the pull request this Ticket's implementation opened.
 
 Finish with **approve** when it is ready for a User to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a User. Finish with **needs you** and a Question when you can't judge it.`;
 
+const merge = `Merge the pull request this Ticket's implementation opened, once it is ready.
+
+- Read the Ticket, its Comments and Reports, and its Pull Request's state, checks and reviews.
+- Never resolve a merge conflict or change code yourself: that is Implement's work.
+
+Finish with **send back** when the pull request has a merge conflict or a failing check, saying which in a Comment. Finish with **review** when it should wait for a User instead. Finish with **needs you** and a Question when you can't tell.`;
+
 export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {
     brief: triage,
@@ -76,9 +84,20 @@ export const defaultSteps: Record<string, DefaultStep> = {
     model: "sonnet",
     labelRule: { kind: "skippedBy", label: "no-review" },
     outcomes: [
-      { name: "approve", status: "In Review", default: true },
+      { name: "approve", status: "Merge", default: true },
       { name: "changes", status: "Implement", countsAsRound: true },
       { name: "complete", status: "Done" },
+      { name: "needs you", status: "In Review", needsYou: true },
+    ],
+  },
+  // ADR 0005: skipped, passing the Ticket on to In Review, unless an agent may merge it.
+  Merge: {
+    kind: "merge",
+    brief: merge,
+    model: "haiku",
+    outcomes: [
+      { name: "review", status: "In Review", default: true },
+      { name: "send back", status: "Implement", countsAsRound: true },
       { name: "needs you", status: "In Review", needsYou: true },
     ],
   },

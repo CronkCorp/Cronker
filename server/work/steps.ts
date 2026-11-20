@@ -28,8 +28,19 @@ export const LabelRule = Type.Object(
 );
 export type LabelRule = Static<typeof LabelRule>;
 
-/** The agent work a Status asks for: a Brief, the model it wants, a round limit, a Label rule and its Outcomes. */
+/**
+ * What kind of Step it is: an ordinary one, or a Merge Step, which skips itself by its default Outcome unless the
+ * Ticket has Autonomous Delegation and its Project has agents may merge on (ADR 0005).
+ */
+export const stepKindDescription =
+  "`ordinary`, or `merge`: a Merge Step skips itself, moving the Ticket on by its default Outcome, unless the Ticket has " +
+  "Autonomous Delegation and its Project has agents may merge on.";
+export const StepKind = Type.Union([Type.Literal("ordinary"), Type.Literal("merge")], { description: stepKindDescription });
+export type StepKind = Static<typeof StepKind>;
+
+/** The agent work a Status asks for: its kind, a Brief, the model it wants, a round limit, a Label rule and its Outcomes. */
 export const Step = Type.Object({
+  kind: StepKind,
   brief: Type.String({ description: "Markdown; the middle of the Brief a Run starts from." }),
   model: Type.String({ description: "The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`." }),
   roundLimit: Type.Integer({ minimum: 0 }),
@@ -41,7 +52,7 @@ export type Step = Static<typeof Step>;
 /** Steps by the id of the Status they're on, for a Project. */
 export async function stepsOf(db: Db | Tx, projectId: string): Promise<Map<string, Step>> {
   const { rows } = await db.query<Omit<Step, "outcomes"> & { statusId: string; outcomes: Outcome[] }>(
-    `select steps.status_id as "statusId", steps.brief, steps.model, steps.round_limit as "roundLimit",
+    `select steps.status_id as "statusId", steps.kind, steps.brief, steps.model, steps.round_limit as "roundLimit",
        case when steps.label_rule_kind is null then null else json_build_object(
          'kind', case steps.label_rule_kind when 'skipped_by' then 'skippedBy' else steps.label_rule_kind end,
          'label', steps.label_rule_label
@@ -161,10 +172,10 @@ export async function writeStep(
 ): Promise<void> {
   const { rows } = await tx.query<{ id: string }>(
     `insert into steps (workspace_id, project_id, status_id, brief, model, round_limit, label_rule_kind, label_rule_label,
-       created_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       created_at, kind)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      on conflict (status_id) do update set brief = excluded.brief, model = excluded.model, round_limit = excluded.round_limit,
-       label_rule_kind = excluded.label_rule_kind, label_rule_label = excluded.label_rule_label
+       label_rule_kind = excluded.label_rule_kind, label_rule_label = excluded.label_rule_label, kind = excluded.kind
      returning id`,
     [
       project.workspaceId,
@@ -176,6 +187,7 @@ export async function writeStep(
       step.labelRule && (step.labelRule.kind === "skippedBy" ? "skipped_by" : "requires"),
       step.labelRule?.label.trim() ?? null,
       now,
+      step.kind,
     ],
   );
   const stepId = rows[0]!.id;

@@ -48,6 +48,10 @@ _Avoid_: Follow-up, spin-off, finding
 The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User. Done and Canceled Statuses never have one, so finished or canceled work gets no Runs.
 _Avoid_: Stage, phase, pipeline step, job
 
+**Merge Step**:
+A Step whose Run may merge its Ticket's Pull Request. It skips itself, passing the Ticket on by its default Outcome as with a Label rule, unless the Ticket has Autonomous Delegation and its Project has **agents may merge** on, a setting off by default that only an Admin changes. New Projects' boards have one on a Merge Status between Code review and In Review.
+_Avoid_: Merge job, auto-merge
+
 **Outcome**:
 One of the named ways a Step's Run may end, each moving the Ticket to a set Status, such as *approve → In Review* or *changes → Implement*. A Run moves its Ticket only by choosing an Outcome. An Outcome that sends work back counts as a round; past the Step's round limit it goes to the Step's *needs you* Outcome instead.
 _Avoid_: Result, verdict, transition

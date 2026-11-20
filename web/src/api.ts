@@ -103,8 +103,12 @@ export interface LabelRule {
 export const labelRuleShown = ({ kind, label }: LabelRule) =>
   kind === "requires" ? `requires ${label}` : `skipped by ${label}`;
 
+/** An ordinary Step, or a Merge Step, which skips itself unless an agent may merge the Ticket. */
+export type StepKind = "ordinary" | "merge";
+
 /** The agent work a Status asks for. */
 export interface Step {
+  kind: StepKind;
   brief: string;
   model: string;
   roundLimit: number;
@@ -140,6 +144,8 @@ export interface Project extends ProjectSummary {
   autonomousDelegationDefault: boolean;
   /** Whether a merged Pull Request completes the Tickets it links. */
   pullRequestAutomation: boolean;
+  /** Whether Merge Steps let agents merge Autonomous Delegation Tickets' Pull Requests; only Admins change it. */
+  agentsMayMerge: boolean;
   statuses: Status[];
 }
 
@@ -148,6 +154,7 @@ export interface ProjectEdit {
   newTicketsDelegated?: boolean;
   autonomousDelegationDefault?: boolean;
   pullRequestAutomation?: boolean;
+  agentsMayMerge?: boolean;
 }
 
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
