@@ -19,14 +19,19 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Search"],
           summary: "Search the Workspace",
           description:
-            `Tickets and knowledge of the Workspace matching \`q\`, best first, at most ${perKind} of each kind. ` +
+            `Tickets, knowledge and Transcripts of the Workspace matching \`q\`, best first with Transcripts last, ` +
+            `at most ${perKind} of each kind. A Transcript matches by its entries' text. ` +
             "Words match by their stem in English " +
             "(\"merging\" finds \"merged\"), written in web-search syntax.",
           params: Type.Object({ workspaceId: Type.String() }),
           querystring: Type.Object({
             q: Type.String({ maxLength: 1000, description: "Words, `\"a phrase\"`, `or` between alternatives, `-word` to leave out." }),
             project: Type.Optional(
-              Type.String({ description: "A Project of the Workspace: only its own Tickets and knowledge, not the Workspace's." }),
+              Type.String({
+                description:
+                  "A Project of the Workspace: only its own Tickets and knowledge and the Transcripts of Runs on its " +
+                  "Tickets, not the Workspace's.",
+              }),
             ),
             kinds: Type.Optional(
               Type.String({
