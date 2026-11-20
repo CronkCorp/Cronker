@@ -92,3 +92,33 @@ test("Ctrl+Enter answers a Question from the Inbox's answer box", async ({ page,
     "Green.",
   );
 });
+
+test("pressing Ctrl+Enter again while a Comment is being sent doesn't place it twice", async ({ page, cronk }) => {
+  await ticketsWithAQuestion(page, cronk);
+  await openTicket(page, "CRONK-1");
+  // Hold the Comment's request until the keys have been pressed again, and held.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let sent = 0;
+  await page.route(/\/api\/tickets\/[^/]+\/comments$/, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    sent++;
+    await held;
+    await route.continue();
+  });
+  const box = page.getByLabel("New Comment");
+  await box.fill("Only once.");
+  await box.press("Control+Enter");
+  await expect.poll(() => sent).toBe(1);
+  await box.press("Control+Enter");
+  await page.keyboard.down("Control");
+  await page.keyboard.down("Enter");
+  await box.dispatchEvent("keydown", { key: "Enter", ctrlKey: true, repeat: true });
+  await page.keyboard.up("Enter");
+  await page.keyboard.up("Control");
+  release();
+  const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
+  await expect(comment).toHaveCount(1);
+  await expect(box).toHaveValue("");
+  expect(sent).toBe(1);
+});

@@ -24,12 +24,16 @@ export const field = (form: FormData, name: string) => String(form.get(name) ?? 
 
 /**
  * A Comment box's keydown: Ctrl+Enter or Cmd+Enter submits its form as the submit button does, so an empty box
- * places nothing; plain Enter and Shift+Enter keep adding new lines.
+ * places nothing, and not while that button is disabled, as while the Comment is being sent, nor again for a held key.
+ * Plain Enter and Shift+Enter keep adding new lines.
  */
 export function submitOnModEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
   if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
   event.preventDefault();
-  event.currentTarget.form?.requestSubmit();
+  const form = event.currentTarget.form;
+  const submit = form?.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (!form || event.repeat || submit?.disabled) return;
+  form.requestSubmit(submit);
 }
 
 /**
