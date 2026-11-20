@@ -1,12 +1,13 @@
 import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
 import { recordChanges } from "../work/changes.js";
-import { moveByCronk, type MovedTicket } from "./cronk-moves.js";
+import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
  * Pipeline: a merged Pull Request completes the Tickets it links. Each linked Ticket not already in a Done or
- * Canceled Status, in a Project with Pull Request automation on, moves to its Project's first Done Status as a
- * move by Cronk: Verified when the merging GitHub account is a User of the Ticket's Workspace, otherwise
+ * Canceled Status, in a Project with Pull Request automation on that still lists the Pull Request's Repository,
+ * moves to its Project's first Done Status as a move by Cronk: Verified when the merging GitHub account is a User
+ * of the Ticket's Workspace, otherwise
  * Unverified. Other Pull Requests and unfinished Sub-Tickets don't hold it back, and a Run running on it stops
  * as if a User had moved it. Reopen then sends it back to the producing Step's Status, or, without one, leaves it.
  */
@@ -40,9 +41,7 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
      left join runs on runs.id = pull_request_links.producing_run_id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation
        and statuses.kind not in ('done', 'canceled')
-       -- A Project that removed the Repository since keeps the link, but its Pull Requests no longer move its Tickets.
-       and exists (select from pull_requests join project_repositories on project_repositories.repository_id = pull_requests.repository_id
-                   where pull_requests.id = $1 and project_repositories.project_id = tickets.project_id)
+       and ${listsPullRequestsRepository}
      order by tickets.id
      for update of tickets`,
     [pullRequest.id, mergedBy?.id ?? null],
