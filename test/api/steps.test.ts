@@ -14,7 +14,7 @@ interface Status {
   id: string;
   name: string;
   kind: string;
-  step: { brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; outcomes: Outcome[] } | null;
+  step: { kind: "ordinary" | "merge"; brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; outcomes: Outcome[] } | null;
 }
 interface LabelRule {
   kind: "requires" | "skippedBy";
@@ -58,18 +58,25 @@ const outcome = (name: string, statusId: string, flags: Partial<Outcome> = {}): 
 });
 
 describe("the default board's Steps", () => {
-  test("a new Project has Steps on Triage, Investigate, Implement and Code review, with their Outcomes", async () => {
+  test("a new Project has Steps on Triage, Investigate, Implement, Code review and Merge, with their Outcomes", async () => {
     const { project, id } = await projectOnDefaultBoard();
 
     const steps = Object.fromEntries(
       project.statuses.map((s) => [
         s.name,
-        s.step && { model: s.step.model, roundLimit: s.step.roundLimit, labelRule: s.step.labelRule, outcomes: s.step.outcomes },
+        s.step && {
+          kind: s.step.kind,
+          model: s.step.model,
+          roundLimit: s.step.roundLimit,
+          labelRule: s.step.labelRule,
+          outcomes: s.step.outcomes,
+        },
       ]),
     );
     expect(steps).toEqual({
       Backlog: null,
       Triage: {
+        kind: "ordinary",
         model: "haiku",
         roundLimit: 2,
         labelRule: null,
@@ -77,25 +84,39 @@ describe("the default board's Steps", () => {
       },
       Ready: null,
       Investigate: {
+        kind: "ordinary",
         model: "sonnet",
         roundLimit: 2,
         labelRule: null,
         outcomes: [outcome("done", id("Implement"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Implement: {
+        kind: "ordinary",
         model: "opus",
         roundLimit: 2,
         labelRule: null,
         outcomes: [outcome("done", id("Code review"), { default: true }), outcome("needs you", id("Ready"), { needsYou: true })],
       },
       "Code review": {
+        kind: "ordinary",
         model: "sonnet",
         roundLimit: 2,
         labelRule: { kind: "skippedBy", label: "no-review" },
         outcomes: [
-          outcome("approve", id("In Review"), { default: true }),
+          outcome("approve", id("Merge"), { default: true }),
           outcome("changes", id("Implement"), { countsAsRound: true }),
           outcome("complete", id("Done")),
+          outcome("needs you", id("In Review"), { needsYou: true }),
+        ],
+      },
+      Merge: {
+        kind: "merge",
+        model: "haiku",
+        roundLimit: 2,
+        labelRule: null,
+        outcomes: [
+          outcome("review", id("In Review"), { default: true }),
+          outcome("send back", id("Implement"), { countsAsRound: true }),
           outcome("needs you", id("In Review"), { needsYou: true }),
         ],
       },
@@ -112,6 +133,7 @@ describe("the default board's Steps", () => {
     expect(status("Investigate").step!.brief).toMatch(/Report/);
     expect(status("Implement").step!.brief).toMatch(/implement/i);
     expect(status("Code review").step!.brief).toMatch(/review/i);
+    expect(status("Merge").step!.brief).toMatch(/merge/i);
   });
 
   test("the default Implement Brief says to push to the Ticket's open Pull Request rather than open another", async () => {
@@ -126,6 +148,7 @@ describe("the default board's Steps", () => {
 /** A Step for the Ready Status, sending Tickets on to Investigate or back to Backlog. */
 function readyStep(id: (name: string) => string) {
   return {
+    kind: "ordinary" as const,
     brief: "Plan the work.",
     model: "sonnet",
     roundLimit: 3,
@@ -170,6 +193,7 @@ describe("attaching, editing and removing a Step", () => {
   test("editing a Step replaces its Brief, model, round limit, Label rule and Outcomes", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const edited = {
+      kind: "ordinary",
       brief: "Triage, briefly.",
       model: "opus",
       roundLimit: 1,
@@ -422,6 +446,7 @@ describe("Outcome refusals", () => {
   test("a default Outcome or one counting as a round may still target the Status its Step is on", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const step = {
+      kind: "ordinary",
       brief: "Plan the work.",
       model: "sonnet",
       roundLimit: 2,
@@ -639,7 +664,7 @@ describe("the Brief preview", () => {
 
     const { preamble } = await (await cronk.request("GET", `/api/tickets/${ticket.id}/brief`, { cookie })).json();
 
-    expect(preamble).toContain("- **approve**: moves CRONK-1 to In Review.\n");
+    expect(preamble).toContain("- **approve**: moves CRONK-1 to Merge.\n");
     expect(preamble).toContain("- **changes**: moves CRONK-1 to Implement. It counts as a round: after 2, the Step's *needs you* Outcome applies instead.\n");
     expect(preamble).toContain("- **needs you**: moves CRONK-1 to In Review and hands it back to its Assignee.");
     expect(preamble).not.toContain("**complete**");

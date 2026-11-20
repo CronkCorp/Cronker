@@ -8,7 +8,8 @@ export const ChangedBy = ActorOrCronk;
 /**
  * What a Change changed. `created` marks the Ticket's creation. `parent` is this Ticket's parent; `subTicket`,
  * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null). `stepSkipped`
- * marks Cronk passing the Ticket on past a Step it didn't pass, before the `status` Change moving it. `dismissed` marks a
+ * marks Cronk passing the Ticket on past a Step it didn't pass, by its Label rule or as a Merge Step skipping itself,
+ * before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
  * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
  * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check
@@ -50,7 +51,9 @@ export const Change = Type.Object({
       "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
-      "and the default Outcome the Ticket moved on by. A `merged` Change goes from null to " +
+      "and the default Outcome the Ticket moved on by. A Merge Step that skipped itself records `labelRule` null and " +
+      "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, otherwise " +
+      "`noAutonomousDelegation`. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
       "login of the GitHub account that merged it, or null when GitHub named none. A `sentBack` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it, either a check " +

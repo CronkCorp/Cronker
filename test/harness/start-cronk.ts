@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +60,12 @@ export interface StartedCronk {
    * wrote, which today's API can no longer write, before `upgrade()`.
    */
   stage(sql: string, params?: unknown[]): Promise<void>;
+  /**
+   * Applies a migration `migrateBefore` held back ahead of its turn, recording it as applied so `upgrade()` skips it.
+   * For a later migration the one under test doesn't depend on, which today's API needs to set the test up, such as
+   * one adding columns that creating a Project writes.
+   */
+  applyAhead(migration: string): Promise<void>;
   /** Restarts Cronk, at a new address, applying the migrations `migrateBefore` held back. */
   upgrade(): Promise<void>;
   /** Runs a server command (`server/command.ts`) against this Cronk's database, as an operator would. */
@@ -196,6 +202,10 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     attachmentFiles: async () => (await readdir(attachmentsDirectory).catch(() => [])).sort(),
     async stage(sql, params) {
       await database.query(sql, params);
+    },
+    async applyAhead(migration) {
+      await database.query(await readFile(fileURLToPath(new URL(`../../migrations/${migration}`, import.meta.url)), "utf8"));
+      await database.query("insert into schema_migrations (name) values ($1)", [migration]);
     },
     async upgrade() {
       await cronk.close();
