@@ -48,7 +48,26 @@ async function workspaceWithRun() {
   const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
-  return { workspace, ada, project, ticket, asAgent };
+  return { workspace, ada, project, ticket, agent, asAgent };
+}
+
+/**
+ * Uploads a Claude Code transcript of the session as the Transcript hook does, its lines alternating the user's and
+ * the assistant's messages. The fake Runner's first Run ran in `session_1`.
+ */
+async function uploadTranscript(sessionId: string, messages: string[], as: As) {
+  const lines = messages.map((text, n) =>
+    n % 2 === 0
+      ? { type: "user", uuid: `u-${n}`, message: { role: "user", content: text } }
+      : { type: "assistant", uuid: `a-${n}`, message: { id: `m-${n}`, role: "assistant", content: [{ type: "text", text }] } },
+  );
+  const response = await fetch(`${cronk.url}/api/transcripts/sessions/${sessionId}`, {
+    method: "PUT",
+    headers: { "content-type": "application/x-ndjson", ...as.headers },
+    body: lines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+  });
+  expect(response.status).toBeLessThan(300);
+  return response.json();
 }
 
 function search(workspaceId: string, as: As, query: Record<string, string>) {
@@ -141,6 +160,137 @@ describe("Search", () => {
     );
   });
 
+  test("a search finds Artifacts by their title and description, not by their files", async () => {
+    const { workspace, ada, project } = await workspaceWithProject();
+    const files = (text: string) => [{ path: "index.html", contentBase64: Buffer.from(text).toString("base64") }];
+    const byTitle = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, {
+      title: "Dragging cards",
+      description: "A board prototype.",
+      files: files("<p>Nothing</p>"),
+    });
+    const byDescription = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Colour tokens",
+      description: "Tokens to drag into the theme.",
+      files: files("<p>Nothing</p>"),
+    });
+    await ok("POST", `/api/projects/${project.id}/artifacts`, ada, {
+      title: "Inbox",
+      description: "The Inbox, laid out.",
+      files: files("<p>Drag an item to dismiss it.</p>"),
+    });
+
+    const results = await search(workspace.id, ada, { q: "drag", kinds: "artifact" });
+
+    expect(results).toEqual([
+      {
+        kind: "artifact",
+        id: byTitle.id,
+        title: "Dragging cards",
+        projectId: project.id,
+        ticketKey: null,
+        snippet: [
+          { text: "Dragging", match: true },
+          { text: " cards", match: false },
+        ],
+      },
+      {
+        kind: "artifact",
+        id: byDescription.id,
+        title: "Colour tokens",
+        projectId: null,
+        ticketKey: null,
+        snippet: [
+          { text: "Tokens to ", match: false },
+          { text: "drag", match: true },
+          { text: " into the theme.", match: false },
+        ],
+      },
+    ]);
+  });
+
+  test("a saved Artifact is found by its current title, not an earlier one", async () => {
+    const { workspace, ada } = await workspaceWithProject();
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, { title: "Sketch", files });
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 1, title: "Wireframe" });
+
+    expect(await search(workspace.id, ada, { q: "sketch" })).toEqual([]);
+    expect(await search(workspace.id, ada, { q: "wireframe" })).toEqual([expect.objectContaining({ kind: "artifact", id: artifact.id })]);
+  });
+
+  test("a search finds a Run's Transcript by the text of its entries, kept with the Run's Ticket and Project", async () => {
+    const { workspace, ada, project, asAgent } = await workspaceWithRun();
+    const transcript = await uploadTranscript(
+      "session_1",
+      ["Triage CRONK-1.", "The webhook fires before the deploy finishes, so GitHub retries it."],
+      asAgent,
+    );
+
+    const results = await search(workspace.id, ada, { q: "deploying" });
+
+    expect(results).toEqual([
+      {
+        kind: "transcript",
+        id: transcript.id,
+        title: "Transcript of the Triage Run",
+        projectId: project.id,
+        ticketKey: "CRONK-1",
+        snippet: [
+          { text: "The webhook fires before the ", match: false },
+          { text: "deploy", match: true },
+          { text: " finishes, so GitHub retries it.", match: false },
+        ],
+      },
+    ]);
+  });
+
+  test("a Transcript of no Run is the Workspace's, left out under a Project filter", async () => {
+    const { workspace, ada, project, agent, asAgent } = await workspaceWithRun();
+    const ofRun = await uploadTranscript("session_1", ["Triage CRONK-1.", "The webhook retries."], asAgent);
+    const own = await uploadTranscript("session_by_hand", ["Why does the webhook retry?"], asAgent);
+
+    const all = await search(workspace.id, ada, { q: "webhook" });
+    const inProject = await search(workspace.id, ada, { q: "webhook", project: project.id });
+    const onlyTranscripts = await search(workspace.id, ada, { q: "webhook", kinds: "transcript" });
+
+    expect(all.find((r: { id: string }) => r.id === own.id)).toEqual({
+      kind: "transcript",
+      id: own.id,
+      title: `Transcript of a ${agent.name} session`,
+      projectId: null,
+      ticketKey: null,
+      snippet: [
+        { text: "Why does the ", match: false },
+        { text: "webhook", match: true },
+        { text: " retry?", match: false },
+      ],
+    });
+    expect(inProject.map((r: { id: string }) => r.id)).toEqual([ofRun.id]);
+    expect(onlyTranscripts.map((r: { id: string }) => r.id).sort()).toEqual([ofRun.id, own.id].sort());
+  });
+
+  test("a Transcript is found by its latest upload only", async () => {
+    const { workspace, ada, asAgent } = await workspaceWithRun();
+    const transcript = await uploadTranscript("session_1", ["Triage CRONK-1.", "The webhook retries."], asAgent);
+    const ids = async (q: string) => ((await search(workspace.id, ada, { q })) as { id: string }[]).map((r) => r.id);
+    expect(await ids("webhook")).toEqual([transcript.id]);
+
+    await uploadTranscript("session_1", ["Triage CRONK-1.", "The cache is stale."], asAgent);
+    expect(await ids("webhook")).toEqual([]);
+    expect(await ids("cache")).toEqual([transcript.id]);
+  });
+
+  test("a deleted Transcript is no longer found", async () => {
+    const { workspace, ada, asAgent } = await workspaceWithRun();
+    const transcript = await uploadTranscript("session_1", ["Triage CRONK-1.", "The webhook retries."], asAgent);
+    const ids = async () => ((await search(workspace.id, ada, { q: "webhook" })) as { id: string }[]).map((r) => r.id);
+    expect(await ids()).toEqual([transcript.id]);
+
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, ada);
+
+    expect(await ids()).toEqual([]);
+  });
+
   test("a quoted phrase matches only its words in order, `or` either word, and `-word` leaves out what has it", async () => {
     const { workspace, ada, project } = await workspaceWithProject();
     const create = (title: string, description: string) =>
@@ -230,6 +380,24 @@ describe("Search", () => {
       { text: "Webhook", match: true },
       { text: " retries twice", match: false },
     ]);
+  });
+
+  test("Transcripts come after every other kind, however well they match", async () => {
+    const { workspace, ada, project, asAgent } = await workspaceWithRun();
+    // The Transcript has every alternative and the Ticket one, so by how well they match the Transcript would lead.
+    const transcript = await uploadTranscript(
+      "session_1",
+      ["Triage CRONK-1.", "The webhook retries the deploy of the build, then the cache, the queue and the worker fail."],
+      asAgent,
+    );
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, {
+      title: "Flaky test",
+      description: "Seen when the webhook fires.",
+    });
+
+    const results = await search(workspace.id, ada, { q: "webhook or retry or deploy or build or cache or queue or worker or fail" });
+
+    expect(results.map((r: { id: string }) => r.id)).toEqual([ticket.id, transcript.id]);
   });
 
   test("each kind gives at most its best 20 results", async () => {

@@ -740,6 +740,90 @@ describe("Merges", () => {
     ]);
   });
 
+  test("a merge by a User of the Workspace while a Run is running counts as its Agent's, in that Run, completing the Ticket as Unverified", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const ada = (await (await cronk.request("GET", "/api/me", { cookie })).json()).user;
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Being implemented" });
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { assigneeId: ada.id, delegateId: agent.id, statusId: statusNamed(project, "Implement") },
+    });
+    const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+
+    // The session merges with Bea's own GitHub credentials.
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "unverified" });
+    const inbox = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/inbox`, { cookie })).json();
+    expect(inbox.items.filter((i: { kind: string }) => i.kind === "unverified")).toEqual([
+      expect.objectContaining({
+        ticket: expect.objectContaining({ key: "CRONK-1" }),
+        completedBy: { id: statusNamed(project, "Implement"), name: "Implement" },
+      }),
+    ]);
+    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
+    expect(run).toMatchObject({ state: "stopped", endReason: "@bea merged cronkcorp/cronker#7, completing CRONK-1." });
+    expect(cronk.runner.stops.map((s) => s.runId)).toEqual([run.id]);
+    const changes = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
+    expect(
+      changes.slice(-3).map((c: { actor: unknown; field: string; from: unknown; to: unknown; runId: string | null }) => [
+        c.actor,
+        c.runId,
+        c.field,
+        c.from,
+        c.to,
+      ]),
+    ).toEqual([
+      [
+        expect.objectContaining({ kind: "agent", id: agent.id, name: "claude-max" }),
+        run.id,
+        "merged",
+        null,
+        {
+          pullRequest: { id: 501, repository: "cronkcorp/cronker", number: 7, title: "CRONK-1: make it so", url: "https://github.com/cronkcorp/cronker/pull/7" },
+          mergedBy: "bea",
+        },
+      ],
+      [
+        expect.objectContaining({ kind: "agent", id: agent.id }),
+        run.id,
+        "status",
+        { id: statusNamed(project, "Implement"), name: "Implement" },
+        { id: statusNamed(project, "Done"), name: "Done" },
+      ],
+      [expect.objectContaining({ kind: "agent", id: agent.id }), run.id, "verification", null, "unverified"],
+    ]);
+  });
+
+  test("a merge by a User of the Workspace after the Ticket's Run ended completes it as Verified, as the User's", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Implemented" });
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: statusNamed(project, "Implement") } });
+    const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    // The User takes the Ticket back to In Review, stopping the Run, then merges.
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { statusId: statusNamed(project, "In Review") } });
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
+    const changes = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
+    expect(changes.slice(-3).map((c: { actor: { kind: string }; runId: string | null; field: string }) => [c.actor.kind, c.runId, c.field])).toEqual([
+      ["cronk", null, "merged"],
+      ["cronk", null, "status"],
+      ["cronk", null, "verification"],
+    ]);
+  });
+
   test("Reopening an Unverified Ticket a merge completed sends it back to the producing Step's Status, or leaves it where it is without one", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
@@ -1133,7 +1217,7 @@ describe("Failures sending work back", () => {
         outcome: "needs you",
         step: { statusId: status("Implement"), name: "Implement" },
         question:
-          "Failing checks and requested changes sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
+          "Failing checks, requested changes and merge conflicts sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
           "instead. Read the latest Comments, then move it on yourself.",
       }),
     ]);

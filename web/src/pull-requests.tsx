@@ -49,6 +49,7 @@ export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] 
               <ReviewState pullRequest={pr} />
             </span>
             {pr.sentBack?.kind === "check" && <SentBackBy sentBack={pr.sentBack} />}
+            {pr.sentBack?.kind === "conflict" && <SentBackByConflict sentBack={pr.sentBack} />}
           </li>
         ))}
       </ul>
@@ -83,6 +84,24 @@ function SentBackBy({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["s
     <span className="small muted">
       Sent back:{" "}
       <ExternalLink url={sentBack.url}>{what}</ExternalLink>{" "}
+      <RelativeTime at={sentBack.at} />
+    </span>
+  );
+}
+
+/** A conflict with its base branch that last sent the Ticket back to its producing Step from a Pull Request. */
+function SentBackByConflict({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["sentBack"]>, { kind: "conflict" }> }) {
+  const what = (
+    <>
+      <span className="check-failed" aria-hidden="true">
+        ✗
+      </span>{" "}
+      conflicts with {sentBack.branch}
+    </>
+  );
+  return (
+    <span className="small muted">
+      Sent back: {sentBack.merge ? <ExternalLink url={sentBack.merge.url}>{what}</ExternalLink> : what}{" "}
       <RelativeTime at={sentBack.at} />
     </span>
   );

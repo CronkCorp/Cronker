@@ -1,0 +1,25 @@
+GET /api/workspaces/<id>/search?q=webhook
+
+[
+  {
+    "kind": "ticket",
+    "id": "d1e7ec60-3b53-4db1-8dce-27b40de77045",
+    "title": "Flaky webhook",
+    "projectId": "f6bc2744-4e0f-4ac7-a98e-a6689964ccd9",
+    "ticketKey": "CRONK-1",
+    "snippet": [
+      {
+        "text": "The ",
+        "match": false
+      },
+      {
+        "text": "webhook",
+        "match": true
+      },
+      {
+        "text": " retries twice on deploy.",
+        "match": false
+      }
+    ]
+  }
+]
