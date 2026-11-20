@@ -13,7 +13,7 @@ import {
   type User,
   type Workspace,
 } from "./api.js";
-import { field, useSubmit } from "./forms.js";
+import { field, submitOnModEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
@@ -495,6 +495,7 @@ function Answer({
           value={body}
           disabled={disabled}
           onChange={(e) => setBody(e.target.value)}
+          onKeyDown={submitOnModEnter}
         />
       </Field>
       <Actions>

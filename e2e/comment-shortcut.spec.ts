@@ -61,3 +61,34 @@ test("Ctrl+Enter places a Comment from the Ticket's Comment box, while Enter and
   await expect(comment).toContainText("third line");
   await expect(box).toHaveValue("");
 });
+
+test("Cmd+Enter places a Reply to a Comment", async ({ page, cronk }) => {
+  await ticketsWithAQuestion(page, cronk);
+  await openTicket(page, "CRONK-1");
+  await page.getByLabel("New Comment").fill("Is it blocked?");
+  await page.getByRole("button", { name: "Comment", exact: true }).click();
+  const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
+  await comment.getByRole("button", { name: "Reply" }).click();
+  await comment.getByLabel("Reply").fill("No, it isn't.");
+  await comment.getByLabel("Reply").press("Meta+Enter");
+  await expect(comment.getByRole("article", { name: "Reply from ada@example.com" })).toContainText("No, it isn't.");
+});
+
+test("Ctrl+Enter answers a Question from the Inbox's answer box", async ({ page, cronk }) => {
+  await ticketsWithAQuestion(page, cronk);
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /^Inbox/ }).click();
+  const detail = page.getByRole("region", { name: "Selected item" });
+  await expect(detail).toContainText("Blue or green?");
+  const answer = detail.getByLabel("Answer");
+  await answer.press("Control+Enter");
+  await expect(detail).toContainText("Blue or green?");
+  await answer.fill("Green.");
+  await answer.press("Control+Enter");
+  // The Question leaves the Inbox; the Ticket's needs you item stays, resolved elsewhere.
+  await expect(page.getByRole("list", { name: "Inbox" }).getByRole("button", { name: /^Question / })).toHaveCount(0);
+  await page.goto(page.url().replace(/\/workspaces\/.*$/, ""));
+  await openTicket(page, "CRONK-2");
+  await expect(page.getByRole("article", { name: "Question from claude-max" }).getByRole("article", { name: "Reply from ada@example.com" })).toContainText(
+    "Green.",
+  );
+});
