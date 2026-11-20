@@ -304,6 +304,7 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
   // A check can fail on a pushed commit before GitHub reports the push: once it is the latest commit, it sends back.
   if (newest && (state === "open" || state === "draft")) {
     const { rows: failed } = await tx.query<{ name: string; url: string | null }>(
+      // A failing check run or status names the failure better than its suite does, so comes first.
       `(select name, url, 0 as source, source_id from commit_checks where repository_id = $1 and sha = $2 and state = 'failed')
        union all
        (select app_name, url, 1, id from commit_check_suites where repository_id = $1 and sha = $2 and failed)
@@ -331,13 +332,14 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
 /** The stages of a check run, in order; a delivery of an earlier stage than Cronk knows changes nothing. */
 const checkRunStages: Record<string, number> = { queued: 0, requested: 0, waiting: 0, pending: 0, in_progress: 1, completed: 2 };
 
+/** Whether a completed check run's or check suite's conclusion is a failure. */
+const isFailing = (conclusion: unknown) =>
+  conclusion === "failure" || conclusion === "timed_out" || conclusion === "cancelled" || conclusion === "startup_failure";
+
 function checkRunState(status: string, conclusion: unknown): CheckState {
   if (status !== "completed") return "pending";
   if (conclusion === "success") return "passed";
-  if (conclusion === "failure" || conclusion === "timed_out" || conclusion === "cancelled" || conclusion === "startup_failure") {
-    return "failed";
-  }
-  return "neutral";
+  return isFailing(conclusion) ? "failed" : "neutral";
 }
 
 const statusStates: Record<string, CheckState> = { pending: "pending", success: "passed", failure: "failed", error: "failed" };
@@ -430,9 +432,10 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
 };
 
 /**
- * GitHub's `check_suite` event: a check suite on a commit was requested or completed. A completed suite is kept,
- * unless Cronk knows a later completion of it, and one that failed sends the Tickets an open Pull Request whose
- * latest commit it is links back to work, as a failing check does, though it ran no failing check run.
+ * GitHub's `check_suite` event: a check suite on a commit was requested, rerequested or completed. A completed
+ * suite is kept, and a rerequested one kept as no longer failing, unless Cronk knows a later delivery about it. One
+ * that completed failing sends the Tickets an open Pull Request whose latest commit it is links back to work, as a
+ * failing check does, though it ran no failing check run.
  */
 export const onCheckSuiteEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, check_suite: suite } = payload as {
@@ -440,11 +443,11 @@ export const onCheckSuiteEvent: EventHandler = async (context, tx, { payload }) 
     repository?: { id?: unknown; html_url?: unknown };
     check_suite?: { id?: unknown; head_sha?: unknown; conclusion?: unknown; app?: { name?: unknown } | null; updated_at?: unknown };
   };
-  if (action !== "completed" || typeof repository?.id !== "number") return;
+  if ((action !== "completed" && action !== "rerequested") || typeof repository?.id !== "number") return;
   if (typeof suite?.id !== "number" || typeof suite.head_sha !== "string" || typeof suite.updated_at !== "string") return;
   if (!(await isListed(tx, repository.id))) return;
   const name = typeof suite.app?.name === "string" ? suite.app.name : "Check suite";
-  const failed = checkRunState("completed", suite.conclusion) === "failed";
+  const failed = action === "completed" && isFailing(suite.conclusion);
   const url = typeof repository.html_url === "string" ? `${repository.html_url}/commit/${suite.head_sha}/checks` : null;
   const { rowCount } = await tx.query(
     `insert into commit_check_suites (repository_id, sha, id, app_name, failed, url, updated_at)

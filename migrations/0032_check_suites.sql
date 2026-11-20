@@ -1,7 +1,7 @@
 -- The completed check suites GitHub reported on a commit of a Repository, each by GitHub's id.
 -- A workflow that fails before it creates any check run, such as one with an invalid workflow
--- file, shows only as its failing suite. A rerun completes the same suite again, so the
--- delivery GitHub updated last wins. Suites aren't shown among a Pull Request's checks; a
+-- file, shows only as its failing suite. A rerun rerequests the same suite, which stops it
+-- failing until it completes again, so the delivery GitHub updated last wins. Suites aren't shown among a Pull Request's checks; a
 -- failing one only sends work back.
 create table commit_check_suites (
   repository_id bigint not null,
