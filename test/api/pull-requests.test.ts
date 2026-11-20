@@ -1094,6 +1094,30 @@ describe("Failures sending work back", () => {
     expect(await commentsOf(ticket.id, cookie)).toHaveLength(1);
   });
 
+  test("requested changes submitted while the Ticket was in an Active Status send it back once an Outcome moves it into a Review Status", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status, finishImplementing } = await implementing();
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+
+    await finishImplementing();
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { actor: unknown; body: string; sentBack: boolean }) => [c.actor, c.body, c.sentBack])).toEqual([
+      [
+        { kind: "cronk", name: "Cronk" },
+        "@bea [requested changes](https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72) on " +
+          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7). Sent CRONK-1 back to Implement.",
+        true,
+      ],
+    ]);
+
+    // The review still requests changes, but it already sent the Ticket back: the next Outcome leaves it in In Review.
+    await finishImplementing();
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toHaveLength(1);
+  });
+
   const failing = (installation: StandInInstallation, repository: StandInRepository, sha: string) =>
     checkRunEvent(installation, repository, { id: 10, name: "test", sha, status: "completed", conclusion: "failure" });
 
