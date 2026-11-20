@@ -124,13 +124,16 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["GitHub"],
           summary: "The GitHub App's installations and the Repositories each covers",
           description:
-            "Every GitHub account or organization the App is installed on, with the Repositories it covers there, as GitHub reports them now, by account and then by `owner/name`, ignoring case. Installing the App on GitHub is what makes a Repository available to Cronk. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+            "Every GitHub account or organization the App is installed on, with the Repositories it covers there, by account and then by `owner/name`, ignoring case. Installing the App on GitHub is what makes a Repository available to Cronk. Cronk keeps what GitHub said for five minutes per installation, and forgets it sooner when it learns it changed, such as a Repository added to or removed from a Project or renamed or transferred on GitHub; `refresh=true` asks GitHub afresh, as for a Repository just installed there. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+          querystring: Type.Object({
+            refresh: Type.Optional(Type.Boolean({ description: "Ask GitHub afresh instead of using the list Cronk keeps." })),
+          }),
           response: { 200: Type.Array(Installation), 401: ErrorBody, 403: ErrorBody, 409: ErrorBody, 502: ErrorBody },
         },
       },
       async (request) => {
         await requireUser(context, request);
-        return listInstallations(context);
+        return listInstallations(context, { fresh: request.query.refresh === true });
       },
     );
 

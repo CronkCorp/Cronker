@@ -22,6 +22,13 @@ async function createSignInOnlyApp(cookie: string, githubOrganization?: string) 
   return cronk.github.apps[0]!;
 }
 
+/** The App's installations as a User's listing gets them, `refresh` asking GitHub afresh. */
+async function listInstallations(cookie: string, { refresh = false } = {}) {
+  const response = await cronk.request("GET", `/api/github/installations${refresh ? "?refresh=true" : ""}`, { cookie });
+  expect(response.status, await response.clone().text()).toBe(200);
+  return response.json();
+}
+
 const checklist = async (cookie: string) => cronk.request("GET", "/api/github/app/checklist", { cookie });
 
 describe("upgrading the GitHub App", () => {
@@ -260,7 +267,8 @@ describe("the App's installations", () => {
     const cookie = await signIn(cronk);
     await createGitHubApp(cronk, cookie);
     const acme = cronk.github.install(cronk.github.apps[0]!, "acme", ["api"]);
-    const list = async () => expect((await cronk.request("GET", "/api/github/installations", { cookie })).status).toBe(200);
+    // Refresh asks GitHub each time, rather than using the list Cronk keeps.
+    const list = () => listInstallations(cookie, { refresh: true });
 
     await list();
     await list();
@@ -277,6 +285,59 @@ describe("the App's installations", () => {
     await list();
     await list();
     expect(cronk.github.tokensIssued).toHaveLength(2);
+  });
+
+  test("a second listing within five minutes makes no calls to GitHub", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const acme = cronk.github.install(cronk.github.apps[0]!, "acme", ["api"]);
+    await listInstallations(cookie);
+    const calls = cronk.github.apiCalls.length;
+
+    // Installed on another Repository on GitHub since; the list Cronk keeps doesn't know yet.
+    acme.repositories.push({ id: 990001, name: "docs", fullName: "acme/docs" });
+    cronk.clock.advance(4 * 60 * 1000);
+    const again = await listInstallations(cookie);
+
+    expect(cronk.github.apiCalls.length).toBe(calls);
+    expect(again).toEqual([{ account: "acme", repositories: [{ id: acme.repositories[0]!.id, fullName: "acme/api" }] }]);
+  });
+
+  test("the list is asked of GitHub again once five minutes have passed", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const acme = cronk.github.install(cronk.github.apps[0]!, "acme", ["api"]);
+    await listInstallations(cookie);
+
+    acme.repositories.push({ id: 990001, name: "docs", fullName: "acme/docs" });
+    cronk.clock.advance(5 * 60 * 1000);
+    const calls = cronk.github.apiCalls.length;
+    const again = await listInstallations(cookie);
+
+    expect(cronk.github.apiCalls.slice(calls)).toEqual(["GET /app/installations", "GET /installation/repositories"]);
+    expect(again[0].repositories.map((r: { fullName: string }) => r.fullName)).toEqual(["acme/api", "acme/docs"]);
+  });
+
+  test("Refresh asks GitHub at once, for an installation or Repository just added there", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    const acme = cronk.github.install(app, "acme", ["api"]);
+    await listInstallations(cookie);
+
+    acme.repositories.push({ id: 990001, name: "docs", fullName: "acme/docs" });
+    cronk.github.install(app, "bea", ["notes"]);
+    const refreshed = await listInstallations(cookie, { refresh: true });
+
+    const names = (list: { repositories: { fullName: string }[] }[]) => list.map((i) => i.repositories.map((r) => r.fullName));
+    expect(names(refreshed)).toEqual([["acme/api", "acme/docs"], ["bea/notes"]]);
+    // What Refresh got is kept in turn.
+    const calls = cronk.github.apiCalls.length;
+    expect(names(await listInstallations(cookie))).toEqual([["acme/api", "acme/docs"], ["bea/notes"]]);
+    expect(cronk.github.apiCalls.length).toBe(calls);
   });
 
   test("without a GitHub App there are no installations to list", async () => {

@@ -10,7 +10,7 @@ import type { Config } from "./config.js";
 import type { Context } from "./context.js";
 import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection } from "./db.js";
 import { issueSetupCode } from "./identity/setup.js";
-import { InstallationTokens } from "./github/installations.js";
+import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Live } from "./live/live.js";
 import type { RunnerKind } from "./runs/runner.js";
@@ -62,6 +62,7 @@ export async function createCronk({
       live: new Live(),
       runners: {},
       installationTokens: new InstallationTokens(clock),
+      installationListings: new InstallationListings(clock),
       attachments: directoryStorage(config.attachments.directory),
     };
     const reports = runReports(context);

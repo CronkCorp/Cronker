@@ -7,8 +7,10 @@ import { Picker, type PickerOption } from "./ui/picker.js";
 
 /**
  * The Repositories a Project lists as holding its code, added from those the GitHub App's
- * installations cover. Reloads whenever the Project changes, as on a rename on GitHub. GitHub
- * is asked which Repositories the App covers only once Add Repository is first opened.
+ * installations cover. Reloads whenever the Project changes, as on a rename on GitHub. Cronk
+ * is asked which Repositories the App covers only once Add Repository is first opened; it
+ * keeps GitHub's answer a few minutes, and Refresh asks GitHub afresh, as for a Repository
+ * just installed there.
  */
 export function RepositoriesSettings({ project }: { project: Project }) {
   const [repositories, setRepositories] = useState<Repository[] | undefined>(undefined);
@@ -29,13 +31,13 @@ export function RepositoriesSettings({ project }: { project: Project }) {
     api.githubApp().then((app) => setHasApp(app !== null), () => setHasApp(true));
   }, []);
 
-  // Asks GitHub on the first opening, and again on the next after a failure.
-  const askGitHub = () => {
-    if (installations || asking) return;
+  // Asks on the first opening, again on the next after a failure, and with Refresh.
+  const askGitHub = (refresh = false) => {
+    if ((installations && !refresh) || asking) return;
     setAsking(true);
     setInstallationsError(null);
     api
-      .githubInstallations()
+      .githubInstallations(refresh)
       .then(setInstallations, (e: unknown) => {
         // The App went away since the page asked Cronk.
         if (e instanceof ApiError && e.code === "github_not_set_up") setHasApp(false);
@@ -64,7 +66,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
   );
   const notice = installationsError ? (
     <FormError error={`Couldn't ask GitHub which Repositories the App is installed on: ${installationsError}`} />
-  ) : !installations ? (
+  ) : !installations || asking ? (
     "Asking GitHub which Repositories the App is installed on…"
   ) : options.length === 0 ? (
     "No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here."
@@ -115,6 +117,14 @@ export function RepositoriesSettings({ project }: { project: Project }) {
             onOpenChange={(open) => open && askGitHub()}
             options={options}
             notice={notice}
+            footer={
+              <>
+                <span>Just installed the App on GitHub?</span>
+                <Button variant="ghost" size="small" disabled={asking} onClick={() => askGitHub(true)}>
+                  Refresh
+                </Button>
+              </>
+            }
             onPick={(id) => void change(() => api.addRepository(project.id, Number(id)))}
             trigger={
               <Button variant="primary" aria-haspopup="listbox" disabled={busy}>

@@ -2,7 +2,7 @@ import type { AttachmentStorage } from "./attachments/storage.js";
 import type { Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
-import type { InstallationTokens } from "./github/installations.js";
+import type { InstallationListings, InstallationTokens } from "./github/installations.js";
 import type { Live } from "./live/live.js";
 import type { Runner } from "./runs/runner.js";
 
@@ -17,6 +17,8 @@ export interface Context {
   runners: Record<string, Runner>;
   /** The GitHub App's installation tokens, held until shortly before they expire. */
   installationTokens: InstallationTokens;
+  /** What GitHub last said the App's installations cover, kept for a few minutes. */
+  installationListings: InstallationListings;
   /** Where Attachments' bytes are kept. */
   attachments: AttachmentStorage;
 }
