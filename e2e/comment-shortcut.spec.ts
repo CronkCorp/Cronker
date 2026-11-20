@@ -1,17 +1,15 @@
 import type { Page } from "@playwright/test";
+import { setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, test } from "./fixtures.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
 
 /**
  * Ada signed in, with a Ticket she wrote (CRONK-1) and one whose Run asked her a Question (CRONK-2), which waits in
  * her Inbox.
  */
 async function ticketsWithAQuestion(page: Page, cronk: StartedCronk) {
-  const credentials = { email: "ada@example.com", password: "correct horse battery" };
-  const { workspace } = await (
-    await cronk.request("POST", "/api/setup", { body: { ...credentials, setupCode: cronk.setupCode(), workspaceName: "Ada's Workspace" } })
-  ).json();
-  const cookie = (await cronk.request("POST", "/api/sign-in", { body: credentials })).headers.get("set-cookie")!.split(";")[0]!;
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
   const call = async (method: string, path: string, body?: unknown, headers?: Record<string, string>) =>
     (await cronk.request(method, path, headers ? { headers, body } : { cookie, body })).json();
   const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
@@ -26,11 +24,7 @@ async function ticketsWithAQuestion(page: Page, cronk: StartedCronk) {
   const running = (await call("GET", `/api/tickets/${asked.id}/runs`)).find((r: { state: string }) => r.state === "running");
   await call("POST", `/api/runs/${running.id}/finish`, { outcome: "needs you", question: "Blue or green?" }, { authorization: `Bearer ${secret}` });
 
-  await page.goto(cronk.url);
-  await page.getByLabel("Email").fill(credentials.email);
-  await page.getByLabel("Password").fill(credentials.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await signInInBrowser(page, cronk);
 }
 
 const openTicket = async (page: Page, key: string) => {
@@ -120,6 +114,13 @@ test("pressing Ctrl+Enter again while a Comment is being sent doesn't place it t
   const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
   await expect(comment).toHaveCount(1);
   await expect(box).toHaveValue("");
+  expect(sent).toBe(1);
+
+  // A held key's repeats place nothing, even once the box is free again.
+  await box.fill("Not from a held key.");
+  await box.dispatchEvent("keydown", { key: "Enter", ctrlKey: true, repeat: true });
+  await box.press("Shift+Enter");
+  await expect(box).toHaveValue("Not from a held key.\n");
   expect(sent).toBe(1);
 });
 
