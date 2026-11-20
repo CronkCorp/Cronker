@@ -29,8 +29,8 @@ import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
-import { Chip, ModelLabel, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
-import { Dialog, DialogActions, DialogClose, Menu, MenuLink } from "./ui/overlays.js";
+import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
+import { Dialog, DialogActions, DialogClose, HoverPopover, Menu, MenuLink } from "./ui/overlays.js";
 
 /** The Workspace's Projects, and a form to create one. */
 export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
@@ -377,32 +377,75 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
   );
 }
 
+/**
+ * A blocked Ticket's chip on its card or row: *Blocked by N*, counting its unfinished blockers. Hovering or focusing
+ * it names them, each a link to its Ticket. An unblocked Ticket shows nothing.
+ */
+function BlockedChip({ ticket }: { ticket: TicketSummary }) {
+  const blockers = ticket.blockedBy;
+  if (blockers.length === 0) return null;
+  return (
+    <HoverPopover
+      label={`Tickets blocking ${ticket.key}`}
+      button={{
+        className: "chip chip-blocked",
+        "aria-label": `Blocked by ${blockers.length}: ${blockers.map((b) => `${b.key} ${b.title}`).join(", ")}`,
+        children: (
+          <>
+            <svg className="chip-icon" viewBox="0 0 12 12" aria-hidden="true">
+              <circle cx="6" cy="6" r="4.75" />
+              <path d="M2.7 9.3 9.3 2.7" />
+            </svg>
+            Blocked by {blockers.length}
+          </>
+        ),
+      }}
+    >
+      <p className="hover-popover-head">Blocked by</p>
+      <ul className="hover-popover-list">
+        {blockers.map((blocker) => (
+          <li key={blocker.id}>
+            <Link to={`/tickets/${blocker.id}`} className="ticket-link">
+              <Key>{blocker.key}</Key> {blocker.title}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </HoverPopover>
+  );
+}
+
 const ticketDrag = "application/x-cronk-ticket";
 
-/** A Ticket on the board: key and Priority, title, Labels, Run state and avatars. */
+/**
+ * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
+ * which holds links of its own and so sits beside the card's link rather than in it.
+ */
 function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; members: Member[]; agents: Agent[]; arrived: boolean }) {
   return (
-    <Link
-      to={`/tickets/${ticket.id}`}
+    <div
       className={`card${arrived ? " arrived" : ""}`}
       draggable
-      onDragStart={(event: DragEvent<HTMLAnchorElement>) => {
+      onDragStart={(event: DragEvent<HTMLDivElement>) => {
         event.dataTransfer.setData(ticketDrag, ticket.id);
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
-      <span className="card-priority">
-        <PriorityTag priority={ticket.priority} />
-      </span>
-      <span className="card-meta">
-        {ticket.labels.map((label) => (
-          <Chip key={label}>{label}</Chip>
-        ))}
-        <TicketRunState ticket={ticket} />
-        <People ticket={ticket} members={members} agents={agents} />
-      </span>
-    </Link>
+      <Link to={`/tickets/${ticket.id}`} className="card-link" draggable={false}>
+        <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
+        <span className="card-priority">
+          <PriorityTag priority={ticket.priority} />
+        </span>
+        <span className="card-meta">
+          {ticket.labels.map((label) => (
+            <Chip key={label}>{label}</Chip>
+          ))}
+          <TicketRunState ticket={ticket} />
+          <People ticket={ticket} members={members} agents={agents} />
+        </span>
+      </Link>
+      <BlockedChip ticket={ticket} />
+    </div>
   );
 }
 
@@ -552,7 +595,7 @@ function List({
             {inStatus.length > 0 && (
               <ul className="rows panel panel-flush">
                 {inStatus.map((ticket) => (
-                  <li key={ticket.id}>
+                  <li key={ticket.id} className="ticket-item">
                     <Link to={`/tickets/${ticket.id}`} className="row ticket-row">
                       <StatusDot kind={status.kind} name={status.name} alone />
                       <span className="ticket-key">{ticket.key}</span> <span className="row-title">{ticket.title}</span>
@@ -565,6 +608,7 @@ function List({
                         <People ticket={ticket} members={members} agents={agents} />
                       </span>
                     </Link>
+                    <BlockedChip ticket={ticket} />
                   </li>
                 ))}
               </ul>

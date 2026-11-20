@@ -66,6 +66,23 @@
   justify-content: flex-end;
   gap: var(--space-2);
 }
+/* A List row is its link, then a blocked Ticket's Blocked chip at its end, outside the link for the same reason as a
+   card's. */
+.ticket-item {
+  display: flex;
+  align-items: center;
+}
+.ticket-item:hover {
+  background: var(--surface-2);
+}
+.ticket-item > .ticket-row {
+  flex: 1;
+  min-width: 0;
+}
+.ticket-item > .chip-blocked {
+  flex: none;
+  margin-right: var(--space-4);
+}
 .ticket-row .ticket-key {
   width: 80px;
   flex: none;
@@ -208,25 +225,40 @@
   display: grid;
   gap: var(--space-2);
 }
-/* Priority follows the key on the first line, wrapping under it in a narrow column; title and meta take a line
-   each. */
+/* A card is its link (key, Priority, title, meta) and, for a blocked Ticket, its Blocked chip under it: the chip holds
+   links of its own, so it can't sit inside the card's. Priority follows the key on the first line, wrapping under it
+   in a narrow column; title and meta take a line each. */
 .card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  cursor: grab;
+}
+.card:hover {
+  border-color: var(--muted);
+}
+.card-link {
+  align-self: stretch;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px var(--space-2);
   min-width: 0;
   padding: var(--space-2);
-  border: 1px solid var(--border);
   border-radius: var(--radius-panel);
-  background: var(--surface);
   color: var(--text);
   text-decoration: none;
-  cursor: grab;
+  cursor: inherit;
 }
-.card:hover {
-  border-color: var(--muted);
+.card-link:hover {
   text-decoration: none;
+}
+.card > .chip-blocked {
+  margin: calc(-1 * var(--space-1)) var(--space-2) var(--space-2);
 }
 .card-key {
   order: 1;

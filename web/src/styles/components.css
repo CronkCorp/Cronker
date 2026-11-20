@@ -476,6 +476,19 @@ textarea.markdown-source {
   border-color: var(--info);
   color: var(--info);
 }
+/* A blocked Ticket's chip: a button naming its blockers on hover or focus. */
+.chip-blocked {
+  background: var(--warn-soft);
+  color: var(--warn);
+  cursor: pointer;
+}
+.chip-icon {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
 
 /* The 11px uppercase pills: Run states, Decision statuses and Pull Request states. */
 .run-state,
@@ -728,6 +741,25 @@ textarea.markdown-source {
 }
 .menu {
   padding: var(--space-1);
+}
+.hover-popover {
+  padding: var(--space-2) var(--space-3);
+}
+.hover-popover-head {
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.hover-popover-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
 }
 .menu-item {
   display: flex;
