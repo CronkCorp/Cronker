@@ -1088,7 +1088,8 @@ function described(change: Change): string {
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
-    const why = mergeRule ? mergeRulesShown[mergeRule] : labelRule ? labelRuleShown(labelRule) : "skipped";
+    // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
+    const why = mergeRule ? mergeRulesShown[mergeRule] : labelRuleShown(labelRule!);
     return `skipped the ${status.name} Step (${why}), moving on by ${outcome}`;
   }
   if (change.field === "description") return "changed the Description";

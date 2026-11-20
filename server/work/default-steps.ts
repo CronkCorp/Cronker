@@ -47,12 +47,12 @@ const codeReview = `Review the pull request this Ticket's implementation opened.
 
 Finish with **approve** when it is ready for a User to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a User. Finish with **needs you** and a Question when you can't judge it.`;
 
-const merge = `Merge the pull request this Ticket's implementation opened, once it is ready.
+const merge = `Check whether the pull request this Ticket's implementation opened is ready to merge.
 
 - Read the Ticket, its Comments and Reports, and its Pull Request's state, checks and reviews.
 - Never resolve a merge conflict or change code yourself: that is Implement's work.
 
-Finish with **send back** when the pull request has a merge conflict or a failing check, saying which in a Comment. Finish with **review** when it should wait for a User instead. Finish with **needs you** and a Question when you can't tell.`;
+Finish with **review** when it is ready, for a User to merge. Finish with **send back** when it has a merge conflict or a failing check, saying which in a Comment. Finish with **needs you** and a Question when you can't tell.`;
 
 export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {

@@ -142,9 +142,9 @@ export type RunNeed = "started" | "waiting" | "none";
  * goes to the highest Priority waiting Ticket first, then to the one that entered its Status first.
  *
  * A delegated Ticket that doesn't pass the Step's Label rule, or a Merge Step's rule (Autonomous Delegation in a
- * Project with agents may merge on), gets no Run: Cronk moves it on by the
- * Step's default Outcome, which counts as entering that Status in turn. A chain of skips that comes
- * back to a Status it already passed stops there, so the Ticket waits for a User.
+ * Project with agents may merge on), gets no Run: Cronk moves it on by the Step's default Outcome, which counts as
+ * entering that Status in turn. A chain of skips that comes back to a Status it already passed stops there, so the
+ * Ticket waits for a User.
  */
 export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<RunNeed> {
   return enterStatus(context, tx, ticketId, now, new Set());
@@ -537,7 +537,6 @@ function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
   });
 }
 
-/** Whether a Ticket with these Labels passes the Label rule, matching Labels ignoring case. */
 /**
  * Why a Merge Step skips itself for a Ticket, if it does: its Project has agents may merge off, or the Ticket lacks
  * Autonomous Delegation (ADR 0005).
@@ -548,6 +547,7 @@ function mergeRefusal(agentsMayMerge: boolean, autonomous: boolean): "agentsMayM
   return null;
 }
 
+/** Whether a Ticket with these Labels passes the Label rule, matching Labels ignoring case. */
 function passes(rule: LabelRule | null, labels: string[]): boolean {
   if (!rule) return true;
   const has = labels.some((label) => label.toLowerCase() === rule.label.toLowerCase());

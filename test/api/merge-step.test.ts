@@ -294,3 +294,18 @@ describe("Merge on the default board", () => {
     });
   });
 });
+
+describe("changing agents may merge", () => {
+  test("turning it off passes on a Ticket waiting in Merge for its Runner, as entering Merge then would", async () => {
+    const { ada, project, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: true });
+    cronk.runner.refuseNext({ kind: "rate_limited", message: "Too many fires.", retryAt: new Date("2026-01-01T10:00:00Z") });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, autonomousDelegation: true, statusId: status("Merge") });
+    expect(await ok("GET", `/api/tickets/${ticket.id}`, ada)).toMatchObject({ statusId: status("Merge"), waiting: "runnerPaused" });
+
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: false });
+
+    expect(await ok("GET", `/api/tickets/${ticket.id}`, ada)).toMatchObject({ statusId: status("In Review"), waiting: null });
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+  });
+});

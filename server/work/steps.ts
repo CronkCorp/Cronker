@@ -32,10 +32,11 @@ export type LabelRule = Static<typeof LabelRule>;
  * What kind of Step it is: an ordinary one, or a Merge Step, which skips itself by its default Outcome unless the
  * Ticket has Autonomous Delegation and its Project has agents may merge on (ADR 0005).
  */
-export const stepKindDescription =
-  "`ordinary`, or `merge`: a Merge Step skips itself, moving the Ticket on by its default Outcome, unless the Ticket has " +
-  "Autonomous Delegation and its Project has agents may merge on.";
-export const StepKind = Type.Union([Type.Literal("ordinary"), Type.Literal("merge")], { description: stepKindDescription });
+export const StepKind = Type.Union([Type.Literal("ordinary"), Type.Literal("merge")], {
+  description:
+    "`ordinary`, or `merge`: a Merge Step skips itself, moving the Ticket on by its default Outcome, unless the Ticket has " +
+    "Autonomous Delegation and its Project has agents may merge on.",
+});
 export type StepKind = Static<typeof StepKind>;
 
 /** The agent work a Status asks for: its kind, a Brief, the model it wants, a round limit, a Label rule and its Outcomes. */

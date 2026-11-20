@@ -9,7 +9,7 @@ import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { defaultRoundLimit, LabelRule, Outcome, stepKindDescription } from "./steps.js";
+import { defaultRoundLimit, LabelRule, Outcome, StepKind } from "./steps.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
@@ -21,12 +21,8 @@ const outcomeRules =
   "Canceled Status, and no Outcome may target a Canceled Status. The *needs you* Outcome may not target the Status " +
   "the Step is on either.";
 const StepBody = Type.Object({
-  kind: Type.Optional(
-    Type.Union([Type.Literal("ordinary"), Type.Literal("merge")], {
-      default: "ordinary",
-      description: `${stepKindDescription} Ordinary unless given.`,
-    }),
-  ),
+  /** Ordinary unless given. */
+  kind: Type.Optional(StepKind),
   brief: Type.String({ minLength: 1, maxLength: 50_000, pattern: "\\S", description: "Markdown." }),
   model: Type.String({
     minLength: 1,

@@ -4,6 +4,8 @@ import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
+import { recheckWaiting, waitingTickets } from "../runs/runs.js";
+import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
 import { defaultRoundLimit, Step, stepsOf, writeStep } from "./steps.js";
 
@@ -183,23 +185,18 @@ export interface ProjectEdit {
 
 /** Changes a Project's settings, as a User. */
 export async function editProject(
-  { db, live }: Context,
+  context: Context,
   userId: string,
   projectId: string,
   edit: ProjectEdit,
 ): Promise<Project> {
+  const { db, live } = context;
   return transaction(db, async (tx) => {
     const viewer = userViewer(userId);
     const project = await findProject(tx, viewer, projectId, { lock: true });
     if (!project) throw projectNotFound();
-    if (edit.agentsMayMerge !== undefined) {
-      const { rows } = await tx.query<{ isAdmin: boolean }>(
-        `select is_admin as "isAdmin" from memberships where workspace_id = $1 and user_id = $2`,
-        [project.workspaceId, userId],
-      );
-      if (!rows[0]?.isAdmin) {
-        throw new ApiError(403, "not_admin", "Only an Admin of this Workspace can change whether agents may merge.");
-      }
+    if (edit.agentsMayMerge !== undefined && !(await requireMember(db, userId, project.workspaceId)).isAdmin) {
+      throw new ApiError(403, "not_admin", "Only an Admin of this Workspace can change whether agents may merge.");
     }
     const next = {
       newTicketsDelegated: edit.newTicketsDelegated ?? project.newTicketsDelegated,
@@ -220,6 +217,10 @@ export async function editProject(
         [project.id, next.newTicketsDelegated, next.autonomousDelegationDefault, next.pullRequestAutomation, next.agentsMayMerge],
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+    }
+    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now.
+    if (next.agentsMayMerge !== project.agentsMayMerge) {
+      recheckWaiting(context, tx, await waitingTickets(tx, "tickets.project_id = $1", [project.id]));
     }
     return (await findProject(tx, viewer, project.id))!;
   });
