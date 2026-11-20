@@ -1,6 +1,6 @@
 import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
-import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
+import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { statusesOf } from "../work/projects.js";
 import type { Outcome } from "../work/steps.js";
@@ -143,7 +143,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
     }
     const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
     await recordChanges(tx, ticket, move.by, now, [{ field: "status", from: named(ticket.statusId), to: named(to) }]);
-    await startUnblocked(context, tx, [ticket.id]);
+    await blockingChanged(context, tx, [ticket.id]);
     // A failure known before an Outcome moved it into a Review Status sends it back, before a Run starts there:
     // that move tells the Workspace and starts the next Run.
     if (target.kind === "outcome" && statuses.find((s) => s.id === to)!.kind === "review") {

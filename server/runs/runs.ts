@@ -406,13 +406,13 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
 }
 
 /**
- * Call after something may have unblocked or blocked Tickets: the `moved` Tickets entered a Status, or their
- * Status changed kind, so what they block and their parents may now have only finished blockers and
- * Sub-Tickets, or an unfinished one again; or the Tickets named in `also` lost a blocker or a Sub-Ticket.
+ * Call after something changed what blocks Tickets: the `moved` Tickets entered a Status, or their Status
+ * changed kind, so what they block and their parents may now have only finished blockers and Sub-Tickets, or
+ * an unfinished one again; or they were renamed; or the Tickets named in `also` lost a blocker or a Sub-Ticket.
  * Their cards change, every Ticket the `moved` ones block among them, since each card lists its unfinished
  * blockers; once the transaction commits, those waiting for a Run are rechecked.
  */
-export async function startUnblocked(context: Context, tx: Tx, moved: string[], also: string[] = []): Promise<void> {
+export async function blockingChanged(context: Context, tx: Tx, moved: string[], also: string[] = []): Promise<void> {
   const { rows } = await tx.query<WaitingTicket & { workspaceId: string; projectId: string; waits: boolean }>(
     `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
        agents.runner_id as "runnerId", tickets.waits_for_run as waits

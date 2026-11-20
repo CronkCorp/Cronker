@@ -71,6 +71,10 @@
 .ticket-item {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+}
+.ticket-item:has(> .chip-blocked) {
+  padding-right: var(--space-4);
 }
 .ticket-item:hover {
   background: var(--surface-2);
@@ -81,7 +85,6 @@
 }
 .ticket-item > .chip-blocked {
   flex: none;
-  margin-right: var(--space-4);
 }
 .ticket-row .ticket-key {
   width: 80px;

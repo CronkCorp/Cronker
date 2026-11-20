@@ -8,9 +8,9 @@ import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
+import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
-import { finishedKinds, Waiting, waitingColumn } from "../runs/waiting.js";
+import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -125,11 +125,8 @@ export const ticketRefColumn = (tickets: string, projects: string) =>
 /** SQL for the unfinished Tickets blocking the Ticket `alias`, as TicketRefs, oldest block first. */
 const blockersColumn = (alias: string) =>
   `coalesce((select json_agg(${ticketRefColumn("blockers", "blocker_projects")} order by relations.seq)
-     from relations join tickets blockers on blockers.id = relations.ticket_id
-     join projects blocker_projects on blocker_projects.id = blockers.project_id
-     join statuses blocker_statuses on blocker_statuses.id = blockers.status_id
-     where relations.kind = 'blocks' and relations.other_ticket_id = ${alias}.id
-       and blocker_statuses.kind not in ${finishedKinds}), '[]'::json)`;
+     from projects blocker_projects, ${unfinishedBlockers(alias)}
+       and blocker_projects.id = blockers.project_id), '[]'::json)`;
 
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
@@ -693,9 +690,9 @@ export async function editTicket(
     if (delegateChanged) await passDelegationDown(context, tx, ticket, next, userId, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
-    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
+    if (entered || leftParent.length > 0) await blockingChanged(context, tx, entered ? [ticket.id] : [], leftParent);
     // The cards of what it blocks name it by its title.
-    else if (next.title !== ticket.title) await startUnblocked(context, tx, [ticket.id]);
+    else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
     return withMentions(tx, (await findTicketRow(tx, editor, ticket.id))!);
   });
