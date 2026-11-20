@@ -4,7 +4,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { userViewer, type Viewer } from "../identity/viewers.js";
 import type { User } from "../identity/user.js";
-import { startRunIfNeeded } from "../runs/runs.js";
+import { startRunIfNeeded, startUnblocked } from "../runs/runs.js";
 import { recordChanges } from "./changes.js";
 import { insertComment } from "./comment-writes.js";
 import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "./tickets.js";
@@ -80,6 +80,8 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     ]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     await startRunIfNeeded(context, tx, ticket.id, now);
+    // Sent back out of Done, it blocks again what it blocks.
+    await startUnblocked(context, tx, [ticket.id]);
   });
   return (await findTicket(db, userViewer(user.id), ticketId))!;
 }
