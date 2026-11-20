@@ -1,0 +1,125 @@
+GET /api/artifacts/:id/versions
+200
+[
+  {
+    "number": 1,
+    "actor": {
+      "kind": "user",
+      "id": "c7795a36-1d8f-4b4a-a548-3ed739997878",
+      "name": "ada@example.com"
+    },
+    "savedAt": "2026-01-01T09:00:00.000Z"
+  },
+  {
+    "number": 2,
+    "actor": {
+      "kind": "agent",
+      "id": "fe3f5bd3-15b6-47af-85f8-f08e79ab00b9",
+      "name": "claude-max"
+    },
+    "savedAt": "2026-01-01T09:00:00.000Z"
+  },
+  {
+    "number": 3,
+    "actor": {
+      "kind": "user",
+      "id": "c7795a36-1d8f-4b4a-a548-3ed739997878",
+      "name": "ada@example.com"
+    },
+    "savedAt": "2026-01-01T09:00:00.000Z"
+  }
+]
+
+GET /api/artifacts/:id/versions/compare?from=1&to=2
+200
+{
+  "from": {
+    "number": 1,
+    "actor": {
+      "kind": "user",
+      "id": "c7795a36-1d8f-4b4a-a548-3ed739997878",
+      "name": "ada@example.com"
+    },
+    "savedAt": "2026-01-01T09:00:00.000Z"
+  },
+  "to": {
+    "number": 2,
+    "actor": {
+      "kind": "agent",
+      "id": "fe3f5bd3-15b6-47af-85f8-f08e79ab00b9",
+      "name": "claude-max"
+    },
+    "savedAt": "2026-01-01T09:00:00.000Z"
+  },
+  "files": [
+    {
+      "path": "app.js",
+      "change": "removed",
+      "text": true,
+      "lines": [
+        {
+          "change": "removed",
+          "text": "console.log('v1');"
+        }
+      ]
+    },
+    {
+      "path": "data/cards.json",
+      "change": "added",
+      "text": true,
+      "lines": [
+        {
+          "change": "added",
+          "text": "["
+        },
+        {
+          "change": "added",
+          "text": "  \"Write the spec\","
+        },
+        {
+          "change": "added",
+          "text": "  \"Build it\""
+        },
+        {
+          "change": "added",
+          "text": "]"
+        }
+      ]
+    },
+    {
+      "path": "index.html",
+      "change": "changed",
+      "text": true,
+      "lines": [
+        {
+          "change": "same",
+          "text": "<!doctype html>"
+        },
+        {
+          "change": "same",
+          "text": "<title>Board</title>"
+        },
+        {
+          "change": "same",
+          "text": "<link rel=\"stylesheet\" href=\"board.css\">"
+        },
+        {
+          "change": "same",
+          "text": "<h1>Board</h1>"
+        },
+        {
+          "change": "same",
+          "text": "<p>Drag cards between columns.</p>"
+        },
+        {
+          "change": "added",
+          "text": "<p>Double-click a card to edit it.</p>"
+        },
+        {
+          "change": "same",
+          "text": "<script src=\"app.js\"></script>"
+        }
+      ]
+    }
+  ]
+}

@@ -333,7 +333,8 @@ export function DocumentScreen({
           </div>
           <aside className="side" aria-label="Document details">
             <Versions
-              key={`${versionsShown} ${document.version.number}`}
+              key={versionsShown}
+              current={document.version.number}
               source={{
                 list: () => api.versions(document.id),
                 read: (number) => api.version(document.id, number),
@@ -543,45 +544,88 @@ function Move({
   );
 }
 
-/** Where a Document's, Decision's or Term's Versions come from, each read with a title and a body. */
-export interface VersionSource<V extends VersionWithBody = VersionWithBody> {
-  list: () => Promise<Version[]>;
-  read: (number: number) => Promise<V>;
-  compare: (from: number, to: number) => Promise<Comparison<V>>;
+/** A Version as a list of Versions shows it: its number, and who saved it and when. */
+type ListedVersion = Pick<Version, "number" | "actor" | "savedAt">;
+
+/**
+ * Where a Document's, Decision's, Term's or Artifact's Versions come from. Each Document's, Decision's or Term's is
+ * read with a title and a body, and compares as a Diff of them; an Artifact's are only compared, file by file.
+ */
+export interface VersionSource<V extends VersionWithBody = VersionWithBody, C = Comparison<V>> {
+  list: () => Promise<ListedVersion[]>;
+  /** Reads one Version; its list entries open nothing when left out. */
+  read?: (number: number) => Promise<V>;
+  compare: (from: number, to: number) => Promise<C>;
   /** Draws a Version read alone; its body as a Document's when left out. */
   show?: (version: V) => ReactNode;
+  /** Draws what changed between two; a Diff of their bodies, named by their titles where they differ, when left out. */
+  showComparison?: (comparison: C) => ReactNode;
 }
 
-/** A Document's, Decision's or Term's Versions, newest first, in a side list: read any one, or pick two to see their Diff. */
-export function Versions<V extends VersionWithBody>({ source }: { source: VersionSource<V> }) {
-  const [versions, setVersions] = useState<Version[] | null>(null);
+/** Two Versions' bodies as a Diff, named by Version and, where they differ, by title. */
+function BodiesCompared({ comparison }: { comparison: Comparison }) {
+  const { from, to } = comparison;
+  const titled = (version: Version) => `Version ${version.number}${from.title !== to.title ? `: ${version.title}` : ""}`;
+  return <Diff from={titled(from)} to={titled(to)} lines={comparison.lines} />;
+}
+
+/**
+ * A Document's, Decision's, Term's or Artifact's Versions, newest first, in a side list, each with who saved it and
+ * when: read any one, or pick two to see what changed. A new current Version, such as one saved elsewhere, joins the
+ * list in place, leaving whatever is open and picked as it is.
+ */
+export function Versions<V extends VersionWithBody, C = Comparison<V>>({
+  source,
+  current,
+}: {
+  source: VersionSource<V, C>;
+  /** The current Version's number; the list is read again when it changes. */
+  current: number;
+}) {
+  const [versions, setVersions] = useState<ListedVersion[] | null>(null);
   const [shown, setShown] = useState<V | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
-  const [comparison, setComparison] = useState<Comparison<V> | null>(null);
+  const [comparison, setComparison] = useState<C | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  // A new source each render is the same Versions; the screen remounts this to show a new one.
+  // Kept apart from the others so the next list read clears it.
+  const [listFailure, setListFailure] = useState<string | null>(null);
+  const latest = useLatest();
+  const latestList = useLatest();
+  // A new source each render reads the same Versions; the latest one is used.
   const sourceRef = useRef(source);
+  sourceRef.current = source;
   useEffect(() => {
-    sourceRef.current.list().then(setVersions, (e: Error) => setFailure(e.message));
-  }, []);
+    // Lists read quickly one after another show only the last, however the replies arrive.
+    latestList(
+      sourceRef.current.list(),
+      (listed) => {
+        setVersions(listed);
+        setListFailure(null);
+      },
+      (e) => setListFailure(e.message),
+    );
+  }, [current, latestList]);
 
   const pick = (number: number, on: boolean) => {
     const next = on ? [...picked.filter((n) => n !== number), number].slice(-2) : picked.filter((n) => n !== number);
     setPicked(next);
     if (next.length === 2) {
       const [from, to] = [Math.min(...next), Math.max(...next)];
-      sourceRef.current.compare(from, to).then(setComparison, (e: Error) => setFailure(e.message));
+      // Picks changed quickly show only the last two's comparison, however the replies arrive.
+      latest(sourceRef.current.compare(from, to), setComparison, (e) => setFailure(e.message));
     }
   };
+  const { read, show, showComparison } = sourceRef.current;
+  const arrived = useArrivals(versions?.map((version) => String(version.number)) ?? [], versions !== null);
 
-  if (!versions) return failure ? <FormError error={failure} /> : null;
+  if (!versions) return listFailure ? <FormError error={listFailure} /> : null;
   return (
     <section aria-label="Versions" className="panel side-section">
       <h2 className="side-title">Versions</h2>
       {versions.length > 1 && <p className="muted small">Pick two to see what changed.</p>}
       <ol className="version-list">
         {[...versions].reverse().map((version) => (
-          <li key={version.number}>
+          <li key={version.number} className={arrived.has(String(version.number)) ? "arrived" : undefined}>
             {versions.length > 1 && (
               <input
                 type="checkbox"
@@ -591,9 +635,13 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
               />
             )}
             <span className="version-item">
-              <Button variant="ghost" size="small" onClick={() => sourceRef.current.read(version.number).then(setShown, (e: Error) => setFailure(e.message))}>
-                Version {version.number}
-              </Button>
+              {read ? (
+                <Button variant="ghost" size="small" onClick={() => read(version.number).then(setShown, (e: Error) => setFailure(e.message))}>
+                  Version {version.number}
+                </Button>
+              ) : (
+                <span>Version {version.number}</span>
+              )}
               <span className="version-by">
                 <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
               </span>
@@ -601,12 +649,12 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
           </li>
         ))}
       </ol>
-      <FormError error={failure} />
+      <FormError error={failure ?? listFailure} />
       <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.title}` : ""} wide>
         {shown && (
           <>
             <VersionMeta version={shown} />
-            {sourceRef.current.show ? sourceRef.current.show(shown) : <DocumentBody body={shown.body} />}
+            {show ? show(shown) : <DocumentBody body={shown.body} />}
           </>
         )}
       </Dialog>
@@ -621,13 +669,9 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
         title="What changed"
         wide
       >
-        {comparison && (
-          <Diff
-            from={`Version ${comparison.from.number}${comparison.from.title !== comparison.to.title ? `: ${comparison.from.title}` : ""}`}
-            to={`Version ${comparison.to.number}${comparison.from.title !== comparison.to.title ? `: ${comparison.to.title}` : ""}`}
-            lines={comparison.lines}
-          />
-        )}
+        {comparison !== null &&
+          // Left out only where the comparison is a Comparison, the default.
+          (showComparison ? showComparison(comparison) : <BodiesCompared comparison={comparison as unknown as Comparison} />)}
       </Dialog>
     </section>
   );

@@ -323,7 +323,13 @@ export async function createTicket(
       delegateId = parent.delegateId !== null && (await holdAgentInUse(tx, parent.delegateId)) ? parent.delegateId : null;
       autonomousDelegation = parent.autonomousDelegation;
     } else if (creator.kind === "agent") {
-      const run = input.runId === undefined ? null : await runningRunOf(tx, creator, input.runId);
+      const run =
+        input.runId === undefined
+          ? null
+          : await runningRunOf(tx, creator, input.runId, {
+              rule: "An Agent files a Ticket from a Run only while that Run of its own is running.",
+              advice: "Name your running Run, as your Brief gives it, or leave the Run out to file the Ticket for your Owner.",
+            });
       actor = { kind: "agent", id: creator.id, runId: run?.id ?? null };
       assigneeId = run?.assigneeId ?? creator.owner.id;
       discovery = { runId: run?.id ?? null, sourceTicketId: run?.ticketId ?? null };
@@ -386,10 +392,11 @@ async function holdAgentInUse(tx: Tx, agentId: string): Promise<boolean> {
 }
 
 /** The Agent's running Run of that id, with its Ticket and the Ticket's Assignee; refused if it has none. */
-async function runningRunOf(
+export async function runningRunOf(
   tx: Tx,
   agent: AgentCaller,
   runId: string,
+  refusal: { rule: string; advice: string },
 ): Promise<{ id: string; ticketId: string; assigneeId: string | null }> {
   const { rows } = isUuid(runId)
     ? await tx.query<{ id: string; ticketId: string; assigneeId: string | null }>(
@@ -400,10 +407,7 @@ async function runningRunOf(
       )
     : { rows: [] };
   if (rows[0]) return rows[0];
-  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run with that id.`, {
-    rule: "An Agent files a Ticket from a Run only while that Run of its own is running.",
-    advice: "Name your running Run, as your Brief gives it, or leave the Run out to file the Ticket for your Owner.",
-  });
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run with that id.`, refusal);
 }
 
 /**

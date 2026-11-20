@@ -21,6 +21,7 @@ import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
+import { ProjectArtifacts } from "./artifacts.js";
 import { ProjectDecisions } from "./decisions.js";
 import { ProjectDocuments } from "./documents.js";
 import { ProjectGlossary } from "./terms.js";
@@ -102,7 +103,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
 }
 
-type View = "board" | "list" | "settings" | "documents" | "glossary" | "decisions";
+type View = "board" | "list" | "settings" | "documents" | "glossary" | "decisions" | "artifacts";
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
@@ -114,12 +115,16 @@ export function ProjectMenu({ project }: { project: ProjectSummary }) {
       <MenuLink to={`${base}/documents`}>Documents</MenuLink>
       <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
       <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
+      <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
       <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
     </Menu>
   );
 }
 
-/** A Project of the Workspace on screen, as a board, as a list, its Documents, its Terms, its Decisions, or its settings. */
+/**
+ * A Project of the Workspace on screen, as a board, as a list, its Documents, its Terms, its Decisions, its Artifacts,
+ * or its settings.
+ */
 export function ProjectScreen({
   workspace,
   projectId,
@@ -140,7 +145,8 @@ export function ProjectScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
-  usePlace(view === "documents" ? "documents" : view === "glossary" ? "terms" : view === "decisions" ? "decisions" : "project", projectId);
+  const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
+  usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
 
   useEffect(() => {
     api.project(projectId).then(
@@ -182,6 +188,7 @@ export function ProjectScreen({
   if (view === "documents") return <ProjectDocuments workspace={workspace} project={project} />;
   if (view === "glossary") return <ProjectGlossary workspace={workspace} project={project} />;
   if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
+  if (view === "artifacts") return <ProjectArtifacts workspace={workspace} project={project} />;
 
   const base = `/projects/${project.id}`;
   const home = workspaceCrumb(workspace);
@@ -848,7 +855,7 @@ export function ScopeSwitch({
 }: {
   workspace: Workspace;
   project: ProjectSummary | null;
-  kind: "documents" | "glossary" | "decisions";
+  kind: "documents" | "glossary" | "decisions" | "artifacts";
 }) {
   const [projects, setProjects] = useState<ProjectSummary[]>(project ? [project] : []);
   useEffect(() => {

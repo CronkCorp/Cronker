@@ -62,8 +62,8 @@ const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CR
 const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
   "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
-  "and Terms), create and save Artifacts, and propose Decisions and edit their text (only Users change a Decision's status). During your " +
-  "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents to it and unlink " +
+  "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only Users change a Decision's status). During your " +
+  "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
   "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add blocks from " +
   "it. Anything else is refused with the rule and what to do instead.";
@@ -128,9 +128,10 @@ export function buildMcpServer(api: Api): McpServer {
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
-        "changes requested, and by whom), the Step that produced it and the failing check or review requesting changes that last sent the Ticket back to that Step, which Cronk's Comment also links; " +
+        "changes requested, and by whom), the Step that produced it and the failing check, review requesting changes or merge conflict that last sent the Ticket back to that Step, which Cronk's Comment also links; " +
         "its Linked Documents, " +
-        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; and the " +
+        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; its " +
+        "Linked Artifacts, which you read with `read_artifact`; and the " +
         "files attached to it, each Comment carrying its own. Markdown refers to an Attachment as `attachment:<id>`. " +
         "A Ticket outside your Workspace answers as not found.",
       inputSchema: { ticket: ticketArgument },
@@ -147,6 +148,7 @@ export function buildMcpServer(api: Api): McpServer {
           reports: await get(`/api/tickets/${found.id}/reports`),
           pullRequests: await get(`/api/tickets/${found.id}/pull-requests`),
           linkedDocuments: await get(`/api/tickets/${found.id}/documents`),
+          linkedArtifacts: await get(`/api/tickets/${found.id}/artifacts`),
           attachments: await get(`/api/tickets/${found.id}/attachments`),
         };
       }),
@@ -157,19 +159,23 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Search",
       description:
-        "Finds Tickets, Documents, Reports, Terms and Decisions of your Workspace, best first, each with its kind, id, " +
-        "title, Project, Ticket key (a Ticket's own, or the Ticket a Report is on) and a snippet whose matching words " +
+        "Finds Tickets, Documents, Reports, Terms, Decisions, Artifacts (by title and description) and Transcripts of " +
+        "your Workspace, best first with Transcripts last, each with its kind, id, title, Project, Ticket key (a " +
+        "Ticket's own, or the Ticket a Report is on or a Transcript's Run was on) and a snippet whose matching words " +
         "are marked. Words match by their stem in English (`merging` finds `merged`); write `\"a phrase\"` for words " +
         "in order, `or` between alternatives and `-word` to leave out what has it. Search before filing a Ticket or " +
-        "writing knowledge, to build on what's there; read a result with its own tool.",
+        "writing knowledge, to build on what's there; read a result with its own tool (Transcripts have none yet).",
       inputSchema: {
         query: z.string().min(1).max(1000),
         project: z
           .string()
           .optional()
-          .describe("A Project's key, such as `CRONK`: only its own Tickets and knowledge. The whole Workspace when left out."),
+          .describe(
+            "A Project's key, such as `CRONK`: only its own Tickets and knowledge and the Transcripts of Runs on its " +
+              "Tickets. The whole Workspace when left out.",
+          ),
         kinds: z
-          .array(z.enum(["ticket", "document", "report", "term", "decision"]))
+          .array(z.enum(["ticket", "document", "report", "term", "decision", "artifact", "transcript"]))
           .min(1)
           .optional()
           .describe("Only these kinds. All when left out."),
@@ -744,7 +750,9 @@ export function buildMcpServer(api: Api): McpServer {
         "Creates an Artifact, a live page such as an HTML prototype, in a Project or the Workspace when no Project is " +
         "given, at Version 1 by your Agent: its page and the files it refers to by relative paths (scripts, styles, " +
         "images, data), each with its bytes as base64. It is served sandboxed: its scripts run, and may load from " +
-        "CDNs, but can't call Cronk's API, and `attachment:` references don't work in it. " +
+        "CDNs, but can't call Cronk's API, and `attachment:` references don't work in it. Name your running Run to " +
+        "link it to the Run's Ticket, where its Users find it; it is then kept in that Ticket's Project or the " +
+        "Workspace. " +
         sizeLimit,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
@@ -752,9 +760,45 @@ export function buildMcpServer(api: Api): McpServer {
         description: z.string().optional().describe("What it shows, in a sentence or two."),
         page: artifactPathArgument.optional().describe("The path of the file that is its page; `index.html` when left out."),
         files: artifactFiles,
+        run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it: links the Artifact to its Ticket."),
       },
     },
-    ({ project, ...input }) => answer(async () => send("POST", await placePath(project, "artifacts"), input)),
+    ({ project, run, ...input }) =>
+      answer(async () => send("POST", await placePath(project, "artifacts"), { ...input, runId: run })),
+  );
+
+  server.registerTool(
+    "link_artifact",
+    {
+      title: "Link an Artifact to your Run's Ticket",
+      description:
+        "During your running Run on a Ticket, links an Artifact of the Ticket's Project or of the Workspace to it, so " +
+        "it is one click away for its Users. Refused for an Artifact of another Project, for any other Ticket and " +
+        "outside a running Run.",
+      inputSchema: { ticket: ticketArgument, artifact: artifactArgument },
+    },
+    ({ ticket, artifact }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        return send("POST", `/api/tickets/${found.id}/artifacts`, { artifactId: artifact });
+      }),
+  );
+
+  server.registerTool(
+    "unlink_artifact",
+    {
+      title: "Unlink an Artifact from your Run's Ticket",
+      description:
+        "During your running Run on a Ticket, unlinks one of its Linked Artifacts; the Artifact stays where it is " +
+        "kept. Answers with the Ticket's Linked Artifacts left. Refused for any other Ticket and outside a running Run.",
+      inputSchema: { ticket: ticketArgument, artifact: artifactArgument },
+    },
+    ({ ticket, artifact }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        await send("DELETE", `/api/tickets/${found.id}/artifacts/${encodeURIComponent(artifact)}`);
+        return get(`/api/tickets/${found.id}/artifacts`);
+      }),
   );
 
   server.registerTool(

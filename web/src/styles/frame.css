@@ -1,4 +1,5 @@
-/* The frame: a 232px sidebar and a main column at most 1120px wide; below 760px a strip and a menu. */
+/* The frame: a 232px sidebar and a main column that takes the rest of the width; below 760px a strip and a menu. The
+   sidebar can be hidden, giving the main column the whole window. */
 .frame {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -7,9 +8,9 @@
 .main {
   min-width: 0;
 }
+/* The main column's content takes its whole width beside the sidebar, so the board fits more Statuses before it
+   scrolls; a page that wants a narrower measure, such as settings, sets its own. */
 .main-inner {
-  max-width: var(--main-width);
-  margin: 0 auto;
   padding: var(--space-5) var(--space-4);
 }
 
@@ -91,6 +92,52 @@
   font-weight: 400;
   text-overflow: ellipsis;
 }
+.sidebar-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.sidebar-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sidebar-toggle:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+/* While the sidebar is hidden, its show button sits at the main column's top left, beside the content, not over it. */
+.sidebar-show {
+  position: fixed;
+  top: var(--space-4);
+  left: var(--space-3);
+  z-index: 1;
+}
+@media (min-width: 761px) {
+  .sidebar-top .workspace-switcher {
+    flex: 1;
+    min-width: 0;
+  }
+  .frame-sidebar-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .frame-sidebar-hidden .sidebar {
+    display: none;
+  }
+  .frame-sidebar-hidden .main {
+    padding-left: calc(var(--space-3) + 32px); /* the show button's offset and width */
+  }
+}
+
 .workspace-switcher {
   display: flex;
   align-items: center;
@@ -192,6 +239,12 @@
     align-items: center;
     gap: var(--space-1);
   }
+  .sidebar-top {
+    display: contents;
+  }
+  .sidebar-toggle {
+    display: none;
+  }
   .workspace-switcher {
     width: auto;
     margin: 0 var(--space-2) 0 0;
@@ -289,6 +342,14 @@
   display: grid;
   gap: var(--space-3);
 }
+/* A Ticket's side panel scrolls on its own when it is taller than the window; `fitWindow` sets its max-height. */
+.page-split > .side-fits-window {
+  overflow-y: auto;
+}
+/* Scrolling over a panel that overflows stays in it; over one that fits it scrolls the page. */
+.page-split > .side-fits-window[data-overflows] {
+  overscroll-behavior-y: contain;
+}
 @media (max-width: 900px) {
   .page-split {
     grid-template-columns: minmax(0, 1fr);
@@ -296,5 +357,8 @@
   .page-split > .side {
     position: static;
     order: -1;
+  }
+  .page-split > .side-fits-window {
+    overflow-y: visible;
   }
 }

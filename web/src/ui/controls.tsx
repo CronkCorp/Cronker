@@ -19,6 +19,23 @@ export function Button({
   return <button {...props} type={type} className={`${buttonClass(variant, size)}${className ? ` ${className}` : ""}`} />;
 }
 
+const onMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+/**
+ * The submit button of a Comment box, showing the shortcut that places the Comment too (`submitOnCtrlOrCmdEnter`): ⌘↵ on
+ * macOS, Ctrl+↵ elsewhere. The hint is left out of the button's name and announced as its keyboard shortcut instead.
+ */
+export function CommentButton({ children, ...props }: { variant?: ButtonVariant; disabled?: boolean; children: ReactNode }) {
+  return (
+    <Button {...props} type="submit" aria-keyshortcuts={onMac ? "Meta+Enter" : "Control+Enter"}>
+      {children}{" "}
+      <kbd className="shortcut-hint" aria-hidden>
+        {onMac ? "⌘↵" : "Ctrl+↵"}
+      </kbd>
+    </Button>
+  );
+}
+
 /** A field with its label above it, in 12px muted, and an optional hint under it. */
 export function Field({ label, hint, children, className }: { label: ReactNode; hint?: ReactNode; children: ReactNode; className?: string }) {
   return (

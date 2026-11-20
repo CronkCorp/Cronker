@@ -6,7 +6,7 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers (listed, or one by id), and sending the App's webhook deliveries signed with its secret,
+ * installation covers (listed, or one by id), a Pull Request with its mergeability, and sending the App's webhook deliveries signed with its secret,
  * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
@@ -62,6 +62,15 @@ export interface StandInPullRequest {
   merged: boolean;
   /** Whether GitHub says it can be merged: null while GitHub is still working it out, as after a push. */
   mergeable: boolean | null;
+  /** The base branch's name; `main` by default. */
+  base: string;
+  /** The base branch's commit GitHub worked mergeability out against; `b0` by default. */
+  baseSha: string;
+  /**
+   * When set, what each ask about it answers in turn instead of `mergeable`, the last one staying: whether it can be
+   * merged (null while GitHub works it out), alone or worked out against another base commit than `baseSha`.
+   */
+  answers: (boolean | null | { mergeable: boolean | null; baseSha: string })[];
 }
 
 /** A merge GitHub made at the App's request. */
@@ -283,6 +292,9 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         draft: false,
         merged: false,
         mergeable: true,
+        base: "main",
+        baseSha: "b0",
+        answers: [],
       };
       Object.assign(pullRequest, fields);
       pullRequests.set(key, pullRequest);
@@ -589,14 +601,23 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       const pullRequest = repository && pullRequests.get(`${repository.id}#${pulls[2]}`);
       if (!repository || !pullRequest) return json(response, 404, { message: "Not Found" });
       if (request.method === "GET") {
+        const next = pullRequest.answers.length > 1 ? pullRequest.answers.shift()! : pullRequest.answers[0];
+        const answer =
+          next === undefined
+            ? { mergeable: pullRequest.mergeable, baseSha: pullRequest.baseSha }
+            : typeof next === "object" && next !== null
+              ? next
+              : { mergeable: next, baseSha: pullRequest.baseSha };
+        const mergeable = pullRequest.state === "open" ? answer.mergeable : null;
         return json(response, 200, {
           number: pullRequest.number,
           state: pullRequest.state,
           draft: pullRequest.draft,
           merged: pullRequest.merged,
-          mergeable: pullRequest.state === "open" ? pullRequest.mergeable : null,
-          mergeable_state: pullRequest.mergeable === null ? "unknown" : pullRequest.mergeable ? "clean" : "dirty",
+          mergeable,
+          mergeable_state: mergeable === null ? "unknown" : mergeable ? "clean" : "dirty",
           head: { sha: pullRequest.headSha },
+          base: { ref: pullRequest.base, sha: answer.baseSha },
         });
       }
       const body = JSON.parse((await readBody(request)) || "{}") as { merge_method?: MergeMethod; sha?: string };
