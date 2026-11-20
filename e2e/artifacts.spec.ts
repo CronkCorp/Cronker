@@ -129,7 +129,7 @@ test("an Artifact's page lists its Versions, who saved each and when, and compar
   await page.goto(`${cronk.url}/artifacts/${artifact.id}`);
 
   const versions = page.getByRole("region", { name: "Versions" });
-  await expect(versions.getByRole("listitem")).toHaveText([/Version 2.*claude-max/, /Version 1.*ada@example\.com/]);
+  await expect(versions.getByRole("listitem")).toHaveText([/Version 2.*claude-max.*1 Jan 09:00/, /Version 1.*ada@example\.com.*1 Jan 09:00/]);
   await versions.getByLabel("Compare Version 1").check();
   await versions.getByLabel("Compare Version 2").check();
 

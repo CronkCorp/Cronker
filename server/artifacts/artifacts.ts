@@ -10,7 +10,7 @@ import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { describeSize } from "../attachments/attachments.js";
-import { ComparedLine, compareLines } from "../knowledge/compare.js";
+import { ComparedLine, compareWords } from "../knowledge/compare.js";
 
 /**
  * Artifacts: live pages an Actor builds, such as an HTML prototype, with the files the page refers to by relative
@@ -434,19 +434,24 @@ async function bytesOf(context: Context, file: Kept): Promise<Buffer> {
 
 type VersionRow = Omit<ArtifactVersion, "savedAt"> & { savedAt: Date };
 
-/** An Artifact's Versions, oldest first, each with the Actor who saved it and when, without their files. */
-export async function artifactVersionsOf(db: Db, viewer: Viewer, artifactId: string): Promise<ArtifactVersion[]> {
-  const artifact = await findArtifact(db, viewer, artifactId);
-  if (!artifact) throw artifactNotFound();
+/** The Versions of an Artifact already found in the caller's view, oldest first. */
+async function versionsOfFound(db: Db, artifactId: string): Promise<ArtifactVersion[]> {
   const { rows } = await db.query<VersionRow>(
     `select versions.number, ${actorColumn("users", "agents")} as actor, versions.saved_at as "savedAt"
      from artifact_versions versions
      left join users on users.id = versions.actor_user_id
      left join agents on agents.id = versions.actor_agent_id
      where versions.artifact_id = $1 order by versions.number`,
-    [artifact.id],
+    [artifactId],
   );
   return rows.map((row) => ({ ...row, savedAt: row.savedAt.toISOString() }));
+}
+
+/** An Artifact's Versions, oldest first, each with the Actor who saved it and when, without their files. */
+export async function artifactVersionsOf(db: Db, viewer: Viewer, artifactId: string): Promise<ArtifactVersion[]> {
+  const artifact = await findArtifact(db, viewer, artifactId);
+  if (!artifact) throw artifactNotFound();
+  return versionsOfFound(db, artifact.id);
 }
 
 export const ComparedFile = Type.Object({
@@ -480,16 +485,10 @@ function textOf(bytes: Buffer): string | undefined {
 }
 
 /**
- * Two files' texts compared line by line: the newline that ends a file's last line starts no further line, and an
- * empty file has no lines rather than one empty line.
+ * A file's text as lines: `\r\n` ends a line as `\n` does, the newline ending the last line starts no further one,
+ * and an empty file has none.
  */
-function compareTexts(before: string, after: string): ComparedLine[] {
-  before = before.replace(/\r?\n$/, "");
-  after = after.replace(/\r?\n$/, "");
-  if (before === "") return after === "" ? [] : after.split("\n").map((text) => ({ change: "added", text }));
-  if (after === "") return before.split("\n").map((text) => ({ change: "removed", text }));
-  return compareLines(before, after);
-}
+const linesOf = (text: string) => (text === "" ? [] : text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n"));
 
 /**
  * Two of an Artifact's Versions: each file added, removed or changed from one to the other, by path, its text
@@ -503,7 +502,7 @@ export async function compareArtifactVersions(
 ): Promise<ArtifactComparison> {
   const artifact = await findArtifact(context.db, viewer, artifactId);
   if (!artifact) throw artifactNotFound();
-  const versions = await artifactVersionsOf(context.db, viewer, artifact.id);
+  const versions = await versionsOfFound(context.db, artifact.id);
   const version = (number: number) => {
     const found = versions.find((v) => v.number === number);
     if (!found) throw new ApiError(404, "not_found", `${artifact.title} has no Version ${number}.`);
@@ -512,22 +511,23 @@ export async function compareArtifactVersions(
   const [from, to] = [version(numbers.from), version(numbers.to)];
   const filesOf = async (number: number) =>
     new Map((await keptFiles(context.db, artifact.id, number)).map((file) => [file.path, file]));
-  const [before, after] = [await filesOf(from.number), await filesOf(to.number)];
+  const [filesBefore, filesAfter] = [await filesOf(from.number), await filesOf(to.number)];
+  const paths = [...new Set([...filesBefore.keys(), ...filesAfter.keys()])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const files: ComparedFile[] = [];
-  const paths = [...new Set([...before.keys(), ...after.keys()])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   for (const path of paths) {
-    const [a, b] = [before.get(path), after.get(path)];
-    if (a && b && a.blobId === b.blobId) continue;
-    const bytesA = a && (await bytesOf(context, a));
-    const bytesB = b && (await bytesOf(context, b));
-    if (bytesA && bytesB && bytesA.equals(bytesB)) continue;
-    const [textA, textB] = [bytesA && textOf(bytesA), bytesB && textOf(bytesB)];
-    const text = (!bytesA || textA !== undefined) && (!bytesB || textB !== undefined);
+    const [before, after] = [filesBefore.get(path), filesAfter.get(path)];
+    if (before && after && before.blobId === after.blobId) continue;
+    const bytesBefore = before ? await bytesOf(context, before) : Buffer.alloc(0);
+    const bytesAfter = after ? await bytesOf(context, after) : Buffer.alloc(0);
+    if (before && after && bytesBefore.equals(bytesAfter)) continue;
+    // A side the file is missing from reads as empty text.
+    const [textBefore, textAfter] = [textOf(bytesBefore), textOf(bytesAfter)];
+    const text = textBefore !== undefined && textAfter !== undefined;
     files.push({
       path,
-      change: !a ? "added" : !b ? "removed" : "changed",
+      change: !before ? "added" : !after ? "removed" : "changed",
       text,
-      lines: text ? compareTexts(textA ?? "", textB ?? "") : [],
+      lines: text ? compareWords(linesOf(textBefore), linesOf(textAfter)) : [],
     });
   }
   return { from, to, files };

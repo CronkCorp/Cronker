@@ -424,4 +424,44 @@ describe("Artifacts", () => {
     expect(missing.status).toBe(404);
     expect(missing.json.error.message).toBe("Board prototype has no Version 3.");
   });
+
+  test("comparing two Versions shows a file whose line endings alone changed with every line the same, and an empty file added with no lines", async () => {
+    const { ada, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page), file("app.js", "start();\r\nstop();\r\n")],
+    });
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, {
+      baseVersion: 1,
+      files: [file("app.js", "start();\nstop();"), file("empty.txt", "")],
+    });
+
+    expect((await ok("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=2`, ada)).files).toEqual([
+      {
+        path: "app.js",
+        change: "changed",
+        text: true,
+        lines: [
+          { change: "same", text: "start();" },
+          { change: "same", text: "stop();" },
+        ],
+      },
+      { path: "empty.txt", change: "added", text: true, lines: [] },
+    ]);
+  });
+
+  test("an Artifact of another Workspace has no Versions to list or compare for the caller", async () => {
+    const { ada, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page)],
+    });
+    const other = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
+    const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
+    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const asStranger = { headers: { authorization: `Bearer ${secret}` } };
+
+    expect((await call("GET", `/api/artifacts/${artifact.id}/versions`, asStranger)).status).toBe(404);
+    expect((await call("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=1`, asStranger)).status).toBe(404);
+  });
 });
