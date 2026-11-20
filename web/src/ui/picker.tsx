@@ -27,7 +27,7 @@ interface PickerProps {
   /** Picking toggles and keeps the list open. */
   multiple?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /** Shown in place of the options, such as while they load or when they can't be had. */
+  /** Shown in place of the list of options, such as while they load or when they can't be had. */
   notice?: ReactNode;
 }
 
@@ -74,6 +74,7 @@ export function Picker({
       setActive((at) => (shown.length === 0 ? -1 : (at + step + shown.length) % shown.length));
     } else if (event.key === "Enter") {
       event.preventDefault();
+      if (notice !== undefined) return;
       const option = active >= 0 ? shown[active] : typed ? shown[0] : undefined;
       if (option) choose(option);
     }
@@ -153,16 +154,16 @@ export function Picker({
           }}
           onKeyDown={onKeyDown}
         />
-        <ul role="listbox" id={`${id}-list`} aria-label={label} aria-multiselectable={multiple || undefined} className="picker-list">
-          {notice !== undefined ? (
-            <li className="picker-empty">{notice}</li>
-          ) : (
-            <>
-              {shown.length === 0 && <li className="picker-empty">{options.length === 0 ? "Nothing to pick." : "Nothing matches."}</li>}
-              {items}
-            </>
-          )}
-        </ul>
+        {notice !== undefined ? (
+          <div id={`${id}-list`} className="picker-empty">
+            {notice}
+          </div>
+        ) : (
+          <ul role="listbox" id={`${id}-list`} aria-label={label} aria-multiselectable={multiple || undefined} className="picker-list">
+            {shown.length === 0 && <li className="picker-empty">{options.length === 0 ? "Nothing to pick." : "Nothing matches."}</li>}
+            {items}
+          </ul>
+        )}
       </div>
     </Popover>
   );

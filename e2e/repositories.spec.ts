@@ -88,22 +88,23 @@ test("the Repositories section asks GitHub only once Add Repository opens its Pi
 
   await repositories.getByRole("button", { name: "Add Repository" }).click();
   const picker = page.getByRole("listbox", { name: "Repository to add" });
-  await expect(picker.getByText("Asking GitHub which Repositories the App is installed on…")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Repository to add" })).toHaveText("Asking GitHub which Repositories the App is installed on…", { useInnerText: true });
   answer();
-  await expect(picker.getByRole("group", { name: "cronkcorp" }).getByRole("option")).toHaveText(["cronkcorp/api", "cronkcorp/Cronker", "cronkcorp/Docs"]);
+  await expect(picker.getByRole("option")).toHaveText(["bea/Atlas", "bea/notes", "cronkcorp/api", "cronkcorp/Cronker", "cronkcorp/Docs"]);
   await expect(picker.getByRole("group", { name: "bea" }).getByRole("option")).toHaveText(["bea/Atlas", "bea/notes"]);
+  await expect(picker.getByRole("group", { name: "cronkcorp" }).getByRole("option")).toHaveText(["cronkcorp/api", "cronkcorp/Cronker", "cronkcorp/Docs"]);
   expect(asked).toHaveLength(1);
 
   // Typing filters; Enter picks the first match, adds it and closes the list.
   await page.getByRole("combobox", { name: "Filter Repository to add" }).fill("s");
-  await expect(picker.getByRole("option")).toHaveText(["cronkcorp/Docs", "bea/Atlas", "bea/notes"]);
+  await expect(picker.getByRole("option")).toHaveText(["bea/Atlas", "bea/notes", "cronkcorp/Docs"]);
   await page.keyboard.press("Enter");
   await expect(picker).toBeHidden();
-  await expect(repositories.getByRole("listitem")).toHaveText(["cronkcorp/DocsRemove", "cronkcorp/websiteRemove"]);
+  await expect(repositories.getByRole("listitem")).toHaveText(["bea/AtlasRemove", "cronkcorp/websiteRemove"]);
 
   // Opened again, it lists what is left without asking GitHub again.
   await repositories.getByRole("button", { name: "Add Repository" }).click();
-  await expect(picker.getByRole("option")).toHaveText(["cronkcorp/api", "cronkcorp/Cronker", "bea/Atlas", "bea/notes"]);
+  await expect(picker.getByRole("option")).toHaveText(["bea/notes", "cronkcorp/api", "cronkcorp/Cronker", "cronkcorp/Docs"]);
   expect(asked).toHaveLength(1);
 });
 
@@ -125,17 +126,15 @@ test("the Repositories section says when there is no App, GitHub can't be asked,
   cronk.github.signedInAs = cronk.github.account("ada-gh");
   await createGitHubApp(cronk, cookie);
   cronk.github.install(cronk.github.apps[0]!, "cronkcorp", []);
-  await page.route("**/api/github/installations", (route) =>
-    route.fulfill({ status: 502, json: { error: { code: "github_unavailable", message: "GitHub didn't answer." } } }),
-  );
+  cronk.github.unavailable = true;
   await page.reload();
   await repositories.getByRole("button", { name: "Add Repository" }).click();
-  const picker = page.getByRole("listbox", { name: "Repository to add" });
-  await expect(picker.getByRole("alert")).toHaveText("Couldn't ask GitHub which Repositories the App is installed on: GitHub didn't answer.");
+  const popover = page.getByRole("dialog", { name: "Repository to add" });
+  await expect(popover.getByRole("alert")).toHaveText(/^Couldn't ask GitHub which Repositories the App is installed on: GitHub couldn't be reached/);
 
   // Opened again, it asks again.
   await page.keyboard.press("Escape");
-  await page.unroute("**/api/github/installations");
+  cronk.github.unavailable = false;
   await repositories.getByRole("button", { name: "Add Repository" }).click();
-  await expect(picker.getByText("No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here.")).toBeVisible();
+  await expect(popover).toHaveText("No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here.", { useInnerText: true });
 });

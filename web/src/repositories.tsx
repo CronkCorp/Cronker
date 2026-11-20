@@ -5,9 +5,6 @@ import { useLatest } from "./live.js";
 import { Banner, Button, FormError, Panel, Saved } from "./ui/controls.js";
 import { Picker, type PickerOption } from "./ui/picker.js";
 
-const noAppText =
-  "This installation has no GitHub App yet. Once an Admin creates it on the GitHub page and installs it on GitHub, its Repositories can be added here.";
-
 /**
  * The Repositories a Project lists as holding its code, added from those the GitHub App's
  * installations cover. Reloads whenever the Project changes, as on a rename on GitHub. GitHub
@@ -19,7 +16,6 @@ export function RepositoriesSettings({ project }: { project: Project }) {
   const [hasApp, setHasApp] = useState<boolean | undefined>(undefined);
   const [installations, setInstallations] = useState<GitHubInstallation[] | undefined>(undefined);
   const [installationsError, setInstallationsError] = useState<string | null>(null);
-  const [noApp, setNoApp] = useState(false);
   const [asking, setAsking] = useState(false);
   const { error, busy, saved, save } = useSave();
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -41,7 +37,8 @@ export function RepositoriesSettings({ project }: { project: Project }) {
     api
       .githubInstallations()
       .then(setInstallations, (e: unknown) => {
-        if (e instanceof ApiError && e.code === "github_not_set_up") setNoApp(true);
+        // The App went away since the page asked Cronk.
+        if (e instanceof ApiError && e.code === "github_not_set_up") setHasApp(false);
         else setInstallationsError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => setAsking(false));
@@ -55,7 +52,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
     });
 
   const listed = new Set(repositories?.map((r) => r.id));
-  // GitHub's answer comes sorted by owner/name; several installations are told apart by their account.
+  // Cronk answers by account and owner/name; several installations are told apart by their account.
   const options: PickerOption[] = (installations ?? []).flatMap((installation) =>
     installation.repositories
       .filter((r) => !listed.has(r.id))
@@ -65,9 +62,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
         group: installations!.length > 1 ? installation.account : undefined,
       })),
   );
-  const notice = noApp ? (
-    noAppText
-  ) : installationsError ? (
+  const notice = installationsError ? (
     <FormError error={`Couldn't ask GitHub which Repositories the App is installed on: ${installationsError}`} />
   ) : !installations ? (
     "Asking GitHub which Repositories the App is installed on…"
@@ -109,13 +104,16 @@ export function RepositoriesSettings({ project }: { project: Project }) {
         </ul>
       )}
       {hasApp === false ? (
-        <p className="muted">{noAppText}</p>
+        <p className="muted">
+          This installation has no GitHub App yet. Once an Admin creates it on the GitHub page and installs it on GitHub,
+          its Repositories can be added here.
+        </p>
       ) : hasApp === true ? (
         <div>
           <Picker
             label="Repository to add"
             onOpenChange={(open) => open && askGitHub()}
-            options={notice === undefined ? options : []}
+            options={options}
             notice={notice}
             onPick={(id) => void change(() => api.addRepository(project.id, Number(id)))}
             trigger={
