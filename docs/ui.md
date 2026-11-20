@@ -19,7 +19,7 @@ The web client follows this file since the styling pass at the end of milestone 
 
 ![App frame](ui/frame.png)
 
-- **Frame:** a 232px left sidebar and a main column. The main column's content takes its whole width beside the sidebar, with 24px vertical and 16px horizontal padding, on every screen: there is no overall cap, so a wide window shows more of the board, a list or a split view. A page that needs a narrower measure sets its own, as settings pages do (760px).
+- **Frame:** a 232px left sidebar and a main column. The main column's content takes its whole width beside the sidebar, with 24px vertical and 16px horizontal padding, on every screen: there is no overall cap, so a wide window shows more of the board, a list or a split view. A page that needs a narrower measure sets its own, as settings pages do (760px of sections, 964px with their section list) and a Document's or Term's body does (720px).
 - **Sidebar, top to bottom:**
   - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace.
   - The search box, which opens the Workspace's search results on Enter. Below 760px it takes a line of its own under the strip's links.
