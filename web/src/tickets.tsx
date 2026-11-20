@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import {
   api,
   nameOf,
@@ -29,7 +29,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { attachAll, Attachments, FileList } from "./attachments.js";
-import { field, useSubmit } from "./forms.js";
+import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
@@ -37,7 +37,7 @@ import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
-import { Actions, Button, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, CommentButton, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
@@ -1058,25 +1058,22 @@ function CommentForm({
   primary?: boolean;
   onSend: (body: string) => Promise<void>;
 }) {
-  const { error, busy, onSubmit } = useSubmit((form) => onSend(field(form, "body")));
+  // The box empties once the Comment is placed; a refused one stays to be fixed.
+  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
+    await onSend(field(form, "body"));
+    element.reset();
+  });
   return (
-    <form
-      className="comment-form"
-      onSubmit={async (event: FormEvent<HTMLFormElement>) => {
-        const form = event.currentTarget;
-        await onSubmit(event);
-        form.reset();
-      }}
-    >
+    <form className="comment-form" onSubmit={onSubmit}>
       <label className="field">
         <span className="sr-only">{label}</span>
-        <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" />
+        <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnCtrlOrCmdEnter} />
       </label>
       <FormError error={error} />
       <Actions>
-        <Button type="submit" variant={primary ? "primary" : "secondary"} disabled={busy}>
+        <CommentButton variant={primary ? "primary" : "secondary"} disabled={busy}>
           {button}
-        </Button>
+        </CommentButton>
         {hint && <span className="muted small">{hint}</span>}
       </Actions>
     </form>
