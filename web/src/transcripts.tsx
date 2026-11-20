@@ -92,7 +92,13 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
     <div className="page transcript-page">
       <PageHead
         crumbs={crumbs}
-        title={run ? `Transcript of the ${run.step.name} Run` : "Transcript"}
+        title={
+          run
+            ? `Transcript of the ${run.step.name} Run`
+            : transcript.runId
+              ? "Transcript"
+              : `Transcript of a ${transcript.agent.name} session`
+        }
         meta={
           <span className="transcript-meta">
             <Actor actor={agent} />

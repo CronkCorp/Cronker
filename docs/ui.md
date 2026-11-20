@@ -183,7 +183,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ![Transcript](ui/transcript.png)
 
-- **Page head:** the breadcrumbs lead through the Project and Ticket to "Transcript"; the title names the Run's Step ("Transcript of the Triage Run"), and a line under it holds the Agent, the Ticket, the model label, how many entries it keeps and when it was last uploaded, and the Run's Session link.
+- **Page head:** the breadcrumbs lead through the Project and Ticket to "Transcript"; the title names the Run's Step ("Transcript of the Triage Run"), or, for a session of no Run, its Agent ("Transcript of a claude-max session"), and a line under it holds the Agent, the Ticket, the model label, how many entries it keeps and when it was last uploaded, and the Run's Session link.
 - **Entries**, in order, at most 880px wide: a message shows who said it (the Agent's avatar and violet name, or an `INPUT` or `SYSTEM` kind label for what the session was sent) and its time over its text in full, rendered as Markdown in a bubble, the Agent's with an `--agent` border.
 - **Tool calls** are one line each: a caret, the tool's name in bold mono and a one-line summary of its input in muted mono (its description, command, file path or the like), cut off with an ellipsis. Clicking the line opens its Input (pretty-printed JSON) and Result under it, each in a `pre` scrolling past 480px; clicking again closes it. A result cut at 20 KB carries a `warn` **Cut** chip on its line and says so under the result.
 - **A Transcript past 50 MB** shows a dashed box where its gap is, saying how many entries and megabytes were left out between its start and its end.
@@ -229,7 +229,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Results page** (`/workspaces/<id>/search?q=…`, with `&project=<id>` when narrowed): breadcrumbs to the Workspace, "Search" as the `h1` with "Results for “…”" under it, and a Project filter (All Projects, or one by key and name). It marks no sidebar item.
 - **Grouped by kind:** Tickets, Documents, Reports, Terms, Decisions and Transcripts, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out. A kind gives its best 20 at most; a full group says so under it, and to narrow the search for others. While a search loads, the last one's results are cleared.
-- **A result:** its title as a link (a Ticket's, Report's or Run's Transcript's Ticket key before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
+- **A result:** its title as a link (the key of a Ticket, or of the Ticket a Report is on or a Transcript's Run was on, before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
 - **Nothing found:** an empty state saying nothing matches, and how to write a search: a phrase in quotes, `or` between alternatives, `-word` to leave out.
 
 ### Agents and Runners
