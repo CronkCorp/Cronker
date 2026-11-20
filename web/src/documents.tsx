@@ -587,6 +587,8 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
   const [picked, setPicked] = useState<number[]>([]);
   const [comparison, setComparison] = useState<C | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // Kept apart from the others so the next list read clears it.
+  const [listFailure, setListFailure] = useState<string | null>(null);
   const latest = useLatest();
   const latestList = useLatest();
   // A new source each render reads the same Versions; the latest one is used.
@@ -594,7 +596,14 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
   sourceRef.current = source;
   useEffect(() => {
     // Lists read quickly one after another show only the last, however the replies arrive.
-    latestList(sourceRef.current.list(), setVersions, (e) => setFailure(e.message));
+    latestList(
+      sourceRef.current.list(),
+      (listed) => {
+        setVersions(listed);
+        setListFailure(null);
+      },
+      (e) => setListFailure(e.message),
+    );
   }, [current, latestList]);
 
   const pick = (number: number, on: boolean) => {
@@ -608,7 +617,7 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
   };
   const { read, show, showComparison } = sourceRef.current;
 
-  if (!versions) return failure ? <FormError error={failure} /> : null;
+  if (!versions) return listFailure ? <FormError error={listFailure} /> : null;
   return (
     <section aria-label="Versions" className="panel side-section">
       <h2 className="side-title">Versions</h2>
@@ -639,7 +648,7 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
           </li>
         ))}
       </ol>
-      <FormError error={failure} />
+      <FormError error={failure ?? listFailure} />
       <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.title}` : ""} wide>
         {shown && (
           <>
