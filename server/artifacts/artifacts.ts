@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
@@ -9,7 +9,10 @@ import { inView, type Viewer } from "../identity/viewers.js";
 import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
-import { describeSize } from "../attachments/attachments.js";
+import { describeSize, forgetAttachments } from "../attachments/attachments.js";
+import { ownerName } from "../agents/tokens.js";
+import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
+import { insertLink } from "./linked-artifacts.js";
 
 /**
  * Artifacts: live pages an Actor builds, such as an HTML prototype, with the files the page refers to by relative
@@ -265,16 +268,29 @@ async function keepingFiles<T>(context: Context, files: FileInput[], work: (kept
   }
 }
 
-/** Creates an Artifact in the Project or the Workspace, at Version 1 by its Actor, with its page and files. */
+/**
+ * Creates an Artifact in the Project or the Workspace, at Version 1 by its Actor, with its page and files. An Agent
+ * creating it during its running Run names the Run, and the Artifact is linked to the Run's Ticket.
+ */
 export async function createArtifact(
   context: Context,
   actor: Caller,
   place: Place,
-  input: { title: string; description?: string; page?: string; files: FileInput[] },
+  input: { title: string; description?: string; page?: string; files: FileInput[]; runId?: string },
 ): Promise<Artifact> {
   const { db, clock } = context;
+  if (input.runId !== undefined && actor.kind === "user") {
+    throw new ApiError(400, "run_for_agents", "Only an Agent names the Run it creates an Artifact in.");
+  }
   return keepingFiles(context, input.files, (files) =>
     transaction(db, async (tx) => {
+      const run =
+        input.runId !== undefined && actor.kind === "agent"
+          ? await runningRunOf(tx, actor, input.runId, {
+              rule: "An Agent creates an Artifact in a Run only while that Run of its own is running.",
+              advice: "Name your running Run, as your Brief gives it, or leave the Run out to create the Artifact linked to no Ticket.",
+            })
+          : null;
       const now = clock.now();
       const { rows } = await tx.query<{ id: string }>(
         `insert into artifacts (workspace_id, project_id, version, created_at) values ($1, $2, 1, $3) returning id`,
@@ -285,7 +301,14 @@ export async function createArtifact(
       checkVersion(content, context.config.attachments.limitBytes);
       await insertVersion(tx, { id, workspaceId: place.workspaceId }, 1, content, actor, now);
       context.live.publish(tx, place.workspaceId, { type: "artifact.changed", projectId: place.projectId, artifactId: id });
-      return (await findArtifact(tx, actor, id))!;
+      const created = (await findArtifact(tx, actor, id))!;
+      if (run && actor.kind === "agent") {
+        const ticket = (await findTicketRow(tx, actor, run.ticketId, { lock: true }))!;
+        // Asked again under the Ticket's lock, so a Run stopped meanwhile, as by a move, refuses the create.
+        const runId = await runOfAgent(tx, actor, ticket);
+        await insertLink(context, tx, ticket, { kind: "agent", id: actor.id, runId }, created);
+      }
+      return created;
     }),
   );
 }
@@ -366,6 +389,41 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
       return (await findArtifact(tx, actor, current.id))!;
     }),
   );
+}
+
+/**
+ * Deletes the Artifact with all its Versions, their files' bytes once the delete is committed. Only a User may, so an
+ * agent can't remove work. It drops out of its links, and the Tickets linking it show the change.
+ */
+export async function deleteArtifact(context: Context, actor: Caller, artifactId: string): Promise<void> {
+  const { db, live } = context;
+  await transaction(db, async (tx) => {
+    const artifact = await lockArtifact(tx, actor, artifactId);
+    if (!artifact) throw artifactNotFound();
+    if (actor.kind === "agent") {
+      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete an Artifact.`, {
+        rule: "Only a User deletes an Artifact, so an agent can't remove work.",
+        advice: `Leave the Artifact as it is, or save a new Version; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+      });
+    }
+    const linking = await tx.query<{ ticketId: string; projectId: string }>(
+      `select tickets.id as "ticketId", tickets.project_id as "projectId"
+       from linked_artifacts join tickets on tickets.id = linked_artifacts.ticket_id
+       where linked_artifacts.artifact_id = $1 order by linked_artifacts.seq`,
+      [artifact.id],
+    );
+    for (const { ticketId, projectId } of linking.rows) {
+      live.publish(tx, artifact.workspaceId, { type: "ticket.changed", projectId, ticketId });
+    }
+    const blobs = await tx.query<{ blobId: string }>(
+      `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
+      [artifact.id],
+    );
+    // Its Versions, their files and its links go with it.
+    await tx.query("delete from artifacts where id = $1", [artifact.id]);
+    afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
+    live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });
+  });
 }
 
 /** The Artifact at its current Version, its row locked until the transaction ends, so saves of it queue up. */

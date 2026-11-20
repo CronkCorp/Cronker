@@ -22,7 +22,7 @@ import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { navigate, replace, usePath } from "./router.js";
-import { ArtifactScreen } from "./artifacts.js";
+import { ArtifactScreen, WorkspaceArtifacts } from "./artifacts.js";
 import { RunnersScreen } from "./runners.js";
 import { SearchScreen } from "./search.js";
 import { takeReturnAfterSignIn } from "./storage.js";
@@ -282,8 +282,8 @@ function SignedIn({
   reload: () => void;
   onSignedOut: () => void;
 }) {
-  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|settings|agents|inbox|documents|glossary|decisions|search)(?:\/([^/]+))?)?\/?$/.exec(path);
-  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary|decisions))?\/?$/.exec(path);
+  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|settings|agents|inbox|documents|glossary|decisions|artifacts|search)(?:\/([^/]+))?)?\/?$/.exec(path);
+  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary|decisions|artifacts))?\/?$/.exec(path);
   const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
   const termPath = /^\/terms\/([^/]+)\/?$/.exec(path);
@@ -334,7 +334,7 @@ function SignedIn({
         key={`${current.id} ${projectPath[1]}`}
         workspace={current}
         projectId={projectPath[1]!}
-        view={(projectPath[2] as "list" | "settings" | "documents" | "glossary" | "decisions" | undefined) ?? "board"}
+        view={(projectPath[2] as "list" | "settings" | "documents" | "glossary" | "decisions" | "artifacts" | undefined) ?? "board"}
         onOtherWorkspace={onOtherWorkspace}
       />
     );
@@ -385,6 +385,8 @@ function SignedIn({
     page = <WorkspaceGlossary key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "decisions" && !workspacePath[3]) {
     page = <WorkspaceDecisions key={current.id} workspace={current} />;
+  } else if (current && workspacePath?.[2] === "artifacts" && !workspacePath[3]) {
+    page = <WorkspaceArtifacts key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "documents" && !workspacePath[3]) {
     page = <WorkspaceDocuments key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "search" && !workspacePath[3]) {

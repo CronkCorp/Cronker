@@ -1227,6 +1227,16 @@
   gap: var(--space-2);
 }
 
+/* Artifacts: a Project's or the Workspace's, each its title over its description. */
+.artifact-list td:first-child {
+  width: auto;
+}
+.artifact-list-description {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Artifact: the page itself in its sandboxed frame, its files beside it. */
 .artifact-description {
   max-width: 720px;

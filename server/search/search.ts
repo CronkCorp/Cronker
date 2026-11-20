@@ -2,8 +2,9 @@ import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
 
 /**
- * Search over a Workspace's Tickets, knowledge and Transcripts with Postgres full-text: words matched by their stem in the
- * `english` configuration, written in web-search syntax. Needs no AI service.
+ * Search over a Workspace's Tickets, knowledge, Artifacts (by title and description) and Transcripts with Postgres
+ * full-text: words matched by their stem in the `english` configuration, written in web-search syntax. Needs no AI
+ * service.
  */
 
 export const SnippetPart = Type.Object({
@@ -11,7 +12,7 @@ export const SnippetPart = Type.Object({
   match: Type.Boolean({ description: "Whether this part matched the search." }),
 });
 
-export const searchKinds = ["ticket", "document", "report", "term", "decision", "transcript"] as const;
+export const searchKinds = ["ticket", "document", "report", "term", "decision", "artifact", "transcript"] as const;
 export type SearchKind = (typeof searchKinds)[number];
 export const SearchKind = Type.Union(searchKinds.map((kind) => Type.Literal(kind)));
 
@@ -64,6 +65,12 @@ const hits = `
     join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version, q
   where decisions.workspace_id = $1 and versions.search @@ query
   union all
+  select 'artifact', artifacts.id, versions.title, artifacts.project_id, null, versions.description,
+    ts_rank(versions.search, query)
+  from artifacts
+    join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version, q
+  where artifacts.workspace_id = $1 and versions.search @@ query
+  union all
   -- A Transcript matches by an entry whose text the whole search matches, and shows the one that matched best. A Run's
   -- is kept with the Run's Ticket and Project; an Agent's own, of no Run, with the Workspace.
   select 'transcript', best.transcript_id,
@@ -86,7 +93,7 @@ const hits = `
 export const perKind = 20;
 
 /**
- * The Workspace's Tickets, knowledge and Transcripts matching the query, best first with Transcripts last, at most
+ * The Workspace's Tickets, knowledge, Artifacts and Transcripts matching the query, best first with Transcripts last, at most
  * `perKind` of each kind, each with a snippet.
  */
 export async function search(db: Db, workspaceId: string, input: { q: string; project: string | null; kinds: SearchKind[] }): Promise<SearchResult[]> {

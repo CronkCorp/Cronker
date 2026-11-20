@@ -388,6 +388,7 @@ export interface Change {
     | "verification"
     | "dismissed"
     | "linkedDocument"
+    | "linkedArtifact"
     | "merged"
     | "sentBack"
     | "transcriptDeleted"
@@ -629,6 +630,17 @@ export interface Artifact {
   files: ArtifactFile[];
 }
 
+/** An Artifact as its Project's or the Workspace's list shows it: without its files. */
+export type ArtifactSummary = Omit<Artifact, "files">;
+
+/** An Artifact linked to a Ticket, kept in its Project or the Workspace. */
+export interface LinkedArtifact {
+  id: string;
+  /** Null for an Artifact of the Workspace. */
+  projectId: string | null;
+  title: string;
+}
+
 /** A Document linked to a Ticket, from its Project's page tree or the Workspace's. */
 export interface LinkedDocument {
   id: string;
@@ -798,7 +810,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SearchKind = "ticket" | "document" | "report" | "term" | "decision" | "transcript";
+export type SearchKind = "ticket" | "document" | "report" | "term" | "decision" | "artifact" | "transcript";
 
 export interface SearchResult {
   kind: SearchKind;
@@ -960,6 +972,13 @@ export const api = {
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
   artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
+  deleteArtifact: (id: string) => call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}`),
+  linkedArtifacts: (ticketId: string) =>
+    call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),
+  linkArtifact: (ticketId: string, artifactId: string) =>
+    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId }),
+  unlinkArtifact: (ticketId: string, artifactId: string) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts/${encodeURIComponent(artifactId)}`),
   editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
   deleteDocument: (id: string) => call<void>("DELETE", doc(id)),
   versions: (documentId: string) => call<Version[]>("GET", `${doc(documentId)}/versions`),
@@ -981,6 +1000,7 @@ export const api = {
     call<Attachment>("POST", `${attachmentsPath(owner)}?name=${encodeURIComponent(file.name)}`, file),
   removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
   decisions: (place: Place) => call<DecisionSummary[]>("GET", `${placePath(place)}/decisions`),
+  artifacts: (place: Place) => call<ArtifactSummary[]>("GET", `${placePath(place)}/artifacts`),
   createDecision: (place: Place, input: { title: string; body?: string }) =>
     call<Decision>("POST", `${placePath(place)}/decisions`, input),
   decision: (id: string) => call<Decision>("GET", decision(id)),
