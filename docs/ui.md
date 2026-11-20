@@ -26,7 +26,7 @@ The web client follows this file since the styling pass at the end of milestone 
   - Documents, Terms and Decisions (the Workspace's, or the current Project's).
   - **Projects**, each listed by key and name.
   - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins. Runners shows even without a Workspace, since a User's Runners belong to none.
-  - The signed-in User, marked "Admin" for an Admin, which opens a menu: Password and Sign out.
+  - The signed-in User, marked "Admin" for an Admin, which opens a menu: the theme, a System / Light / Dark segmented control that defaults to System; Password; and Sign out. The theme is kept in the browser (`localStorage`), not on the User, so each device can differ, and a small script in `index.html` applies it before first paint.
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Password, New Workspace or a page that isn't there, marks none.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
 - **Page head:** breadcrumbs (13px, muted, with `--accent` links), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title, and a Document's, Term's or Decision's Version, who saved it and when on a muted line under it. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
@@ -35,7 +35,7 @@ The web client follows this file since the styling pass at the end of milestone 
 
 ## Design tokens
 
-All colours are CSS custom properties on `:root` in the web client's stylesheet. Components use only tokens, never literal colours; `e2e/styling.spec.ts` checks every rule the browser is served. The dark values apply under `prefers-color-scheme: dark`.
+All colours are CSS custom properties on `:root` in the web client's stylesheet. Components use only tokens, never literal colours; `e2e/styling.spec.ts` checks every rule the browser is served. The dark values apply under `prefers-color-scheme: dark` unless the User chose Light, and whenever they chose Dark (`data-theme` on the root element); the choice changes which values apply, never the values.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
@@ -77,7 +77,7 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 
 ## Component conventions
 
-The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog), each wrapped once (`Popover`, `Menu` with `MenuItem` and `MenuLink`, `Dialog` and `ConfirmDialog`) and styled by our classes. Every view switch so far is an address (List / Board, the scope switch), so no screen needs tabs yet; Radix's tabs join the set, wrapped once as `Tabs`, when one does. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
+The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog), each wrapped once (`Popover`, `Menu` with `MenuItem`, `MenuLink` and `MenuChoice` (a segmented control inside a menu, such as the theme), `Dialog` and `ConfirmDialog`) and styled by our classes. Every view switch so far is an address (List / Board, the scope switch), so no screen needs tabs yet; Radix's tabs join the set, wrapped once as `Tabs`, when one does. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
 
 - **Actor** (`<Actor>`): avatar plus name. An avatar's letters are drawn by CSS, so they stay out of the text around them. A User is round. An Agent is square and violet, followed by "for <Owner>" where the Owner isn't obvious. Cronk is muted text with its "C" avatar.
 - **Key** (`<Key>`) and **model label** (`<ModelLabel>`): a Ticket or Project key, or a model label, in the mono face; a key at 12px `--muted`.
