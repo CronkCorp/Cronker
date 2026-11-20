@@ -389,6 +389,37 @@ describe("MCP with an Agent token", () => {
     expect(read.linkedDocuments).toEqual([]);
   });
 
+  test("during its Run an Agent attaches files as base64 to its Ticket and to the Report it writes", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: triage } });
+    const client = await connect(secret);
+    const report = await call(client, "write_report", { ticket: "CRONK-1", title: "Findings", body: "See the log." });
+
+    const onTicket = await call(client, "attach_file", {
+      ticket: "CRONK-1",
+      name: "trace.log",
+      mediaType: "text/plain",
+      contentBase64: Buffer.from("boom").toString("base64"),
+    });
+    const onReport = await call(client, "attach_file", {
+      document: report.json.id,
+      name: "screen.png",
+      mediaType: "image/png",
+      contentBase64: Buffer.from("png").toString("base64"),
+    });
+
+    expect(onTicket).toEqual({ isError: false, json: expect.objectContaining({ name: "trace.log", size: 4, on: { kind: "ticket", id: ticket.id } }) });
+    expect(onReport).toEqual({ isError: false, json: expect.objectContaining({ name: "screen.png", on: { kind: "document", id: report.json.id } }) });
+    const read = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(read.json.attachments).toEqual([onTicket.json]);
+    const reportAttachments = await (await cronk.request("GET", `/api/documents/${report.json.id}/attachments`, { cookie })).json();
+    expect(reportAttachments).toEqual([onReport.json]);
+  });
+
   test("during its Run an Agent splits its Ticket and files a Discovered Ticket that blocks it", async () => {
     const { cookie, ticket, agent, secret } = await workspaceWithTicket();
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
