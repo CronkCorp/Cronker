@@ -616,6 +616,7 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
     }
   };
   const { read, show, showComparison } = sourceRef.current;
+  const arrived = useArrivals(versions?.map((version) => String(version.number)) ?? [], versions !== null);
 
   if (!versions) return listFailure ? <FormError error={listFailure} /> : null;
   return (
@@ -624,7 +625,7 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
       {versions.length > 1 && <p className="muted small">Pick two to see what changed.</p>}
       <ol className="version-list">
         {[...versions].reverse().map((version) => (
-          <li key={version.number}>
+          <li key={version.number} className={arrived.has(String(version.number)) ? "arrived" : undefined}>
             {versions.length > 1 && (
               <input
                 type="checkbox"
