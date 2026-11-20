@@ -49,23 +49,27 @@ export async function tokenFor(context: Context, installationId: number): Promis
   );
 }
 
-/** Orders Repositories by `owner/name`, ignoring case, so every client lists them alike. */
-function byFullName(a: { fullName: string }, b: { fullName: string }): number {
-  const [x, y] = [a.fullName.toLowerCase(), b.fullName.toLowerCase()];
+/** Orders names alphabetically ignoring case, the same on every server whatever its locale. */
+function ignoringCase(a: string, b: string): number {
+  const [x, y] = [a.toLowerCase(), b.toLowerCase()];
   if (x !== y) return x < y ? -1 : 1;
-  return a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0;
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Every installation of the App, with the Repositories it covers, sorted by `owner/name` ignoring case. */
+/**
+ * Every installation of the App, by account, with the Repositories it covers by `owner/name`, both
+ * ignoring case, so every client lists them alike.
+ */
 export async function listInstallations(context: Context): Promise<Installation[]> {
   const { config } = context;
   const installations = await appInstallations(config, await appToken(context));
-  return Promise.all(
+  const listed = await Promise.all(
     installations.map(async (installation) => ({
       account: installation.account.login,
       repositories: (await installationRepositories(config, await tokenFor(context, installation.id)))
         .map((r) => ({ id: r.id, fullName: r.full_name }))
-        .sort(byFullName),
+        .sort((a, b) => ignoringCase(a.fullName, b.fullName)),
     })),
   );
+  return listed.sort((a, b) => ignoringCase(a.account, b.account));
 }
