@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 e2e/live.spec.ts:105:1 › a save by another member adds its Version to the list without closing what Ada has open (2.6s)
+
+  1 passed (3.7s)
