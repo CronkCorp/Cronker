@@ -77,7 +77,7 @@ test("attach, edit and remove Steps in Project settings, and preview a Ticket's 
   await expect(summary("Ready")).toContainText("opus, 2 Outcomes, requires planned");
 
   // A Status of the Project's own takes a Merge Step too.
-  await steps.getByLabel("Kind of Step for Ready").selectOption("Merge: skipped unless an agent may merge the Ticket");
+  await steps.getByLabel("Kind of Step for Ready").selectOption("Merge");
   await steps.getByRole("button", { name: "Save the Step on Ready" }).click();
   await expect(summary("Ready")).toContainText("Merge Step, opus, 2 Outcomes, requires planned");
 

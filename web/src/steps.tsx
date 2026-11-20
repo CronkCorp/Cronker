@@ -169,8 +169,8 @@ function StepForm({
       <div className="form-row">
         <Field label={`Kind of Step for ${of}`}>
           <select value={draft.kind} onChange={(e) => onDraft({ ...draft, kind: e.target.value as StepKind })}>
-            <option value="ordinary">Ordinary: every Ticket its Label rule lets through gets a Run</option>
-            <option value="merge">Merge: skipped unless an agent may merge the Ticket</option>
+            <option value="ordinary">Ordinary</option>
+            <option value="merge">Merge</option>
           </select>
         </Field>
         <Field label={`Model for ${of}`}>
