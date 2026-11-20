@@ -29,7 +29,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { attachAll, Attachments, FileList } from "./attachments.js";
-import { field, useSubmit } from "./forms.js";
+import { field, submitOnModEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
@@ -1010,7 +1010,7 @@ function CommentForm({
     >
       <label className="field">
         <span className="sr-only">{label}</span>
-        <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" />
+        <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnModEnter} />
       </label>
       <FormError error={error} />
       <Actions>

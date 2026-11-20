@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 /** Runs a form's action, tracking whether it is busy and the error it ended with. */
 export function useSubmit(action: (form: FormData, element: HTMLFormElement) => Promise<void>) {
@@ -21,6 +21,16 @@ export function useSubmit(action: (form: FormData, element: HTMLFormElement) => 
 }
 
 export const field = (form: FormData, name: string) => String(form.get(name) ?? "");
+
+/**
+ * A Comment box's keydown: Ctrl+Enter or Cmd+Enter submits its form as the submit button does, so an empty box
+ * places nothing; plain Enter and Shift+Enter keep adding new lines.
+ */
+export function submitOnModEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+  event.preventDefault();
+  event.currentTarget.form?.requestSubmit();
+}
 
 /**
  * Runs a settings page's saves one at a time, tracking whether one is busy, the error it ended with,
