@@ -1,16 +1,17 @@
 /**
  * Scrubbing: known secret patterns in a Transcript become `[scrubbed]` before anything is stored (ADR 0006). The
  * list is fixed in code: Cronk's own tokens, GitHub's, Anthropic's, AWS access keys, Slack's, private-key blocks
- * and bearer values. A secret of another shape is not caught, which is why any User may delete a Transcript.
+ * and bearer values. A secret of another shape is not caught.
  */
 
 export const scrubbed = "[scrubbed]";
 
-// The distinctive prefixes match even straight after other letters, such as a token pasted onto a word.
+// The long, distinctive prefixes match even straight after other letters, such as a token pasted onto a word; AWS's
+// four letters are too short for that, so its keys match only as words of their own.
 const patterns: RegExp[] = [
-  // Cronk's own secrets: `cronk_<kind>_` and 32 random bytes in base64url (server/identity/secrets.ts),
-  // caught whole however much more of the same alphabet follows.
-  /cronk_(?:setup|sign_in|join|reset|github_state|github_sign_in|agent|oauth_code|oauth_refresh)_[A-Za-z0-9_-]{32,}/g,
+  // Cronk's own secrets: `cronk_<kind>_` and 32 random bytes in base64url (server/identity/secrets.ts), of any
+  // kind, a new one included, caught whole however much more of the same alphabet follows.
+  /cronk_[a-z]+(?:_[a-z]+)*_[A-Za-z0-9_-]{32,}/g,
   // GitHub: personal, OAuth, user-to-server, server-to-server and refresh tokens, and fine-grained personal tokens.
   /gh[pousr]_[A-Za-z0-9]{36,}/g,
   /github_pat_[A-Za-z0-9_]{22,}/g,

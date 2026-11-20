@@ -3,7 +3,16 @@ import { api, type Project, type Run, type Ticket, type Transcript, type Transcr
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
 import { Actor } from "./ui/actor.js";
-import { Button, EmptyState, ExternalLink, FormError, PageHead, RelativeTime, workspaceCrumb, type Crumb } from "./ui/controls.js";
+import {
+  Button,
+  EmptyState,
+  ExternalLink,
+  FormError,
+  PageHead,
+  RelativeTime,
+  workspaceCrumb,
+  type Crumb,
+} from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel } from "./ui/labels.js";
 
 /**
@@ -12,12 +21,13 @@ import { Chip, KindLabel, ModelLabel } from "./ui/labels.js";
  */
 export function TranscriptScreen({ workspace, transcriptId }: { workspace: Workspace; transcriptId: string }) {
   const [transcript, setTranscript] = useState<Transcript | null>(null);
-  const [run, setRun] = useState<{ run: Run; ticket: Ticket; project: Project } | null>(null);
+  // The Run the Transcript records, with its Ticket and Project, for the page head.
+  const [ofRun, setOfRun] = useState<{ run: Run; ticket: Ticket; project: Project } | null>(null);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [next, setNext] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  usePlace("project", run?.project.id ?? null);
+  usePlace("project", ofRun?.project.id ?? null);
 
   useEffect(() => {
     let current = true;
@@ -35,7 +45,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
         const foundRun = await api.run(found.runId);
         const ticket = await api.ticket(foundRun.ticketId);
         const project = await api.project(ticket.projectId);
-        if (current) setRun({ run: foundRun, ticket, project });
+        if (current) setOfRun({ run: foundRun, ticket, project });
       })
       .catch(fail);
     return () => {
@@ -66,10 +76,11 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   if (!transcript) return <div className="page" aria-busy="true" />;
 
   const crumbs: Crumb[] = [workspaceCrumb(workspace)];
-  if (run) {
+  const run = ofRun?.run;
+  if (ofRun) {
     crumbs.push(
-      { label: <span className="mono">{run.project.key}</span>, to: `/projects/${run.project.id}` },
-      { label: <span className="mono">{run.ticket.key}</span>, to: `/tickets/${run.ticket.id}` },
+      { label: <span className="mono">{ofRun.project.key}</span>, to: `/projects/${ofRun.project.id}` },
+      { label: <span className="mono">{ofRun.ticket.key}</span>, to: `/tickets/${ofRun.ticket.id}` },
     );
   } else {
     crumbs.push({ label: "Agents", to: `/workspaces/${workspace.id}/agents` });
@@ -81,29 +92,31 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
     <div className="page transcript-page">
       <PageHead
         crumbs={crumbs}
-        title={run ? `Transcript of the ${run.run.step.name} Run` : "Transcript"}
+        title={run ? `Transcript of the ${run.step.name} Run` : "Transcript"}
         meta={
           <span className="transcript-meta">
             <Actor actor={agent} />
-            {run && (
+            {ofRun && (
               <>
                 <span>
-                  on <span className="mono">{run.ticket.key}</span> {run.ticket.title}
+                  on <span className="mono">{ofRun.ticket.key}</span> {ofRun.ticket.title}
                 </span>
-                <ModelLabel model={run.run.model} />
+                <ModelLabel model={ofRun.run.model} />
               </>
             )}
             <span>
               {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"}, uploaded{" "}
               <RelativeTime at={transcript.uploadedAt} />
             </span>
-            {run?.run.sessionUrl && <ExternalLink url={run.run.sessionUrl}>Session</ExternalLink>}
+            {run?.sessionUrl && <ExternalLink url={run.sessionUrl}>Session</ExternalLink>}
           </span>
         }
       />
       <FormError error={failure} />
       {entries.length === 0 ? (
-        <EmptyState title="Nothing was said in this session yet.">Its entries appear once the agent's next turn is uploaded.</EmptyState>
+        <EmptyState title="Nothing was said in this session yet.">
+          Its entries appear once the agent's next turn is uploaded.
+        </EmptyState>
       ) : (
         <ol className="transcript" aria-label="Entries">
           {entries.map((entry) => (
@@ -199,10 +212,10 @@ function ToolResult({ entry }: { entry: TranscriptEntry }) {
 
 function Gap({ gap }: { gap: NonNullable<Transcript["gap"]> }) {
   const megabytes = gap.bytes / (1024 * 1024);
+  const size = megabytes >= 1 ? `${megabytes.toFixed(1)} MB` : `${Math.ceil(gap.bytes / 1024)} KB`;
   return (
     <li className="transcript-gap" role="separator" aria-label="Left out">
-      {gap.entries} {gap.entries === 1 ? "entry" : "entries"} ({megabytes >= 1 ? `${megabytes.toFixed(1)} MB` : `${Math.ceil(gap.bytes / 1024)} KB`})
-      left out here: this Transcript was over 50 MB, so only its start and its end are kept.
+      {gap.entries} {gap.entries === 1 ? "entry" : "entries"} ({size}) left out here: this Transcript was over 50 MB, so only its start and its end are kept.
     </li>
   );
 }

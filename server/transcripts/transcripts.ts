@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import type { AgentCaller } from "../identity/callers.js";
+import type { AgentCaller } from "../agents/tokens.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
@@ -115,7 +115,16 @@ export async function uploadTranscript(
        on conflict (agent_id, session_id) do update set uploaded_at = excluded.uploaded_at, run_id = excluded.run_id,
          gap_after = excluded.gap_after, gap_entries = excluded.gap_entries, gap_bytes = excluded.gap_bytes
        returning id, (xmax = 0) as created`,
-      [agent.workspace.id, agent.id, sessionId, now, gap?.after ?? null, gap?.entries ?? null, gap?.bytes ?? null, run.rows[0]?.id ?? null],
+      [
+        agent.workspace.id,
+        agent.id,
+        sessionId,
+        now,
+        gap?.after ?? null,
+        gap?.entries ?? null,
+        gap?.bytes ?? null,
+        run.rows[0]?.id ?? null,
+      ],
     );
     const { id, created } = rows[0]!;
     await tx.query("delete from transcript_entries where transcript_id = $1", [id]);
@@ -131,7 +140,7 @@ export async function uploadTranscript(
           batch.map((entry) => entry.role),
           batch.map((entry) => entry.text),
           batch.map((entry) => entry.toolName),
-          batch.map((entry) => (entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null))),
+          batch.map(toolInputJson),
           batch.map((entry) => entry.toolResult),
           batch.map((entry) => entry.cut),
           batch.map((entry) => entry.at),
@@ -164,12 +173,16 @@ function cutToolResult(entry: ConvertedEntry, index: number): TranscriptEntry {
   return { ...positioned, toolResult: bytes.subarray(0, end).toString("utf8"), cut: true };
 }
 
+/** A tool call's input as stored, in JSON; none for a message. */
+const toolInputJson = (entry: TranscriptEntry): string | null =>
+  entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null);
+
 /** How much an entry takes up: its text, tool name, tool input and tool result, in bytes. */
 function sizeOf(entry: TranscriptEntry): number {
   return (
     Buffer.byteLength(entry.text ?? "") +
     Buffer.byteLength(entry.toolName ?? "") +
-    (entry.toolName === null ? 0 : Buffer.byteLength(JSON.stringify(entry.toolInput ?? null))) +
+    Buffer.byteLength(toolInputJson(entry) ?? "") +
     Buffer.byteLength(entry.toolResult ?? "")
   );
 }
@@ -189,14 +202,15 @@ function keepStartAndEnd(entries: TranscriptEntry[]): { kept: TranscriptEntry[];
   const total = sizes.reduce((sum, size) => sum + size, 0);
   if (total <= transcriptLimitBytes) return { kept: entries, gap: null };
   const half = transcriptLimitBytes / 2;
-  let startEnd = 0;
-  for (let bytes = 0; startEnd < entries.length && bytes + sizes[startEnd]! <= half; startEnd += 1) bytes += sizes[startEnd]!;
-  let endStart = entries.length;
-  for (let bytes = 0; endStart > startEnd && bytes + sizes[endStart - 1]! <= half; endStart -= 1) bytes += sizes[endStart - 1]!;
-  const leftOut = sizes.slice(startEnd, endStart);
+  // The start keeps entries [0, headCount), the end entries [tailFrom, length); the gap is what lies between.
+  let headCount = 0;
+  for (let bytes = 0; headCount < entries.length && bytes + sizes[headCount]! <= half; headCount += 1) bytes += sizes[headCount]!;
+  let tailFrom = entries.length;
+  for (let bytes = 0; tailFrom > headCount && bytes + sizes[tailFrom - 1]! <= half; tailFrom -= 1) bytes += sizes[tailFrom - 1]!;
+  const leftOut = sizes.slice(headCount, tailFrom);
   return {
-    kept: [...entries.slice(0, startEnd), ...entries.slice(endStart)],
-    gap: { after: startEnd, entries: leftOut.length, bytes: leftOut.reduce((sum, size) => sum + size, 0) },
+    kept: [...entries.slice(0, headCount), ...entries.slice(tailFrom)],
+    gap: { after: headCount, entries: leftOut.length, bytes: leftOut.reduce((sum, size) => sum + size, 0) },
   };
 }
 

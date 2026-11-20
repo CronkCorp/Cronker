@@ -514,7 +514,6 @@ interface EndedRun {
 
 const endedRunColumns = `runs.id as "runId", runs.workspace_id as "workspaceId", runs.ticket_id as "ticketId",
   runs.session_id as "sessionId", runs.session_url as "sessionUrl",
-  (select transcripts.id from transcripts where transcripts.run_id = runs.id limit 1) as "transcriptId",
   (select kind from runners where runners.id = runs.runner_id) as "runnerKind"`;
 
 /** Once the transaction commits, asks the Runner of a Run Cronk ended to stop its session too, where it can. */
