@@ -151,7 +151,11 @@ The web client keeps its own small component set, styled with the tokens in plai
   - Status, Priority, Assignee, Delegate, Autonomous Delegation (On, Off, or the Project's once delegated) and Labels, each edited in place, then Due date and Estimate. An agent's completion adds a Verification row among them: an Unverified chip with Accept and Reopen…, or Verified.
   - The **Run card**, in `--agent-soft`, while a Run is running or waiting: the Agent, the Step and its model label, the Run state, when it started and its session link (a waiting Run has not started, so it shows why it waits instead). A Run gone wrong shows here with Retry, in `--danger-soft`. It is hidden otherwise.
   - Pull Requests, Parent, Sub-Tickets, Relations, Linked Documents and Linked Artifacts (each with Link and Unlink) and Files.
-- **Below 900px** the side panel moves above the main column, as on a Document's, Term's or Decision's page.
+  - **Taller than the window**, as with many Relations, it is at most the window's height below its top, less the 16px gap, and scrolls on its own: scrolling over it scrolls the panel, not the page, so every group is reachable wherever the main column is. Its Pickers open over the page, never clipped by it. A panel that fits has no scrollbar and scrolling over it scrolls the page.
+- **Below 900px** the side panel moves above the main column, as on a Document's, Term's or Decision's page, at its full height.
+
+![A side panel taller than the window, scrolled to its Files](ui/ticket-side-panel-scrolled.png)
+
 - **Timeline entries**, oldest first, each with an avatar in the gutter:
   - **Comment:** the body in a bordered bubble, with replies indented under it. A Question is a Comment from the Agent in a `--warn-soft` box with its answer box. A send-back by Cronk is a Comment labelled `SENT BACK`, naming the failing checks (each linking to GitHub), the review, or for a merge conflict the merge that caused it.
   - **Report:** a card with an `--agent` border, its title and an "Open Report" link. The body shows at body size, its headings scaled down to 14px.

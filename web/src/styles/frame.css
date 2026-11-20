@@ -345,6 +345,14 @@
   display: grid;
   gap: var(--space-3);
 }
+/* A Ticket's side panel scrolls on its own when it is taller than the window; `fitWindow` sets its max-height. */
+.page-split > .side-fits-window {
+  overflow-y: auto;
+}
+/* Scrolling over a panel that overflows stays in it; over one that fits it scrolls the page. */
+.page-split > .side-fits-window[data-overflows] {
+  overscroll-behavior-y: contain;
+}
 @media (max-width: 900px) {
   .page-split {
     grid-template-columns: minmax(0, 1fr);
@@ -352,5 +360,8 @@
   .page-split > .side {
     position: static;
     order: -1;
+  }
+  .page-split > .side-fits-window {
+    overflow-y: visible;
   }
 }
