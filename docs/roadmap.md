@@ -77,7 +77,7 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 ## Milestones
 
 1. **The loop.** *Built.* Sign-in, Workspaces, Projects, Admins, Agents and tokens; Tickets with all kept fields; the board with Status kinds, Steps, Briefs, Outcomes, round limits and Label rules; Delegation, Autonomous Delegation, Verification, Questions, the Inbox, Reports, live updates; the HTTP API and MCP with OAuth; the subscription Runner with Run states and limits. Dogfooding starts here: `docs/setup.md` sets an installation up.
-2. **Code and knowledge.** Code first: the GitHub App upgrade, Repositories on Projects, Pull Requests, merges by Users, failures sending work back. Then knowledge: Reports into Documents, Documents with Versions, Linked Documents, Attachments, Terms and Decisions with export. Last, a styling pass over every screen, milestone 1's and 2's alike, following `docs/ui.md` (adapted from the old Cronk's): first the foundation (design tokens, IBM Plex faces, the shared components, the sidebar frame), then each screen.
+2. **Code and knowledge.** *Built.* Code first: the GitHub App upgrade, Repositories on Projects, Pull Requests, merges by Users, failures sending work back. Then knowledge: Reports into Documents, Documents with Versions, Linked Documents, Attachments, Terms and Decisions with export. Last, a styling pass over every screen, milestone 1's and 2's alike, following `docs/ui.md` (adapted from the old Cronk's): first the foundation (design tokens, IBM Plex faces, the shared components, the sidebar frame), then each screen.
 3. **More Runners and the rest.** The Managed Agents Runner with fetched Transcripts, the Transcript hook, merges by agents, Artifacts, search.
 
 ## Not now
