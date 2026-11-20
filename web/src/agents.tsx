@@ -4,7 +4,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
-import { Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, workspaceCrumb } from "./ui/controls.js";
+import { Banner, Button, CopyButton, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, workspaceCrumb } from "./ui/controls.js";
 import { Key, RunState } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -415,26 +415,5 @@ function ManageTokens({
         Whatever connects with it stops working until it is given a new token.
       </ConfirmDialog>
     </Dialog>
-  );
-}
-
-/** Copies a secret to the clipboard and says so. */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const copy = () => {
-    setCopied(false);
-    setError(null);
-    navigator.clipboard.writeText(text).then(
-      () => setCopied(true),
-      () => setError("Couldn't copy: select it and copy it yourself."),
-    );
-  };
-  return (
-    <>
-      <Button onClick={copy}>Copy</Button>
-      <Saved shown={copied}>Copied.</Saved>
-      <FormError error={error} />
-    </>
   );
 }

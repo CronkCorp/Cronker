@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Agent, type ProjectSummary, type Runner, type Trigger, type WorkspaceSummary } from "./api.js";
+import {
+  api,
+  type Agent,
+  type AgentToken,
+  type ProjectSummary,
+  type Runner,
+  type TranscriptHook,
+  type Trigger,
+  type WorkspaceSummary,
+} from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
-import { Actions, Banner, Button, clockTime, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
+import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
@@ -11,12 +20,15 @@ import { Chip, ModelLabel } from "./ui/labels.js";
  * The User's own Runners: ways for Cronk to start their Agents' Runs with their own credentials.
  * A subscription Runner fires one claude.ai scheduled task per model label, optionally per Project.
  * Each card's count of running Runs and its pause stay current from the User's Runners stream, and a removed
- * Runner's card drops out of every open Runners page.
+ * Runner's card drops out of every open Runners page. A subscription Runner's card also says how to install the
+ * Transcript hook, and makes its token for each Agent pointed at the Runner.
  */
 export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   usePlace("runners");
   const [runners, setRunners] = useState<Runner[] | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [hook, setHook] = useState<TranscriptHook | null>(null);
   const [error, setError] = useState<string | null>(null);
   const latest = useLatest();
   const refresh = useCallback(() => {
@@ -31,6 +43,15 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
       (e: Error) => setError(e.message),
     );
   }, [workspaces]);
+  useEffect(() => {
+    Promise.all(workspaces.map((w) => api.agents(w.id))).then(
+      (lists) => setAgents(lists.flat()),
+      (e: Error) => setError(e.message),
+    );
+  }, [workspaces]);
+  useEffect(() => {
+    api.transcriptHook().then(setHook, (e: Error) => setError(e.message));
+  }, []);
   const replace = (updated: Runner) =>
     setRunners((all) => all?.map((r) => (r.id === updated.id ? updated : r)) ?? null);
   const drop = (removed: Runner) => setRunners((all) => all?.filter((r) => r.id !== removed.id) ?? null);
@@ -62,6 +83,8 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
             runner={runner}
             projects={projects}
             workspaces={workspaces}
+            agents={agents.filter((a) => a.runnerId === runner.id)}
+            hook={hook}
             onChanged={replace}
             onRemoved={drop}
           />
@@ -88,12 +111,17 @@ function RunnerSettings({
   runner,
   projects,
   workspaces,
+  agents: agentsOnIt,
+  hook,
   onChanged,
   onRemoved,
 }: {
   runner: Runner;
   projects: ProjectSummary[];
   workspaces: WorkspaceSummary[];
+  /** The Agents pointed at it, as the page loaded them. */
+  agents: Agent[];
+  hook: TranscriptHook | null;
   onChanged: (runner: Runner) => void;
   onRemoved: (runner: Runner) => void;
 }) {
@@ -277,7 +305,86 @@ function RunnerSettings({
           </ConfirmDialog>
         </div>
       )}
+      {runner.kind === "subscription" && hook && <TranscriptHookSetup hook={hook} agents={agentsOnIt} />}
     </section>
+  );
+}
+
+/**
+ * How to install the Transcript hook for a subscription Runner's Runs: the snippet to commit, with this Cronk's
+ * address in it, the setup steps, and a *Transcript hook* token for each Agent pointed at the Runner, shown once.
+ */
+function TranscriptHookSetup({ hook, agents }: { hook: TranscriptHook; agents: Agent[] }) {
+  const snippet = JSON.stringify(hook.settings, null, 2);
+  const host = new URL(hook.script).host;
+  return (
+    <div className="runner-hook" aria-label="Transcript hook" role="group">
+      <h3>Transcript hook</h3>
+      <p className="muted small">
+        Runs upload their Transcripts through a Claude Code hook this Cronk serves. Its uploads also tell Cronk a Run is
+        still working, so a long turn doesn't become lost.
+      </p>
+      <ol className="runner-hook-steps">
+        <li>
+          Commit this as <code>.claude/settings.json</code> in each Repository the scheduled tasks work on, merging it
+          into any hooks already there:
+          <pre aria-label="settings.json snippet">
+            {snippet}
+          </pre>
+          <div>
+            <CopyButton text={snippet} label="Copy snippet" />
+          </div>
+        </li>
+        <li>
+          Make a Transcript hook token below for the Agent pointed at this Runner, and add it to the cloud environment
+          of its scheduled tasks as the variable <code>{hook.tokenVariable}</code>.
+        </li>
+        <li>
+          Give that environment <strong>Full</strong> network access, or add <code>{host}</code> to its{" "}
+          <strong>Limited</strong> allowlist, so the hook can reach Cronk.
+        </li>
+        <li>
+          Hooks only run in cloud sessions with one Repository: a scheduled task with several gets no Transcripts.
+        </li>
+      </ol>
+      {agents.length === 0 ? (
+        <p className="muted small">No Agent uses this Runner yet: point one at it from its page to make its token.</p>
+      ) : (
+        agents.map((agent) => <HookToken key={agent.id} agent={agent} variable={hook.tokenVariable} />)
+      )}
+    </div>
+  );
+}
+
+/** Makes a *Transcript hook* token for an Agent, showing it once; it is revoked on its own on the Agent's page. */
+function HookToken({ agent, variable }: { agent: Agent; variable: string }) {
+  const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
+  const make = useSubmit(async () => {
+    setIssued(await api.issueToken(agent.id, { name: "Transcript hook", access: "full" }));
+  });
+  return (
+    <form onSubmit={make.onSubmit} className="runner-hook-token" aria-label={`Transcript hook token for ${agent.name}`}>
+      <Actions>
+        <Button type="submit" disabled={make.busy}>
+          Make a Transcript hook token for {agent.name}
+        </Button>
+      </Actions>
+      <FormError error={make.error} />
+      {issued && (
+        <Banner tone="warn" label="Token made">
+          <Field label={`${variable} for ${agent.name}`}>
+            <div className="copy-row">
+              <input readOnly value={issued.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
+              <CopyButton text={issued.secret} />
+            </div>
+          </Field>
+          <p>
+            Copy it now: it is shown only once. It is listed among {agent.name}'s tokens as <em>Transcript hook</em>,
+            where revoking it stops only the hook's uploads.
+          </p>
+        </Banner>
+      )}
+    </form>
   );
 }
 

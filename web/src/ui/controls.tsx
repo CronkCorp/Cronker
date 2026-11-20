@@ -275,3 +275,24 @@ function LiveStatus({ state }: { state: LiveState }) {
     </span>
   );
 }
+
+/** Copies text, such as a secret, to the clipboard and says so. */
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const copy = () => {
+    setCopied(false);
+    setError(null);
+    navigator.clipboard.writeText(text).then(
+      () => setCopied(true),
+      () => setError("Couldn't copy: select it and copy it yourself."),
+    );
+  };
+  return (
+    <>
+      <Button onClick={copy}>{label}</Button>
+      <Saved shown={copied}>Copied.</Saved>
+      <FormError error={error} />
+    </>
+  );
+}

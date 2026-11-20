@@ -269,6 +269,13 @@ export interface Trigger {
 }
 
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
+/** How to install the Transcript hook: the `settings.json` snippet to commit, with this Cronk's address in it. */
+export interface TranscriptHook {
+  script: string;
+  tokenVariable: string;
+  settings: { hooks: Record<string, unknown> };
+}
+
 export interface Runner {
   id: string;
   name: string;
@@ -888,6 +895,7 @@ export const api = {
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
+  transcriptHook: () => call<TranscriptHook>("GET", "/api/transcript-hook"),
   transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
   transcriptEntries: (id: string, after?: number) =>
     call<{ entries: TranscriptEntry[]; next: number | null }>(
