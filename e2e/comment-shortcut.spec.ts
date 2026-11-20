@@ -122,3 +122,31 @@ test("pressing Ctrl+Enter again while a Comment is being sent doesn't place it t
   await expect(box).toHaveValue("");
   expect(sent).toBe(1);
 });
+
+test("the buttons that place a Comment show the shortcut as a hint, Ctrl+↵ off macOS", async ({ page, cronk }) => {
+  await ticketsWithAQuestion(page, cronk);
+  await openTicket(page, "CRONK-2");
+  const comment = page.getByRole("button", { name: "Comment", exact: true });
+  await expect(comment).toHaveText("Comment Ctrl+↵");
+  await expect(comment).toHaveAttribute("aria-keyshortcuts", "Control+Enter");
+  const question = page.getByRole("article", { name: "Question from claude-max" });
+  await expect(question.getByRole("button", { name: "Post answer", exact: true })).toHaveText("Post answer Ctrl+↵");
+
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /^Inbox/ }).click();
+  const answer = page.getByRole("region", { name: "Selected item" }).getByRole("button", { name: "Post answer", exact: true });
+  await expect(answer).toHaveText("Post answer Ctrl+↵");
+});
+
+test("on macOS the hint is ⌘↵", async ({ page, cronk }) => {
+  await page.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
+  await ticketsWithAQuestion(page, cronk);
+  await openTicket(page, "CRONK-1");
+  const comment = page.getByRole("button", { name: "Comment", exact: true });
+  await expect(comment).toHaveText("Comment ⌘↵");
+  await expect(comment).toHaveAttribute("aria-keyshortcuts", "Meta+Enter");
+  await page.getByLabel("New Comment").fill("Is it blocked?");
+  await page.getByLabel("New Comment").press("Meta+Enter");
+  const placed = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
+  await placed.getByRole("button", { name: "Reply" }).click();
+  await expect(placed.getByRole("button", { name: "Send reply", exact: true })).toHaveText("Send reply ⌘↵");
+});

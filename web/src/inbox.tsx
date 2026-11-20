@@ -20,7 +20,7 @@ import { Markdown } from "./markdown.js";
 import { PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, CommentButton, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker } from "./ui/picker.js";
@@ -499,9 +499,9 @@ function Answer({
         />
       </Field>
       <Actions>
-        <Button type="submit" variant="primary" disabled={disabled}>
+        <CommentButton variant="primary" disabled={disabled}>
           Post answer
-        </Button>
+        </CommentButton>
         <span className="muted small">The answer sends {item.ticket.key} back to the {item.question.step.name} Step.</span>
         <Button variant="ghost" disabled={disabled} onClick={() => run(() => api.dismissQuestion(item.question.id))}>
           Dismiss

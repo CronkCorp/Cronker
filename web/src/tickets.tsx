@@ -37,7 +37,7 @@ import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
-import { Actions, Button, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, CommentButton, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
@@ -1014,9 +1014,9 @@ function CommentForm({
       </label>
       <FormError error={error} />
       <Actions>
-        <Button type="submit" variant={primary ? "primary" : "secondary"} disabled={busy}>
+        <CommentButton variant={primary ? "primary" : "secondary"} disabled={busy}>
           {button}
-        </Button>
+        </CommentButton>
         {hint && <span className="muted small">{hint}</span>}
       </Actions>
     </form>
