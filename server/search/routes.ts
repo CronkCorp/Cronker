@@ -20,7 +20,7 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Search the Workspace",
           description:
             `Tickets, knowledge and Transcripts of the Workspace matching \`q\`, best first with Transcripts last, ` +
-            `at most ${perKind} of each kind. A Transcript matches by its entries' text. ` +
+            `at most ${perKind} of each kind. A Transcript matches by an entry whose text has the whole search. ` +
             "Words match by their stem in English " +
             "(\"merging\" finds \"merged\"), written in web-search syntax.",
           params: Type.Object({ workspaceId: Type.String() }),

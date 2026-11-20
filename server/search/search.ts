@@ -64,21 +64,21 @@ const hits = `
     join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version, q
   where decisions.workspace_id = $1 and versions.search @@ query
   union all
-  -- A Transcript matches by its entries' text, and shows the entry that matched best. A Run's is kept with the Run's
-  -- Ticket and Project; an Agent's own, of no Run, with the Workspace.
-  select 'transcript', transcripts.id,
+  -- A Transcript matches by an entry whose text the whole search matches, and shows the one that matched best. A Run's
+  -- is kept with the Run's Ticket and Project; an Agent's own, of no Run, with the Workspace.
+  select 'transcript', best.transcript_id,
     case when runs.id is null then 'Transcript of a ' || agents.name || ' session'
       else 'Transcript of the ' || runs.status_name || ' Run' end,
     tickets.project_id, projects.key || '-' || tickets.number, best.text, best.rank
   from (
-      select distinct on (entries.transcript_id) entries.transcript_id, entries.text, ts_rank(entries.search, query) as rank
+      select distinct on (entries.transcript_id) entries.transcript_id, transcripts.agent_id, transcripts.run_id,
+        entries.text, ts_rank(entries.search, query) as rank
       from transcript_entries entries join transcripts on transcripts.id = entries.transcript_id, q
       where transcripts.workspace_id = $1 and entries.search @@ query
       order by entries.transcript_id, rank desc, entries.position
     ) best
-    join transcripts on transcripts.id = best.transcript_id
-    join agents on agents.id = transcripts.agent_id
-    left join runs on runs.id = transcripts.run_id
+    join agents on agents.id = best.agent_id
+    left join runs on runs.id = best.run_id
     left join tickets on tickets.id = runs.ticket_id
     left join projects on projects.id = tickets.project_id`;
 
