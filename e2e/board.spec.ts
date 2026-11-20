@@ -1,6 +1,7 @@
 import { setUp, signIn } from "../test/harness/flows.js";
-import type { Locator } from "@playwright/test";
-import { expect, test } from "./fixtures.js";
+import type { Locator, Page } from "@playwright/test";
+import type { StartedCronk } from "../test/harness/start-cronk.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
 
 test("Done and Canceled board columns start collapsed to their dot and count, and open on click until the User leaves", async ({
   page,
@@ -39,13 +40,33 @@ test("Done and Canceled board columns start collapsed to their dot and count, an
   await expect(lane("Done").getByRole("link", { name: /CRONK-1 Shipped/ })).toBeHidden();
 });
 
-test("a 1280px screen shows every Status of the board, named in full, without sideways scrolling", async ({ page, cronk }) => {
+/** A Project named Cronker with twelve Statuses, three more than the default board's, as Ada sees it at 1280px. */
+async function crowdedBoard(page: Page, cronk: StartedCronk) {
   await page.setViewportSize({ width: 1280, height: 800 });
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
   const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  // Before Done, so they come after In Review.
+  for (const name of ["Design", "Release", "Staging"]) {
+    await call("POST", `/api/projects/${project.id}/statuses`, { name, kind: "active", position: 7 });
+  }
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const open = async () => {
+    await signInInBrowser(page, cronk);
+    await page.getByRole("link", { name: "CRONK Cronker" }).click();
+    const board = page.getByRole("region", { name: "Board" });
+    await expect(board.getByRole("region", { name: "Backlog", exact: true })).toBeVisible();
+    return { board, lane: (name: string) => board.getByRole("region", { name, exact: true }) };
+  };
+  return { call, project, status, open };
+}
+
+test("a board whose Statuses don't fit scrolls sideways itself, its columns still readable, while the page stays put", async ({
+  page,
+  cronk,
+}) => {
+  const { call, project, status, open } = await crowdedBoard(page, cronk);
   // A busy card in a column with a Step: Priority, Labels, a long word in its title and an Assignee.
   const busy = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Export Terms as GLOSSARY.md and Decisions as docs/adr/" });
   await call("PATCH", `/api/tickets/${busy.id}`, {
@@ -54,34 +75,68 @@ test("a 1280px screen shows every Status of the board, named in full, without si
     labels: ["security", "documentation"],
     assigneeId: (await call("GET", "/api/me")).user.id,
   });
+  const { board, lane } = await open();
 
-  await page.goto(cronk.url);
-  await page.getByLabel("Email").fill("ada@example.com");
-  await page.getByLabel("Password").fill("correct horse battery");
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
-  const board = page.getByRole("region", { name: "Board" });
-  await expect(board.getByRole("region", { name: "Backlog", exact: true })).toBeVisible();
-
-  // The default board's nine Statuses, Done and Canceled collapsed to their dot and count.
-  const open = ["Backlog", "Triage", "Ready", "Investigate", "Implement", "Code review", "In Review"];
-  for (const name of [...open, "Done", "Canceled"]) {
-    const column = board.getByRole("region", { name, exact: true });
-    const box = (await column.boundingBox())!;
-    expect(box.x + box.width, `${name} ends inside the screen`).toBeLessThanOrEqual(1280);
+  // Every open column keeps a card's readable width; Done and Canceled stay collapsed to their dot and count.
+  const columns = ["Backlog", "Triage", "Ready", "Investigate", "Implement", "Code review", "In Review", "Design", "Release", "Staging"];
+  for (const name of columns) {
+    expect((await lane(name).boundingBox())!.width, `${name} keeps a readable width`).toBeGreaterThanOrEqual(240);
+  }
+  for (const name of ["Done", "Canceled"]) {
+    expect((await lane(name).boundingBox())!.width, `${name} stays collapsed`).toBeLessThan(60);
   }
   // Each open column's name, and its Step's model label, are shown whole rather than cut off.
   const models: Record<string, string> = { Triage: "haiku", Investigate: "sonnet", Implement: "opus", "Code review": "sonnet" };
   const whole = (shown: Locator) => shown.evaluate((e) => e.scrollWidth <= e.clientWidth);
-  for (const name of open) {
-    const column = board.getByRole("region", { name, exact: true });
-    const head = column.getByRole("heading", { name });
-    await expect(head).toBeVisible();
-    expect(await whole(head), `${name} is named in full`).toBe(true);
+  for (const name of columns) {
+    expect(await whole(lane(name).getByRole("heading", { name })), `${name} is named in full`).toBe(true);
     const model = models[name];
-    if (model) expect(await whole(column.getByText(model, { exact: true })), `${name}'s ${model} is shown in full`).toBe(true);
+    if (model) expect(await whole(lane(name).getByText(model, { exact: true })), `${name}'s ${model} is shown in full`).toBe(true);
   }
-  const card = board.getByRole("region", { name: "Code review", exact: true }).getByRole("link", { name: /^CRONK-1 / });
+  const card = lane("Code review").getByRole("link", { name: /^CRONK-1 / });
   expect(await whole(card), "the busy card fits its column").toBe(true);
+
+  // The board scrolls sideways; the document does not, and the page head stays where it was.
+  expect(await board.evaluate((e) => e.scrollWidth > e.clientWidth), "the board overflows").toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
+  const title = page.getByRole("heading", { name: "Cronker", level: 1 });
+  const before = (await title.boundingBox())!.x;
+  await board.evaluate((e) => (e.scrollLeft = e.scrollWidth));
+  const end = (await lane("Canceled").boundingBox())!;
+  expect(end.x + end.width, "the last column scrolls into the screen").toBeLessThanOrEqual(1280);
+  await expect(lane("Staging").getByRole("heading", { name: "Staging" })).toBeInViewport();
+  expect((await title.boundingBox())!.x, "the page head stays put").toBe(before);
+  expect(await page.evaluate(() => window.scrollX)).toBe(0);
+});
+
+test("dragging a card to the board's edge scrolls it, so the card reaches a column that starts off screen", async ({ page, cronk }) => {
+  const { call, project, open } = await crowdedBoard(page, cronk);
+  await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
+  const { board, lane } = await open();
+  const card = lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ });
+
+  // Staging, the last open column, starts past the board's right edge.
+  const edge = (await board.boundingBox())!;
+  expect((await lane("Staging").boundingBox())!.x, "Staging starts off screen").toBeGreaterThan(edge.x + edge.width);
+
+  // Pick the card up and hold it at the board's right edge until Staging comes into view, then drop it there.
+  const from = (await card.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  const y = edge.y + 60;
+  await page.mouse.move(edge.x + edge.width / 2, y, { steps: 5 });
+  expect(await board.evaluate((e) => e.scrollLeft), "the board has not scrolled before the card reaches its edge").toBe(0);
+  await expect(async () => {
+    await page.mouse.move(edge.x + edge.width - 8, y);
+    await page.mouse.move(edge.x + edge.width - 4, y);
+    const staging = (await lane("Staging").boundingBox())!;
+    expect(staging.x + staging.width).toBeLessThanOrEqual(edge.x + edge.width);
+  }).toPass({ timeout: 10_000 });
+  const staging = (await lane("Staging").boundingBox())!;
+  await page.mouse.move(staging.x + staging.width / 2, staging.y + 80, { steps: 5 });
+  await page.mouse.up();
+
+  await expect(lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeVisible();
+  await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeHidden();
+  expect(await page.evaluate(() => window.scrollX)).toBe(0);
 });
