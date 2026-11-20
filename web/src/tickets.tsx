@@ -1016,7 +1016,10 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | RelationKind>,
+  Exclude<
+    Change["field"],
+    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | "transcriptDeleted" | RelationKind
+  >,
   string
 > = {
   delegate: "Delegate",
@@ -1086,6 +1089,7 @@ function described(change: Change): string {
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
+  if (change.field === "transcriptDeleted") return `deleted the Transcript of the ${(change.from as { step: string }).step} Run`;
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
     // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
@@ -1487,6 +1491,7 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
             </Link>
           </>
         )}
+        {run.transcriptDeleted && <span className="small muted"> Transcript deleted</span>}
         {run.sessionUrl && (
           <>
             {" "}
