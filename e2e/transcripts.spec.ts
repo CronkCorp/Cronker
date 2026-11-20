@@ -109,3 +109,32 @@ test("a Transcript deleted by another User while open stays shown, marked Delete
   await expect(page.getByRole("list", { name: "Entries" })).toContainText("Reading the Ticket first.");
   await expect(page.getByRole("button", { name: "More of this Transcript" })).toHaveCount(0);
 });
+
+test("an open Transcript read to its end follows new turns past its first page", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  await signInInBrowser(page, cronk);
+  const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "laptop" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "Transcript hook", access: "full" });
+  const turn = (n: number) => ({ type: "user", uuid: `u${n}`, timestamp: "2026-01-01T09:00:00.000Z", message: { role: "user", content: `Turn ${n}.` } });
+  const upload = async (count: number) => {
+    const response = await fetch(`${cronk.url}/api/transcripts/sessions/laptop-session`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-ndjson", authorization: `Bearer ${secret}` },
+      body: Array.from({ length: count }, (_, i) => JSON.stringify(turn(i + 1))).join("\n"),
+    });
+    return response.json();
+  };
+  // A page holds 200 entries, so this one fills the first page exactly.
+  const transcript = await upload(200);
+  await page.goto(`${cronk.url}/transcripts/${transcript.id}`);
+  const entries = page.getByRole("list", { name: "Entries" });
+  await expect(entries).toContainText("Turn 200.");
+  await expect(page.getByRole("button", { name: "Show more" })).toHaveCount(0);
+
+  await upload(201);
+
+  await expect(entries).toContainText("Turn 201.");
+  await expect(page.getByRole("button", { name: "Show more" })).toHaveCount(0);
+});

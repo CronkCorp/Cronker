@@ -20,7 +20,10 @@ import {
 import { Chip, KindLabel, ModelLabel } from "./ui/labels.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
-/** The entries of a Transcript from its start, a page at a time until at least `count` are read or none are left. */
+/**
+ * The entries of a Transcript from its start, a page at a time until at least `count` are read or none are left;
+ * with `count` Infinity, all of them.
+ */
 async function entriesFromStart(transcriptId: string, count: number): Promise<{ entries: TranscriptEntry[]; next: number | null }> {
   const entries: TranscriptEntry[] = [];
   let next: number | null = null;
@@ -49,9 +52,10 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   const [deleting, setDeleting] = useState(false);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
   usePlace("project", ofRun?.project.id ?? null);
-  // How many entries are shown, so a refetch after an upload reads at least as many again.
+  // How far the page has read, so a refetch after an upload reads at least as far again: to the end when it was
+  // there, so the session's new turns appear, else as many entries as are shown, leaving the rest to Show more.
   const shown = useRef(0);
-  shown.current = entries.length;
+  shown.current = transcript !== null && next === null ? Infinity : entries.length;
 
   useEffect(() => {
     let current = true;
@@ -101,7 +105,11 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
     api
       .transcriptEntries(transcriptId, next)
       .then((page) => {
-        setEntries((shown) => [...shown, ...page.entries]);
+        // A live refresh may have read past where this page starts meanwhile: add only what is still new.
+        setEntries((shown) => {
+          const last = shown.at(-1)?.position ?? 0;
+          return [...shown, ...page.entries.filter((entry) => entry.position > last)];
+        });
         setNext(page.next);
       })
       .catch((error: Error) => setFailure(error.message))
@@ -187,7 +195,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
           ))}
         </ol>
       )}
-      {next !== null && (
+      {next !== null && !gone && (
         <Button variant="secondary" disabled={loading} onClick={more}>
           Show more
         </Button>

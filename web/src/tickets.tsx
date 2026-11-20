@@ -1074,6 +1074,12 @@ interface SentBack {
   failure: { kind: "check"; name: string; url: string | null } | { kind: "review"; reviewer: string | null; url: string | null };
 }
 
+/** What a `transcriptDeleted` Change records: the Run whose Transcript a User deleted, and its Step's name. */
+interface TranscriptDeleted {
+  runId: string;
+  step: string;
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
@@ -1089,7 +1095,7 @@ function described(change: Change): string {
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
-  if (change.field === "transcriptDeleted") return `deleted the Transcript of the ${(change.from as { step: string }).step} Run`;
+  if (change.field === "transcriptDeleted") return `deleted the Transcript of the ${(change.from as TranscriptDeleted).step} Run`;
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
     // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
