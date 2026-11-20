@@ -15,6 +15,7 @@ export type LiveEvent =
   | { type: "report.changed"; projectId: string; ticketId: string; reportId: string }
   | { type: "attachments.changed"; projectId: string; ticketId: string }
   | { type: "pull_requests.changed"; projectId: string; ticketId: string }
+  | { type: "transcripts.changed"; projectId: string; ticketId: string }
   | { type: "attachments.changed"; documentId: string }
   | { type: "document.changed"; projectId: string | null; documentId: string }
   | { type: "term.changed"; projectId: string | null; termId: string }
@@ -31,6 +32,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "report.added": "A Run wrote a Report on a Ticket.",
   "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
   "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state, checks or reviews.",
+  "transcripts.changed":
+    "A session outside a Run was uploaded, linking its Transcript to a Ticket, uploading it again, or unlinking it.",
   "document.changed":
     "A Document in a page tree, the Workspace's (`projectId` null) or a Project's, was created, saved, moved or deleted.",
   "term.changed": "A Term in a glossary, the Workspace's (`projectId` null) or a Project's, was created, saved or deleted.",

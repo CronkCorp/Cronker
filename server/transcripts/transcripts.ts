@@ -154,8 +154,20 @@ export async function uploadTranscript(
       ],
     );
     const { id, created } = rows[0]!;
-    await tx.query("delete from transcript_tickets where transcript_id = $1", [id]);
-    if (!run.rows[0]) await linkNamedTickets(tx, agent.workspace.id, id, converted, now);
+    const unlinked = await tx.query<{ ticketId: string; namedAt: Date }>(
+      `delete from transcript_tickets where transcript_id = $1 returning ticket_id as "ticketId", named_at as "namedAt"`,
+      [id],
+    );
+    const namedBefore = new Map(unlinked.rows.map(({ ticketId, namedAt }) => [ticketId, namedAt]));
+    const linked = run.rows[0] ? [] : await linkNamedTickets(tx, agent.workspace.id, id, converted, namedBefore, now);
+    // Each Ticket that gained or lost the Transcript, or whose link moved, shows it differently in its timeline.
+    const touched = await tx.query<{ id: string; projectId: string }>(
+      `select id, project_id as "projectId" from tickets where id = any($1::uuid[]) order by id`,
+      [[...new Set([...namedBefore.keys(), ...linked])]],
+    );
+    for (const ticket of touched.rows) {
+      context.live.publish(tx, agent.workspace.id, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
     await tx.query("delete from transcript_entries where transcript_id = $1", [id]);
     for (let start = 0; start < entries.length; start += insertBatch) {
       const batch = entries.slice(start, start + insertBatch);
@@ -187,9 +199,18 @@ const ticketInputs = ["ticket", "blocks"];
 
 /**
  * Links the Transcript to each Ticket of the Workspace its Cronk tool calls name, in the order they first named
- * them, each placed at the time of the first call naming it. Every entry counts, even one a cap left out.
+ * them, each placed at the time of the first call naming it: when the transcript gives that call no time, where
+ * the upload before placed it, or else now. Every entry counts, even one a cap left out. Says which it linked.
  */
-async function linkNamedTickets(tx: Tx, workspaceId: string, transcriptId: string, entries: ConvertedEntry[], now: Date) {
+async function linkNamedTickets(
+  tx: Tx,
+  workspaceId: string,
+  transcriptId: string,
+  entries: ConvertedEntry[],
+  namedBefore: Map<string, Date>,
+  now: Date,
+): Promise<string[]> {
+  // Each Ticket a call names, by its key or id as the call gave it.
   const named: { name: string; at: string | null }[] = [];
   for (const entry of entries) {
     if (entry.toolName === null || !cronkTool.test(entry.toolName)) continue;
@@ -201,7 +222,8 @@ async function linkNamedTickets(tx: Tx, workspaceId: string, transcriptId: strin
     }
   }
   const ids = [...new Set(named.map(({ name }) => name.toLowerCase()).filter(isUuid))];
-  const keys = [...new Set(named.map(({ name }) => name).filter((name) => keysWritten(name)[0] === name))];
+  const isKey = (name: string) => keysWritten(name)[0] === name;
+  const keys = [...new Set(named.map(({ name }) => name).filter(isKey))];
   const byId = await tx.query<{ id: string }>("select id from tickets where workspace_id = $1 and id = any($2::uuid[])", [
     workspaceId,
     ids,
@@ -214,15 +236,16 @@ async function linkNamedTickets(tx: Tx, workspaceId: string, transcriptId: strin
   const firstNamed = new Map<string, Date>();
   for (const { name, at } of named) {
     const ticketId = ticketOf.get(isUuid(name) ? name.toLowerCase() : name);
-    if (ticketId && !firstNamed.has(ticketId)) firstNamed.set(ticketId, at ? new Date(at) : now);
+    if (ticketId && !firstNamed.has(ticketId)) firstNamed.set(ticketId, at ? new Date(at) : (namedBefore.get(ticketId) ?? now));
   }
-  if (firstNamed.size === 0) return;
+  if (firstNamed.size === 0) return [];
   await tx.query(
-    `insert into transcript_tickets (transcript_id, ticket_id, named_at, position)
-     select $1, ticket_id, named_at, position from unnest($2::uuid[], $3::timestamptz[]) with ordinality
+    `insert into transcript_tickets (transcript_id, workspace_id, ticket_id, named_at, position)
+     select $1, $2, ticket_id, named_at, position from unnest($3::uuid[], $4::timestamptz[]) with ordinality
        as named (ticket_id, named_at, position)`,
-    [transcriptId, [...firstNamed.keys()], [...firstNamed.values()]],
+    [transcriptId, workspaceId, [...firstNamed.keys()], [...firstNamed.values()]],
   );
+  return [...firstNamed.keys()];
 }
 
 /** The entry with every known secret in its text, tool input and tool result scrubbed. */

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -459,6 +460,34 @@ describe("hand-connected Claude Code", () => {
     const rewritten = await uploaded("laptop-1", [userSays("Start over.", 1)], asAgent);
     expect(rewritten.tickets).toEqual([]);
     expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
+  });
+
+  test("a call the transcript gives no time keeps its place in the timeline when uploaded again", async () => {
+    const { ada, ticket, asAgent } = await adaWithAgent();
+    const { timestamp: _, ...untimed } = toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-1" });
+    await uploaded("laptop-1", [untimed], asAgent);
+    const [first] = await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada);
+    expect(first.namedAt).toBe(first.uploadedAt);
+
+    cronk.clock.advance(60_000);
+    await uploaded("laptop-1", [untimed, userSays("And now?", 1)], asAgent);
+
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toMatchObject([{ namedAt: first.namedAt }]);
+  });
+
+  test("an open Ticket hears of a Transcript linked to it or unlinked from it", async () => {
+    const { ada, workspace, project, ticket, asAgent } = await adaWithAgent();
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+    const changed = (ticketId: string) => ({ type: "transcripts.changed", data: { projectId: project.id, ticketId } });
+
+    await uploaded("laptop-1", [toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-1" }, 1)], asAgent);
+    expect(await stream.next()).toEqual(changed(ticket.id));
+    await uploaded("laptop-1", [toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-2" }, 1)], asAgent);
+    expect([await stream.next(), await stream.next()]).toEqual(
+      expect.arrayContaining([changed(ticket.id), changed(second.id)]),
+    );
+    stream.close();
   });
 
   test("an Agent of another Workspace can't list an Agent's Transcripts", async () => {
