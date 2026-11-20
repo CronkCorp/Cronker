@@ -131,6 +131,13 @@
   color: var(--muted);
   font-size: 11px;
 }
+.sidebar-search {
+  margin-bottom: var(--space-2);
+}
+.sidebar-search input {
+  width: 100%;
+  font-size: 13px;
+}
 .sidebar-menu-button {
   display: none;
 }
@@ -191,6 +198,11 @@
   }
   .sidebar-strip .side-link {
     min-height: 28px;
+  }
+  .sidebar-search {
+    order: 1;
+    flex: 1 1 100%;
+    margin: 0;
   }
   .sidebar-strip .side-link .count {
     margin-left: 4px;

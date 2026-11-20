@@ -3,6 +3,7 @@ import { api, nameOf, type ProjectSummary, type User, type WorkspaceSummary } fr
 import { InboxLink } from "./inbox.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
+import { SearchBox } from "./search.js";
 import { Avatar } from "./ui/actor.js";
 import { chooseTheme, storedTheme, type Theme } from "./storage.js";
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
@@ -98,6 +99,7 @@ function Sidebar({
         <WorkspaceSwitcher workspaces={workspaces} current={current} />
         {current && (
           <>
+            <SearchBox key={current.id} workspaceId={current.id} />
             <InboxLink key={current.id} workspaceId={current.id} current={area === "inbox"} />
             <SideLink to={knowledge("documents")} current={area === "documents"}>
               Documents

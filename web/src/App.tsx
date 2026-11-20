@@ -22,6 +22,7 @@ import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { navigate, replace, usePath } from "./router.js";
+import { SearchScreen } from "./search.js";
 import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
@@ -279,7 +280,7 @@ function SignedIn({
   reload: () => void;
   onSignedOut: () => void;
 }) {
-  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|settings|agents|inbox|documents|glossary|decisions)(?:\/([^/]+))?)?\/?$/.exec(path);
+  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|settings|agents|inbox|documents|glossary|decisions|search)(?:\/([^/]+))?)?\/?$/.exec(path);
   const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary|decisions))?\/?$/.exec(path);
   const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
   const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
@@ -371,6 +372,8 @@ function SignedIn({
     page = <WorkspaceDecisions key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "documents" && !workspacePath[3]) {
     page = <WorkspaceDocuments key={current.id} workspace={current} />;
+  } else if (current && workspacePath?.[2] === "search" && !workspacePath[3]) {
+    page = <SearchScreen key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "inbox" && !workspacePath[3]) {
     page = <InboxScreen key={current.id} workspace={current} user={user} />;
   } else if (current && workspacePath?.[2] === "agents" && workspacePath[3]) {

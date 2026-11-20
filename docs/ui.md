@@ -22,6 +22,7 @@ The web client follows this file since the styling pass at the end of milestone 
 - **Frame:** a 232px left sidebar and a main column. The main column's content is at most 1120px wide, centred, with 24px vertical and 16px horizontal padding.
 - **Sidebar, top to bottom:**
   - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace.
+  - The search box, which opens the Workspace's search results on Enter. Below 760px it takes a line of its own under the strip's links.
   - Inbox, with the number of waiting items as a red count.
   - Documents, Terms and Decisions (the Workspace's, or the current Project's).
   - **Projects**, each listed by key and name.
@@ -205,6 +206,13 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Register:** the page head holds the same scope switch, then **Export** and **New Decision**. Below it, status filter chips with counts, and a table of number, title, status and date. A superseded Decision carries "→ 0007" after its title. Each proposed row ends with small **Reject** (ghost) and **Accept** (secondary) buttons, so a User works through what Agents proposed without opening each one; they behave as on the Decision's page, and the row says "Accepted." or "Rejected." in their place, or why it was refused.
 - **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value, then its Versions.
 - **Status actions,** which only Users see, sit in the page head and save at once, saying so ("Accepted.", `role="status"`) beside them; the pill, banners and register follow, live on other open pages too. A proposed Decision's head holds **Edit**, **Reject** and **Accept** (primary, last). Reject asks first in a confirming dialog naming the Decision, since a rejected Decision is never deleted and stays in the register. Every other change is in the head's "…" menu: an accepted Decision offers **Deprecate** and **Supersede…**, which opens a dialog to choose the replacing Decision of the same place; a rejected, deprecated or superseded one offers **Back to proposed**, and a superseded one also Supersede… to change what replaces it. A refusal, such as for a change based on an outdated Version, closes any dialog and shows under the head, and the page shows the current Version.
+
+### Search
+
+- **Results page** (`/workspaces/<id>/search?q=…`, with `&project=<id>` when narrowed): breadcrumbs to the Workspace, "Search" as the `h1` with "Results for “…”" under it, and a Project filter (All Projects, or one by key and name). It marks no sidebar item.
+- **Grouped by kind:** Tickets, Documents, Reports, Terms and Decisions, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out.
+- **A result:** its title as a link (a Ticket's or Report's Ticket key before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
+- **Nothing found:** an empty state saying nothing matches, and how to write a search: a phrase in quotes, `or` between alternatives, `-word` to leave out.
 
 ### Agents and Runners
 
