@@ -511,6 +511,45 @@ describe("The producing Step", () => {
     expect((await pullRequestsOf(idle.id, cookie))[0].producingStep).toBeNull();
   });
 
+  test("is the Step of the Run running when the Pull Request opened, though GitHub's report of it arrives after that Run finished", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const implement = project.statuses.find((s: { name: string }) => s.name === "Implement").id;
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Quick finish" });
+    // The Implement Run starts at 09:00, opens its Pull Request at 09:01 and finishes at 09:02.
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, labels: ["no-review"], statusId: implement } });
+    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
+    cronk.clock.advance(2 * 60_000);
+    const finished = await cronk.request("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` }, body: { outcome: "done" } });
+    expect(finished.status, await finished.clone().text()).toBe(200);
+    cronk.clock.advance(60_000);
+
+    const opened = pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "b" });
+    await deliver(app, "pull_request", { ...opened, pull_request: { ...opened.pull_request, created_at: "2026-01-01T09:01:00Z" } });
+
+    expect((await pullRequestsOf(ticket.id, cookie))[0].producingStep).toEqual({ runId: run.id, statusId: implement, name: "Implement" });
+  });
+
+  test("is absent for a Ticket whose only Run started after the Pull Request opened", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const implement = project.statuses.find((s: { name: string }) => s.name === "Implement").id;
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Opened by hand" });
+    cronk.clock.advance(60_000);
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: implement } });
+
+    // A User opened it at 09:00, before the Run started at 09:01; GitHub's report arrives while the Run is running.
+    const opened = pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "b" });
+    await deliver(app, "pull_request", { ...opened, pull_request: { ...opened.pull_request, created_at: "2026-01-01T09:00:00Z" } });
+
+    expect((await pullRequestsOf(ticket.id, cookie))[0].producingStep).toBeNull();
+  });
+
   test("is absent for a Ticket a later edit links, even with a Run running on it", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
