@@ -106,7 +106,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Decision status** (`<DecisionStatusPill>`): 11px uppercase pill. Proposed is outlined `--warn`, Accepted filled `--ok-soft` with `--ok` text, Superseded outlined `--info`, Rejected outlined `--muted`, and Deprecated dashed `--muted`.
 - **Pull Request state** (`<PullRequestState>`): 11px uppercase pill. Draft dashed `--muted`, Open outlined `--ok`, Merged filled `--agent-soft` with `--agent` text, Closed outlined `--danger`. **Checks** show as counts: ✓ in `--ok`, ✗ in `--danger`, ● running in `--warn`.
 - **Diff** (`<Diff>`): mono lines on `--surface`, removed lines on `--danger-soft` and struck through, added on `--ok-soft`, with a header naming the two Versions.
-- **Live indicator** (`<LiveIndicator>`): a green dot with "Live" on views that are streaming, first among the page head's switchers. It turns into a muted "Reconnecting…" while the stream is away. It is a status named "Live updates", so assistive technology reads out the change.
+- **Live indicator** (`<LiveIndicator>`): a green dot with "Live" on views that are streaming, first among the page head's switchers. It turns into a muted "Reconnecting…" while the stream is away. A stream the browser gives up on, answered with an error status such as a proxy's while Cronk restarts, is opened again after 3 seconds, doubling with each failure in a row up to 30. It is a status named "Live updates", so assistive technology reads out the change.
 
 ## Screens
 

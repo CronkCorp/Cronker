@@ -135,6 +135,30 @@ test("every streaming view says it is Live, and Reconnecting… while its stream
   await expect(live).toHaveText("Live", { timeout: 15_000 });
 });
 
+test("a stream refused with an HTTP error, such as by a proxy while Cronk restarts, comes back once Cronk answers again", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/decisions`);
+  const live = page.getByRole("status", { name: "Live updates" });
+  await expect(live).toHaveText("Live");
+
+  // A browser gives up on a stream answered with an error status rather than reconnecting by itself.
+  let refused = 0;
+  await page.route("**/events", (route) => {
+    refused += 1;
+    return route.fulfill({ status: 502, body: "Bad Gateway" });
+  });
+  const browserCookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  const cookie = await signIn(cronk);
+  expect((await cronk.request("DELETE", "/api/sign-in", { cookie: browserCookie })).status).toBe(204);
+  await expect(live).toHaveText("Reconnecting…");
+  await expect.poll(() => refused).toBeGreaterThan(0);
+
+  await page.context().addCookies([{ name: cookie.split("=")[0]!, value: cookie.split("=").slice(1).join("="), url: cronk.url }]);
+  await page.unroute("**/events");
+  await expect(live).toHaveText("Live", { timeout: 15_000 });
+});
+
 /** Opens a connection to Cronk without sending anything on it yet. */
 function connectTo(cronk: StartedCronk): Promise<Socket> {
   return new Promise((resolve, reject) => {
