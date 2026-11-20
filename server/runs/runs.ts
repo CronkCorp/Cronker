@@ -12,6 +12,7 @@ import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../knowledge/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
 import { moveByCronk } from "../pipeline/cronk-moves.js";
+import { sendBackForKnownFailures } from "../pipeline/sending-back.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
@@ -598,6 +599,8 @@ export async function finishRun(
         if (applied!.needsYou && questionBy === "agent") await askQuestion(context, tx, ticket, asking, question!, now);
       },
     });
+    // A failure that arrived before the Ticket reached a Review Status sends it back once the Outcome moves it into one.
+    await sendBackForKnownFailures(context, tx, ticket.id);
     return present((await findRunRow(tx, caller, run.id))!);
   });
 }

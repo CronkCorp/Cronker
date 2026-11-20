@@ -847,10 +847,11 @@ describe("Failures sending work back", () => {
   };
 
   /**
-   * A delegated Ticket whose Implement Run opened Pull Request 501 (`CRONK-1`, branch `b`, latest commit `c1`), then
-   * finished with *done*, which, past Code review that its `no-review` Label skips, moved it to In Review, a Review Status.
+   * A delegated Ticket whose Implement Run, still running in that Active Status, opened Pull Request 501 (`CRONK-1`,
+   * branch `b`, latest commit `c1`). Finishing it with *done* moves it, past Code review that its `no-review` Label
+   * skips, to In Review, a Review Status.
    */
-  async function inReview() {
+  async function implementing() {
     const setup = await projectWithRepository();
     const { workspace, cookie, app, installation, project, cronker } = setup;
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
@@ -874,10 +875,16 @@ describe("Failures sending work back", () => {
       });
       expect(finished.status, await finished.clone().text()).toBe(200);
     };
-    await finishImplementing();
     const status = (name: string) => statusNamed(project, name);
-    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
     return { ...setup, ticket, pr, status, finishImplementing };
+  }
+
+  /** The Ticket of `implementing`, its Implement Run finished with *done*, moving it to In Review. */
+  async function inReview() {
+    const implemented = await implementing();
+    await implemented.finishImplementing();
+    expect(await ticketOf(implemented.ticket.id, implemented.cookie)).toMatchObject({ statusId: implemented.status("In Review") });
+    return implemented;
   }
 
   const ticketOf = async (ticketId: string, cookie: string) => ok("GET", `/api/tickets/${ticketId}`, cookie);
@@ -1058,6 +1065,33 @@ describe("Failures sending work back", () => {
       "The check [**check 10**](https://github.com/cronkcorp/cronker/runs/10) failed",
       "@bea [requested changes](https://github.com/cronkcorp/cronker/pull/7#pullrequestreview-72)",
     ]);
+  });
+
+  test("a check that failed on the latest commit while the Ticket was in an Active Status sends it back once an Outcome moves it into a Review Status", async () => {
+    const { cookie, app, installation, cronker, ticket, status, finishImplementing } = await implementing();
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+
+    await finishImplementing();
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { actor: unknown; body: string; sentBack: boolean }) => [c.actor, c.body, c.sentBack])).toEqual([
+      [
+        { kind: "cronk", name: "Cronk" },
+        "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed on " +
+          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
+        true,
+      ],
+    ]);
+    // Back in Implement, the delegated Ticket gets a new Run there.
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
+
+    // The same failure already sent it back: the next Outcome into In Review leaves it there.
+    await finishImplementing();
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toHaveLength(1);
   });
 
   const failing = (installation: StandInInstallation, repository: StandInRepository, sha: string) =>
