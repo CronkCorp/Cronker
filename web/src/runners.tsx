@@ -17,7 +17,6 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
   usePlace("runners");
   const [runners, setRunners] = useState<Runner[] | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const latest = useLatest();
   const refresh = useCallback(() => {
@@ -29,11 +28,6 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
   useEffect(() => {
     Promise.all(workspaces.map((w) => api.projects(w.id))).then(
       (lists) => setProjects(lists.flat()),
-      (e: Error) => setError(e.message),
-    );
-    // Which Agents use each Runner, named when removing it asks first. Only the User's own Agents use their Runners.
-    Promise.all(workspaces.map((w) => api.agents(w.id))).then(
-      (lists) => setAgents(lists.flat()),
       (e: Error) => setError(e.message),
     );
   }, [workspaces]);
@@ -67,7 +61,7 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
             key={runner.id}
             runner={runner}
             projects={projects}
-            agents={agents.filter((a) => a.runnerId === runner.id)}
+            workspaces={workspaces}
             onChanged={replace}
             onRemoved={drop}
           />
@@ -93,19 +87,33 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
 function RunnerSettings({
   runner,
   projects,
-  agents,
+  workspaces,
   onChanged,
   onRemoved,
 }: {
   runner: Runner;
   projects: ProjectSummary[];
-  /** The Agents pointed at it. */
-  agents: Agent[];
+  workspaces: WorkspaceSummary[];
   onChanged: (runner: Runner) => void;
   onRemoved: (runner: Runner) => void;
 }) {
   const [removingTrigger, setRemovingTrigger] = useState<Trigger | null>(null);
   const [removing, setRemoving] = useState(false);
+  // The Agents pointed at it, loaded as removing it asks first, so the dialog names them as they stand.
+  const [agents, setAgents] = useState<Agent[] | null>(null);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!removing) return setAgents(null);
+    let current = true;
+    setAgentsError(null);
+    Promise.all(workspaces.map((w) => api.agents(w.id))).then(
+      (lists) => current && setAgents(lists.flat().filter((a) => a.runnerId === runner.id)),
+      (e: Error) => current && setAgentsError(e.message),
+    );
+    return () => {
+      current = false;
+    };
+  }, [removing, workspaces, runner.id]);
   const [limitSaved, setLimitSaved] = useState(false);
   const limit = useSubmit(async (form) => {
     setLimitSaved(false);
@@ -154,12 +162,8 @@ function RunnerSettings({
           onRemoved(runner);
         }}
       >
-        {agents.length === 0
-          ? "No Agent uses it."
-          : `${listed(agents.map((a) => a.name))} ${agents.length === 1 ? "is" : "are"} left with no Runner, so ${agents.length === 1 ? "its" : "their"} Runs can't start until you choose another.`}{" "}
-        {runner.triggers.length > 0 &&
-          `Its ${listed(runner.triggers.map((t) => t.model))} ${runner.triggers.length === 1 ? "trigger goes" : "triggers go"} with it, tokens and all.`}{" "}
-        Past Runs keep their history. It can't be removed while one of its Runs is running.
+        {agentsError ?? (agents === null ? "Finding the Agents that use it…" : agentsLeft(agents))}{" "}
+        {triggersGoing(runner.triggers)}
       </ConfirmDialog>
       {pausedUntil && (
         <Banner tone="warn" label="Paused">
@@ -275,6 +279,22 @@ function RunnerSettings({
       )}
     </section>
   );
+}
+
+/** What removing a Runner does to the Agents pointed at it. */
+function agentsLeft(agents: Agent[]): string {
+  if (agents.length === 0) return "No Agent uses it.";
+  const names = listed(agents.map((a) => a.name));
+  return agents.length === 1
+    ? `${names} is left with no Runner, so its Runs can't start until you choose another.`
+    : `${names} are left with no Runner, so their Runs can't start until you choose others.`;
+}
+
+/** What removing a Runner does to its triggers. */
+function triggersGoing(triggers: Trigger[]): string {
+  if (triggers.length === 0) return "";
+  const models = listed(triggers.map((t) => t.model));
+  return triggers.length === 1 ? `Its ${models} trigger goes with it, token and all.` : `Its ${models} triggers go with it, tokens and all.`;
 }
 
 /** Names in a sentence: "a", "a and b", "a, b and c". */
