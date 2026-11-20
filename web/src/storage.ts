@@ -20,3 +20,26 @@ export function takeReturnAfterSignIn(): string | undefined {
   if (path) safely(() => sessionStorage.removeItem(returnAfterSignInKey));
   return path;
 }
+
+/** The web client's theme: System follows the browser's `prefers-color-scheme`; Light and Dark override it. */
+export type Theme = "system" | "light" | "dark";
+
+/** Also read by the inline script in `index.html`, which applies the stored theme before first paint. */
+const themeKey = "cronk_theme";
+
+/** The theme chosen on this browser; System when none was, or storage can't be read. */
+export function storedTheme(): Theme {
+  const stored = safely(() => localStorage.getItem(themeKey));
+  return stored === "light" || stored === "dark" ? stored : "system";
+}
+
+/** Applies a theme to the page and keeps it on this browser, not on the User, so each device can differ. */
+export function chooseTheme(theme: Theme): void {
+  if (theme === "system") {
+    delete document.documentElement.dataset.theme;
+    safely(() => localStorage.removeItem(themeKey));
+  } else {
+    document.documentElement.dataset.theme = theme;
+    safely(() => localStorage.setItem(themeKey, theme));
+  }
+}

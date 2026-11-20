@@ -4,7 +4,8 @@ import { InboxLink } from "./inbox.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
 import { Avatar } from "./ui/actor.js";
-import { Menu, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
+import { chooseTheme, storedTheme, type Theme } from "./storage.js";
+import { Menu, MenuChoice, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
 
 /** Which item of the sidebar a page belongs to. */
 export type Area =
@@ -82,6 +83,7 @@ function Sidebar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState(storedTheme);
   const projects = useProjects(current?.id ?? null);
   const project = projects?.find((p) => p.id === place.projectId) ?? null;
   // On a phone, following a link out of the menu closes it.
@@ -166,6 +168,21 @@ function Sidebar({
               </button>
             }
           >
+            <MenuLabel>Theme</MenuLabel>
+            <MenuChoice<Theme>
+              label="Theme"
+              value={theme}
+              options={[
+                { value: "system", label: "System" },
+                { value: "light", label: "Light" },
+                { value: "dark", label: "Dark" },
+              ]}
+              onChange={(next) => {
+                chooseTheme(next);
+                setTheme(next);
+              }}
+            />
+            <MenuSeparator />
             <MenuLink to="/password">Password</MenuLink>
             <MenuItem
               onSelect={() => {

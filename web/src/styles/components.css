@@ -285,19 +285,23 @@ textarea.markdown-source {
   background: var(--surface);
   overflow: hidden;
 }
-.segmented a {
+.segmented a,
+.segmented-item {
   padding: 5px 12px;
   color: var(--text);
   font-size: 13px;
   text-decoration: none;
 }
-.segmented a + a {
+.segmented a + a,
+.segmented-item + .segmented-item {
   border-left: 1px solid var(--border);
 }
-.segmented a:hover {
+.segmented a:hover,
+.segmented-item[data-highlighted] {
   background: var(--surface-2);
 }
-.segmented a[aria-current="page"] {
+.segmented a[aria-current="page"],
+.segmented-item[data-state="checked"] {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
@@ -735,7 +739,10 @@ textarea.markdown-source {
   font-size: 13px;
   text-decoration: none;
   cursor: pointer;
-  outline: none;
+}
+/* The control clips its segments, so the focus ring sits inside the segment. */
+.menu-choice .segmented-item:focus-visible {
+  outline-offset: -2px;
 }
 .menu-item[data-highlighted] {
   background: var(--surface-2);
@@ -755,6 +762,20 @@ textarea.markdown-source {
 .menu-label {
   padding: 6px 10px 2px;
   color: var(--muted);
+}
+/* A segmented control inside a menu, its segments sharing the menu's width. */
+.menu-choice {
+  display: flex;
+  margin: var(--space-1) 10px 6px;
+}
+.menu-choice .segmented-item {
+  flex: 1;
+  text-align: center;
+  cursor: pointer;
+}
+/* The control clips its segments, so the focus ring sits inside the segment. */
+.menu-choice .segmented-item:focus-visible {
+  outline-offset: -2px;
 }
 .menu-separator {
   height: 1px;

@@ -43,8 +43,9 @@
   --main-width: 1120px;
 }
 
+/* The dark values: under the system's dark setting unless the User chose Light, or whenever they chose Dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #121513;
     --surface: #1a1e1b;
@@ -68,4 +69,29 @@
     --shadow: 0 6px 24px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
     --scrim: rgb(0 0 0 / 0.55);
   }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121513;
+  --surface: #1a1e1b;
+  --surface-2: #232825;
+  --border: #2e3430;
+  --text: #e2e6e1;
+  --muted: #98a29b;
+  --accent: #4fb2aa;
+  --accent-soft: #1d3634;
+  --on-accent: #0c1514;
+  --agent: #a793f2;
+  --agent-soft: #2b2545;
+  --danger: #ee7d6b;
+  --danger-soft: #3d211d;
+  --warn: #e3a447;
+  --warn-soft: #3a2c15;
+  --ok: #6cc284;
+  --ok-soft: #1c3324;
+  --info: #74a8ea;
+  --info-soft: #1b2b40;
+  --shadow: 0 6px 24px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  --scrim: rgb(0 0 0 / 0.55);
 }
