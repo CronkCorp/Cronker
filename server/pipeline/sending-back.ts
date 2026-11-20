@@ -5,7 +5,8 @@ import { insertComment } from "../work/comment-writes.js";
 import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
- * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit,
+ * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit
+ * (a check run, a commit status, or a check suite, which fails too when its workflow fails before running any check run),
  * or a review requesting changes, whoever wrote it, sends each linked Ticket that is in a Review Status, has a
  * producing Step and is in a Project with Pull Request automation on that still lists the Pull Request's Repository,
  * back to that Step's Status as a move by Cronk. It counts as a round for the Step: past its round limit the Step's *needs you* Outcome applies instead, with
@@ -131,11 +132,18 @@ export async function sendBackForFailure(
   return sent;
 }
 
-/** A failed check on the commit, if Cronk knows one: the first GitHub reported, as the commit's failure. */
+/**
+ * A failed check on the commit, if Cronk knows one, as the commit's failure: a failed check run or status, the first
+ * GitHub reported, or else a failed check suite.
+ */
 export async function failingCheckOn(tx: Tx, repositoryId: number | string, sha: string): Promise<Failure | null> {
   const { rows } = await tx.query<{ name: string; url: string | null }>(
-    `select name, url from commit_checks where repository_id = $1 and sha = $2 and state = 'failed'
-     order by source_id limit 1`,
+    // A failing check run or status names the failure better than its suite does, so comes first.
+    `select name, url from (
+       (select name, url, 0 as source, source_id from commit_checks where repository_id = $1 and sha = $2 and state = 'failed')
+       union all
+       (select app_name, url, 1, id from commit_check_suites where repository_id = $1 and sha = $2 and failed)
+       order by source, source_id limit 1) as failed`,
     [repositoryId, sha],
   );
   return rows[0] ? { kind: "check", sha, ...rows[0] } : null;

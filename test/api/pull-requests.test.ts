@@ -93,6 +93,24 @@ const checkRunEvent = (
     html_url: `https://github.com/${repository.fullName}/runs/${run.id}`,
   },
 });
+/** A `check_suite` delivery as GitHub sends it, with only the fields Cronk reads. */
+const checkSuiteEvent = (
+  installation: StandInInstallation,
+  repository: StandInRepository,
+  suite: { id: number; app: string; sha: string; conclusion: string | null; updatedAt?: string; action?: string },
+) => ({
+  action: suite.action ?? "completed",
+  installation: { id: installation.id },
+  repository: { id: repository.id, full_name: repository.fullName, html_url: `https://github.com/${repository.fullName}` },
+  check_suite: {
+    id: suite.id,
+    head_sha: suite.sha,
+    status: suite.conclusion === null ? "queued" : "completed",
+    conclusion: suite.conclusion,
+    app: { name: suite.app },
+    updated_at: suite.updatedAt ?? "2026-01-01T09:30:00Z",
+  },
+});
 /** A `status` delivery as GitHub sends it, with only the fields Cronk reads. */
 const statusEvent = (
   installation: StandInInstallation,
@@ -904,6 +922,93 @@ describe("Failures sending work back", () => {
     // Back in the producing Step's Status, the delegated Ticket gets a new Run there.
     const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
     expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
+  });
+
+  test("a check suite failing on the latest commit with no failing check run sends the Ticket back, with a Comment from Cronk", async () => {
+    const { cookie, app, installation, cronker, ticket, status } = await inReview();
+
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 30, app: "GitHub Actions", sha: "c1", conclusion: "startup_failure" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    const comments = await commentsOf(ticket.id, cookie);
+    expect(comments.map((c: { actor: unknown; body: string; sentBack: boolean }) => [c.actor, c.body, c.sentBack])).toEqual([
+      [
+        { kind: "cronk", name: "Cronk" },
+        "The check [**GitHub Actions**](https://github.com/cronkcorp/cronker/commit/c1/checks) failed on " +
+          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
+        true,
+      ],
+    ]);
+  });
+
+  test.each([
+    ["the check run", "check_run", "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed"],
+    ["the suite", "check_suite", "The check [**GitHub Actions**](https://github.com/cronkcorp/cronker/commit/c1/checks) failed"],
+  ])("a failing check suite and a failing check run on the same commit send the Ticket back once, %s first", async (_, first, comment) => {
+    const { cookie, app, installation, cronker, ticket, status, finishImplementing } = await inReview();
+    const deliveries = {
+      check_run: checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }),
+      check_suite: checkSuiteEvent(installation, cronker, { id: 30, app: "GitHub Actions", sha: "c1", conclusion: "failure" }),
+    };
+    const second = first === "check_run" ? "check_suite" : "check_run";
+    await deliver(app, first, deliveries[first as keyof typeof deliveries]);
+    await finishImplementing();
+
+    await deliver(app, second, deliveries[second]);
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body.split(" on ")[0])).toEqual([comment]);
+  });
+
+  test.each(["failure", "timed_out", "cancelled", "startup_failure"])("a check suite concluding %s on the latest commit sends the Ticket back", async (conclusion) => {
+    const { cookie, app, installation, cronker, ticket, status } = await inReview();
+
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 30, app: "GitHub Actions", sha: "c1", conclusion }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+  });
+
+  test("passing, neutral, skipped, stale and action-required check suites, a suite only requested, and a failing suite on an earlier commit send nothing back", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+    await deliver(app, "pull_request", pullRequestEvent("synchronize", installation, cronker, { ...pr, sha: "c2", updatedAt: "2026-01-01T10:00:00Z" }));
+
+    for (const [id, conclusion] of [[30, "success"], [31, "neutral"], [32, "skipped"], [33, "action_required"], [34, "stale"]] as const) {
+      await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id, app: `App ${id}`, sha: "c2", conclusion }));
+    }
+    await deliver(app, "check_suite", {
+      ...checkSuiteEvent(installation, cronker, { id: 35, app: "GitHub Actions", sha: "c2", conclusion: "failure" }),
+      action: "requested",
+    });
+    // The commit before the latest.
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 36, app: "GitHub Actions", sha: "c1", conclusion: "failure" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+    // Suites aren't among the Pull Request's checks.
+    expect((await pullRequestsOf(ticket.id, cookie))[0].checks).toEqual([]);
+  });
+
+  test("a check suite failing on a new commit before GitHub reports the push sends the Ticket back once the push is reported, unless a rerun passed", async () => {
+    const { cookie, app, installation, cronker, ticket, pr, status } = await inReview();
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 30, app: "Lint", sha: "c2", conclusion: "failure" }));
+    // Rerun, the same suite completes again; a late delivery of the earlier completion changes nothing.
+    const rerun = checkSuiteEvent(installation, cronker, { id: 30, app: "Lint", sha: "c2", conclusion: "success", updatedAt: "2026-01-01T09:40:00Z" });
+    await deliver(app, "check_suite", rerun);
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 30, app: "Lint", sha: "c2", conclusion: "failure" }));
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 31, app: "GitHub Actions", sha: "c2", conclusion: "startup_failure" }));
+    // Another failed suite is being rerun when the push is reported, so it no longer counts.
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, { id: 29, app: "Build", sha: "c2", conclusion: "failure" }));
+    await deliver(app, "check_suite", checkSuiteEvent(installation, cronker, {
+      id: 29, app: "Build", sha: "c2", conclusion: null, action: "rerequested", updatedAt: "2026-01-01T09:45:00Z",
+    }));
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+
+    await deliver(app, "pull_request", pullRequestEvent("synchronize", installation, cronker, { ...pr, sha: "c2", updatedAt: "2026-01-01T10:00:00Z" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body.split(" on ")[0])).toEqual([
+      "The check [**GitHub Actions**](https://github.com/cronkcorp/cronker/commit/c2/checks) failed",
+    ]);
   });
 
   test("a failing check's send-back records a Change by Cronk naming the Pull Request and the check, just before its move", async () => {
