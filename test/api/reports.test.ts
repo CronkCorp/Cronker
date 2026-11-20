@@ -60,7 +60,9 @@ async function runningRun(options: StartCronkOptions = {}) {
   const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
   const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
-  const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+  // The Run as the fake Runner was asked to start it: reading it through the API would read tables a database
+  // migrated short of today's migrations lacks.
+  const run = { id: cronk.runner.starts.at(-1)!.runId };
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, ada, project, ticket, agent, run, asAgent };
 }
