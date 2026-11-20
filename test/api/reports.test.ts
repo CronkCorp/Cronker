@@ -177,6 +177,7 @@ describe("Reports as Documents", () => {
     };
 
     const byAgent = await attach(asAgent, "agent.log");
+    cronk!.clock.advance(60_000);
     const byAda = await attach(ada, "ada.log");
 
     expect(byAgent).toMatchObject({ name: "agent.log", on: { kind: "document", id: report.id } });
