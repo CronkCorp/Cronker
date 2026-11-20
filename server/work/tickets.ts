@@ -8,9 +8,9 @@ import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
-import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.js";
+import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { RunState } from "../runs/states.js";
-import { Waiting, waitingColumn } from "../runs/waiting.js";
+import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -102,6 +102,11 @@ export const TicketSummary = Type.Object({
     { description: "The Ticket's latest Run, for marking the board's card; its Runs list them all." },
   ),
   waiting: Waiting,
+  blockedBy: Type.Array(TicketRef, {
+    description:
+      "The unfinished Tickets blocking this one, of any Project of the Workspace, oldest block first. A blocker in a " +
+      "Done or Canceled Status, Unverified ones included, is finished and no longer listed.",
+  }),
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
@@ -117,6 +122,12 @@ export const ticketRefColumn = (tickets: string, projects: string) =>
   `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
      'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
+/** SQL for the unfinished Tickets blocking the Ticket `alias`, as TicketRefs, oldest block first. */
+const blockersColumn = (alias: string) =>
+  `coalesce((select json_agg(${ticketRefColumn("blockers", "blocker_projects")} order by relations.seq)
+     from projects blocker_projects, ${unfinishedBlockers(alias)}
+       and blocker_projects.id = blockers.project_id), '[]'::json)`;
+
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
@@ -127,6 +138,7 @@ export const ticketColumns = `tickets.id, tickets.project_id as "projectId", pro
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
   ${waitingColumn("tickets")} as waiting,
+  ${blockersColumn("tickets")} as "blockedBy",
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources
@@ -682,7 +694,9 @@ export async function editTicket(
     if (delegateChanged) await passDelegationDown(context, tx, ticket, next, userId, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
-    if (entered || leftParent.length > 0) await startUnblocked(context, tx, entered ? [ticket.id] : [], leftParent);
+    if (entered || leftParent.length > 0) await blockingChanged(context, tx, entered ? [ticket.id] : [], leftParent);
+    // The cards of what it blocks name it by its title.
+    else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
     return withMentions(tx, (await findTicketRow(tx, editor, ticket.id))!);
   });

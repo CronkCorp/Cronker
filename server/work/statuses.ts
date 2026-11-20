@@ -2,7 +2,7 @@ import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { startUnblocked } from "../runs/runs.js";
+import { blockingChanged } from "../runs/runs.js";
 import { userViewer } from "../identity/viewers.js";
 import {
   findProject,
@@ -86,7 +86,7 @@ export async function changeStatuses(
     if (change.type === "edit" && change.kind !== undefined) {
       // A Status's kind says whether its Tickets are finished, for what they block and for their parents.
       const { rows } = await tx.query<{ id: string }>("select id from tickets where status_id = $1", [change.statusId]);
-      await startUnblocked(context, tx, rows.map((row) => row.id));
+      await blockingChanged(context, tx, rows.map((row) => row.id));
     }
     live.publish(tx, project.workspaceId, { type: "statuses.changed", projectId: project.id });
     return { ...project, statuses: await statusesOf(tx, project.id) };

@@ -71,6 +71,7 @@ describe("creating a Ticket", () => {
       createdAt: "2026-01-01T09:00:00.000Z",
       lastRun: null,
       waiting: null,
+      blockedBy: [],
       mentions: [],
     });
 

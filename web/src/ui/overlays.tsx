@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog";
 import * as RadixMenu from "@radix-ui/react-dropdown-menu";
 import * as RadixPopover from "@radix-ui/react-popover";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { navigate } from "../router.js";
 import { Button, FormError } from "./controls.js";
 
@@ -31,6 +31,91 @@ export function Popover({
       <RadixPopover.Trigger asChild>{trigger}</RadixPopover.Trigger>
       <RadixPopover.Portal>
         <RadixPopover.Content className="popover" align={align} sideOffset={4} aria-label={label} collisionPadding={8}>
+          {children}
+        </RadixPopover.Content>
+      </RadixPopover.Portal>
+    </RadixPopover.Root>
+  );
+}
+
+/**
+ * A popover that shows what its button stands for, such as the Tickets a Blocked chip counts. Hovering or focusing
+ * the button opens it without taking focus, and it closes once the pointer leaves both or focus moves on; clicking
+ * the button opens it with focus inside, so its links can be reached from the keyboard, and Escape gives focus back.
+ */
+export function HoverPopover({
+  label,
+  button,
+  children,
+}: {
+  /** The popover's accessible name. */
+  label: string;
+  /** The button's own attributes and content. */
+  button: Omit<ComponentProps<"button">, "type" | "onClick" | "onFocus" | "onPointerEnter" | "onPointerLeave">;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  // Whether focus went into the popover, so closing gives it back to the button.
+  const [focusInside, setFocusInside] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const closing = useRef<number | undefined>(undefined);
+  // Focus given back to the button on closing doesn't open the popover again.
+  const givingFocusBack = useRef(false);
+  const show = () => {
+    window.clearTimeout(closing.current);
+    if (!open) setFocusInside(false);
+    setOpen(true);
+  };
+  const hideSoon = () => {
+    window.clearTimeout(closing.current);
+    if (!focusInside) closing.current = window.setTimeout(() => setOpen(false), 150);
+  };
+  const onTrigger = (target: EventTarget | null) => target instanceof Node && !!trigger.current?.contains(target);
+  return (
+    <RadixPopover.Root open={open} onOpenChange={setOpen}>
+      <RadixPopover.Anchor asChild>
+        <button
+          {...button}
+          ref={trigger}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onPointerEnter={show}
+          onPointerLeave={hideSoon}
+          onFocus={() => {
+            if (!givingFocusBack.current) show();
+          }}
+          onClick={() => {
+            show();
+            requestAnimationFrame(() => content.current?.querySelector<HTMLElement>("a[href], button")?.focus());
+          }}
+        />
+      </RadixPopover.Anchor>
+      <RadixPopover.Portal>
+        <RadixPopover.Content
+          ref={content}
+          className="popover hover-popover"
+          align="start"
+          sideOffset={4}
+          aria-label={label}
+          collisionPadding={8}
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (!focusInside) return;
+            givingFocusBack.current = true;
+            trigger.current?.focus();
+            givingFocusBack.current = false;
+          }}
+          // The button is outside the popover, but pressing or focusing it keeps the popover open.
+          onInteractOutside={(event) => {
+            if (onTrigger(event.target)) event.preventDefault();
+          }}
+          onFocus={() => setFocusInside(true)}
+          onPointerEnter={() => window.clearTimeout(closing.current)}
+          onPointerLeave={hideSoon}
+        >
           {children}
         </RadixPopover.Content>
       </RadixPopover.Portal>
