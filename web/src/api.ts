@@ -282,6 +282,13 @@ export interface Runner {
   createdAt: string;
 }
 
+/** How to install the Transcript hook: the `settings.json` snippet to commit, with this Cronk's address in it. */
+export interface TranscriptHook {
+  script: string;
+  tokenVariable: string;
+  settings: { hooks: Record<string, unknown> };
+}
+
 export type TokenAccess = "full" | "read";
 
 export interface AgentToken {
@@ -910,6 +917,7 @@ export const api = {
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
+  transcriptHook: () => call<TranscriptHook>("GET", "/api/transcript-hook"),
   transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
   transcriptEntries: (id: string, after?: number) =>
     call<{ entries: TranscriptEntry[]; next: number | null }>(

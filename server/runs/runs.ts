@@ -724,11 +724,12 @@ export async function checkForLostRuns(context: Context): Promise<void> {
   }
 }
 
-/** What a request names: a Run, a Ticket by id, or a Ticket by its key. */
+/** What a request names: a Run, a Ticket by id, a Ticket by its key, or the session a Run's Runner returned. */
 export interface NamedInCall {
   runId?: string;
   ticketId?: string;
   ticketKey?: string;
+  sessionId?: string;
 }
 
 /**
@@ -736,18 +737,18 @@ export interface NamedInCall {
  * call was allowed or not: a Run long without such a call is lost.
  */
 export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
-  const { runId, ticketId, ticketKey } = named;
+  const { runId, ticketId, ticketKey, sessionId } = named;
   const ticket = ticketId && isUuid(ticketId)
     ? ticketId
     : ticketKey
       ? (await findTicketRefByKey(db, agent.workspace.id, ticketKey))?.id
       : undefined;
   const run = runId && isUuid(runId) ? runId : undefined;
-  if (!ticket && !run) return;
+  if (!ticket && !run && !sessionId) return;
   await db.query(
     `update runs set last_call_at = $3
-     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4)`,
-    [agent.id, run ?? null, clock.now(), ticket ?? null],
+     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4 or session_id = $5)`,
+    [agent.id, run ?? null, clock.now(), ticket ?? null, sessionId ?? null],
   );
 }
 
