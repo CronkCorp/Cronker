@@ -176,7 +176,7 @@ describe("Search", () => {
 
   test("a Project filter naming no Project of the Workspace, or an unknown kind, is refused", async () => {
     const { workspace, ada } = await workspaceWithProject();
-    const { workspace: elsewhere } = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" }).then((w) => ({ workspace: w }));
+    const elsewhere = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
     const foreign = await ok("POST", `/api/workspaces/${elsewhere.id}/projects`, ada, { name: "Foreign", key: "FOR" });
     const path = (query: Record<string, string>) => `/api/workspaces/${workspace.id}/search?${new URLSearchParams(query)}`;
 
@@ -218,7 +218,10 @@ describe("Search", () => {
       title: "Flaky test",
       description: "Fails when the webhook retries.",
     });
-    const inTitle = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Webhook retries twice" });
+    const inTitle = await ok("POST", `/api/projects/${project.id}/tickets`, ada, {
+      title: "Webhook retries twice",
+      description: "Seen on Mondays. ".repeat(30),
+    });
 
     const results = await search(workspace.id, ada, { q: "webhook" });
 
@@ -240,5 +243,32 @@ describe("Search", () => {
 
     expect(results.filter((r) => r.kind === "ticket")).toHaveLength(20);
     expect(results.filter((r) => r.kind === "term").map((r) => r.id)).toEqual([term.id]);
+  });
+
+  test("the snippet marks the words that matched in the text, even when some matched only the title", async () => {
+    const { workspace, ada, project } = await workspaceWithProject();
+    await ok("POST", `/api/projects/${project.id}/tickets`, ada, {
+      title: "Board breaks",
+      description: `It crashes when a column is empty.${" Then nothing else happens.".repeat(20)}`,
+    });
+    await ok("POST", `/api/projects/${project.id}/terms`, ada, {
+      name: "Ticket",
+      definition: "A unit of work.",
+      avoid: ["Issue", "task"],
+    });
+
+    const [ticket] = await search(workspace.id, ada, { q: "board crash" });
+    const [term] = await search(workspace.id, ada, { q: "issues" });
+
+    expect(ticket.snippet).toEqual([
+      { text: "It ", match: false },
+      { text: "crashes", match: true },
+      { text: " when a column is empty. Then nothing else happens. Then nothing else happens", match: false },
+    ]);
+    expect(term.snippet).toEqual([
+      { text: "A unit of work. Avoid: ", match: false },
+      { text: "Issue", match: true },
+      { text: ", task", match: false },
+    ]);
   });
 });

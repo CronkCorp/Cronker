@@ -50,7 +50,10 @@ const hits = `
     q
   where documents.workspace_id = $1 and versions.search @@ query
   union all
-  select 'term', terms.id, versions.name, terms.project_id, null, versions.definition, ts_rank(versions.search, query)
+  select 'term', terms.id, versions.name, terms.project_id, null,
+    versions.definition || case when cardinality(versions.avoid) = 0 then ''
+      else ' Avoid: ' || array_to_string(versions.avoid, ', ') end,
+    ts_rank(versions.search, query)
   from terms join term_versions versions on versions.term_id = terms.id and versions.number = terms.version, q
   where terms.workspace_id = $1 and versions.search @@ query
   union all
@@ -69,16 +72,19 @@ export async function search(db: Db, workspaceId: string, input: { q: string; pr
     `with q as (select websearch_to_tsquery('english', $2) as query),
      hits as (${hits})
      select kind, id, title, project_id as "projectId", ticket_key as "ticketKey",
-       ts_headline('english', translate(case when to_tsvector('english', body) @@ query then body else title end, $4, ''),
-         query, $3) as headline
+       -- Where the text beneath the title matched, the snippet shows that; where only the title did, the title.
+       case when strpos(in_body, $8) > 0 then in_body
+         else ts_headline('english', translate(title, $4, ''), query, $3) end as headline
      from (
        select hits.*, row_number() over (partition by kind order by rank desc, title, id) as place
        from hits, q
        where kind = any($5) and ($6::uuid is null or project_id = $6)
-     ) found, q
+     ) found
+       cross join q
+       cross join lateral (select ts_headline('english', translate(body, $4, ''), query, $3) as in_body) body_headline
      where place <= $7
      order by rank desc, title, id`,
-    [workspaceId, input.q, `StartSel=${start}, StopSel=${stop}`, start + stop, input.kinds, input.project, perKind],
+    [workspaceId, input.q, `StartSel=${start}, StopSel=${stop}`, start + stop, input.kinds, input.project, perKind, start],
   );
   return rows.map(({ headline, ...row }) => ({ ...row, snippet: parts(headline) }));
 }
