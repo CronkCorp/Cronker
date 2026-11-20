@@ -199,6 +199,8 @@ export interface TicketSummary {
   lastRun: { id: string; state: RunState } | null;
   /** What it waits for before it gets the Run it needs, if it needs one. */
   waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
+  /** The unfinished Tickets blocking it, of any Project of the Workspace, oldest block first. */
+  blockedBy: TicketRef[];
 }
 
 export interface Ticket extends TicketSummary {

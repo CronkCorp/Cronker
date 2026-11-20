@@ -407,25 +407,26 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
 }
 
 /**
- * Call after something may have unblocked waiting Tickets: the `moved` Tickets entered a Status, or their
- * Status changed kind, so what they block and their parents may now have only finished blockers and
- * Sub-Tickets; or the Tickets named in `also` lost a blocker or a Sub-Ticket. Their cards change, and once
- * the transaction commits they are rechecked.
+ * Call after something changed what blocks Tickets: the `moved` Tickets entered a Status, or their Status
+ * changed kind, so what they block and their parents may now have only finished blockers and Sub-Tickets, or
+ * an unfinished one again; or they were renamed; or the Tickets named in `also` lost a blocker or a Sub-Ticket.
+ * Their cards change, every Ticket the `moved` ones block among them, since each card lists its unfinished
+ * blockers; once the transaction commits, those waiting for a Run are rechecked.
  */
-export async function startUnblocked(context: Context, tx: Tx, moved: string[], also: string[] = []): Promise<void> {
-  const { rows } = await tx.query<WaitingTicket & { workspaceId: string; projectId: string }>(
+export async function blockingChanged(context: Context, tx: Tx, moved: string[], also: string[] = []): Promise<void> {
+  const { rows } = await tx.query<WaitingTicket & { workspaceId: string; projectId: string; waits: boolean }>(
     `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
-       agents.runner_id as "runnerId"
+       agents.runner_id as "runnerId", tickets.waits_for_run as waits
      from tickets left join agents on agents.id = tickets.delegate_id
-     where tickets.waits_for_run and (tickets.id = any($2::uuid[])
-       or tickets.id in (select other_ticket_id from relations where kind = 'blocks' and ticket_id = any($1::uuid[]))
-       or tickets.id in (select parent_id from tickets where id = any($1::uuid[])))`,
+     where tickets.id in (select other_ticket_id from relations where kind = 'blocks' and ticket_id = any($1::uuid[]))
+       or (tickets.waits_for_run and (tickets.id = any($2::uuid[])
+         or tickets.id in (select parent_id from tickets where id = any($1::uuid[]))))`,
     [moved, also],
   );
   for (const { id, workspaceId, projectId } of rows) {
     context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId: id });
   }
-  recheckWaiting(context, tx, rows);
+  recheckWaiting(context, tx, rows.filter((row) => row.waits));
 }
 
 /** A waiting Ticket, with the Runner its Delegate uses, if any. */
