@@ -22,6 +22,7 @@ import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { navigate, replace, usePath } from "./router.js";
+import { ArtifactScreen } from "./artifacts.js";
 import { RunnersScreen } from "./runners.js";
 import { SearchScreen } from "./search.js";
 import { takeReturnAfterSignIn } from "./storage.js";
@@ -287,6 +288,7 @@ function SignedIn({
   const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
   const termPath = /^\/terms\/([^/]+)\/?$/.exec(path);
   const decisionPath = /^\/decisions\/([^/]+)\/?$/.exec(path);
+  const artifactPath = /^\/artifacts\/([^/]+)\/?$/.exec(path);
   const transcriptPath = /^\/transcripts\/([^/]+)\/?$/.exec(path);
   const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
 
@@ -365,6 +367,15 @@ function SignedIn({
         key={`${current.id} ${decisionPath[1]}`}
         workspace={current}
         decisionId={decisionPath[1]!}
+        onOtherWorkspace={onOtherWorkspace}
+      />
+    );
+  } else if (current && artifactPath) {
+    page = (
+      <ArtifactScreen
+        key={`${current.id} ${artifactPath[1]}`}
+        workspace={current}
+        artifactId={artifactPath[1]!}
         onOtherWorkspace={onOtherWorkspace}
       />
     );

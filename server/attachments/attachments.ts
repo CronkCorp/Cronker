@@ -137,7 +137,7 @@ export function attachmentTooLarge(limitBytes: number): ApiError {
 }
 
 /** A size as people read it: in MB or KB when it is a whole number of them, otherwise in bytes. */
-function describeSize(bytes: number): string {
+export function describeSize(bytes: number): string {
   if (bytes % megabyte === 0) return `${bytes / megabyte} MB`;
   if (bytes % 1024 === 0) return `${bytes / 1024} KB`;
   return `${bytes} bytes`;

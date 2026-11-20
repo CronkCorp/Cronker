@@ -10,6 +10,8 @@
   --accent: #116466;
   --accent-soft: #d7ebe9;
   --on-accent: #ffffff;
+  /* What an Artifact's page is drawn on, as a browser draws any page: white in both themes. */
+  --canvas: #ffffff;
   --agent: #6247c2;
   --agent-soft: #e9e4fb;
   --danger: #b93a2b;
