@@ -1,4 +1,5 @@
-import { expect, test } from "./fixtures.js";
+import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
+import { expect, signInInBrowser, test } from "./fixtures.js";
 
 test("set up with a GitHub App, add someone by GitHub login, and they sign in with GitHub", async ({ page, browser, cronk }) => {
   cronk.github.signedInAs = cronk.github.account("ada-gh", "ada@example.com");
@@ -42,4 +43,27 @@ test("set up with a GitHub App, add someone by GitHub login, and they sign in wi
   await beaPage.getByRole("link", { name: "Sign in with GitHub" }).click();
   await expect(beaPage.getByRole("status")).toContainText("No User has that GitHub account");
   await beaContext.close();
+});
+
+test("an App that only reads Repositories shows the write access to add, then the installations yet to accept it", async ({ page, cronk }) => {
+  await setUp(cronk);
+  await createGitHubApp(cronk, await signIn(cronk));
+  const app = cronk.github.apps[0]!;
+  // As Cronk created Apps before Runs pushed and agents merged.
+  const readOnly = { emails: "read", metadata: "read", pull_requests: "read", checks: "read", statuses: "read" };
+  app.permissions = { ...readOnly };
+  cronk.github.install(app, "acme", ["api"]);
+  await signInInBrowser(page, cronk);
+
+  await page.goto(`${cronk.url}/github`);
+  const checklist = page.getByRole("region", { name: "What the App needs" });
+  await expect(checklist.getByRole("listitem")).toHaveText(["Contents: Read and write", "Pull requests: Read and write"]);
+
+  // The Admin adds them on GitHub; acme's owner hasn't accepted them yet.
+  app.permissions = { ...readOnly, contents: "write", pull_requests: "write" };
+  await page.reload();
+  await expect(checklist.getByText("The App has every permission, event and webhook setting Cronk needs")).toBeVisible();
+  await expect(checklist.getByRole("listitem").filter({ hasText: "acme" })).toContainText(
+    "acme lacksContents: Read and writePull requests: Read and write",
+  );
 });

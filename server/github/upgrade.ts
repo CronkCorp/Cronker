@@ -14,7 +14,7 @@ import { appInstallations, appOnGitHub, appWebhook, under } from "./client.js";
  */
 
 const Permissions = Type.Record(Type.String(), Type.String(), {
-  description: "Permissions by name, each with the access needed (always `read`).",
+  description: "Permissions by name, each with the access needed: `read`, or `write`, which includes reading.",
 });
 
 export const Checklist = Type.Object({
@@ -35,10 +35,15 @@ export type Checklist = Static<typeof Checklist>;
 /** Permissions an installation has accepted for itself; `emails` belongs to each User's sign-in instead. */
 const installationPermissions = Object.keys(requiredPermissions).filter((name) => name !== "emails");
 
+/** Each access level, ranked so that one includes those below it: `write` includes `read`. */
+const accessRank: Record<string, number> = { read: 1, write: 2 };
+
 function missingOf(has: Record<string, string> | undefined, names: string[]): Record<string, string> {
   const missing: Record<string, string> = {};
-  // Any access, such as `write` granted by hand, includes reading.
-  for (const name of names) if (!has?.[name] || has[name] === "none") missing[name] = requiredPermissions[name]!;
+  for (const name of names) {
+    const needed = requiredPermissions[name]!;
+    if ((accessRank[has?.[name] ?? "none"] ?? 0) < accessRank[needed]!) missing[name] = needed;
+  }
   return missing;
 }
 

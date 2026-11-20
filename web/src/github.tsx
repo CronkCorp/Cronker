@@ -110,10 +110,14 @@ export function GitHubSetupStep({ onSkip }: { onSkip: () => void }) {
 const permissionNames: Record<string, string> = {
   emails: "Email addresses (account permission)",
   metadata: "Metadata",
+  contents: "Contents",
   pull_requests: "Pull requests",
   checks: "Checks",
   statuses: "Commit statuses",
 };
+
+/** How GitHub's settings page names each access level. */
+const accessNames: Record<string, string> = { read: "Read-only", write: "Read and write" };
 
 /** How GitHub's settings page names each event Cronk subscribes to. */
 const eventNames: Record<string, string> = {
@@ -130,7 +134,7 @@ function PermissionList({ permissions }: { permissions: Record<string, string> }
     <ul className="checklist">
       {Object.entries(permissions).map(([name, access]) => (
         <li key={name}>
-          {permissionNames[name] ?? name}: {access === "read" ? "Read-only" : access}
+          {permissionNames[name] ?? name}: {accessNames[access] ?? access}
         </li>
       ))}
     </ul>
@@ -157,7 +161,7 @@ function AppChecklist() {
         <>
           <Banner tone="warn">
           <p>
-            The App lacks some of what Cronk needs to read Pull Requests and hear from GitHub. GitHub can't change an
+            The App lacks some of what Cronk needs to work with Pull Requests and hear from GitHub. GitHub can't change an
             existing App from Cronk, so add these in <a href={settingsUrl}>the App's settings on GitHub</a>, save, and
             reload this page.
           </p>
@@ -200,7 +204,7 @@ function AppChecklist() {
       {installationsNotAccepted.length > 0 && (
         <>
           <h3>Installations that haven't accepted</h3>
-          <p>Each installation's owner on GitHub accepts the App's new permissions on its page there. Until then, Cronk can't read its Pull Requests.</p>
+          <p>Each installation's owner on GitHub accepts the App's new permissions on its page there. Until then, Cronk can't use the new permissions on its Repositories.</p>
           <ul className="checklist">
             {installationsNotAccepted.map((installation) => (
               <li key={installation.htmlUrl}>
