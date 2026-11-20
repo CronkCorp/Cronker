@@ -6,6 +6,7 @@ A simpler rewrite of Cronk (`CronkCorp/Cronk`): a self-hosted platform where hum
 - `docs/adr/`: decisions that are hard to reverse.
 - `docs/roadmap.md`: what is settled, the milestones, and what is left out for now.
 - `docs/ui.md`: how the web client looks. Read it before changing the web client.
+- `docs/releasing.md`: how a version is cut; `docs/setup.md` says how installations upgrade.
 
 The old Cronk's code and docs are a reference to copy from; where this repo's docs differ, this repo wins.
 

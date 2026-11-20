@@ -29,6 +29,7 @@ Choose a secret key and keep it somewhere safe: it encrypts the GitHub App's cre
 
 ```sh
 git clone https://github.com/CronkCorp/Cronker.git && cd Cronker
+git checkout "$(git describe --tags --abbrev=0)"  # the latest release; leave out to run main
 cat > .env <<EOF
 CRONK_PUBLIC_URL=https://cronk.example.com
 CRONK_SECRET_KEY=$(openssl rand -base64 32)
@@ -119,6 +120,31 @@ Claude Code on your own machine connects to Cronk with an Agent's token.
 3. Check it: `claude mcp list` shows `cronk` as connected, and in Claude Code, asking it to list the Tickets of your Project answers from Cronk.
 
 Revoking the token on the Agent's page cuts it off from the next request.
+
+## Upgrading
+
+Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releases](https://github.com/CronkCorp/Cronker/releases). Read the notes of every release you skip: they call out anything to do by hand, such as a GitHub App permission to accept.
+
+1. **Back up** the database and the Attachments; Cronk's migrations only go forward.
+
+   ```sh
+   docker compose exec -T postgres pg_dump -U cronk cronk > cronk-$(date +%F).sql
+   docker compose cp cronk:/app/data/attachments ./attachments-$(date +%F)
+   ```
+
+2. **Check out the new release and rebuild.**
+
+   ```sh
+   git fetch --tags
+   git checkout "$(git describe --tags --abbrev=0 origin/main)"
+   docker compose up -d --build
+   ```
+
+   Without Docker: check out the release the same way, then `npm ci && npm run build` and restart `npm start`.
+
+3. **Check it came up.** Cronk applies new migrations itself when it starts, one start at a time; `docker compose logs cronk` shows them, and then Cronk listening. Upgrade when no Runs are running if you can: a Run whose session can't reach Cronk while it restarts may fail or be lost, and then waits in your Inbox with Retry.
+
+To go back, restore the backup into an empty database and check out the release you came from: a newer database can't be used by an older Cronk.
 
 ## When something goes wrong
 
