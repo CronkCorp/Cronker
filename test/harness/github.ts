@@ -123,6 +123,8 @@ export interface StandInGitHub {
   redeliveries(app: StandInApp): DeliveryAttempt[];
   /** Answers the App's next redelivery request with 422, as GitHub does for a delivery it no longer keeps. */
   refuseNextRedelivery(): void;
+  /** While true, GitHub's API answers every call with 503, as during an outage. */
+  unavailable: boolean;
   stop(): Promise<void>;
 }
 
@@ -233,6 +235,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     refuseNextRedelivery() {
       refuseRedelivery = true;
     },
+    unavailable: false,
     stop: async () => {},
   };
 
@@ -296,6 +299,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     // The API lives under `/api/v3`, as on GitHub Enterprise Server, so Cronk must join paths onto it.
     const path = url.pathname.replace(/^\/api\/v3(?=\/)/, "");
     const bearer = /^(?:Bearer|token) (.+)$/.exec(request.headers.authorization ?? "")?.[1];
+    if (github.unavailable && url.pathname.startsWith("/api/v3/")) return json(response, 503, { message: "Service Unavailable" });
 
     // Web: the manifest form a browser posts to create a GitHub App.
     if (request.method === "POST" && /^\/(?:settings|organizations\/[^/]+\/settings)\/apps\/new$/.test(path)) {
