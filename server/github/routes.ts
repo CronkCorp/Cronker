@@ -133,7 +133,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         await requireUser(context, request);
-        return listInstallations(context, { fresh: request.query.refresh === true });
+        return listInstallations(context, { refresh: request.query.refresh === true });
       },
     );
 

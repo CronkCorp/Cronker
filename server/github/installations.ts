@@ -54,11 +54,11 @@ class Kept<K, V> {
 
   constructor(private readonly clock: Clock) {}
 
-  /** The value kept for `key`, unless it has expired or `fresh` asks GitHub again; then `fetch`'s, which is kept. */
-  async get(key: K, fetch: () => Promise<V>, fresh: boolean): Promise<V> {
+  /** The value kept for `key`, unless it has expired or `refresh` asks GitHub again; then `fetch`'s, which is kept. */
+  async get(key: K, fetch: () => Promise<V>, refresh: boolean): Promise<V> {
     const now = this.clock.now().getTime();
     const held = this.#held.get(key);
-    if (!fresh && held && held.until > now) return held.value;
+    if (!refresh && held && held.until > now) return held.value;
     const fetching = fetch();
     const entry = { until: now + listingLifetimeMs, value: fetching };
     this.#held.set(key, entry);
@@ -69,10 +69,14 @@ class Kept<K, V> {
     return fetching;
   }
 
-  /** Forgets the value kept for `key`, or every value, so the next call asks GitHub. */
-  forget(key?: K): void {
-    if (key === undefined) this.#held.clear();
-    else this.#held.delete(key);
+  /** Forgets the value kept for `key`, so the next call asks GitHub. */
+  forget(key: K): void {
+    this.#held.delete(key);
+  }
+
+  /** Forgets every value kept. */
+  clear(): void {
+    this.#held.clear();
   }
 
   /** Forgets every value but those kept for `keys`. */
@@ -86,7 +90,9 @@ class Kept<K, V> {
  * memory only. Each is asked again five minutes after it was last asked, or at once once forgotten.
  */
 export class InstallationListings {
+  /** The installations, under the one key `all`. */
   readonly installations: Kept<"all", ListedInstallation[]>;
+  /** Each installation's Repositories, by installation id. */
   readonly repositories: Kept<number, ListedRepository[]>;
 
   constructor(clock: Clock) {
@@ -94,10 +100,15 @@ export class InstallationListings {
     this.repositories = new Kept(clock);
   }
 
+  /** Forgets the Repositories kept for one installation, as after a rename there. */
+  forgetRepositoriesOf(installationId: number): void {
+    this.repositories.forget(installationId);
+  }
+
   /** Forgets everything kept, as when Cronk learns the Repositories the App covers may have changed. */
   forget(): void {
-    this.installations.forget();
-    this.repositories.forget();
+    this.installations.clear();
+    this.repositories.clear();
   }
 }
 
@@ -127,14 +138,14 @@ function ignoringCase(a: string, b: string): number {
 /**
  * Every installation of the App, by account, with the Repositories it covers by `owner/name`, both
  * ignoring case, so every client lists them alike. What GitHub said within the last five minutes
- * is used again, unless `fresh` asks GitHub afresh.
+ * is used again, unless `refresh` asks GitHub afresh.
  */
-export async function listInstallations(context: Context, { fresh = false } = {}): Promise<Installation[]> {
+export async function listInstallations(context: Context, { refresh = false } = {}): Promise<Installation[]> {
   const { config, installationListings: kept } = context;
   const installations = await kept.installations.get(
     "all",
     async () => (await appInstallations(config, await appToken(context))).map((i) => ({ id: i.id, account: i.account.login })),
-    fresh,
+    refresh,
   );
   // An installation removed from GitHub isn't listed again, so nothing it covered is kept.
   kept.repositories.keepOnly(installations.map((i) => i.id));
@@ -147,7 +158,7 @@ export async function listInstallations(context: Context, { fresh = false } = {}
           (await installationRepositories(config, await tokenFor(context, installation.id)))
             .map((r) => ({ id: r.id, fullName: r.full_name }))
             .sort((a, b) => ignoringCase(a.fullName, b.fullName)),
-        fresh,
+        refresh,
       ),
     })),
   );

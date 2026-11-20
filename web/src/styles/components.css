@@ -911,7 +911,7 @@ textarea.markdown-source {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-1) var(--space-1) 8px;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-2);
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 12px;

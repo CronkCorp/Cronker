@@ -30,10 +30,12 @@ async function post(cookie: string, path: string, body: unknown) {
 }
 
 /** The App's installations as the Add Repository picker gets them: account, then each Repository's `owner/name`. */
-const installationsListed = async (cookie: string) =>
-  ((await (await cronk.request("GET", "/api/github/installations", { cookie })).json()) as { account: string; repositories: { fullName: string }[] }[]).map(
-    (i) => [i.account, i.repositories.map((r) => r.fullName)],
-  );
+async function installationsListed(cookie: string) {
+  const response = await cronk.request("GET", "/api/github/installations", { cookie });
+  expect(response.status, await response.clone().text()).toBe(200);
+  const installations: { account: string; repositories: { fullName: string }[] }[] = await response.json();
+  return installations.map((i) => [i.account, i.repositories.map((r) => r.fullName)]);
+}
 
 const repositoriesOf = async (projectId: string, cookie: string) =>
   (await cronk.request("GET", `/api/projects/${projectId}/repositories`, { cookie })).json();
