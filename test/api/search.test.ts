@@ -211,7 +211,7 @@ describe("Search", () => {
     expect(onlyTranscripts.map((r: { id: string }) => r.id).sort()).toEqual([ofRun.id, own.id].sort());
   });
 
-  test("a Transcript is found by its latest upload only, and not at all once deleted", async () => {
+  test("a Transcript is found by its latest upload only", async () => {
     const { workspace, ada, asAgent } = await workspaceWithRun();
     const transcript = await uploadTranscript("session_1", ["Triage CRONK-1.", "The webhook retries."], asAgent);
     const ids = async (q: string) => ((await search(workspace.id, ada, { q })) as { id: string }[]).map((r) => r.id);
@@ -220,10 +220,6 @@ describe("Search", () => {
     await uploadTranscript("session_1", ["Triage CRONK-1.", "The cache is stale."], asAgent);
     expect(await ids("webhook")).toEqual([]);
     expect(await ids("cache")).toEqual([transcript.id]);
-
-    // Deleting a Transcript (#189) has no route yet; it removes the Transcript with its entries, as this does.
-    await cronk.stage("delete from transcripts where id = $1", [transcript.id]);
-    expect(await ids("cache")).toEqual([]);
   });
 
   test("a quoted phrase matches only its words in order, `or` either word, and `-word` leaves out what has it", async () => {

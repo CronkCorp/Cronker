@@ -56,9 +56,8 @@ export interface StartedCronk {
   /** The files in the directory Cronk keeps Attachments in. */
   attachmentFiles(): Promise<string[]>;
   /**
-   * Runs SQL against this Cronk's database. A test of a migration uses it to stage rows an earlier Cronk wrote,
-   * which today's API can no longer write, before `upgrade()`; another may stand in for a change the API can't make
-   * yet, saying which ticket brings it.
+   * Runs SQL against this Cronk's database. Only a test of a migration uses it, to stage rows an earlier Cronk
+   * wrote, which today's API can no longer write, before `upgrade()`.
    */
   stage(sql: string, params?: unknown[]): Promise<void>;
   /**
