@@ -163,6 +163,27 @@ describe("Reports as Documents", () => {
     ]);
   });
 
+  test("a Report carries Attachments, by a User and by its Run's Agent, as any Document does", async () => {
+    const { ada, ticket, asAgent } = await runningRun();
+    const report = await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: "See the log." });
+    const attach = async (as: Request, name: string) => {
+      const response = await fetch(new URL(`/api/documents/${report.id}/attachments?name=${name}`, cronk!.url), {
+        method: "POST",
+        headers: { ...as.headers, ...(as.cookie ? { cookie: as.cookie } : {}), "content-type": "text/plain" },
+        body: "42 passed",
+      });
+      expect(response.status, await response.clone().text()).toBe(201);
+      return response.json();
+    };
+
+    const byAgent = await attach(asAgent, "agent.log");
+    cronk!.clock.advance(60_000);
+    const byAda = await attach(ada, "ada.log");
+
+    expect(byAgent).toMatchObject({ name: "agent.log", on: { kind: "document", id: report.id } });
+    expect(await ok("GET", `/api/documents/${report.id}/attachments`, ada)).toEqual([byAgent, byAda]);
+  });
+
   test("saving or deleting a Report tells the Workspace's streams, so its Ticket shows it", async () => {
     const { workspace, ada, project, ticket, asAgent } = await runningRun();
     const report = await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: "…" });

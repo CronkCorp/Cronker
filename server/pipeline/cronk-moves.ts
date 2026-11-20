@@ -12,6 +12,15 @@ import type { Outcome } from "../work/steps.js";
  * completes the Ticket as Verified or Unverified when it moves to a Done Status, and starts the next Run.
  */
 
+/**
+ * SQL condition, for a query over `tickets` whose `$1` is a Pull Request's id: the Ticket's Project lists that Pull
+ * Request's Repository. A Project that removed the Repository since keeps its links, so its Tickets still show the
+ * Pull Request, but its merges and failures no longer move them.
+ */
+export const listsPullRequestsRepository = `exists (
+  select from pull_requests join project_repositories on project_repositories.repository_id = pull_requests.repository_id
+  where pull_requests.id = $1 and project_repositories.project_id = tickets.project_id)`;
+
 /** The Ticket a move by Cronk moves, locked by the caller's transaction. */
 export interface MovedTicket {
   id: string;

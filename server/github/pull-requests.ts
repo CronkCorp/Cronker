@@ -35,7 +35,7 @@ export const Check = Type.Object({
 export type Check = Static<typeof Check>;
 
 export const ProducingStep = Type.Object({
-  runId: Type.String({ format: "uuid", description: "The Run that was running on the Ticket when GitHub reported the Pull Request opened." }),
+  runId: Type.String({ format: "uuid", description: "The Run that was running on the Ticket when the Pull Request opened, by the time GitHub gives for its opening." }),
   statusId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Status whose Step the Run ran, or null if the Status was removed since.",
   }),
@@ -185,6 +185,14 @@ interface PullRequestPayload {
   html_url: string;
   head: { ref: string; sha: string };
   updated_at: string;
+  created_at?: unknown;
+}
+
+/** When GitHub says the Pull Request opened, if it says. */
+function openedAt(pr: PullRequestPayload): Date | null {
+  if (typeof pr.created_at !== "string") return null;
+  const at = new Date(pr.created_at);
+  return Number.isNaN(at.getTime()) ? null : at;
 }
 
 const isPullRequest = (pr: unknown): pr is PullRequestPayload => {
@@ -230,7 +238,8 @@ async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Pr
  * GitHub's `pull_request` event. A Pull Request of a Repository some Project lists is kept as
  * the delivery reports it, unless Cronk already knows a newer state, and links to the Tickets
  * its title and branch name now. A delivery of its opening records, for each Ticket it links,
- * the Run running on that Ticket then: the producing Step's. A check that failed on its latest
+ * the Run that was running on that Ticket when GitHub says the Pull Request opened, even if
+ * the delivery arrives after that Run ended: the producing Step's. A check that failed on its latest
  * commit before Cronk heard of the push sends the Tickets back now.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
@@ -275,7 +284,12 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
     await tx.query(
       `insert into pull_request_links (pull_request_id, ticket_id, workspace_id, producing_run_id, linked_at)
        select distinct $1::bigint, tickets.id, tickets.workspace_id,
-         case when $4 then (select runs.id from runs where runs.ticket_id = tickets.id and runs.state = 'running') end,
+         case when $4 then (
+           select runs.id from runs
+           where runs.ticket_id = tickets.id and runs.state <> 'refused'
+             and runs.started_at <= $6::timestamptz and (runs.ended_at is null or runs.ended_at > $6::timestamptz)
+           order by runs.started_at desc, runs.seq desc limit 1
+         ) end,
          $5::timestamptz
        from unnest($3::text[]) as written (text)
        join project_repositories on project_repositories.repository_id = $2
@@ -284,7 +298,7 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
        join tickets on tickets.project_id = projects.id and tickets.number = split_part(written.text, '-', 2)::integer
        on conflict (pull_request_id, ticket_id) do update
          set producing_run_id = coalesce(pull_request_links.producing_run_id, excluded.producing_run_id)`,
-      [pr.id, repository.id, keys, opened, context.clock.now()],
+      [pr.id, repository.id, keys, opened, context.clock.now(), openedAt(pr) ?? context.clock.now()],
     );
   }
   // A check can fail on a pushed commit before GitHub reports the push: once it is the latest commit, it sends back.

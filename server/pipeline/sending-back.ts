@@ -2,13 +2,13 @@ import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
 import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
-import { moveByCronk, type MovedTicket } from "./cronk-moves.js";
+import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
  * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit,
  * or a review requesting changes, whoever wrote it, sends each linked Ticket that is in a Review Status, has a
- * producing Step and is in a Project with Pull Request automation on, back to that Step's Status as a move by Cronk.
- * It counts as a round for the Step: past its round limit the Step's *needs you* Outcome applies instead, with
+ * producing Step and is in a Project with Pull Request automation on that still lists the Pull Request's Repository,
+ * back to that Step's Status as a move by Cronk. It counts as a round for the Step: past its round limit the Step's *needs you* Outcome applies instead, with
  * Cronk's own Question. Cronk writes a Comment linking the failure. Each head commit and each review sends a
  * Ticket back at most once, so many failing checks on one commit send it back once.
  */
@@ -88,6 +88,7 @@ export async function sendBackForFailure(
      -- A Status that has lost its Step since produces nothing to send back to.
      join steps on steps.status_id = producing.id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation and statuses.kind = 'review'
+       and ${listsPullRequestsRepository}
      order by tickets.id
      for update of tickets`,
     [pullRequest.id],

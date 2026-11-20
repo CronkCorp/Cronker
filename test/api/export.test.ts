@@ -139,6 +139,15 @@ describe("Exporting knowledge", () => {
     );
   });
 
+  test("Markdown in a Term's words to avoid is escaped, so they show as typed", async () => {
+    const { ada, project } = await workspaceWithProject();
+    await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Ticket", definition: "A unit of work.", avoid: ["*card*", "work_item"] });
+
+    const { files } = await ok("GET", `/api/projects/${project.id}/export`, ada);
+
+    expect(files[0].content).toBe("# Glossary\n\n**Ticket**:\nA unit of work.\n_Avoid_: \\*card\\*, work\\_item\n");
+  });
+
   test("an empty Project exports a GLOSSARY.md with no Terms and no Decisions", async () => {
     const { ada, project } = await workspaceWithProject();
 

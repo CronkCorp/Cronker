@@ -23,12 +23,12 @@ export type Export = Static<typeof Export>;
 /** Text set inside Markdown's emphasis or link text, its markup characters escaped so they show as typed. */
 const escapeInline = (text: string) => text.replace(/[\\*_[\]`]/g, (c) => `\\${c}`);
 
-/** A glossary as Markdown: each Term's name in bold, its definition, then the words to avoid. */
+/** A glossary as Markdown: each Term's name in bold, its definition, then the words to avoid, each shown as typed. */
 function glossaryFile(terms: Term[]): ExportedFile {
   const entries = terms.map((term) => {
     const lines = [`**${escapeInline(term.name)}**:`];
     if (term.definition.trim()) lines.push(term.definition.trim());
-    if (term.avoid.length > 0) lines.push(`_Avoid_: ${term.avoid.join(", ")}`);
+    if (term.avoid.length > 0) lines.push(`_Avoid_: ${term.avoid.map(escapeInline).join(", ")}`);
     return lines.join("\n");
   });
   return { path: "GLOSSARY.md", content: ["# Glossary", ...entries].join("\n\n") + "\n" };
