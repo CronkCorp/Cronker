@@ -839,6 +839,52 @@ export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, na
   );
 }
 
+/**
+ * Brings a lost Run back to running when its Agent calls naming it or its Ticket: Cronk only guessed the
+ * session was gone, and a call shows it wasn't. Only the Ticket's latest Run comes back, and only while
+ * nothing has moved on since: the Ticket is still in the Run's Status, still delegated to its Agent, and
+ * has no other running Run. Runs before the call is handled, so a late `finish` is accepted.
+ */
+export async function reviveLostRun(context: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
+  const { db, clock } = context;
+  const { runId, ticketId, ticketKey } = named;
+  const ticket = ticketId && isUuid(ticketId)
+    ? ticketId
+    : ticketKey
+      ? (await findTicketRefByKey(db, agent.workspace.id, ticketKey))?.id
+      : undefined;
+  const run = runId && isUuid(runId) ? runId : undefined;
+  if (!ticket && !run) return;
+  // Still revivable: the Ticket's latest Run, lost, its Ticket unmoved, still its Agent's, with no Run running.
+  const revivable = `runs.agent_id = $1 and runs.state = 'lost' and tickets.id = runs.ticket_id
+    and tickets.status_id = runs.status_id and tickets.delegate_id = runs.agent_id
+    and runs.id = (select latest.id from runs latest where latest.ticket_id = runs.ticket_id order by latest.started_at desc limit 1)
+    and not exists (select 1 from runs other where other.ticket_id = runs.ticket_id and other.state = 'running')`;
+  const { rows: candidates } = await db.query<{ id: string; ticketId: string }>(
+    `select runs.id, runs.ticket_id as "ticketId" from runs, tickets
+     where ${revivable} and (runs.id = $2 or runs.ticket_id = $3)`,
+    [agent.id, run ?? null, ticket ?? null],
+  );
+  const candidate = candidates[0];
+  if (!candidate) return;
+  await transaction(db, async (tx) => {
+    // The Ticket is locked before its Run, and the Run before its Runner's slots, as everywhere else.
+    await tx.query("select 1 from tickets where id = $1 for update", [candidate.ticketId]);
+    const slot = await lockSlotOf(tx, candidate.id);
+    // Checked again under the locks: the Ticket may have moved on meanwhile.
+    const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
+      `update runs set state = 'running', ended_at = null, end_reason = null, last_call_at = $2
+       from tickets where runs.id = $3 and ${revivable}
+       returning runs.workspace_id as "workspaceId", tickets.project_id as "projectId", runs.ticket_id as "ticketId"`,
+      [agent.id, clock.now(), candidate.id],
+    );
+    const revived = rows[0];
+    if (!revived) return;
+    if (slot) runnerChanged(context, tx, slot);
+    context.live.publish(tx, revived.workspaceId, { type: "ticket.changed", projectId: revived.projectId, ticketId: revived.ticketId });
+  });
+}
+
 /** Where Runners report their Runs' ends. */
 export function runReports(context: Context): RunReports {
   return {

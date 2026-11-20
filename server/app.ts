@@ -14,9 +14,9 @@ import { artifactRoutes } from "./artifacts/routes.js";
 import { sandboxRoutes } from "./artifacts/sandbox.js";
 import { attachmentRoutes } from "./attachments/routes.js";
 import { agentRoutes } from "./agents/routes.js";
-import { refuseStoppedRunCalls } from "./runs/calls.js";
+import { namedInCall, refuseStoppedRunCalls, reviveLostRunCalls } from "./runs/calls.js";
 import { runRoutes } from "./runs/routes.js";
-import { noteRunCall, type NamedInCall } from "./runs/runs.js";
+import { noteRunCall } from "./runs/runs.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
@@ -81,19 +81,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   // even a call refused before its route looked at the token, such as a malformed one.
   app.addHook("onSend", async (request, _reply, payload) => {
     const header = request.headers.authorization;
-    const params = (request.params ?? {}) as Record<string, string | undefined>;
-    const named: NamedInCall = {
-      runId: params.runId,
-      ticketId: params.ticketId,
-      ticketKey: params.key,
-      sessionId: params.sessionId,
-    };
-    // Filing a Ticket names a Run in its body: the Run it is filed from, or a Sub-Ticket's parent, its Run's Ticket.
-    if (request.method === "POST" && request.routeOptions.url === "/api/projects/:projectId/tickets") {
-      const body = (request.body ?? {}) as Record<string, unknown>;
-      if (typeof body.runId === "string") named.runId = body.runId;
-      if (typeof body.parentId === "string") named.ticketId = body.parentId;
-    }
+    const named = namedInCall(request);
     if (!named.runId && !named.ticketId && !named.ticketKey && !named.sessionId) return payload;
     try {
       const agent =
@@ -131,6 +119,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(cookie);
   acceptReadableForms(app, context);
   refuseStoppedRunCalls(app, context);
+  reviveLostRunCalls(app, context);
   await app.register(identityRoutes(context));
   await app.register(githubRoutes(context));
   await app.register(workspaceRoutes(context));

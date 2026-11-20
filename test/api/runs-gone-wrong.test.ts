@@ -303,6 +303,79 @@ describe("lost Runs", () => {
     expect(await alive(1)).toBe("lost");
   });
 
+  test("a lost Run whose Agent calls again naming it runs again, and its finish is accepted", async () => {
+    const { ada, ticket, run, asAgent, inbox, status } = await runningRun();
+    cronk.clock.advance(minutes(30));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("lost");
+
+    // The session was only busy: it finishes the work and reports in.
+    cronk.clock.advance(minutes(7));
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready", report: "Clear enough." });
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({ state: "finished", outcome: "ready", endReason: null }),
+    );
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Ready"));
+    expect((await inbox()).items).toEqual([]);
+  });
+
+  test("a call naming a lost Run's Ticket brings it back, alive for another 30 minutes", async () => {
+    const { workspace, ada, run, asAgent } = await runningRun();
+    cronk.clock.advance(minutes(30));
+    await cronk.checkForLostRuns();
+
+    cronk.clock.advance(minutes(10));
+    await ok("GET", `/api/workspaces/${workspace.id}/tickets/CRONK-1`, asAgent);
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(
+      expect.objectContaining({ state: "running", endedAt: null, endReason: null }),
+    );
+
+    cronk.clock.advance(minutes(29));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    cronk.clock.advance(minutes(1));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("lost");
+  });
+
+  test("a lost Run stays lost once its Ticket moved, was retried or undelegated, and for anyone else's calls", async () => {
+    const lostRun = async () => {
+      const setup = await runningRun();
+      cronk.clock.advance(minutes(30));
+      await cronk.checkForLostRuns();
+      return setup;
+    };
+    const stateAfterAgentCall = async ({ ada, ticket, run, asAgent }: Awaited<ReturnType<typeof lostRun>>) => {
+      await call("GET", `/api/tickets/${ticket.id}`, asAgent);
+      await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready", report: "Late." });
+      return (await ok("GET", `/api/runs/${run.id}`, ada)).state;
+    };
+
+    const moved = await lostRun();
+    await ok("PATCH", `/api/tickets/${moved.ticket.id}`, moved.ada, { statusId: moved.status("Ready") });
+    expect(await stateAfterAgentCall(moved)).toBe("lost");
+    await cronk.stop();
+
+    cronk = await startCronk();
+    const retried = await lostRun();
+    await ok("POST", `/api/tickets/${retried.ticket.id}/retry`, retried.ada);
+    expect(await stateAfterAgentCall(retried)).toBe("lost");
+    await cronk.stop();
+
+    cronk = await startCronk();
+    const undelegated = await lostRun();
+    await ok("PATCH", `/api/tickets/${undelegated.ticket.id}`, undelegated.ada, { delegateId: null });
+    expect(await stateAfterAgentCall(undelegated)).toBe("lost");
+    await cronk.stop();
+
+    cronk = await startCronk();
+    const others = await lostRun();
+    await ok("GET", `/api/tickets/${others.ticket.id}`, others.ada);
+    await ok("GET", `/api/runs/${others.run.id}`, others.ada);
+    expect((await ok("GET", `/api/runs/${others.run.id}`, others.ada)).state).toBe("lost");
+  });
+
   test("Admins set the lost-Run threshold per Workspace; other members only read it", async () => {
     const { workspace, ada, run } = await runningRun();
     const settings = `/api/workspaces/${workspace.id}/settings`;
