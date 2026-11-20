@@ -215,12 +215,15 @@ function AppChecklist() {
   );
 }
 
-/** Where the App is installed, and the Repositories each installation covers. */
+/**
+ * Where the App is installed, and the Repositories each installation covers, as GitHub says now
+ * rather than as Cronk keeps it, so an installation just made on GitHub shows on reloading.
+ */
 function Installations({ app }: { app: GitHubApp }) {
   const [installations, setInstallations] = useState<GitHubInstallation[] | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    api.githubInstallations().then(setInstallations, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+    api.githubInstallations(true).then(setInstallations, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
   return (
     <Panel title="Installations" id="installations" description="The accounts and organizations the App is installed on, and the Repositories each covers.">
