@@ -9,8 +9,9 @@ import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cr
  * moves to its Project's first Done Status as a move by Cronk: Verified when the merging GitHub account is a User
  * of the Ticket's Workspace, otherwise
  * Unverified. A merge an Agent's Run asked Cronk for completes them Unverified, as that Agent in that Run in its own
- * Workspace. Other Pull Requests and unfinished Sub-Tickets don't hold it back, and a Run running on it stops
- * as if a User had moved it. Reopen then sends it back to the producing Step's Status, or, without one, leaves it.
+ * Workspace. So does a User's own merge while a Run is running on the Ticket, as that Run's Agent's in that Run, so an
+ * agent merging with the User's credentials can't pass as the User vouching for the work. Other Pull Requests and
+ * unfinished Sub-Tickets don't hold it back, and a Run running on it stops as if a User had moved it. Reopen then sends it back to the producing Step's Status, or, without one, leaves it.
  */
 
 /** The merge as GitHub reported it, or as an Agent's Run asked Cronk for it. */
@@ -31,7 +32,13 @@ export interface Merge {
 export async function completeMergedTickets(context: Context, tx: Tx, merge: Merge): Promise<void> {
   const { pullRequest, mergedBy } = merge;
   const { rows: tickets } = await tx.query<
-    MovedTicket & { doneStatusId: string; producingStatusId: string | null; produced: boolean; byMember: boolean }
+    MovedTicket & {
+      doneStatusId: string;
+      producingStatusId: string | null;
+      produced: boolean;
+      byMember: boolean;
+      running: { agentId: string; runId: string } | null;
+    }
   >(
     `select tickets.id, projects.key || '-' || tickets.number as key, tickets.workspace_id as "workspaceId",
        tickets.project_id as "projectId", tickets.status_id as "statusId", tickets.verification,
@@ -39,7 +46,9 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
         order by done.position limit 1) as "doneStatusId",
        runs.status_id as "producingStatusId", runs.id is not null as produced,
        exists (select 1 from memberships join users on users.id = memberships.user_id
-               where memberships.workspace_id = tickets.workspace_id and users.github_id = $2) as "byMember"
+               where memberships.workspace_id = tickets.workspace_id and users.github_id = $2) as "byMember",
+       (select json_build_object('agentId', running.agent_id, 'runId', running.id) from runs running
+        where running.ticket_id = tickets.id and running.state = 'running') as running
      from pull_request_links
      join tickets on tickets.id = pull_request_links.ticket_id
      join projects on projects.id = tickets.project_id
@@ -54,16 +63,26 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
   );
   const name = `${pullRequest.repository}#${pullRequest.number}`;
   const { byAgent } = merge;
-  for (const { doneStatusId, producingStatusId, produced, byMember, ...ticket } of tickets) {
+  for (const { doneStatusId, producingStatusId, produced, byMember, running, ...ticket } of tickets) {
     const agentsOwn = byAgent?.workspaceId === ticket.workspaceId;
-    const by: ChangeActor = byAgent && agentsOwn ? { kind: "agent", id: byAgent.id, runId: byAgent.runId } : { kind: "cronk" };
+    const usersOwn = byMember && !merge.autoMerged && !byAgent;
+    // A User's own merge while a Run is running on the Ticket may be that Run's Agent using the User's credentials:
+    // it counts as the Run's Agent's, in that Run, and never vouches for the work.
+    const asRunsAgent = usersOwn && running !== null;
+    const by: ChangeActor =
+      byAgent && agentsOwn
+        ? { kind: "agent", id: byAgent.id, runId: byAgent.runId }
+        : asRunsAgent
+          ? { kind: "agent", id: running.agentId, runId: running.runId }
+          : { kind: "cronk" };
     const merger = byAgent ? (agentsOwn ? byAgent.name : "Cronk") : mergedBy ? `@${mergedBy.login}` : "GitHub";
     await moveByCronk(context, tx, ticket, {
       target: { kind: "status", statusId: doneStatusId, completedFrom: producingStatusId, withoutStep: !produced },
       by,
       stopReason: `${merger} merged ${name}, completing ${ticket.key}.`,
-      // Only a User of the Ticket's Workspace merging it themselves vouches for the work; an agent's merge never does.
-      verification: byMember && !merge.autoMerged && !byAgent ? "verified" : "unverified",
+      // Only a User of the Ticket's Workspace merging it themselves, with no Run running on it, vouches for the work;
+      // an agent's merge never does.
+      verification: usersOwn && running === null ? "verified" : "unverified",
       pullRequestId: pullRequest.id,
       // Recorded at the move's time, ahead of the Changes moving it.
       beforeMove: async (_decision, now) => {
