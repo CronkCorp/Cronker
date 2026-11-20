@@ -61,6 +61,7 @@ export const Run = Type.Object({
   transcriptId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Transcript, once one was uploaded for the session its Runner returned when starting it.",
   }),
+  transcriptDeleted: Type.Boolean({ description: "Whether a User deleted its Transcript." }),
   startedAt: Type.String({ format: "date-time" }),
   endedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
   lastCallAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
@@ -83,7 +84,10 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
-  (select transcripts.id from transcripts where transcripts.run_id = runs.id limit 1) as "transcriptId",
+  (select transcripts.id from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)
+    as "transcriptId",
+  exists (select from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is not null)
+    as "transcriptDeleted",
   runs.started_at as "startedAt", runs.ended_at as "endedAt", runs.last_call_at as "lastCallAt",
   runs.workspace_id as "workspaceId", runs.agent_id as "agentId", runs.status_id as "statusId", runs.brief`;
 
@@ -765,11 +769,12 @@ export async function checkForLostRuns(context: Context): Promise<void> {
   }
 }
 
-/** What a request names: a Run, a Ticket by id, or a Ticket by its key. */
+/** What a request names: a Run, a Ticket by id, a Ticket by its key, or the session a Run's Runner returned. */
 export interface NamedInCall {
   runId?: string;
   ticketId?: string;
   ticketKey?: string;
+  sessionId?: string;
 }
 
 /**
@@ -777,18 +782,18 @@ export interface NamedInCall {
  * call was allowed or not: a Run long without such a call is lost.
  */
 export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
-  const { runId, ticketId, ticketKey } = named;
+  const { runId, ticketId, ticketKey, sessionId } = named;
   const ticket = ticketId && isUuid(ticketId)
     ? ticketId
     : ticketKey
       ? (await findTicketRefByKey(db, agent.workspace.id, ticketKey))?.id
       : undefined;
   const run = runId && isUuid(runId) ? runId : undefined;
-  if (!ticket && !run) return;
+  if (!ticket && !run && !sessionId) return;
   await db.query(
     `update runs set last_call_at = $3
-     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4)`,
-    [agent.id, run ?? null, clock.now(), ticket ?? null],
+     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4 or session_id = $5)`,
+    [agent.id, run ?? null, clock.now(), ticket ?? null, sessionId ?? null],
   );
 }
 
