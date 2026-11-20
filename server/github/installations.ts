@@ -188,3 +188,4 @@ export async function listInstallations(context: Context, { refresh = false } = 
   );
   return listed.sort((a, b) => ignoringCase(a.account, b.account));
 }
+

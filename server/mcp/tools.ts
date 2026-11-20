@@ -128,7 +128,7 @@ export function buildMcpServer(api: Api): McpServer {
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
-        "changes requested, and by whom), the Step that produced it and the failing check or review requesting changes that last sent the Ticket back to that Step, which Cronk's Comment also links; " +
+        "changes requested, and by whom), the Step that produced it and the failing check, review requesting changes or merge conflict that last sent the Ticket back to that Step, which Cronk's Comment also links; " +
         "its Linked Documents, " +
         "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; its " +
         "Linked Artifacts, which you read with `read_artifact`; and the " +

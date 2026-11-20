@@ -701,6 +701,13 @@ export interface PullRequest {
   sentBack:
     | { kind: "check"; name: string; sha: string; url: string | null; at: string }
     | { kind: "review"; reviewer: string | null; url: string | null; at: string }
+    | {
+        kind: "conflict";
+        branch: string;
+        sha: string;
+        merge: { repository: string; number: number; url: string } | null;
+        at: string;
+      }
     | null;
 }
 

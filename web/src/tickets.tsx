@@ -1136,10 +1136,16 @@ interface Merged {
   mergedBy: string | null;
 }
 
-/** What a `sentBack` Change records: the Pull Request, and the failing check or the review requesting changes on it. */
+/**
+ * What a `sentBack` Change records: the Pull Request, and the failing check, the review requesting changes or the
+ * conflict with its base branch on it, with the merge that caused it.
+ */
 interface SentBack {
   pullRequest: { repository: string; number: number; url: string };
-  failure: { kind: "check"; name: string; url: string | null } | { kind: "review"; reviewer: string | null; url: string | null };
+  failure:
+    | { kind: "check"; name: string; url: string | null }
+    | { kind: "review"; reviewer: string | null; url: string | null }
+    | { kind: "conflict"; branch: string; merge: { repository: string; number: number; url: string } | null };
 }
 
 /**
@@ -1165,6 +1171,11 @@ function described(change: Change): string {
   if (change.field === "sentBack") {
     const { pullRequest, failure } = change.to as SentBack;
     const name = pullRequestName(pullRequest);
+    if (failure.kind === "conflict") {
+      return failure.merge
+        ? `sent it back: ${pullRequestName(failure.merge)} merged into ${failure.branch}, and ${name} conflicts with it`
+        : `sent it back: ${name} conflicts with ${failure.branch}`;
+    }
     return failure.kind === "check"
       ? `sent it back: the check ${failure.name} failed on ${name}`
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
@@ -1264,6 +1275,24 @@ function describedWithReason(change: Change, related: Change[]): ReactNode {
   }
   if (change.field !== "sentBack") return described(change);
   const { pullRequest, failure } = change.to as SentBack;
+  const pullRequestLink = <ExternalLink url={pullRequest.url}>{pullRequestName(pullRequest)}</ExternalLink>;
+  if (failure.kind === "conflict") {
+    return (
+      <>
+        sent it back{moved && <> from {shown(moved, moved.from)} to {shown(moved, moved.to)}</>}:{" "}
+        {failure.merge ? (
+          <>
+            <ExternalLink url={failure.merge.url}>{pullRequestName(failure.merge)}</ExternalLink> merged into {failure.branch}, and{" "}
+            {pullRequestLink} conflicts with it
+          </>
+        ) : (
+          <>
+            {pullRequestLink} conflicts with {failure.branch}
+          </>
+        )}
+      </>
+    );
+  }
   return (
     <>
       sent it back{moved && <> from {shown(moved, moved.from)} to {shown(moved, moved.to)}</>}:{" "}

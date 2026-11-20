@@ -247,6 +247,68 @@ describe("MCP with an Agent token", () => {
     });
   });
 
+  test("an Agent reads a Ticket a merge conflict sent back, with Cronk's Comment naming the merge and what sent it back", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+    const cronker = installation.repositories[0]!;
+    await post(cookie, `/api/projects/${ticket.projectId}/repositories`, { id: cronker.id });
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    // Code review is skipped, so finishing Implement moves it to In Review.
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") },
+    });
+    const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
+    const pullRequest = (id: number, number: number, title: string, fields: object) => ({
+      id,
+      number,
+      title,
+      state: "open",
+      draft: false,
+      merged: false,
+      html_url: `https://github.com/cronkcorp/cronker/pull/${number}`,
+      head: { ref: `branch-${number}`, sha: `c${number}` },
+      base: { ref: "main", sha: "b0" },
+      updated_at: "2026-01-01T09:00:00Z",
+      ...fields,
+    });
+    const deliver = (action: string, pr: object) =>
+      cronk.github.deliver(app, "pull_request", { action, installation: { id: installation.id }, repository, pull_request: pr });
+    await deliver("opened", pullRequest(501, 7, "CRONK-1: read me", {}));
+    const client = await connect(secret);
+    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
+    expect((await call(client, "finish", { run: run.id, outcome: "done" })).isError).toBe(false);
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
+    await deliver(
+      "closed",
+      pullRequest(502, 9, "Speed up the board", { state: "closed", merged: true, merge_commit_sha: "m1", updated_at: "2026-01-01T09:30:00Z" }),
+    );
+    await cronk.checkMergeability();
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.comments.at(-1)).toEqual(
+      expect.objectContaining({
+        actor: { kind: "cronk", name: "Cronk" },
+        body:
+          "[cronkcorp/cronker#9](https://github.com/cronkcorp/cronker/pull/9) merged into `main` as `m1`, and now " +
+          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7) conflicts with it. Sent CRONK-1 back to Implement.",
+      }),
+    );
+    expect(json.pullRequests[0].sentBack).toEqual({
+      kind: "conflict",
+      branch: "main",
+      sha: "m1",
+      merge: { repository: "cronkcorp/cronker", number: 9, url: "https://github.com/cronkcorp/cronker/pull/9" },
+      at: "2026-01-01T09:00:00.000Z",
+    });
+  });
+
   test("an Agent reads a Ticket with its Linked Documents", async () => {
     const { cookie, ticket, secret } = await workspaceWithTicket();
     const document = await post(cookie, `/api/projects/${ticket.projectId}/documents`, { title: "Sign-in design" });
