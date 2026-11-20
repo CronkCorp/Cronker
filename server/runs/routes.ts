@@ -8,6 +8,7 @@ import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
 import { createRunner, removeRunner, removeTrigger, RunnerRecord, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
+import { mergePullRequest } from "./merging.js";
 import { Ticket } from "../work/tickets.js";
 
 export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -97,6 +98,31 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => finishRun(context, await requireCaller(context, request), request.params.runId, request.body),
+    );
+
+    app.post(
+      "/api/runs/:runId/merge",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Merge the Run's Ticket's Pull Request",
+          description:
+            "For the caller's own running Run of a Merge Step: merges a Pull Request linked to the Run's Ticket on GitHub, " +
+            "with the GitHub App's token and the Repository's default merge method (the first its settings allow of a " +
+            "merge commit, squashing and rebasing), only while its head is the commit Cronk knows. Refused, naming the " +
+            "rule, unless the Ticket has Autonomous Delegation, its Project has agents may merge on, the Pull Request is " +
+            "open, its checks on its latest commit are green with none pending, no review still requests changes, and " +
+            "GitHub says it is mergeable. The merge ends the Run, finished with the Outcome `merged`, without `finish`, " +
+            "and completes the Ticket as Unverified, recorded as the Agent's in that Run.",
+          params: RunParams,
+          body: Type.Object({
+            pullRequestId: Type.Integer({ description: "GitHub's id for the Pull Request, as the Ticket's Pull Requests list it." }),
+          }),
+          response: { 200: Run, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request) =>
+        mergePullRequest(context, await requireCaller(context, request), request.params.runId, request.body.pullRequestId),
     );
 
     app.post(

@@ -44,6 +44,8 @@ const groups: { kind: SearchKind; heading: string }[] = [
   { kind: "report", heading: "Reports" },
   { kind: "term", heading: "Terms" },
   { kind: "decision", heading: "Decisions" },
+  { kind: "artifact", heading: "Artifacts" },
+  { kind: "transcript", heading: "Transcripts" },
 ];
 
 const pageOf = (result: SearchResult): string => {
@@ -57,6 +59,10 @@ const pageOf = (result: SearchResult): string => {
       return `/terms/${result.id}`;
     case "decision":
       return `/decisions/${result.id}`;
+    case "artifact":
+      return `/artifacts/${result.id}`;
+    case "transcript":
+      return `/transcripts/${result.id}`;
   }
 };
 
