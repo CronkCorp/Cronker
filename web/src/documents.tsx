@@ -543,21 +543,40 @@ function Move({
   );
 }
 
-/** Where a Document's, Decision's or Term's Versions come from, each read with a title and a body. */
-export interface VersionSource<V extends VersionWithBody = VersionWithBody> {
-  list: () => Promise<Version[]>;
-  read: (number: number) => Promise<V>;
-  compare: (from: number, to: number) => Promise<Comparison<V>>;
+/** A Version as a list of Versions shows it: its number, and who saved it and when. */
+type ListedVersion = Pick<Version, "number" | "actor" | "savedAt">;
+
+/**
+ * Where a Document's, Decision's, Term's or Artifact's Versions come from. Each Document's, Decision's or Term's is
+ * read with a title and a body, and compares as a Diff of them; an Artifact's are only compared, file by file.
+ */
+export interface VersionSource<V extends VersionWithBody = VersionWithBody, C = Comparison<V>> {
+  list: () => Promise<ListedVersion[]>;
+  /** Reads one Version; its list entries open nothing when left out. */
+  read?: (number: number) => Promise<V>;
+  compare: (from: number, to: number) => Promise<C>;
   /** Draws a Version read alone; its body as a Document's when left out. */
   show?: (version: V) => ReactNode;
+  /** Draws what changed between two; a Diff of their bodies, named by their titles where they differ, when left out. */
+  showComparison?: (comparison: C) => ReactNode;
 }
 
-/** A Document's, Decision's or Term's Versions, newest first, in a side list: read any one, or pick two to see their Diff. */
-export function Versions<V extends VersionWithBody>({ source }: { source: VersionSource<V> }) {
-  const [versions, setVersions] = useState<Version[] | null>(null);
+/** Two Versions' bodies as a Diff, named by Version and, where they differ, by title. */
+function BodiesCompared({ comparison }: { comparison: Comparison }) {
+  const { from, to } = comparison;
+  const titled = (version: Version) => `Version ${version.number}${from.title !== to.title ? `: ${version.title}` : ""}`;
+  return <Diff from={titled(from)} to={titled(to)} lines={comparison.lines} />;
+}
+
+/**
+ * A Document's, Decision's, Term's or Artifact's Versions, newest first, in a side list, each with who saved it and
+ * when: read any one, or pick two to see what changed.
+ */
+export function Versions<V extends VersionWithBody, C = Comparison<V>>({ source }: { source: VersionSource<V, C> }) {
+  const [versions, setVersions] = useState<ListedVersion[] | null>(null);
   const [shown, setShown] = useState<V | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
-  const [comparison, setComparison] = useState<Comparison<V> | null>(null);
+  const [comparison, setComparison] = useState<C | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   // A new source each render is the same Versions; the screen remounts this to show a new one.
   const sourceRef = useRef(source);
@@ -573,6 +592,7 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
       sourceRef.current.compare(from, to).then(setComparison, (e: Error) => setFailure(e.message));
     }
   };
+  const { read, show, showComparison } = sourceRef.current;
 
   if (!versions) return failure ? <FormError error={failure} /> : null;
   return (
@@ -591,9 +611,13 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
               />
             )}
             <span className="version-item">
-              <Button variant="ghost" size="small" onClick={() => sourceRef.current.read(version.number).then(setShown, (e: Error) => setFailure(e.message))}>
-                Version {version.number}
-              </Button>
+              {read ? (
+                <Button variant="ghost" size="small" onClick={() => read(version.number).then(setShown, (e: Error) => setFailure(e.message))}>
+                  Version {version.number}
+                </Button>
+              ) : (
+                <span>Version {version.number}</span>
+              )}
               <span className="version-by">
                 <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
               </span>
@@ -606,7 +630,7 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
         {shown && (
           <>
             <VersionMeta version={shown} />
-            {sourceRef.current.show ? sourceRef.current.show(shown) : <DocumentBody body={shown.body} />}
+            {show ? show(shown) : <DocumentBody body={shown.body} />}
           </>
         )}
       </Dialog>
@@ -621,13 +645,9 @@ export function Versions<V extends VersionWithBody>({ source }: { source: Versio
         title="What changed"
         wide
       >
-        {comparison && (
-          <Diff
-            from={`Version ${comparison.from.number}${comparison.from.title !== comparison.to.title ? `: ${comparison.from.title}` : ""}`}
-            to={`Version ${comparison.to.number}${comparison.from.title !== comparison.to.title ? `: ${comparison.to.title}` : ""}`}
-            lines={comparison.lines}
-          />
-        )}
+        {comparison !== null &&
+          // Left out only where the comparison is a Comparison, the default.
+          (showComparison ? showComparison(comparison) : <BodiesCompared comparison={comparison as unknown as Comparison} />)}
       </Dialog>
     </section>
   );
