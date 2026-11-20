@@ -93,6 +93,12 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 2. **Code and knowledge.** *Built.* Code first: the GitHub App upgrade, Repositories on Projects, Pull Requests, merges by Users, failures sending work back. Then knowledge: Reports into Documents, Documents with Versions, Linked Documents, Attachments, Terms and Decisions with export. Last, a styling pass over every screen, milestone 1's and 2's alike, following `docs/ui.md` (adapted from the old Cronk's): first the foundation (design tokens, IBM Plex faces, the shared components, the sidebar frame), then each screen.
 3. **More Runners and the rest.** Transcripts first: their storage and view, filled by the Transcript hook. Then the Managed Agents Runner, filling them from fetched events. Then merges by agents with the Merge Step, search, and Artifacts.
 
+## After milestone 3
+
+Ideas, not yet grilled.
+
+- **Hosted skills.** Skills (a `SKILL.md` plus files, with Versions) kept per Workspace and Project in Cronk and edited in the web client. They reach Runs natively on the Managed Agents Runner, and over MCP (listed in the Brief, with a `read_skill` tool) on the others, hand-connected Claude Code included. A `SessionStart` hook installing them into `.claude/skills/` could follow once it is proven. They may replace the old Cronk's Guidance: a skill marked as always loaded does Guidance's job.
+
 ## Not now
 
-Custom fields, Guidance, Protected items and Suggestions, full Markdown export and import, User and Workspace webhooks, email, a shared Triage view, other Git hosts.
+Custom fields, Protected items and Suggestions, full Markdown export and import, User and Workspace webhooks, email, a shared Triage view, other Git hosts.
