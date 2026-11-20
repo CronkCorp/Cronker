@@ -74,8 +74,11 @@ async function send(url, init) {
   throw new Error(`Cronk answered ${response.status}: ${reason}`);
 }
 
+/** Where the hook keeps, per session, when it last told Cronk the session's Run is alive. */
+const aliveDir = () => join(tmpdir(), "cronk-transcript-hook");
+
 /** The file whose modification time says when this session last told Cronk its Run is alive. */
-const aliveFile = (sessionId) => join(tmpdir(), "cronk-transcript-hook", `${sessionId.replace(/[^\w.-]/g, "_")}.alive`);
+const aliveFile = (sessionId) => join(aliveDir(), `${sessionId.replace(/[^\w.-]/g, "_")}.alive`);
 
 async function aliveIsDue(sessionId) {
   try {
@@ -87,7 +90,7 @@ async function aliveIsDue(sessionId) {
 
 async function noteAlive(sessionId) {
   const file = aliveFile(sessionId);
-  await mkdir(join(tmpdir(), "cronk-transcript-hook"), { recursive: true });
+  await mkdir(aliveDir(), { recursive: true });
   await writeFile(file, "");
   const now = new Date();
   await utimes(file, now, now);

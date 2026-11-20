@@ -67,7 +67,9 @@ async function adaWithRunningRun() {
   const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
   // The fake Runner's first session is `session_1`; in it, Claude Code on the web names itself `cse_1`.
   expect(run).toMatchObject({ state: "running", sessionUrl: "https://claude.ai/code/session_1" });
-  return { workspace, ada, agent, ticket, run, hookToken };
+  // The cloud environment's variables: the token, and the session Claude Code on the web runs in.
+  const sessionEnv = { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" };
+  return { workspace, ada, agent, ticket, run, hookToken, sessionEnv };
 }
 
 /** The hook commands of the `settings.json` snippet Cronk gives a User to commit, by the event they run on. */
@@ -116,14 +118,11 @@ const stopInput = (transcriptPath: string) => ({
 
 describe("the Transcript hook on Stop", () => {
   test("uploads the session's whole transcript, which becomes the Run's Transcript", async () => {
-    const { ada, run, hookToken } = await adaWithRunningRun();
+    const { ada, run, sessionEnv } = await adaWithRunningRun();
     const { Stop } = await hookCommands(ada);
     const path = await transcriptFile([userSays("Triage CRONK-1.", 1), assistantSays("Reading it.", 2)]);
 
-    const hook = await runHook(Stop!, stopInput(path), {
-      CRONK_TOKEN: hookToken.secret,
-      CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1",
-    });
+    const hook = await runHook(Stop!, stopInput(path), sessionEnv);
 
     expect(hook).toEqual({ code: 0, stdout: "", stderr: "" });
     const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
@@ -135,13 +134,13 @@ describe("the Transcript hook on Stop", () => {
 
 describe("when the upload fails", () => {
   test("revoking the Transcript hook token refuses its uploads alone; the hook says why on stderr and exits 0", async () => {
-    const { ada, agent, run, hookToken } = await adaWithRunningRun();
+    const { ada, agent, run, hookToken, sessionEnv } = await adaWithRunningRun();
     const laptop = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
     await ok("DELETE", `/api/agents/${agent.id}/tokens/${hookToken.token.id}`, ada);
     const { Stop } = await hookCommands(ada);
     const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);
 
-    const refused = await runHook(Stop!, stopInput(path), { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" });
+    const refused = await runHook(Stop!, stopInput(path), sessionEnv);
 
     expect(refused.code).toBe(0);
     expect(refused.stderr).toMatch(/^Cronk's Transcript hook: Cronk answered 401: .+\n$/);
@@ -149,32 +148,46 @@ describe("when the upload fails", () => {
     expect((await ok("GET", "/api/agent", { headers: { authorization: `Bearer ${laptop.secret}` } })).agent.id).toBe(agent.id);
   });
 
-  test("a Cronk that can't be reached, or a missing token, never fails the agent's turn", async () => {
-    const { ada, hookToken } = await adaWithRunningRun();
+  test("a Cronk that can't be reached, or a missing token, never fails the agent's turn; the session's copy of the script still runs", async () => {
+    const { ada, sessionEnv } = await adaWithRunningRun();
     const { Stop } = await hookCommands(ada);
     const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);
-    await runHook(Stop!, stopInput(path), { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" });
+    await runHook(Stop!, stopInput(path), sessionEnv);
     await cronk.stop();
 
-    const unreachable = await runHook(Stop!, stopInput(path), { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" });
+    const unreachable = await runHook(Stop!, stopInput(path), sessionEnv);
     const noToken = await runHook(Stop!, stopInput(path), { CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" });
 
-    expect(unreachable.code).toBe(0);
-    expect(unreachable.stderr).toMatch(/^Cronk's Transcript hook: .+\n$/);
-    expect(noToken).toEqual({ code: 0, stdout: "", stderr: "Cronk's Transcript hook: CRONK_TOKEN is not set: add the Transcript hook token to the environment's variables.\n" });
+    expect(unreachable).toMatchObject({ code: 0, stdout: "" });
+    expect(unreachable.stderr).toMatch(/\nCronk's Transcript hook: .+\n$/);
+    expect(noToken).toMatchObject({ code: 0, stdout: "" });
+    expect(noToken.stderr).toMatch(
+      /\nCronk's Transcript hook: CRONK_TOKEN is not set: add the Transcript hook token to the environment's variables\.\n$/,
+    );
+  });
+
+  test("with no copy of the script and Cronk out of reach, the hook says it couldn't fetch the script and exits 0", async () => {
+    const { ada, sessionEnv } = await adaWithRunningRun();
+    const { Stop } = await hookCommands(ada);
+    const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);
+    await cronk.stop();
+
+    const hook = await runHook(Stop!, stopInput(path), sessionEnv);
+
+    expect(hook).toMatchObject({ code: 0, stdout: "" });
+    expect(hook.stderr).toMatch(/Cronk's Transcript hook: couldn't fetch http:\/\/.+\/hooks\/transcript\.mjs\n$/);
   });
 });
 
 describe("keeping the Run alive", () => {
   test("each upload counts as a call naming its Run, so a Run whose session is working never becomes lost", async () => {
-    const { ada, run, hookToken } = await adaWithRunningRun();
+    const { ada, run, sessionEnv } = await adaWithRunningRun();
     const { Stop } = await hookCommands(ada);
     const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);
-    const env = { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" };
-    const state = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).state;
+        const state = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).state;
 
     cronk.clock.advance(minutes(20));
-    expect((await runHook(Stop!, stopInput(path), env)).stderr).toBe("");
+    expect((await runHook(Stop!, stopInput(path), sessionEnv)).stderr).toBe("");
     cronk.clock.advance(minutes(29));
     await cronk.checkForLostRuns();
     expect(await state()).toBe("running");
@@ -185,10 +198,9 @@ describe("keeping the Run alive", () => {
   });
 
   test("on PostToolUse the hook only tells Cronk the Run is alive, at most once every 5 minutes", async () => {
-    const { ada, run, hookToken } = await adaWithRunningRun();
+    const { ada, run, sessionEnv } = await adaWithRunningRun();
     const { PostToolUse } = await hookCommands(ada);
-    const env = { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" };
-    const toolUsed = {
+        const toolUsed = {
       session_id: "4f8e1c2a-local",
       transcript_path: join(sessionTmp, "transcript.jsonl"),
       cwd: "/home/user/Cronker",
@@ -200,14 +212,14 @@ describe("keeping the Run alive", () => {
     const lastCall = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).lastCallAt;
 
     cronk.clock.advance(minutes(20));
-    expect(await runHook(PostToolUse!, toolUsed, env)).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(await runHook(PostToolUse!, toolUsed, sessionEnv)).toEqual({ code: 0, stdout: "", stderr: "" });
     expect(await lastCall()).toBe("2026-01-01T09:20:00.000Z");
     // Nothing was uploaded: the ping only says the Run is alive.
     expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({ transcriptId: null });
 
     // Within 5 minutes of the last ping, by the session's own clock, the hook asks nothing of Cronk.
     cronk.clock.advance(minutes(2));
-    expect(await runHook(PostToolUse!, toolUsed, env)).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(await runHook(PostToolUse!, toolUsed, sessionEnv)).toEqual({ code: 0, stdout: "", stderr: "" });
     expect(await lastCall()).toBe("2026-01-01T09:20:00.000Z");
 
     // Once 5 minutes have passed in the session, the next tool call pings again.
@@ -216,7 +228,7 @@ describe("keeping the Run alive", () => {
       if (file.endsWith(".alive")) await utimes(join(sessionTmp, file), fiveMinutesAgo, fiveMinutesAgo);
     }
     cronk.clock.advance(minutes(27));
-    expect(await runHook(PostToolUse!, toolUsed, env)).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(await runHook(PostToolUse!, toolUsed, sessionEnv)).toEqual({ code: 0, stdout: "", stderr: "" });
     expect(await lastCall()).toBe("2026-01-01T09:49:00.000Z");
     cronk.clock.advance(minutes(29));
     await cronk.checkForLostRuns();
