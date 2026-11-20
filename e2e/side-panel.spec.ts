@@ -67,7 +67,8 @@ test("scrolling over the main column scrolls the page, and the side panel stays 
 
 test("a side panel that fits the window has no scrollbar, and scrolling over it scrolls the page as before", async ({ page, cronk }) => {
   await openTallTicket(page, cronk, { blockedBy: 1 });
-  await page.setViewportSize({ width: 1280, height: 1000 });
+  // Tall enough for every group, Linked Artifacts among them.
+  await page.setViewportSize({ width: 1280, height: 1200 });
   const panel = page.getByRole("complementary", { name: "Details" });
   await expect(panel.getByRole("region", { name: "Files" })).toBeInViewport({ ratio: 1 });
   expect(await panel.evaluate((aside: HTMLElement) => aside.scrollHeight - aside.clientHeight)).toBe(0);
