@@ -172,6 +172,7 @@ test("every board column, open or collapsed, is as tall as the tallest, and stay
   };
   const bottoms = () => Promise.all(names.map(bottom));
   const implementBottom = () => bottom("Implement");
+  // Eight cards take Implement well past the 60vh floor (480px of the 800px window), more than a card's height beyond it.
   expect(await implementBottom(), "Implement outgrows the 60vh floor").toBeGreaterThan(page.viewportSize()!.height * 0.6 + 200);
   expect(new Set(await bottoms()).size, "every column ends at the same height").toBe(1);
 
@@ -181,24 +182,25 @@ test("every board column, open or collapsed, is as tall as the tallest, and stay
   expect(await top("Backlog", /Lonely/), "Backlog's card sits at its top, level with Implement's first").toBe(first);
 
   // A live update adds two more cards: every column grows with Implement, without a reload.
-  const short = await implementBottom();
+  const eightCards = await implementBottom();
   const ninth = await inImplement("Busy ticket 9");
   const tenth = await inImplement("Busy ticket 10");
   await expect(lane("Implement").getByRole("link", { name: /Busy ticket 10/ })).toBeVisible();
-  expect(await implementBottom()).toBeGreaterThan(short);
+  expect(await implementBottom()).toBeGreaterThan(eightCards);
   expect(new Set(await bottoms()).size, "every column still ends at the same height").toBe(1);
 
   // Live updates move both out to Done, still collapsed: every column shrinks back with Implement.
   await call("PATCH", `/api/tickets/${ninth.id}`, { statusId: status("Done") });
   await call("PATCH", `/api/tickets/${tenth.id}`, { statusId: status("Done") });
   await expect(lane("Implement").getByRole("link", { name: /Busy ticket 10/ })).toBeHidden();
-  await expect.poll(implementBottom).toBe(short);
+  await expect.poll(implementBottom).toBe(eightCards);
   expect(new Set(await bottoms()).size, "every column ends at the same height after cards leave").toBe(1);
 });
 
 test("a dragged card dropped on the empty lower part of a short column moves into that column", async ({ page, cronk }) => {
   const { call, project, status, open } = await crowdedBoard(page, cronk);
-  await page.setViewportSize({ width: 1280, height: 1000 });
+  const windowHeight = 1000;
+  await page.setViewportSize({ width: 1280, height: windowHeight });
   for (let i = 1; i <= 12; i++) {
     const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: `Busy ticket ${i}` });
     await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: status("Ready") });
@@ -209,10 +211,10 @@ test("a dragged card dropped on the empty lower part of a short column moves int
 
   // Backlog has no cards; the point to drop on is below its 60vh floor, in the part it stretches to.
   const backlog = (await lane("Backlog").boundingBox())!;
-  const floor = (await lane("Backlog").evaluate((e) => e.getBoundingClientRect().top)) + 0.6 * 1000;
+  const floor = (await lane("Backlog").evaluate((e) => e.getBoundingClientRect().top)) + 0.6 * windowHeight;
   const y = floor + 40;
   expect(y, "the drop point is inside the stretched Backlog").toBeLessThan(backlog.y + backlog.height);
-  expect(y, "the drop point is on screen").toBeLessThan(1000);
+  expect(y, "the drop point is on screen").toBeLessThan(windowHeight);
 
   const from = (await card.boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
