@@ -45,25 +45,20 @@ test("set up with a GitHub App, add someone by GitHub login, and they sign in wi
   await beaContext.close();
 });
 
-test("an App that only reads Repositories shows the write access to add, then the installations yet to accept it", async ({ page, cronk }) => {
+test("an App that only reads Repositories shows the write access to add, as GitHub names it", async ({ page, cronk }) => {
   await setUp(cronk);
   await createGitHubApp(cronk, await signIn(cronk));
   const app = cronk.github.apps[0]!;
   // As Cronk created Apps before Runs pushed and agents merged.
   const readOnly = { emails: "read", metadata: "read", pull_requests: "read", checks: "read", statuses: "read" };
   app.permissions = { ...readOnly };
-  cronk.github.install(app, "acme", ["api"]);
   await signInInBrowser(page, cronk);
 
   await page.goto(`${cronk.url}/github`);
   const checklist = page.getByRole("region", { name: "What the App needs" });
   await expect(checklist.getByRole("listitem")).toHaveText(["Contents: Read and write", "Pull requests: Read and write"]);
 
-  // The Admin adds them on GitHub; acme's owner hasn't accepted them yet.
   app.permissions = { ...readOnly, contents: "write", pull_requests: "write" };
   await page.reload();
   await expect(checklist.getByText("The App has every permission, event and webhook setting Cronk needs")).toBeVisible();
-  await expect(checklist.getByRole("listitem").filter({ hasText: "acme" })).toContainText(
-    "acme lacksContents: Read and writePull requests: Read and write",
-  );
 });

@@ -188,7 +188,7 @@ describe("upgrading the GitHub App to write to Repositories", () => {
     expect((await (await checklist(cookie)).json()).installationsNotAccepted).toEqual([]);
   });
 
-  test("an App lacking only one of them lists just that one", async () => {
+  test("an App with write access on Pull Requests but only reading contents lists just contents", async () => {
     await setUp(cronk);
     const cookie = await signIn(cronk);
     await createGitHubApp(cronk, cookie);

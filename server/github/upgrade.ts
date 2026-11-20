@@ -3,7 +3,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
-import { appToken, isAnyAdmin, requiredEvents, requiredPermissions, webhookSecret, webhooksPath } from "./app.js";
+import { appToken, isAnyAdmin, type Access, requiredEvents, requiredPermissions, webhookSecret, webhooksPath } from "./app.js";
 import { appInstallations, appOnGitHub, appWebhook, under } from "./client.js";
 
 /**
@@ -36,13 +36,16 @@ export type Checklist = Static<typeof Checklist>;
 const installationPermissions = Object.keys(requiredPermissions).filter((name) => name !== "emails");
 
 /** Each access level, ranked so that one includes those below it: `write` includes `read`. */
-const accessRank: Record<string, number> = { read: 1, write: 2 };
+const accessRank: Record<Access, number> = { read: 1, write: 2 };
+
+/** Whether GitHub's access, such as `none` or absent, includes what Cronk needs. */
+const includes = (has: string | undefined, needed: Access) => (accessRank[has as Access] ?? 0) >= accessRank[needed];
 
 function missingOf(has: Record<string, string> | undefined, names: string[]): Record<string, string> {
   const missing: Record<string, string> = {};
   for (const name of names) {
     const needed = requiredPermissions[name]!;
-    if ((accessRank[has?.[name] ?? "none"] ?? 0) < accessRank[needed]!) missing[name] = needed;
+    if (!includes(has?.[name], needed)) missing[name] = needed;
   }
   return missing;
 }
