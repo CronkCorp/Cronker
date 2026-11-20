@@ -27,6 +27,8 @@ interface PickerProps {
   /** Picking toggles and keeps the list open. */
   multiple?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Shown in place of the options, such as while they load or when they can't be had. */
+  notice?: ReactNode;
 }
 
 /**
@@ -42,6 +44,7 @@ export function Picker({
   onCreate,
   multiple = false,
   onOpenChange,
+  notice,
 }: PickerProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -151,8 +154,14 @@ export function Picker({
           onKeyDown={onKeyDown}
         />
         <ul role="listbox" id={`${id}-list`} aria-label={label} aria-multiselectable={multiple || undefined} className="picker-list">
-          {shown.length === 0 && <li className="picker-empty">{options.length === 0 ? "Nothing to pick." : "Nothing matches."}</li>}
-          {items}
+          {notice !== undefined ? (
+            <li className="picker-empty">{notice}</li>
+          ) : (
+            <>
+              {shown.length === 0 && <li className="picker-empty">{options.length === 0 ? "Nothing to pick." : "Nothing matches."}</li>}
+              {items}
+            </>
+          )}
         </ul>
       </div>
     </Popover>

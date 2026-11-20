@@ -94,6 +94,7 @@ test("adding and removing a Repository says Saved.", async ({ page, cronk }) => 
 
   const repositories = page.getByRole("region", { name: "Repositories" });
   await repositories.getByRole("button", { name: "Add Repository" }).click();
+  await page.getByRole("listbox", { name: "Repository to add" }).getByRole("option", { name: "cronkcorp/cronker" }).click();
   await expect(repositories.getByRole("status")).toHaveText("Saved.");
   await repositories.getByRole("button", { name: "Remove cronkcorp/cronker" }).click();
   await expect(repositories.getByText("The Project lists no Repositories yet.")).toBeVisible();
