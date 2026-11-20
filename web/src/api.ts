@@ -820,6 +820,7 @@ export const api = {
   runners: () => call<Runner[]>("GET", "/api/runners"),
   createRunner: (input: { name: string; kind: string }) => call<Runner>("POST", "/api/runners", input),
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
+  removeRunner: (id: string) => call<void>("DELETE", runner(id)),
   saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
   removeTrigger: (runnerId: string, triggerId: string) =>

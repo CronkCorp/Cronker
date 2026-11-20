@@ -247,6 +247,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
               ))}
             </select>
           </Field>
+          {agent.runnerId === null && <p className="field-hint">Choose a Runner for its Runs to start.</p>}
         </Panel>
       )}
       {agent && (

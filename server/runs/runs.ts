@@ -224,6 +224,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
   const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
   if (running) return needsNone();
+  // Removing a Runner holds this lock while it clears its Agents: if one was removed since the read above, read again.
+  if (ticket.runnerId && !(await lockRunnerIfAny(tx, ticket.runnerId))) return enterStatus(context, tx, ticketId, now, skipped);
   const runner = ticket.runnerKind ? context.runners[ticket.runnerKind] : undefined;
   if (ticket.blocked || (runner && !(await hasSlotFor(tx, ticket.runnerId!, ticketId)))) {
     await waitForRun(true);
@@ -326,11 +328,18 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
  * it takes this lock, so counting its running Runs and waiting Tickets gives the answer that stands.
  */
 async function lockRunner(tx: Tx, runnerId: string): Promise<{ limit: number; paused: boolean; ownerId: string }> {
+  const runner = await lockRunnerIfAny(tx, runnerId);
+  if (!runner) throw new Error(`Runner ${runnerId} is gone`);
+  return runner;
+}
+
+/** As `lockRunner`, but nothing if the Runner was removed meanwhile. */
+async function lockRunnerIfAny(tx: Tx, runnerId: string): Promise<{ limit: number; paused: boolean; ownerId: string } | undefined> {
   const { rows } = await tx.query<{ limit: number; paused: boolean; ownerId: string }>(
     `select run_limit as limit, paused_until is not null as paused, owner_id as "ownerId" from runners where id = $1 for update`,
     [runnerId],
   );
-  return rows[0]!;
+  return rows[0];
 }
 
 /**
