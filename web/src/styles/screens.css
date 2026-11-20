@@ -127,12 +127,12 @@
 
 /* Board: open columns share the width but keep a card's readable width; when they don't fit, the board scrolls
    sideways itself while the page head and filters stay put. A column's name wraps rather than being cut off.
-   Done and Canceled start collapsed. */
+   Done and Canceled start collapsed. Every column stretches to the tallest one's height, so the board ends in one
+   straight line and a short column's empty lower part still takes a dropped card. */
 .board {
   position: relative; /* holds collapsed columns' visually hidden names, so they scroll with it, not the page */
   display: flex;
   gap: var(--space-2);
-  align-items: flex-start;
   overflow-x: auto;
 }
 .column {
@@ -1227,6 +1227,16 @@
   gap: var(--space-2);
 }
 
+/* Artifacts: a Project's or the Workspace's, each its title over its description. */
+.artifact-list td:first-child {
+  width: auto;
+}
+.artifact-list-description {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Artifact: the page itself in its sandboxed frame, its files beside it. */
 .artifact-description {
   max-width: 720px;
@@ -1259,6 +1269,23 @@
 .artifact-file-size {
   margin-left: auto;
   white-space: nowrap;
+}
+.compared-files {
+  display: grid;
+  gap: var(--space-5);
+}
+.compared-file {
+  display: grid;
+  gap: var(--space-2);
+}
+.compared-file-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
 }
 
 /* Search results: one group per kind, each result its title, where it is kept and where it matched. */

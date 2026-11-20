@@ -1,0 +1,14 @@
+  ✓    9 e2e/comment-shortcut.spec.ts:36:1 › Ctrl+Enter places a Comment from the Ticket's Comment box, while Enter and Shift+Enter add new lines (1.8s)
+  ✓   10 e2e/comment-shortcut.spec.ts:59:1 › Cmd+Enter places a Reply to a Comment (2.3s)
+  ✓   11 e2e/comment-shortcut.spec.ts:71:1 › Ctrl+Enter answers a Question from the Inbox's answer box (2.6s)
+  ✓   12 e2e/comment-shortcut.spec.ts:90:1 › pressing Ctrl+Enter again while a Comment is being sent doesn't place it twice (2.2s)
+  ✓   13 e2e/comment-shortcut.spec.ts:127:1 › the buttons that place a Comment show the shortcut as a hint, Ctrl+↵ off macOS (1.8s)
+  ✓   14 e2e/comment-shortcut.spec.ts:141:1 › on macOS the hint is ⌘↵ (2.0s)
+  ✓   15 e2e/comment-shortcut.spec.ts:155:1 › a Comment Cronk refuses stays in its box with the refusal under it (2.0s)
+  ✓   41 e2e/inbox.spec.ts:111:1 › a failed Run waits in the Inbox, and Retry starts a fresh one (1.9s)
+  102 passed (1.7m)
+ Test Files  47 passed (47)
+      Tests  745 passed (745)
+   Start at  15:55:19
+   Duration  294.89s (tests 98%, import 2%)
+

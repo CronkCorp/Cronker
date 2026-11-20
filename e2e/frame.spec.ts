@@ -61,6 +61,7 @@ test("every page opens with breadcrumbs and its title, and a sidebar page marks 
     ["Documents", "Documents"],
     ["Terms", "Terms"],
     ["Decisions", "Decisions"],
+    ["Artifacts", "Artifacts"],
     ["CRONK Cronker", "Cronker"],
     ["Agents", "Agents"],
     ["Runners", "Runners"],

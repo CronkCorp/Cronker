@@ -15,6 +15,7 @@ export type Area =
   | "documents"
   | "terms"
   | "decisions"
+  | "artifacts"
   | "project"
   | "agents"
   | "runners"
@@ -32,8 +33,8 @@ interface Place {
 const PlaceContext = createContext<(place: Place) => void>(() => {});
 
 /**
- * Tells the sidebar where the page is: its item, and the Project whose Documents, Terms and Decisions the sidebar
- * then leads to. A Ticket marks its Project; a Document marks Documents.
+ * Tells the sidebar where the page is: its item, and the Project whose Documents, Terms, Decisions and Artifacts the
+ * sidebar then leads to. A Ticket marks its Project; a Document marks Documents.
  */
 export function usePlace(area: Area, projectId: string | null = null): void {
   const set = useContext(PlaceContext);
@@ -171,7 +172,7 @@ function Sidebar({
   // On a phone, following a link out of the menu closes it.
   const closing = () => setMenuOpen(false);
   const area = place.area;
-  const knowledge = (kind: "documents" | "glossary" | "decisions") =>
+  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") =>
     project ? `/projects/${project.id}/${kind}` : `/workspaces/${current?.id}/${kind}`;
 
   return (
@@ -193,6 +194,9 @@ function Sidebar({
             </SideLink>
             <SideLink to={knowledge("decisions")} current={area === "decisions"}>
               Decisions
+            </SideLink>
+            <SideLink to={knowledge("artifacts")} current={area === "artifacts"}>
+              Artifacts
             </SideLink>
           </>
         )}

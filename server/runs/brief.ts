@@ -79,18 +79,24 @@ export function buildBrief(
     "",
     runId ? `Your Run id is ${runId}.` : "Your Run id is given when the Run starts.",
     "",
-    "End the Run by calling `finish` with your Run id and one of these Outcomes:",
+    step.kind === "merge"
+      ? "End the Run by merging its Pull Request with `merge_pull_request`, or by calling `finish` with your Run id and one of these Outcomes:"
+      : "End the Run by calling `finish` with your Run id and one of these Outcomes:",
     "",
     ...offeredOutcomes(step, statuses, autonomous).map(outcomeLine),
     "",
     "Rules:",
     "",
-    "- Call `finish` exactly once, as the last thing you do.",
+    step.kind === "merge"
+      ? "- Call `finish` exactly once, as the last thing you do, unless you merge: a merge with `merge_pull_request` " +
+        "ends this Run, finished as *merged*, so don't call `finish` after it."
+      : "- Call `finish` exactly once, as the last thing you do.",
     "- *needs you* takes a Question.",
     `- While this Run is running you may edit ${ticketKey}'s description, Priority, Labels, due date and estimate, ` +
       "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
     `- File anything you find that isn't part of ${ticketKey}'s work with \`file_ticket\`, giving your Run id: it waits ` +
       `for ${ticketKey}'s Assignee as a Discovered Ticket.`,
+    `- Give your Run id when you create an Artifact with \`create_artifact\`, so it is linked to ${ticketKey}.`,
     "- Don't merge pull requests on GitHub directly.",
   ].join("\n");
 

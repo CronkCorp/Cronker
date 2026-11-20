@@ -47,6 +47,11 @@ export interface StartedCronk {
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every five minutes. */
   replayFailedDeliveries(): Promise<void>;
+  /**
+   * Asks GitHub whether the Pull Requests waiting on a mergeability check can merge, as the server does every five
+   * seconds; a conflicting one sends its Ticket back. Move the clock first to ask again those GitHub was still working out.
+   */
+  checkMergeability(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -192,6 +197,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     checkForLostRuns: () => cronk.checkForLostRuns(),
     resumePausedRunners: () => cronk.resumePausedRunners(),
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
+    checkMergeability: () => cronk.checkMergeability(),
     logs,
     setupCode() {
       const line = logs.find((l) => typeof l.setupCode === "string");
