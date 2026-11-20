@@ -759,6 +759,19 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
+export type SearchKind = "ticket" | "document" | "report" | "term" | "decision";
+
+export interface SearchResult {
+  kind: SearchKind;
+  id: string;
+  title: string;
+  projectId: string | null;
+  /** A Ticket's own key, or the key of the Ticket a Report is on. */
+  ticketKey: string | null;
+  /** Where it matched, the matching words marked. */
+  snippet: { text: string; match: boolean }[];
+}
+
 export const api = {
   setupNeeded: () => call<{ needed: boolean }>("GET", "/api/setup").then((r) => r.needed),
   setUp: (input: { setupCode: string; email: string; password: string; workspaceName: string }) =>
@@ -931,6 +944,11 @@ export const api = {
     call<DecisionVersion & { body: string }>("GET", `${decision(id)}/versions/${number}`),
   compareDecisionVersions: (id: string, from: number, to: number) =>
     call<Comparison>("GET", `${decision(id)}/versions/compare?from=${from}&to=${to}`),
+  search: (workspaceId: string, query: { q: string; project?: string }) =>
+    call<SearchResult[]>(
+      "GET",
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${new URLSearchParams({ ...query })}`,
+    ),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 

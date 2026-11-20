@@ -112,6 +112,7 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/workspaces/{workspaceId}/pending-adds",
     "/api/workspaces/{workspaceId}/pending-adds/{userId}",
     "/api/workspaces/{workspaceId}/projects",
+    "/api/workspaces/{workspaceId}/search",
     "/api/workspaces/{workspaceId}/settings",
     "/api/workspaces/{workspaceId}/terms",
     "/api/workspaces/{workspaceId}/tickets/{key}",

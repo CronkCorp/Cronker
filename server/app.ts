@@ -24,6 +24,7 @@ import { knowledgeRoutes } from "./knowledge/routes.js";
 import { exportRoutes } from "./knowledge/export-routes.js";
 import { termRoutes } from "./knowledge/term-routes.js";
 import { liveRoutes } from "./live/routes.js";
+import { searchRoutes } from "./search/routes.js";
 import { transcriptRoutes } from "./transcripts/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { workRoutes } from "./work/routes.js";
@@ -130,6 +131,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(attachmentRoutes(context));
   await app.register(decisionRoutes(context));
   await app.register(exportRoutes(context));
+  await app.register(searchRoutes(context));
   await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
   await app.register(agentRoutes(context));
