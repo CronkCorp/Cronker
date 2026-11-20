@@ -139,7 +139,7 @@ test("the sidebar hides to give the main column the window, stays hidden across 
   await expect(show).toBeHidden();
 });
 
-test("with the sidebar hidden, a board spans the window while other pages keep their width", async ({ page, cronk }) => {
+test("with the sidebar hidden, a board spans the window, and so does every other page", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
@@ -150,16 +150,17 @@ test("with the sidebar hidden, a board spans the window while other pages keep t
   await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "CRONK Cronker" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const width = async () => (await board.boundingBox())!.width;
-  expect(await width()).toBeLessThanOrEqual(1120);
+  // Beside the sidebar: 1600px less its 232px and the main column's 16px padding on each side.
+  expect(await width()).toBeCloseTo(1336, 0);
 
   await page.getByRole("button", { name: "Hide sidebar" }).click();
   expect(await width()).toBeGreaterThan(1500);
 
-  // Moving between pages keeps it hidden: the Workspace's page keeps the 1120px cap, and back on the board it's wide.
+  // Moving between pages keeps it hidden: the Workspace's page widens into the window too, and back on the board it's wide.
   await page.getByRole("main").getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "Ada's Workspace" }).click();
   await expect(page.getByRole("heading", { name: "Ada's Workspace", level: 1 })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeHidden();
-  expect((await page.getByRole("heading", { name: "Ada's Workspace", level: 1 }).boundingBox())!.x).toBeGreaterThan(200);
+  expect((await page.getByRole("heading", { name: "Ada's Workspace", level: 1 }).boundingBox())!.x).toBeLessThan(100);
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`));
   expect(await width()).toBeGreaterThan(1500);

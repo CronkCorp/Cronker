@@ -1,5 +1,5 @@
-/* The frame: a 232px sidebar and a main column at most 1120px wide; below 760px a strip and a menu. The sidebar can
-   be hidden, giving the main column the window: its content keeps the cap, but a board takes the whole width. */
+/* The frame: a 232px sidebar and a main column that takes the rest of the width; below 760px a strip and a menu. The
+   sidebar can be hidden, giving the main column the whole window. */
 .frame {
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
@@ -8,9 +8,9 @@
 .main {
   min-width: 0;
 }
+/* The main column's content takes its whole width beside the sidebar, so the board fits more Statuses before it
+   scrolls; a page that wants a narrower measure, such as settings, sets its own. */
 .main-inner {
-  max-width: var(--main-width);
-  margin: 0 auto;
   padding: var(--space-5) var(--space-4);
 }
 
@@ -135,9 +135,6 @@
   }
   .frame-sidebar-hidden .main {
     padding-left: calc(var(--space-3) + 32px); /* the show button's offset and width */
-  }
-  .frame-sidebar-hidden .main-inner:has(.board) {
-    max-width: none;
   }
 }
 
