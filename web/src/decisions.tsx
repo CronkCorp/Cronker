@@ -138,7 +138,6 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
                             decision={decision}
                             onChanged={(next) => setDecisions((all) => all?.map((d) => (d.id === next.id ? next : d)) ?? null)}
                             onOutdated={load}
-                            onFailed={setFailure}
                           />
                         </td>
                       </tr>
@@ -245,31 +244,16 @@ export function DecisionScreen({
     setDecision(next);
     setVersionsShown((n) => n + 1);
   };
-  // What its last status change from this page said, while that is still the Version shown.
-  const [said, setSaid] = useState<{ text: string; version: number } | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const outdated = () => {
-    load();
-    setVersionsShown((n) => n + 1);
-  };
-  const changeStatus = async (status: DecisionStatus, supersededById?: string) => {
-    if (!decision) return;
-    setBusy(true);
-    setStatusError(null);
-    try {
-      const next = await saveStatus(decision, status, outdated, supersededById);
-      saved(next);
-      setSaid({ text: statusSaid[status], version: next.version.number });
-    } finally {
-      setBusy(false);
-    }
-  };
+  const status = useStatusChange({
+    onChanged: saved,
+    onOutdated: () => {
+      load();
+      setVersionsShown((n) => n + 1);
+    },
+    afterOutdated: "It now shows the current Version: check it, then change the status again.",
+  });
   const [rejecting, setRejecting] = useState(false);
   const [superseding, setSuperseding] = useState(false);
-  const changeFromMenu = (status: DecisionStatus) => () => {
-    changeStatus(status).catch((e: Error) => setStatusError(e.message));
-  };
 
   if (failure) return <FormError error={failure} />;
   if (!decision || !place) return <p className="muted">Loading…</p>;
@@ -292,39 +276,37 @@ export function DecisionScreen({
         actions={
           !editing && (
             <>
-              <Saved shown={said?.version === decision.version.number}>{said?.text}</Saved>
-              {decision.status !== "proposed" && (
+              <Saved shown={status.said(decision) !== null}>{status.said(decision)}</Saved>
+              {menuChanges[decision.status].length > 0 && (
                 <Menu label="More of this Decision">
-                  {decision.status === "accepted" && (
-                    <MenuItem disabled={busy} onSelect={changeFromMenu("deprecated")}>
-                      Deprecate
-                    </MenuItem>
-                  )}
-                  {decision.status !== "accepted" && (
-                    <MenuItem disabled={busy} onSelect={changeFromMenu("proposed")}>
-                      Back to proposed
-                    </MenuItem>
-                  )}
-                  {(decision.status === "accepted" || decision.status === "superseded") && (
-                    <MenuItem disabled={busy} onSelect={() => setSuperseding(true)}>
-                      Supersede…
-                    </MenuItem>
+                  {menuChanges[decision.status].map((to) =>
+                    to === "superseded" ? (
+                      <MenuItem key={to} disabled={status.busy} onSelect={() => setSuperseding(true)}>
+                        Supersede…
+                      </MenuItem>
+                    ) : (
+                      <MenuItem key={to} disabled={status.busy} onSelect={() => status.change(decision, to)}>
+                        {to === "proposed" ? "Back to proposed" : "Deprecate"}
+                      </MenuItem>
+                    ),
                   )}
                 </Menu>
               )}
-              <Button variant={decision.status === "proposed" ? "secondary" : "primary"} onClick={() => setEditing(true)}>
+              <Button
+                variant={decision.status === "proposed" ? "secondary" : "primary"}
+                onClick={() => {
+                  status.clearError();
+                  setEditing(true);
+                }}
+              >
                 Edit
               </Button>
               {decision.status === "proposed" && (
                 <>
-                  <Button disabled={busy} onClick={() => setRejecting(true)}>
+                  <Button disabled={status.busy} onClick={() => setRejecting(true)}>
                     Reject
                   </Button>
-                  <Button
-                    variant="primary"
-                    disabled={busy}
-                    onClick={() => changeStatus("accepted").catch((e: Error) => setStatusError(e.message))}
-                  >
+                  <Button variant="primary" disabled={status.busy} onClick={() => status.change(decision, "accepted")}>
                     Accept
                   </Button>
                 </>
@@ -333,8 +315,14 @@ export function DecisionScreen({
           )
         }
       />
-      {!editing && <FormError error={statusError} />}
-      <RejectDialog decision={decision} open={rejecting} onOpenChange={setRejecting} onReject={() => changeStatus("rejected")} />
+      {!editing && <FormError error={status.error} />}
+      <RejectDialog
+        decision={decision}
+        // Closed once it is no longer proposed, as when someone else changed it meanwhile.
+        open={rejecting && decision.status === "proposed"}
+        onOpenChange={setRejecting}
+        onReject={() => status.change(decision, "rejected")}
+      />
       <Dialog
         open={superseding}
         onOpenChange={setSuperseding}
@@ -344,9 +332,9 @@ export function DecisionScreen({
         <SupersedeForm
           decision={decision}
           others={others.filter((d) => d.id !== decision.id)}
-          onSupersede={async (replacement) => {
-            await changeStatus("superseded", replacement);
+          onSupersede={(replacement) => {
             setSuperseding(false);
+            status.change(decision, "superseded", replacement);
           }}
         />
       </Dialog>
@@ -436,28 +424,63 @@ const statusSaid: Record<DecisionStatus, string> = {
 };
 
 /**
- * Saves a Decision's status from the Version shown, naming the Decision replacing it when superseded. A save based on
- * an outdated Version is refused: `onOutdated` shows the current one, and the refusal says to look again.
+ * The status changes a Decision page's "…" menu offers, by its status; superseding asks for the replacing Decision
+ * first. A proposed Decision is accepted or rejected with the buttons beside it instead.
  */
-async function saveStatus(
-  decision: DecisionSummary,
-  status: DecisionStatus,
-  onOutdated: () => void,
-  supersededById?: string,
-): Promise<Decision> {
-  try {
-    return await api.editDecision(decision.id, {
-      baseVersion: decision.version.number,
-      status,
-      ...(status === "superseded" ? { supersededById: supersededById ?? null } : {}),
-    });
-  } catch (e) {
-    if (e instanceof ApiError && e.code === "outdated_version") {
-      onOutdated();
-      throw new Error(`${e.message} It now shows the current Version: check it, then change the status again.`);
+const menuChanges: Record<DecisionStatus, DecisionStatus[]> = {
+  proposed: [],
+  accepted: ["deprecated", "superseded"],
+  rejected: ["proposed"],
+  deprecated: ["proposed"],
+  superseded: ["proposed", "superseded"],
+};
+
+/**
+ * Saves a Decision's status at once from the Version shown, naming the Decision replacing it when superseded, and
+ * keeps what it last said: "Accepted." while that Version is still the one shown, or why it was refused. A save based
+ * on an outdated Version is refused: `onOutdated` shows the current one, and the refusal ends with `afterOutdated`.
+ */
+function useStatusChange({
+  onChanged,
+  onOutdated,
+  afterOutdated,
+}: {
+  onChanged: (next: Decision) => void;
+  onOutdated: () => void;
+  afterOutdated: string;
+}) {
+  const [said, setSaid] = useState<{ text: string; decisionId: string; version: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const change = async (decision: DecisionSummary, status: DecisionStatus, supersededById?: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api.editDecision(decision.id, {
+        baseVersion: decision.version.number,
+        status,
+        ...(status === "superseded" ? { supersededById: supersededById ?? null } : {}),
+      });
+      onChanged(next);
+      setSaid({ text: statusSaid[status], decisionId: next.id, version: next.version.number });
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "outdated_version") {
+        onOutdated();
+        setError(`${e.message} ${afterOutdated}`);
+      } else setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
-    throw e;
-  }
+  };
+  return {
+    busy,
+    error,
+    clearError: () => setError(null),
+    change,
+    /** What its last change of this Decision said, while the Version it saved is still the one shown. */
+    said: (decision: DecisionSummary) =>
+      said?.decisionId === decision.id && said.version === decision.version.number ? said.text : null,
+  };
 }
 
 /** Asks before rejecting a proposed Decision, naming it: a rejected Decision is never deleted. */
@@ -485,43 +508,47 @@ function RejectDialog({
   );
 }
 
-/** Accept and Reject on a proposed Decision's row of the register, which save at once as on its page. */
+/**
+ * Accept and Reject on a proposed Decision's row of the register, which save at once as on its page; the row says
+ * what was saved, or why it was refused, in their place.
+ */
 function RowActions({
   decision,
   onChanged,
   onOutdated,
-  onFailed,
 }: {
   decision: DecisionSummary;
   onChanged: (next: Decision) => void;
   /** Someone saved the Decision since the register was loaded; the register loads again. */
   onOutdated: () => void;
-  onFailed: (error: string | null) => void;
 }) {
-  const [said, setSaid] = useState<{ text: string; version: number } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const status = useStatusChange({
+    onChanged,
+    onOutdated,
+    afterOutdated: "The register now shows it as it stands: check it, then change the status again.",
+  });
   const [rejecting, setRejecting] = useState(false);
-  const change = async (status: DecisionStatus) => {
-    setBusy(true);
-    onFailed(null);
-    try {
-      const next = await saveStatus(decision, status, onOutdated);
-      onChanged(next);
-      setSaid({ text: statusSaid[status], version: next.version.number });
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (decision.status !== "proposed") return <Saved shown={said?.version === decision.version.number}>{said?.text}</Saved>;
+  const said = status.said(decision);
   return (
     <>
-      <Button variant="ghost" size="small" disabled={busy} onClick={() => setRejecting(true)}>
-        Reject
-      </Button>
-      <Button size="small" disabled={busy} onClick={() => change("accepted").catch((e: Error) => onFailed(e.message))}>
-        Accept
-      </Button>
-      <RejectDialog decision={decision} open={rejecting} onOpenChange={setRejecting} onReject={() => change("rejected")} />
+      {decision.status === "proposed" && (
+        <>
+          <Button variant="ghost" size="small" disabled={status.busy} onClick={() => setRejecting(true)}>
+            Reject
+          </Button>
+          <Button size="small" disabled={status.busy} onClick={() => status.change(decision, "accepted")}>
+            Accept
+          </Button>
+          <RejectDialog
+            decision={decision}
+            open={rejecting}
+            onOpenChange={setRejecting}
+            onReject={() => status.change(decision, "rejected")}
+          />
+        </>
+      )}
+      <Saved shown={said !== null}>{said}</Saved>
+      <FormError error={status.error} />
     </>
   );
 }
@@ -535,13 +562,17 @@ function SupersedeForm({
   decision: Decision;
   /** The other Decisions of its Project, or of the Workspace's own. */
   others: DecisionSummary[];
-  onSupersede: (replacement: string) => Promise<void>;
+  onSupersede: (replacement: string) => void;
 }) {
   // Held here, not left to the picker, so it shows the Decision replacing this one even when the list arrives later.
   const [replacement, setReplacement] = useState(decision.supersededById ?? "");
-  const { error, busy, onSubmit } = useSubmit(() => onSupersede(replacement));
   return (
-    <form onSubmit={onSubmit}>
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSupersede(replacement);
+      }}
+    >
       <Field label="Replaced by">
         <select required value={replacement} onChange={(e) => setReplacement(e.target.value)} autoFocus>
           <option value="" disabled>
@@ -554,12 +585,11 @@ function SupersedeForm({
           ))}
         </select>
       </Field>
-      <FormError error={error} />
       <DialogActions>
         <DialogClose asChild>
           <Button>Cancel</Button>
         </DialogClose>
-        <Button type="submit" variant="primary" disabled={busy || replacement === decision.supersededById}>
+        <Button type="submit" variant="primary" disabled={replacement === decision.supersededById}>
           Supersede
         </Button>
       </DialogActions>

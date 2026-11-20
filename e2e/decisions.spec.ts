@@ -169,3 +169,39 @@ test("an accepted Decision is deprecated, superseded or put back to proposed fro
   await expect(page.getByRole("note", { name: "Superseded" })).toContainText("Superseded by 0002 Runs start from a Brief and the Ticket.");
   await expect(details).toContainText("Superseded");
 });
+
+test("a status change from an outdated Version is refused, then the page or register shows the Decision as it stands", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const record = async (title: string) =>
+    (await (await cronk.request("POST", `/api/workspaces/${workspace.id}/decisions`, { cookie, body: { title } })).json()) as { id: string };
+  const brief = await record("Runs start from a Brief");
+  const desktop = await record("Ship a desktop app");
+  // Away from the stream, the browser misses what is saved meanwhile.
+  await page.route("**/api/workspaces/*/events", (route) => route.abort());
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/decisions/${brief.id}`);
+  await expect(page.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+  await cronk.request("PATCH", `/api/decisions/${brief.id}`, { cookie, body: { baseVersion: 1, status: "accepted" } });
+  await page.getByRole("button", { name: "Reject", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Reject" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alert")).toContainText("It now shows the current Version: check it, then change the status again.");
+  await expect(page.getByRole("complementary", { name: "Decision details" })).toContainText("Accepted");
+  await expect(page.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
+
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/decisions`);
+  const row = page.getByRole("region", { name: "Decisions" }).getByRole("row", { name: /0002/ });
+  await expect(row.getByRole("button", { name: "Accept" })).toBeVisible();
+  await cronk.request("PATCH", `/api/decisions/${desktop.id}`, { cookie, body: { baseVersion: 1, status: "rejected" } });
+  await row.getByRole("button", { name: "Accept" }).click();
+  await expect(row.getByRole("alert")).toContainText("The register now shows it as it stands");
+  await expect(row).toContainText("Rejected");
+  await expect(row.getByRole("button")).toHaveCount(0);
+  const saved = (await (await cronk.request("GET", `/api/decisions/${desktop.id}`, { cookie })).json()) as { status: string };
+  expect(saved.status).toBe("rejected");
+});
