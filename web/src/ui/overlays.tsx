@@ -101,6 +101,42 @@ export function MenuLabel({ children }: { children: ReactNode }) {
   return <RadixMenu.Label className="menu-label">{children}</RadixMenu.Label>;
 }
 
+/**
+ * A segmented control inside a Menu, such as the theme's System / Light / Dark. Choosing keeps the menu open, so the
+ * choice shows in place.
+ */
+export function MenuChoice<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: ReactNode }[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <RadixMenu.RadioGroup
+      className="segmented menu-choice"
+      aria-label={label}
+      value={value}
+      onValueChange={(next) => onChange(next as T)}
+    >
+      {options.map((option) => (
+        <RadixMenu.RadioItem
+          key={option.value}
+          value={option.value}
+          className="segmented-item"
+          onSelect={(event) => event.preventDefault()}
+        >
+          {option.label}
+        </RadixMenu.RadioItem>
+      ))}
+    </RadixMenu.RadioGroup>
+  );
+}
+
 export function MenuSeparator() {
   return <RadixMenu.Separator className="menu-separator" />;
 }

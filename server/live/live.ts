@@ -45,7 +45,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
 export type RunnerEvent = { type: "runner.changed"; runnerId: string };
 
 export const runnerEventTypes: Record<RunnerEvent["type"], string> = {
-  "runner.changed": "A Run started or ended on one of your Runners, changing its count of running Runs, or its queue was paused for a rate limit or resumed.",
+  "runner.changed":
+    "A Run started or ended on one of your Runners, changing its count of running Runs, its queue was paused for a rate limit or resumed, or you removed it.",
 };
 
 /** One open stream: whose it is, and how to write to it. */

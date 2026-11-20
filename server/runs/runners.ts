@@ -6,7 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
-import { startWaitingRuns } from "./runs.js";
+import { recheckWaiting, startWaitingRuns, waitingTickets } from "./runs.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -144,6 +144,37 @@ export async function removeTrigger(context: Context, userId: string, runnerId: 
     : { rowCount: 0 };
   if (!rowCount) throw new ApiError(404, "not_found", `${runner.name} has no such trigger.`);
   return (await findRunner(context.db, userId, runnerId))!;
+}
+
+/** Removes one of the User's own Runners with its triggers; Agents pointed at it are left with none. */
+export async function removeRunner(context: Context, userId: string, runnerId: string): Promise<void> {
+  await transaction(context.db, async (tx) => {
+    // Locked as starting a Run locks it, so no Run starts on it between the check and the delete.
+    const { rows } = isUuid(runnerId)
+      ? await tx.query<{ name: string }>("select name from runners where id = $1 and owner_id = $2 for update", [runnerId, userId])
+      : { rows: [] };
+    if (!rows[0]) throw noSuchRunner();
+    const { rows: counted } = await tx.query<{ running: number }>(
+      "select count(*)::int as running from runs where runner_id = $1 and state = 'running'",
+      [runnerId],
+    );
+    const running = counted[0]!.running;
+    if (running > 0) {
+      throw new ApiError(
+        409,
+        "runner_running",
+        `${rows[0].name} has ${running === 1 ? "a Run" : `${running} Runs`} running. Wait for its running Runs to end, or stop them first.`,
+      );
+    }
+    // Its Agents' Tickets waiting in its queue are rechecked once it is gone, as for an Agent with no Runner.
+    const waiting = await waitingTickets(tx, "agents.runner_id = $1", [runnerId]);
+    await tx.query("update agents set runner_id = null where runner_id = $1", [runnerId]);
+    // Past Runs keep their history, without the Runner.
+    await tx.query("update runs set runner_id = null where runner_id = $1", [runnerId]);
+    await tx.query("delete from runners where id = $1", [runnerId]);
+    context.live.publishToOwner(tx, userId, { type: "runner.changed", runnerId });
+    recheckWaiting(context, tx, waiting.map(({ id }) => ({ id, runnerId: null })));
+  });
 }
 
 /** Sets how many Runs one of the User's own Runners keeps running at once; a higher limit starts waiting Tickets. */

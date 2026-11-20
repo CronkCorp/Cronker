@@ -67,3 +67,46 @@ test("set up a subscription Runner, point an Agent at it, and follow a Run to it
   await confirm.getByRole("button", { name: "Remove" }).click();
   await expect(runner).toContainText("No triggers yet");
 });
+
+test("remove a Runner after confirming what stops working, leaving its Agent to choose another", async ({ page, cronk }) => {
+  const setup = await cronk.request("POST", "/api/setup", {
+    body: {
+      setupCode: cronk.setupCode(),
+      email: "ada@example.com",
+      password: "correct horse battery",
+      workspaceName: "Ada's Workspace",
+    },
+  });
+  const { workspace } = await setup.json();
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill("ada@example.com");
+  await page.getByLabel("Password").fill("correct horse battery");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Ada's Workspace" })).toBeVisible();
+  const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  const send = async (method: string, path: string, body: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const runner = await send("POST", "/api/runners", { name: "Claude Max", kind: "subscription" });
+  await send("POST", `/api/runners/${runner.id}/triggers`, { model: "haiku", triggerId: "trig_haiku", token: "sk-ant-oat01-secret" });
+  const agent = await send("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await send("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+
+  await page.getByRole("link", { name: "Runners" }).click();
+  const card = page.getByRole("region", { name: "Claude Max" });
+  await card.getByRole("button", { name: "More for Claude Max" }).click();
+  await page.getByRole("menuitem", { name: "Remove…" }).click();
+  const confirm = page.getByRole("dialog", { name: "Remove Claude Max?" });
+  await expect(confirm).toContainText("claude-max");
+  await expect(confirm).toContainText("haiku");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(card).toHaveCount(1);
+
+  await card.getByRole("button", { name: "More for Claude Max" }).click();
+  await page.getByRole("menuitem", { name: "Remove…" }).click();
+  await confirm.getByRole("button", { name: "Remove" }).click();
+  await expect(card).toHaveCount(0);
+  await expect(page.getByText("No Runners yet.")).toBeVisible();
+
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/agents/${agent.id}`);
+  await expect(page.getByLabel("Runner")).toHaveValue("");
+  await expect(page.getByText("Choose a Runner for its Runs to start.")).toBeVisible();
+});

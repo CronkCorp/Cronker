@@ -26,7 +26,7 @@ The web client follows this file since the styling pass at the end of milestone 
   - Documents, Terms and Decisions (the Workspace's, or the current Project's).
   - **Projects**, each listed by key and name.
   - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins. Runners shows even without a Workspace, since a User's Runners belong to none.
-  - The signed-in User, marked "Admin" for an Admin, which opens a menu: Password and Sign out.
+  - The signed-in User, marked "Admin" for an Admin, which opens a menu: the theme, a System / Light / Dark segmented control that defaults to System; Password; and Sign out. The theme is kept in the browser (`localStorage`), not on the User, so each device can differ, and a small script in `index.html` applies it before first paint.
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Password, New Workspace or a page that isn't there, marks none.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
 - **Page head:** breadcrumbs (13px, muted, with `--accent` links), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title, and a Document's, Term's or Decision's Version, who saved it and when on a muted line under it. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action.
@@ -35,7 +35,7 @@ The web client follows this file since the styling pass at the end of milestone 
 
 ## Design tokens
 
-All colours are CSS custom properties on `:root` in the web client's stylesheet. Components use only tokens, never literal colours; `e2e/styling.spec.ts` checks every rule the browser is served. The dark values apply under `prefers-color-scheme: dark`.
+All colours are CSS custom properties on `:root` in the web client's stylesheet. Components use only tokens, never literal colours; `e2e/styling.spec.ts` checks every rule the browser is served. The dark values apply under `prefers-color-scheme: dark` unless the User chose Light, and whenever they chose Dark (`data-theme` on the root element); the choice changes which values apply, never the values.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
@@ -77,7 +77,7 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 
 ## Component conventions
 
-The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog), each wrapped once (`Popover`, `Menu` with `MenuItem` and `MenuLink`, `Dialog` and `ConfirmDialog`) and styled by our classes. Every view switch so far is an address (List / Board, the scope switch), so no screen needs tabs yet; Radix's tabs join the set, wrapped once as `Tabs`, when one does. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
+The web client keeps its own small component set, styled with the tokens in plain CSS. Accessibility-heavy primitives come from Radix UI's headless packages (popover, dropdown menu, dialog), each wrapped once (`Popover`, `Menu` with `MenuItem`, `MenuLink` and `MenuChoice` (a segmented control inside a menu, such as the theme), `Dialog` and `ConfirmDialog`) and styled by our classes. Every view switch so far is an address (List / Board, the scope switch), so no screen needs tabs yet; Radix's tabs join the set, wrapped once as `Tabs`, when one does. Cronk uses no styled component library and no Tailwind. A new component joins the set before a second screen copies it.
 
 - **Actor** (`<Actor>`): avatar plus name. An avatar's letters are drawn by CSS, so they stay out of the text around them. A User is round. An Agent is square and violet, followed by "for <Owner>" where the Owner isn't obvious. Cronk is muted text with its "C" avatar.
 - **Key** (`<Key>`) and **model label** (`<ModelLabel>`): a Ticket or Project key, or a model label, in the mono face; a key at 12px `--muted`.
@@ -209,7 +209,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - **Agents:** one card per Agent with its avatar, name, how many Tickets are delegated to it and how many of its Runs are running, each running Run by its Ticket's key and title with the Run state, and, on the User's own Agents, its tokens in one line with **Manage tokens** and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
 - **Manage tokens** opens a dialog that lists the Agent's tokens and issues new ones. A new token's secret shows once, with **Copy**, until the dialog closes. Revoke asks first in a confirming dialog, since whatever connects with the token stops working. The Agent's own page, where its Runner is chosen, shows the same line.
-- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and a table of its triggers by model label (in the mono face) and Project, each with a ghost Remove. Removing a trigger asks first, since its token is gone for good. Set up a Runner is a panel under the cards. The page streams the User's own Runners, so the count and the pause stay current while it is open.
+- **Runners:** one card per Runner with its kind, its limit on Runs at once and how many are running, its pause (rate-limited until a time) as a `--warn` banner, and a table of its triggers by model label (in the mono face) and Project, each with a ghost Remove. Removing a trigger asks first, since its token is gone for good. The card's "…" menu holds **Remove…**, which asks first in a confirming dialog naming what stops working: the Agents pointed at it, left with no Runner, and its triggers. While one of its Runs is running, Remove is refused and the dialog shows why: wait for its running Runs to end, or stop them first. Set up a Runner is a panel under the cards. The page streams the User's own Runners, so the count and the pause stay current while it is open, and a removed Runner's card drops out of every open Runners page. An Agent left with no Runner says on its own page to choose one.
 
 ### Workspace settings, Members and GitHub
 

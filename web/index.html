@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Cronk</title>
+    <script>
+      // Applies the theme chosen on this browser before first paint, so the page never flashes the other one.
+      // The key and values are those of web/src/storage.ts.
+      try {
+        var theme = localStorage.getItem("cronk_theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
