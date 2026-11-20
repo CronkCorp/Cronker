@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
-import { sendBackForFailure } from "../pipeline/sending-back.js";
+import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
 
@@ -303,20 +303,9 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
   }
   // A check can fail on a pushed commit before GitHub reports the push: once it is the latest commit, it sends back.
   if (newest && (state === "open" || state === "draft")) {
-    const { rows: failed } = await tx.query<{ name: string; url: string | null }>(
-      // A failing check run or status names the failure better than its suite does, so comes first.
-      `(select name, url, 0 as source, source_id from commit_checks where repository_id = $1 and sha = $2 and state = 'failed')
-       union all
-       (select app_name, url, 1, id from commit_check_suites where repository_id = $1 and sha = $2 and failed)
-       order by source, source_id limit 1`,
-      [repository.id, pr.head.sha],
-    );
-    if (failed[0]) {
-      await sendBackForFailure(context, tx, { id: pr.id, repository: repository.full_name, number: pr.number, url: pr.html_url }, {
-        kind: "check",
-        sha: pr.head.sha,
-        ...failed[0],
-      });
+    const failed = await failingCheckOn(tx, repository.id, pr.head.sha);
+    if (failed) {
+      await sendBackForFailure(context, tx, { id: pr.id, repository: repository.full_name, number: pr.number, url: pr.html_url }, failed);
     }
   }
   if (newest && state === "merged" && !wasMerged) {

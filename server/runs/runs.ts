@@ -12,6 +12,7 @@ import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../knowledge/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
 import { moveByCronk } from "../pipeline/cronk-moves.js";
+import { sendBackForKnownFailures } from "../pipeline/sending-back.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
@@ -216,6 +217,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
       { field: "status", from: named(status), to: named(target) },
     ]);
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
+    // A failure known before the default Outcome moved it into a Review Status sends it back, and Runs start from there.
+    if (target.kind === "review") await sendBackForKnownFailures(context, tx, ticketId);
     return enterStatus(context, tx, ticketId, now, skipped);
   }
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
