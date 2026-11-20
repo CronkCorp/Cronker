@@ -150,3 +150,14 @@ test("on macOS the hint is ⌘↵", async ({ page, cronk }) => {
   await placed.getByRole("button", { name: "Reply" }).click();
   await expect(placed.getByRole("button", { name: "Send reply", exact: true })).toHaveText("Send reply ⌘↵");
 });
+
+test("a Comment Cronk refuses stays in its box with the refusal under it", async ({ page, cronk }) => {
+  await ticketsWithAQuestion(page, cronk);
+  await openTicket(page, "CRONK-1");
+  const box = page.getByLabel("New Comment");
+  // Only spaces pass the box's required check, but Cronk refuses a Comment with no words.
+  await box.fill("   ");
+  await box.press("Control+Enter");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(box).toHaveValue("   ");
+});

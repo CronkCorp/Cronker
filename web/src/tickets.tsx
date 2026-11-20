@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import {
   api,
   nameOf,
@@ -998,16 +998,13 @@ function CommentForm({
   primary?: boolean;
   onSend: (body: string) => Promise<void>;
 }) {
-  const { error, busy, onSubmit } = useSubmit((form) => onSend(field(form, "body")));
+  // The box empties once the Comment is placed; a refused one stays to be fixed.
+  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
+    await onSend(field(form, "body"));
+    element.reset();
+  });
   return (
-    <form
-      className="comment-form"
-      onSubmit={async (event: FormEvent<HTMLFormElement>) => {
-        const form = event.currentTarget;
-        await onSubmit(event);
-        form.reset();
-      }}
-    >
+    <form className="comment-form" onSubmit={onSubmit}>
       <label className="field">
         <span className="sr-only">{label}</span>
         <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnModEnter} />
