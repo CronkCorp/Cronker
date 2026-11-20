@@ -14,7 +14,7 @@ export const ChangedBy = ActorOrCronk;
  * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
  * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check
  * or requested changes on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
- * the Transcript of one of the Ticket's Runs.
+ * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket.
  */
 export const changeFields = [
   "created",
@@ -61,7 +61,9 @@ export const Change = Type.Object({
       "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it, either a check " +
       "`{ kind: \"check\", name, url }` or a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
       "being the login of the GitHub account that wrote it, or null when GitHub named none; a `url` is null when GitHub gave none. " +
-      "A `transcriptDeleted` Change goes from `{ runId, step }`, the Run whose Transcript was deleted and its Step's name, to null.",
+      "A `transcriptDeleted` Change goes from `{ runId, step, sessionId, agent: { id, name } }` to null: the Run whose " +
+      "Transcript a User deleted and its Step's name (both null for a session outside a Run that named the Ticket), " +
+      "its session and its Agent.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {

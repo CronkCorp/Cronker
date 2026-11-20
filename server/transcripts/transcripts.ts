@@ -8,13 +8,15 @@ import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
 import { recordChanges } from "../work/changes.js";
+import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
 
 /**
  * Transcripts (ADR 0006): the record of an agent's conversation, converted on arrival from its source's format
  * into one list of entries and stored in Postgres; no raw file is kept. A Transcript belongs to the Agent that
- * uploaded it, keyed by its source session, and to the Run that ran in that session, if any. Uploading the same
- * session again replaces what Cronk holds.
+ * uploaded it, keyed by its source session, and to the Run that ran in that session, if any. One of no Run, such as
+ * Claude Code connected by hand, links to each Ticket its Cronk tool calls name. Uploading the same session again
+ * replaces what Cronk holds, links included.
  */
 
 export const TranscriptRole = Type.Union([Type.Literal("user"), Type.Literal("assistant"), Type.Literal("system")]);
@@ -38,6 +40,14 @@ export const Transcript = Type.Object({
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Run whose Runner returned this session when starting it; null for a session of no Run.",
   }),
+  tickets: Type.Array(
+    Type.Object({ id: Type.String({ format: "uuid" }), key: Type.String(), title: Type.String() }),
+    {
+      description:
+        "For a session of no Run, the Tickets its Cronk tool calls (`mcp__cronk__…`) name, in the order they first " +
+        "named them; it shows in their timelines. Empty for a Run's Transcript, which shows with its Run.",
+    },
+  ),
   entryCount: Type.Integer({ minimum: 0, description: "How many entries it keeps." }),
   gap: Type.Union(
     [
@@ -56,6 +66,18 @@ export const Transcript = Type.Object({
   uploadedAt: Type.String({ format: "date-time", description: "When it was last uploaded." }),
 });
 export type Transcript = Static<typeof Transcript>;
+
+/** A Transcript as a Ticket it names lists it, placed in the Ticket's timeline when its calls first named it. */
+export const TicketTranscript = Type.Intersect([
+  Transcript,
+  Type.Object({
+    namedAt: Type.String({
+      format: "date-time",
+      description: "When its first Cronk tool call naming this Ticket was made, or its upload's time if unknown.",
+    }),
+  }),
+]);
+export type TicketTranscript = Static<typeof TicketTranscript>;
 
 export const EntryPage = Type.Object({
   entries: Type.Array(TranscriptEntry),
@@ -77,6 +99,11 @@ const insertBatch = 500;
 type Row = Omit<Transcript, "uploadedAt"> & { uploadedAt: Date };
 const columns = `transcripts.id, transcripts.session_id as "sessionId",
   json_build_object('id', agents.id, 'name', agents.name) as agent, transcripts.run_id as "runId",
+  coalesce((select json_agg(json_build_object('id', tickets.id, 'key', projects.key || '-' || tickets.number,
+      'title', tickets.title) order by transcript_tickets.position)
+    from transcript_tickets join tickets on tickets.id = transcript_tickets.ticket_id
+    join projects on projects.id = tickets.project_id
+    where transcript_tickets.transcript_id = transcripts.id), '[]') as tickets,
   (select count(*)::int from transcript_entries where transcript_id = transcripts.id) as "entryCount",
   case when transcripts.gap_after is null then null else json_build_object('after', transcripts.gap_after,
     'entries', transcripts.gap_entries, 'bytes', transcripts.gap_bytes) end as gap,
@@ -140,6 +167,20 @@ export async function uploadTranscript(
       ],
     );
     const { id, created } = rows[0]!;
+    const unlinked = await tx.query<{ ticketId: string; namedAt: Date }>(
+      `delete from transcript_tickets where transcript_id = $1 returning ticket_id as "ticketId", named_at as "namedAt"`,
+      [id],
+    );
+    const namedBefore = new Map(unlinked.rows.map(({ ticketId, namedAt }) => [ticketId, namedAt]));
+    const linked = run.rows[0] ? [] : await linkNamedTickets(tx, agent.workspace.id, id, converted, namedBefore, now);
+    // Each Ticket that gained or lost the Transcript, or whose link moved, shows it differently in its timeline.
+    const touched = await tx.query<{ id: string; projectId: string }>(
+      `select id, project_id as "projectId" from tickets where id = any($1::uuid[]) order by id`,
+      [[...new Set([...namedBefore.keys(), ...linked])]],
+    );
+    for (const ticket of touched.rows) {
+      context.live.publish(tx, agent.workspace.id, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
     await tx.query("delete from transcript_entries where transcript_id = $1", [id]);
     for (let start = 0; start < entries.length; start += insertBatch) {
       const batch = entries.slice(start, start + insertBatch);
@@ -166,6 +207,62 @@ export async function uploadTranscript(
     transcriptChanged(context, tx, agent.workspace.id, transcript);
     return { transcript, created };
   });
+}
+
+/** The tool calls to Cronk's own MCP server, as Claude Code names them when the server is added as `cronk`. */
+const cronkTool = /^mcp__cronk__/i;
+/** The inputs of Cronk's tools that name a Ticket, by its key or its id. */
+const ticketInputs = ["ticket", "blocks"];
+
+/**
+ * Links the Transcript to each Ticket of the Workspace its Cronk tool calls name, in the order they first named
+ * them, each placed at the time of the first call naming it: when the transcript gives that call no time, where
+ * the upload before placed it, or else now. Every entry counts, even one a cap left out. Says which it linked.
+ */
+async function linkNamedTickets(
+  tx: Tx,
+  workspaceId: string,
+  transcriptId: string,
+  entries: ConvertedEntry[],
+  namedBefore: Map<string, Date>,
+  now: Date,
+): Promise<string[]> {
+  // Each Ticket a call names, by its key or id as the call gave it.
+  const named: { name: string; at: string | null }[] = [];
+  for (const entry of entries) {
+    if (entry.toolName === null || !cronkTool.test(entry.toolName)) continue;
+    const input = entry.toolInput;
+    if (typeof input !== "object" || input === null || Array.isArray(input)) continue;
+    for (const field of ticketInputs) {
+      const value = (input as Record<string, unknown>)[field];
+      if (typeof value === "string") named.push({ name: value.trim(), at: entry.at });
+    }
+  }
+  const ids = [...new Set(named.map(({ name }) => name.toLowerCase()).filter(isUuid))];
+  const isKey = (name: string) => keysWritten(name)[0] === name;
+  const keys = [...new Set(named.map(({ name }) => name).filter(isKey))];
+  const byId = await tx.query<{ id: string }>("select id from tickets where workspace_id = $1 and id = any($2::uuid[])", [
+    workspaceId,
+    ids,
+  ]);
+  const byKey = await mentionsInEach(tx, workspaceId, keys);
+  const ticketOf = new Map<string, string>([
+    ...byId.rows.map(({ id }) => [id, id] as const),
+    ...keys.flatMap((key, index) => byKey[index]!.map((mention) => [key, mention.ticketId] as const)),
+  ]);
+  const firstNamed = new Map<string, Date>();
+  for (const { name, at } of named) {
+    const ticketId = ticketOf.get(isUuid(name) ? name.toLowerCase() : name);
+    if (ticketId && !firstNamed.has(ticketId)) firstNamed.set(ticketId, at ? new Date(at) : (namedBefore.get(ticketId) ?? now));
+  }
+  if (firstNamed.size === 0) return [];
+  await tx.query(
+    `insert into transcript_tickets (transcript_id, workspace_id, ticket_id, named_at, position)
+     select $1, $2, ticket_id, named_at, position from unnest($3::uuid[], $4::timestamptz[]) with ordinality
+       as named (ticket_id, named_at, position)`,
+    [transcriptId, workspaceId, [...firstNamed.keys()], [...firstNamed.values()]],
+  );
+  return [...firstNamed.keys()];
 }
 
 /** The entry with every known secret in its text, tool input and tool result scrubbed. */
@@ -242,6 +339,40 @@ export async function findTranscript({ db }: Context, viewer: Viewer, transcript
   return present(row);
 }
 
+/**
+ * The Agent's own Transcripts, of its sessions that matched no Run, such as Claude Code connected by hand; the
+ * last uploaded first. A Run's Transcript is listed with its Run instead.
+ */
+export async function agentTranscripts({ db }: Context, viewer: Viewer, agentId: string): Promise<Transcript[]> {
+  const view = inView(viewer, "agents.workspace_id", "$2");
+  const agent = isUuid(agentId)
+    ? await db.query(`select 1 from agents where agents.id = $1 and ${view.sql}`, [agentId, view.value])
+    : { rowCount: 0 };
+  if (agent.rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
+  const { rows } = await db.query<Row>(
+    `select ${columns} from transcripts join agents on agents.id = transcripts.agent_id
+     where transcripts.agent_id = $1 and transcripts.run_id is null and transcripts.deleted_at is null
+     order by transcripts.uploaded_at desc, transcripts.id`,
+    [agentId],
+  );
+  return rows.map(present);
+}
+
+/** The Transcripts linked to a Ticket by the Cronk tool calls that named it, in the order they first named it. */
+export async function ticketTranscripts({ db }: Context, viewer: Viewer, ticketId: string): Promise<TicketTranscript[]> {
+  const ticket = await findTicketRow(db, viewer, ticketId);
+  if (!ticket) throw ticketNotFound();
+  const { rows } = await db.query<Row & { namedAt: Date }>(
+    `select ${columns}, transcript_tickets.named_at as "namedAt"
+     from transcript_tickets join transcripts on transcripts.id = transcript_tickets.transcript_id
+     join agents on agents.id = transcripts.agent_id
+     where transcript_tickets.ticket_id = $1
+     order by transcript_tickets.named_at, transcripts.id`,
+    [ticket.id],
+  );
+  return rows.map(({ namedAt, ...row }) => ({ ...present(row), namedAt: namedAt.toISOString() }));
+}
+
 /** A page of a Transcript's entries, in order, after the given position. */
 export async function entriesOf(
   context: Context,
@@ -281,13 +412,55 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
     // Another User deleted it first.
     if (!rows[0]) throw transcriptNotFound();
     await tx.query("delete from transcript_entries where transcript_id = $1", [transcript.id]);
-    if (transcript.runId) await recordRunTranscriptDeleted(context, tx, transcript.runId, actor.id);
+    const deleted: TranscriptDeleted = {
+      runId: transcript.runId,
+      step: null,
+      sessionId: transcript.sessionId,
+      agent: transcript.agent,
+    };
+    if (transcript.runId) {
+      const ticket = await runTicketChanged(context, tx, transcript.runId);
+      await recordTranscriptDeleted(context, tx, ticket, actor.id, { ...deleted, step: ticket.step });
+    }
+    // A session outside a Run drops out of the Tickets it named, each recording that it was deleted.
+    const unlinked = await tx.query<{ id: string; projectId: string; workspaceId: string }>(
+      `with unlinked as (delete from transcript_tickets where transcript_id = $1 returning ticket_id)
+       select tickets.id, tickets.project_id as "projectId", tickets.workspace_id as "workspaceId"
+       from unlinked join tickets on tickets.id = unlinked.ticket_id order by tickets.id`,
+      [transcript.id],
+    );
+    for (const ticket of unlinked.rows) {
+      await recordTranscriptDeleted(context, tx, ticket, actor.id, deleted);
+      context.live.publish(tx, ticket.workspaceId, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
     transcriptChanged(context, tx, rows[0].workspaceId, transcript);
   });
 }
 
+/**
+ * What a `transcriptDeleted` Change records: the deleted Transcript's Run and its Step's name (both null for a
+ * session outside a Run), its session and its Agent.
+ */
+interface TranscriptDeleted {
+  runId: string | null;
+  step: string | null;
+  sessionId: string;
+  agent: { id: string; name: string };
+}
+
+/** Records on a Ticket that a User deleted a Transcript of its Run, or one that named it. */
+async function recordTranscriptDeleted(
+  context: Context,
+  tx: Tx,
+  ticket: { id: string; workspaceId: string },
+  userId: string,
+  deleted: TranscriptDeleted,
+): Promise<void> {
+  await recordChanges(tx, ticket, userId, context.clock.now(), [{ field: "transcriptDeleted", from: deleted, to: null }]);
+}
+
 interface RunTicket {
-  ticketId: string;
+  id: string;
   projectId: string;
   workspaceId: string;
   /** The name of the Run's Step. */
@@ -296,7 +469,7 @@ interface RunTicket {
 
 async function runTicket(tx: Tx, runId: string): Promise<RunTicket> {
   const { rows } = await tx.query<RunTicket>(
-    `select tickets.id as "ticketId", tickets.project_id as "projectId", tickets.workspace_id as "workspaceId",
+    `select tickets.id, tickets.project_id as "projectId", tickets.workspace_id as "workspaceId",
        runs.status_name as step
      from runs join tickets on tickets.id = runs.ticket_id where runs.id = $1`,
     [runId],
@@ -307,16 +480,8 @@ async function runTicket(tx: Tx, runId: string): Promise<RunTicket> {
 /** Tells the viewers of the Run's Ticket that it changed, as its Run's Transcript did. */
 async function runTicketChanged(context: Context, tx: Tx, runId: string): Promise<RunTicket> {
   const ticket = await runTicket(tx, runId);
-  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.ticketId });
+  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   return ticket;
-}
-
-/** Records on the Run's Ticket that a User deleted the Run's Transcript, and tells the Ticket's viewers. */
-async function recordRunTranscriptDeleted(context: Context, tx: Tx, runId: string, userId: string): Promise<void> {
-  const ticket = await runTicketChanged(context, tx, runId);
-  await recordChanges(tx, { id: ticket.ticketId, workspaceId: ticket.workspaceId }, userId, context.clock.now(), [
-    { field: "transcriptDeleted", from: { runId, step: ticket.step }, to: null },
-  ]);
 }
 
 /** Tells the Workspace's streams that a Transcript changed, so an open Transcript page shows it. */

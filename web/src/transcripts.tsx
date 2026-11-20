@@ -3,7 +3,7 @@ import { api, type Project, type Run, type Ticket, type Transcript, type Transcr
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
-import { navigate } from "./router.js";
+import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import {
   Button,
@@ -133,15 +133,18 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
       { label: <span className="mono">{ofRun.ticket.key}</span>, to: `/tickets/${ofRun.ticket.id}` },
     );
   } else {
-    crumbs.push({ label: "Agents", to: `/workspaces/${workspace.id}/agents` });
+    crumbs.push(
+      { label: "Agents", to: `/workspaces/${workspace.id}/agents` },
+      { label: transcript.agent.name, to: `/workspaces/${workspace.id}/agents/${transcript.agent.id}` },
+    );
   }
   crumbs.push({ label: "Transcript" });
 
   const agent = { kind: "agent" as const, name: transcript.agent.name };
-  // Where the page leads once the Transcript is gone: its Run's Ticket, or the Agents page.
+  // Where the page leads once the Transcript is gone: its Run's Ticket, or its Agent's page.
   const back = ofRun
     ? { to: `/tickets/${ofRun.ticket.id}`, label: `Back to ${ofRun.ticket.key}` }
-    : { to: `/workspaces/${workspace.id}/agents`, label: "Back to Agents" };
+    : { to: `/workspaces/${workspace.id}/agents/${transcript.agent.id}`, label: `Back to ${transcript.agent.name}` };
   return (
     <div className="page transcript-page">
       <PageHead
@@ -167,6 +170,24 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
                 </span>
                 <ModelLabel model={ofRun.run.model} />
               </>
+            )}
+            {!transcript.runId && (
+              <span>
+                session <span className="mono">{transcript.sessionId}</span>
+              </span>
+            )}
+            {transcript.tickets.length > 0 && (
+              <span>
+                naming{" "}
+                {transcript.tickets.map((ticket, index) => (
+                  <span key={ticket.id}>
+                    {index > 0 && ", "}
+                    <Link to={`/tickets/${ticket.id}`} className="mono" title={ticket.title}>
+                      {ticket.key}
+                    </Link>
+                  </span>
+                ))}
+              </span>
             )}
             <span>
               {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"}, uploaded{" "}

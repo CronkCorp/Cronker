@@ -24,6 +24,7 @@ import {
   type TicketRef,
   type TicketRelations,
   type TicketSummary,
+  type TicketTranscript,
   type User,
   type Workspace,
 } from "./api.js";
@@ -67,6 +68,7 @@ export function TicketScreen({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [transcripts, setTranscripts] = useState<TicketTranscript[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
   const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
@@ -89,6 +91,7 @@ export function TicketScreen({
   const latestAttachments = useLatest();
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
+  const latestTranscripts = useLatest();
   const latestRelations = useLatest();
   const latestLinkedDocuments = useLatest();
   const latestPullRequests = useLatest();
@@ -98,7 +101,8 @@ export function TicketScreen({
   const loadTimeline = useCallback(() => {
     latestTimeline(api.timeline(ticketId), setTimeline);
     latestRuns(api.runs(ticketId), setRuns);
-  }, [ticketId, latestTimeline, latestRuns]);
+    latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
+  }, [ticketId, latestTimeline, latestRuns, latestTranscripts]);
   const loadAttachments = useCallback(
     () => latestAttachments(api.attachments({ kind: "ticket", id: ticketId }), setAttachments, fail),
     [ticketId, latestAttachments],
@@ -144,15 +148,17 @@ export function TicketScreen({
     const comments = api.comments(ticketId);
     const changes = api.timeline(ticketId);
     const runs = api.runs(ticketId);
+    const transcripts = api.ticketTranscripts(ticketId);
     latestComments(comments, setComments, fail);
     latestTimeline(changes, setTimeline, fail);
     latestRuns(runs, setRuns, fail);
-    void Promise.allSettled([comments, changes, runs]).then(() => setLoaded(true));
+    latestTranscripts(transcripts, setTranscripts, fail);
+    void Promise.allSettled([comments, changes, runs, transcripts]).then(() => setLoaded(true));
     loadReports();
     loadAttachments();
     loadLinks();
     loadPullRequests();
-  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestTranscripts, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -164,6 +170,7 @@ export function TicketScreen({
       loadLinks();
     }
     if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
+    if (all || (thisTicket && event.type === "transcripts.changed")) latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
     if (all || (thisTicket && event.type === "comment.added")) loadComments();
     if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) loadReports();
     // A Comment's Attachments come with the Comments.
@@ -293,6 +300,7 @@ export function TicketScreen({
             user={user}
             changes={timeline}
             runs={runs}
+            transcripts={transcripts}
             comments={comments}
             reports={reports}
             onAdded={addComment}
@@ -1074,10 +1082,15 @@ interface SentBack {
   failure: { kind: "check"; name: string; url: string | null } | { kind: "review"; reviewer: string | null; url: string | null };
 }
 
-/** What a `transcriptDeleted` Change records: the Run whose Transcript a User deleted, and its Step's name. */
+/**
+ * What a `transcriptDeleted` Change records: the Run whose Transcript a User deleted and its Step's name (both null
+ * for a session outside a Run that named the Ticket), its session and its Agent.
+ */
 interface TranscriptDeleted {
-  runId: string;
-  step: string;
+  runId: string | null;
+  step: string | null;
+  sessionId: string;
+  agent: { id: string; name: string };
 }
 
 function described(change: Change): string {
@@ -1095,7 +1108,10 @@ function described(change: Change): string {
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
-  if (change.field === "transcriptDeleted") return `deleted the Transcript of the ${(change.from as TranscriptDeleted).step} Run`;
+  if (change.field === "transcriptDeleted") {
+    const { step, agent } = change.from as TranscriptDeleted;
+    return step ? `deleted the Transcript of the ${step} Run` : `deleted a Transcript of ${agent.name}'s session outside a Run`;
+  }
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
     // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
@@ -1212,18 +1228,22 @@ type Entry =
   | { at: string; key: string; kind: "change"; change: Change }
   | { at: string; key: string; kind: "run"; run: Run }
   | { at: string; key: string; kind: "comment"; comment: Comment }
-  | { at: string; key: string; kind: "report"; report: Report };
+  | { at: string; key: string; kind: "report"; report: Report }
+  | { at: string; key: string; kind: "transcript"; transcript: TicketTranscript };
 
 /**
- * Entries recorded at the same moment read cause before effect: a move, then the Comment Cronk wrote about it,
- * then a Report, then the Run the move started.
+ * Entries recorded at the same moment read cause before effect: the Transcript of the call that made a change,
+ * then the move, then the Comment Cronk wrote about it, then a Report, then the Run the move started.
  */
-const tieOrder: Record<Entry["kind"], number> = { change: 0, comment: 1, report: 2, run: 3 };
+const tieOrder: Record<Entry["kind"], number> = { transcript: 0, change: 1, comment: 2, report: 3, run: 4 };
 
 /** Whether the page is scrolled to its end, where new entries may scroll it on. */
 const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 48;
 
-/** The Ticket's one chronology: its Comments (with their replies), Reports, Runs and Changes, oldest first. */
+/**
+ * The Ticket's one chronology: its Comments (with their replies), Reports, Runs, Changes and the Transcripts of
+ * sessions outside a Run that named it, oldest first.
+ */
 function Timeline({
   loaded,
   ticket,
@@ -1231,6 +1251,7 @@ function Timeline({
   user,
   changes,
   runs,
+  transcripts,
   comments,
   reports,
   onAdded,
@@ -1243,6 +1264,8 @@ function Timeline({
   user: User;
   changes: Change[];
   runs: Run[];
+  /** The Transcripts of sessions outside a Run whose Cronk tool calls named the Ticket. */
+  transcripts: TicketTranscript[];
   comments: Comment[];
   reports: Report[];
   onAdded: (comment: Comment) => void;
@@ -1260,6 +1283,12 @@ function Timeline({
       .filter((c) => c.replyToId === null)
       .map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
+    ...transcripts.map((transcript) => ({
+      at: transcript.namedAt,
+      key: `transcript:${transcript.id}`,
+      kind: "transcript" as const,
+      transcript,
+    })),
   ].sort((a, b) => a.at.localeCompare(b.at) || tieOrder[a.kind] - tieOrder[b.kind]);
   const runOf = new Map(runs.map((run) => [run.id, run]));
   const arrived = useArrivals([...entries.map((e) => e.key), ...comments.map((c) => `comment:${c.id}`)], loaded);
@@ -1307,6 +1336,8 @@ function Timeline({
       );
     } else if (entry.kind === "run") {
       rows.push(<RunEntry key={entry.key} run={entry.run} project={project} arrived={isNew} />);
+    } else if (entry.kind === "transcript") {
+      rows.push(<NamingTranscript key={entry.key} transcript={entry.transcript} arrived={isNew} />);
     } else if (entry.kind === "report") {
       const { report } = entry;
       rows.push(
@@ -1457,6 +1488,28 @@ function CommentThread({
         )
       )}
     </article>
+  );
+}
+
+/**
+ * A Transcript of a session outside a Run, such as Claude Code connected by hand, as one line where its Cronk tool
+ * calls first named the Ticket: its Agent, how many entries it keeps, and a link to it.
+ */
+function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscript; arrived: boolean }) {
+  const agent = { kind: "agent" as const, name: transcript.agent.name };
+  return (
+    <li className={`entry entry-run${arrived ? " arrived" : ""}`}>
+      <span className="gutter">
+        <Avatar actor={agent} />
+      </span>
+      <p className="entry-line">
+        <KindLabel kind="Transcript" /> <Actor actor={agent} avatar={false} /> named it in a session outside a Run ·{" "}
+        {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"} <RelativeTime at={transcript.namedAt} clock />{" "}
+        <Link to={`/transcripts/${transcript.id}`} className="small">
+          Transcript
+        </Link>
+      </p>
+    </li>
   );
 }
 
