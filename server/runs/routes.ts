@@ -6,7 +6,7 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
-import { createRunner, removeTrigger, RunnerRecord, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
+import { createRunner, removeRunner, removeTrigger, RunnerRecord, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
 import { Ticket } from "../work/tickets.js";
 
@@ -187,6 +187,27 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return setRunnerLimit(context, user.id, request.params.runnerId, request.body.limit);
+      },
+    );
+
+    app.delete(
+      "/api/runners/:runnerId",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Remove your Runner",
+          description:
+            "Removes it with its triggers. Agents pointed at it are left with no Runner, so their delegated Tickets get " +
+            "Runs refused until their Owner points them at another; its past Runs keep their history without it. " +
+            "Refused with `runner_running` while one of its Runs is running.",
+          params: Type.Object({ runnerId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        await removeRunner(context, user.id, request.params.runnerId);
+        return reply.code(204).send(null);
       },
     );
 
