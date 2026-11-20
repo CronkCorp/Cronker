@@ -12,7 +12,7 @@ import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../knowledge/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
 import { moveByCronk } from "../pipeline/cronk-moves.js";
-import { enteredReview } from "../pipeline/conflicts.js";
+import { sendBackOnEnteringReview } from "../pipeline/conflicts.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
@@ -234,7 +234,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
     // A failure known before the default Outcome moved it into a Review Status sends it back, and Runs start from there;
     // otherwise Cronk asks GitHub whether its Pull Requests conflict.
-    if (target.kind === "review") await enteredReview(context, tx, ticketId);
+    if (target.kind === "review") await sendBackOnEnteringReview(context, tx, ticketId);
     return enterStatus(context, tx, ticketId, now, skipped);
   }
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.

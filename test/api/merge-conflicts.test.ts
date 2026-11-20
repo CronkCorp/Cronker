@@ -63,7 +63,7 @@ const pullRequestEvent = (action: string, installation: StandInInstallation, rep
  * moves it, past Code review that its `no-review` Label skips, to In Review. The stand-in GitHub says #7 merges cleanly
  * until a test says otherwise.
  */
-async function implementing() {
+async function implementing({ withBase = true } = {}) {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   await createGitHubApp(cronk, cookie);
@@ -80,7 +80,10 @@ async function implementing() {
   const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "Make it so" });
   await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") });
   const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b", sha: "c1" };
-  await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+  const opened = pullRequestEvent("opened", installation, cronker, pr);
+  // A delivery without its base, as GitHub's to an earlier Cronk that kept none.
+  if (!withBase) delete (opened.pull_request as { base?: unknown }).base;
+  await deliver(app, "pull_request", opened);
   /** The Agent finishes the Run running on the Ticket with *done*. */
   const finishImplementing = async () => {
     const running = (await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie)).find((r: { state: string }) => r.state === "running");
@@ -103,8 +106,8 @@ async function implementing() {
   return { workspace, cookie, app, installation, cronker, project, status, ticket, pr, secret, finishImplementing, mergeAnother };
 }
 
-async function inReview() {
-  const implemented = await implementing();
+async function inReview(options?: { withBase?: boolean }) {
+  const implemented = await implementing(options);
   await implemented.finishImplementing();
   expect(await ticketOf(implemented.ticket.id, implemented.cookie)).toMatchObject({ statusId: implemented.status("In Review") });
   return implemented;
@@ -178,8 +181,23 @@ describe("Asking GitHub while it works mergeability out", () => {
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
   });
 
-  test("a Pull Request that merges cleanly is asked about once and sends nothing back", async () => {
-    const { cookie, ticket, status, mergeAnother } = await inReview();
+  test("an answer GitHub worked out against the base before the merge is asked again", async () => {
+    const { cookie, cronker, ticket, status, mergeAnother } = await inReview();
+    cronk.github.pullRequest(cronker, { number: 7, base: "main", baseSha: "m1", mergeable: [{ mergeable: true, baseSha: "b0" }, false] });
+    await mergeAnother(9, "m1");
+
+    await cronk.checkMergeability();
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    cronk.clock.advance(seconds(10));
+    await cronk.checkMergeability();
+
+    expect(asks()).toBe(2);
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+  });
+
+  test("a Pull Request that merges cleanly into the merge's commit is asked about once and sends nothing back", async () => {
+    const { cookie, cronker, ticket, status, mergeAnother } = await inReview();
+    cronk.github.pullRequest(cronker, { number: 7, base: "main", baseSha: "m1", mergeable: [true] });
     await mergeAnother(9, "m1");
 
     await cronk.checkMergeability();
@@ -195,7 +213,7 @@ describe("Asking GitHub while it works mergeability out", () => {
 describe("An Outcome moving a Ticket into a Review Status", () => {
   test("has Cronk ask about its Pull Request, and one already conflicting sends it back, naming the latest merge Cronk knows into its base", async () => {
     const { cookie, cronker, ticket, status, finishImplementing, mergeAnother } = await implementing();
-    cronk.github.pullRequest(cronker, { number: 7, base: "main", baseSha: "m2", mergeable: [false] });
+    cronk.github.pullRequest(cronker, { number: 7, base: "main", baseSha: "m1", mergeable: [false] });
     // While the Ticket is in Implement, a merge has Cronk ask nothing about it.
     await mergeAnother(9, "m1");
     await cronk.checkMergeability();
@@ -209,6 +227,21 @@ describe("An Outcome moving a Ticket into a Review Status", () => {
     expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body)).toEqual([
       "[cronkcorp/cronker#9](https://github.com/cronkcorp/cronker/pull/9) merged into `main` as `m1`, and now " +
         "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7) conflicts with it. Sent CRONK-1 back to Implement.",
+    ]);
+  });
+
+  test("a conflict with a base commit other than the latest merge Cronk knows names that commit, not the merge", async () => {
+    const { cookie, cronker, ticket, finishImplementing, mergeAnother } = await implementing();
+    await mergeAnother(9, "m1");
+    // The base branch moved on since, by a push Cronk doesn't watch.
+    cronk.github.pullRequest(cronker, { number: 7, base: "main", baseSha: "p2", mergeable: [false] });
+
+    await finishImplementing();
+    await cronk.checkMergeability();
+
+    expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body)).toEqual([
+      "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7) conflicts with its base branch `main` at `p2`. " +
+        "Sent CRONK-1 back to Implement.",
     ]);
   });
 
@@ -300,6 +333,30 @@ describe("What sent the Ticket back", () => {
 
 describe("Sending back once, and only where it applies", () => {
   const asked = () => cronk.github.apiCalls.filter((c) => c.includes("/pulls/"));
+
+  test("a Pull Request whose base branch Cronk wasn't told is asked about after a merge, and sent back when GitHub says it is on that branch", async () => {
+    const { cookie, cronker, ticket, status, mergeAnother } = await inReview({ withBase: false });
+    cronk.github.pullRequest(cronker, { number: 7, base: "main", baseSha: "m1", mergeable: [false] });
+
+    await mergeAnother(9, "m1");
+    await cronk.checkMergeability();
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+  });
+
+  test("a Pull Request whose base branch Cronk wasn't told, conflicting on another branch than the merge's, is sent back without naming the merge", async () => {
+    const { cookie, cronker, ticket, status, mergeAnother } = await inReview({ withBase: false });
+    cronk.github.pullRequest(cronker, { number: 7, base: "release", baseSha: "r1", mergeable: [false] });
+
+    await mergeAnother(9, "m1");
+    await cronk.checkMergeability();
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body)).toEqual([
+      "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7) conflicts with its base branch `release` at `r1`. " +
+        "Sent CRONK-1 back to Implement.",
+    ]);
+  });
 
   test("the same base commit never sends the Ticket back twice, though it still conflicts when it comes back for review", async () => {
     const { cookie, cronker, ticket, status, finishImplementing, mergeAnother } = await inReview();

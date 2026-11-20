@@ -4,7 +4,7 @@ import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.j
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { statusesOf } from "../work/projects.js";
 import type { Outcome } from "../work/steps.js";
-import { enteredReview } from "./conflicts.js";
+import { sendBackOnEnteringReview } from "./conflicts.js";
 
 /**
  * Pipeline: a Ticket moved by Cronk, on a Run's behalf or with none, applying the loop's rules in one place.
@@ -148,7 +148,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
     // A failure known before an Outcome moved it into a Review Status sends it back, before a Run starts there:
     // that move tells the Workspace and starts the next Run. Otherwise Cronk asks GitHub whether it conflicts.
     if (target.kind === "outcome" && statuses.find((s) => s.id === to)!.kind === "review") {
-      if (await enteredReview(context, tx, ticket.id)) return decision;
+      if (await sendBackOnEnteringReview(context, tx, ticket.id)) return decision;
     }
   }
   if (statuses.find((s) => s.id === to)!.kind === "done") {

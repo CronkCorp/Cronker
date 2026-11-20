@@ -69,9 +69,10 @@ export interface StandInPullRequest {
   baseSha: string;
   /**
    * What each ask for the Pull Request answers about its mergeability, in turn, the last repeating: `true` merges
-   * cleanly, `false` conflicts, `null` while GitHub is still working it out.
+   * cleanly, `false` conflicts, `null` while GitHub is still working it out; with `baseSha`, worked out against that
+   * base commit instead.
    */
-  mergeable: (boolean | null)[];
+  mergeable: (boolean | null | { mergeable: boolean | null; baseSha: string })[];
 }
 
 export interface IssuedToken {
@@ -549,12 +550,13 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       const number = Number(pull[2]);
       const known = pullRequests.get(`${repository.id}#${number}`) ?? { number, base: "main", baseSha: "b0", mergeable: [true] };
       // Each ask takes the next answer; the last one stays.
-      const mergeable = known.mergeable.length > 1 ? known.mergeable.shift()! : known.mergeable[0]!;
+      const next = known.mergeable.length > 1 ? known.mergeable.shift()! : known.mergeable[0]!;
+      const { mergeable, baseSha } = typeof next === "object" && next !== null ? next : { mergeable: next, baseSha: known.baseSha };
       return json(response, 200, {
         number,
         state: "open",
         html_url: `${github.url}/${repository.fullName}/pull/${number}`,
-        base: { ref: known.base, sha: known.baseSha },
+        base: { ref: known.base, sha: baseSha },
         mergeable,
         mergeable_state: mergeable === null ? "unknown" : mergeable ? "clean" : "dirty",
       });
