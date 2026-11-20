@@ -73,19 +73,25 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
 
   refuseOtherOrigins(app, context.config.publicUrl);
 
-  // An Agent's call naming one of its running Runs, or that Run's Ticket, shows the Run is still alive,
+  // An Agent's call naming one of its running Runs, that Run's Ticket or its session (as the Transcript hook's
+  // uploads do), shows the Run is still alive,
   // even a call refused before its route looked at the token, such as a malformed one.
   app.addHook("onSend", async (request, _reply, payload) => {
     const header = request.headers.authorization;
     const params = (request.params ?? {}) as Record<string, string | undefined>;
-    const named: NamedInCall = { runId: params.runId, ticketId: params.ticketId, ticketKey: params.key };
+    const named: NamedInCall = {
+      runId: params.runId,
+      ticketId: params.ticketId,
+      ticketKey: params.key,
+      sessionId: params.sessionId,
+    };
     // Filing a Ticket names a Run in its body: the Run it is filed from, or a Sub-Ticket's parent, its Run's Ticket.
     if (request.method === "POST" && request.routeOptions.url === "/api/projects/:projectId/tickets") {
       const body = (request.body ?? {}) as Record<string, unknown>;
       if (typeof body.runId === "string") named.runId = body.runId;
       if (typeof body.parentId === "string") named.ticketId = body.parentId;
     }
-    if (!named.runId && !named.ticketId && !named.ticketKey) return payload;
+    if (!named.runId && !named.ticketId && !named.ticketKey && !named.sessionId) return payload;
     try {
       const agent =
         agentOfRequest(request) ??

@@ -5,7 +5,9 @@ import { authenticateAgent, type AgentCaller } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
+import { requireUser } from "../identity/sign-ins.js";
 import { convertClaudeCode } from "./claude-code.js";
+import { hookScriptPath, readHookScript, TranscriptHook, transcriptHook } from "./hook.js";
 import { entriesOf, EntryPage, findTranscript, Transcript, uploadTranscript } from "./transcripts.js";
 
 /** The largest upload Cronk reads; what it keeps of one is capped further (ADR 0006). */
@@ -52,6 +54,48 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
           convertClaudeCode(request.body),
         );
         return reply.code(created ? 201 : 200).send(transcript);
+      },
+    );
+
+    app.get(hookScriptPath, { schema: { hide: true } }, async (_request, reply) =>
+      reply.type("text/javascript; charset=utf-8").header("cache-control", "no-cache").send(await readHookScript()),
+    );
+
+    app.get(
+      "/api/transcript-hook",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "How to install the Transcript hook",
+          description:
+            "The `settings.json` snippet to commit in each Repository, with this Cronk's address in it, and the " +
+            "variable of the cloud environment that holds a *Transcript hook* Agent token.",
+          response: { 200: TranscriptHook, 401: ErrorBody, 403: ErrorBody },
+        },
+      },
+      async (request) => {
+        await requireUser(context, request);
+        return transcriptHook(context.config.publicUrl);
+      },
+    );
+
+    app.post(
+      "/api/transcripts/sessions/:sessionId/alive",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "Say a session is still working",
+          description:
+            "The Transcript hook calls this during a long turn, at most once every 5 minutes, without uploading. " +
+            "Like an upload, it counts as a call naming the Run whose Runner returned this session, keeping that " +
+            "Run from becoming lost.",
+          params: Type.Object({ sessionId: Type.String({ minLength: 1, maxLength: 200 }) }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await requireAgent(context, request);
+        return reply.code(204).send(null);
       },
     );
 
