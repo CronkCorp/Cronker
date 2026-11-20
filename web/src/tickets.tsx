@@ -170,6 +170,7 @@ export function TicketScreen({
       loadLinks();
     }
     if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
+    if (all || (thisTicket && event.type === "transcripts.changed")) latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
     if (all || (thisTicket && event.type === "comment.added")) loadComments();
     if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) loadReports();
     // A Comment's Attachments come with the Comments.
@@ -1318,7 +1319,7 @@ function Timeline({
     } else if (entry.kind === "run") {
       rows.push(<RunEntry key={entry.key} run={entry.run} project={project} arrived={isNew} />);
     } else if (entry.kind === "transcript") {
-      rows.push(<TranscriptEntry key={entry.key} transcript={entry.transcript} arrived={isNew} />);
+      rows.push(<NamingTranscript key={entry.key} transcript={entry.transcript} arrived={isNew} />);
     } else if (entry.kind === "report") {
       const { report } = entry;
       rows.push(
@@ -1476,7 +1477,7 @@ function CommentThread({
  * A Transcript of a session outside a Run, such as Claude Code connected by hand, as one line where its Cronk tool
  * calls first named the Ticket: its Agent, how many entries it keeps, and a link to it.
  */
-function TranscriptEntry({ transcript, arrived }: { transcript: TicketTranscript; arrived: boolean }) {
+function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscript; arrived: boolean }) {
   const agent = { kind: "agent" as const, name: transcript.agent.name };
   return (
     <li className={`entry entry-run${arrived ? " arrived" : ""}`}>
