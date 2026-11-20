@@ -206,6 +206,13 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value, then its Versions.
 - **Status actions,** which only Users see, sit in the page head and save at once, saying so ("Accepted.", `role="status"`) beside them; the pill, banners and register follow, live on other open pages too. A proposed Decision's head holds **Edit**, **Reject** and **Accept** (primary, last). Reject asks first in a confirming dialog naming the Decision, since a rejected Decision is never deleted and stays in the register. Every other change is in the head's "…" menu: an accepted Decision offers **Deprecate** and **Supersede…**, which opens a dialog to choose the replacing Decision of the same place; a rejected, deprecated or superseded one offers **Back to proposed**, and a superseded one also Supersede… to change what replaces it. A refusal, such as for a change based on an outdated Version, closes any dialog and shows under the head, and the page shows the current Version.
 
+### Artifact
+
+![Artifact](ui/artifact.png)
+
+- The Artifact itself fills an iframe with `sandbox="allow-scripts"`, on white whatever the theme, beside a side list of its files (path, size, which is the page). Its description sits under the page head, whose meta names the current Version; **Open** opens the page on its own, as sandboxed as in the frame.
+- A save from elsewhere shows the new Version in place: each Version has its own address, so the frame loads it afresh.
+
 ### Agents and Runners
 
 - **Agents:** one card per Agent with its avatar, name, how many Tickets are delegated to it and how many of its Runs are running, each running Run by its Ticket's key and title with the Run state, and, on the User's own Agents, its tokens in one line with **Manage tokens** and Rename and Remove in a "…" menu. "New Agent" is a button in the page head that opens a dialog.
@@ -228,7 +235,7 @@ Server-sent events keep open views current: each Workspace has its stream, and a
 - New entries appear in place (timeline entries at the end, Inbox items in their group), with a short `--accent` ring that fades over about 2s. The page never scrolls on its own unless the User is already at the end.
 - A changed field updates where it is shown, such as the side panel, a card on the board or the Run card. Nothing reloads the whole page or flashes empty while reloading.
 - An item the User is acting on is never removed under them. If it is resolved elsewhere, it stays visible as "Resolved elsewhere", with its actions disabled and a link to its Ticket, until the User moves on. A Document or Term deleted elsewhere while open stays shown under a `warn` banner, "Deleted elsewhere", without its actions and with a link back to its list.
-- Every streaming view shows the Live indicator, and reconnecting reloads its lists. The streaming views are the board and list, a Ticket, the Inbox, Runners, and Documents, Terms and Decisions: their lists, and each one's own page.
+- Every streaming view shows the Live indicator, and reconnecting reloads its lists. The streaming views are the board and list, a Ticket, the Inbox, Runners, and Documents, Terms and Decisions: their lists, and each one's own page; and an Artifact's page.
 
 ## Changing this document
 

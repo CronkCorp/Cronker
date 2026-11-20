@@ -284,6 +284,7 @@ export async function createArtifact(
       const content = { title: input.title, description: input.description ?? "", page: input.page ?? "index.html", files };
       checkVersion(content, context.config.attachments.limitBytes);
       await insertVersion(tx, { id, workspaceId: place.workspaceId }, 1, content, actor, now);
+      context.live.publish(tx, place.workspaceId, { type: "artifact.changed", projectId: place.projectId, artifactId: id });
       return (await findArtifact(tx, actor, id))!;
     }),
   );
@@ -361,6 +362,7 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
       checkVersion(content, context.config.attachments.limitBytes);
       await insertVersion(tx, current, number, content, actor, clock.now());
       await tx.query("update artifacts set version = $2 where id = $1", [current.id, number]);
+      context.live.publish(tx, current.workspaceId, { type: "artifact.changed", projectId: current.projectId, artifactId: current.id });
       return (await findArtifact(tx, actor, current.id))!;
     }),
   );

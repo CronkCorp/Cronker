@@ -1,0 +1,43 @@
+POST /api/projects/:id/artifacts → 201
+{
+  "id": "75b09a16-aab0-46a7-9435-6942258cbb26",
+  "workspaceId": "70ee915a-80e3-4bad-a85c-3490c8dc9e33",
+  "projectId": "64c37fae-0453-449b-a11d-86bdcc55fdf6",
+  "title": "Sprint board prototype",
+  "description": "A board with three columns, to try drag and drop on.",
+  "page": "index.html",
+  "url": "/sandbox/<key>/index.html",
+  "version": {
+    "number": 1,
+    "actor": {
+      "kind": "user",
+      "id": "cb47133e-d95e-4d37-9498-6a8c2c3510bd",
+      "name": "ada@example.com"
+    },
+    "savedAt": "2026-01-01T09:00:00.000Z"
+  },
+  "files": [
+    {
+      "path": "index.html",
+      "mediaType": "text/html",
+      "size": 473
+    },
+    {
+      "path": "scripts/app.js",
+      "mediaType": "text/javascript",
+      "size": 385
+    },
+    {
+      "path": "styles/board.css",
+      "mediaType": "text/css",
+      "size": 359
+    }
+  ]
+}
+
+GET /sandbox/<key>/index.html (no sign-in) → 200
+content-type: text/html; charset=utf-8
+content-security-policy: sandbox allow-scripts
+x-content-type-options: nosniff
+referrer-policy: no-referrer
+cache-control: private, max-age=31536000, immutable
