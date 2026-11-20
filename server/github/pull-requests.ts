@@ -304,8 +304,10 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
   // A check can fail on a pushed commit before GitHub reports the push: once it is the latest commit, it sends back.
   if (newest && (state === "open" || state === "draft")) {
     const { rows: failed } = await tx.query<{ name: string; url: string | null }>(
-      `select name, url from commit_checks where repository_id = $1 and sha = $2 and state = 'failed'
-       order by source_id limit 1`,
+      `(select name, url, 0 as source, source_id from commit_checks where repository_id = $1 and sha = $2 and state = 'failed')
+       union all
+       (select app_name, url, 1, id from commit_check_suites where repository_id = $1 and sha = $2 and failed)
+       order by source, source_id limit 1`,
       [repository.id, pr.head.sha],
     );
     if (failed[0]) {
@@ -425,6 +427,45 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
     stage: 0,
     url: typeof url === "string" ? url : null,
   });
+};
+
+/**
+ * GitHub's `check_suite` event: a check suite on a commit was requested or completed. A completed suite is kept,
+ * unless Cronk knows a later completion of it, and one that failed sends the Tickets an open Pull Request whose
+ * latest commit it is links back to work, as a failing check does, though it ran no failing check run.
+ */
+export const onCheckSuiteEvent: EventHandler = async (context, tx, { payload }) => {
+  const { action, repository, check_suite: suite } = payload as {
+    action?: unknown;
+    repository?: { id?: unknown; html_url?: unknown };
+    check_suite?: { id?: unknown; head_sha?: unknown; conclusion?: unknown; app?: { name?: unknown } | null; updated_at?: unknown };
+  };
+  if (action !== "completed" || typeof repository?.id !== "number") return;
+  if (typeof suite?.id !== "number" || typeof suite.head_sha !== "string" || typeof suite.updated_at !== "string") return;
+  if (!(await isListed(tx, repository.id))) return;
+  const name = typeof suite.app?.name === "string" ? suite.app.name : "Check suite";
+  const failed = checkRunState("completed", suite.conclusion) === "failed";
+  const url = typeof repository.html_url === "string" ? `${repository.html_url}/commit/${suite.head_sha}/checks` : null;
+  const { rowCount } = await tx.query(
+    `insert into commit_check_suites (repository_id, sha, id, app_name, failed, url, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     on conflict (repository_id, sha, id) do update set app_name = excluded.app_name, failed = excluded.failed,
+       url = excluded.url, updated_at = excluded.updated_at
+     where commit_check_suites.updated_at <= excluded.updated_at`,
+    [repository.id, suite.head_sha, suite.id, name, failed, url, suite.updated_at],
+  );
+  if (!rowCount || !failed) return;
+  const { rows } = await tx.query<{ id: string; repository: string; number: number; url: string }>(
+    `select id, repository_full_name as repository, number, url from pull_requests
+     where repository_id = $1 and head_sha = $2 and state in ('open', 'draft') order by id`,
+    [repository.id, suite.head_sha],
+  );
+  const sent: number[] = [];
+  for (const pr of rows) {
+    const failure = { kind: "check", name, sha: suite.head_sha, url } as const;
+    if (await sendBackForFailure(context, tx, { ...pr, id: Number(pr.id) }, failure)) sent.push(Number(pr.id));
+  }
+  await announce(context, tx, sent);
 };
 
 /**

@@ -5,7 +5,8 @@ import { insertComment } from "../work/comment-writes.js";
 import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
- * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit,
+ * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit
+ * (a check run, a commit status, or a check suite that failed without a failing check run),
  * or a review requesting changes, whoever wrote it, sends each linked Ticket that is in a Review Status, has a
  * producing Step and is in a Project with Pull Request automation on that still lists the Pull Request's Repository,
  * back to that Step's Status as a move by Cronk. It counts as a round for the Step: past its round limit the Step's *needs you* Outcome applies instead, with
