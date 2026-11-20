@@ -2,7 +2,7 @@
 
 How Cronk's web client looks and behaves. Read this before changing anything in the web client. Vocabulary follows `CONTEXT.md`. The UI holds no rules (`docs/testing.md`), so everything here is about presentation.
 
-This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are of the web client itself, taken at 1280px when the styling pass ended, except the token sheets (`tokens-light.png`, `tokens-dark.png`), which are the old Cronk's prototype and still show its four Status categories. Where a screenshot and this text differ, the text wins.
+This direction comes from the old Cronk (`CronkCorp/Cronk`, its `docs/ui.md`), adapted to this rewrite. The screenshots in `docs/ui/` are of the web client itself, taken in a window 1280px wide (the phone's 390px) and kept current as [Changing this document](#changing-this-document) says, except the token sheets (`tokens-light.png`, `tokens-dark.png`), which are the old Cronk's prototype and still show its four Status categories. Where a screenshot and this text differ, the text wins.
 
 The web client follows this file since the styling pass at the end of milestone 2 (`docs/roadmap.md`). The tokens live in `web/src/styles/tokens.css`, the shared components in `web/src/ui/`, the frame in `web/src/frame.tsx`, and each screen's layout in `web/src/styles/screens.css`. New screens build on them.
 
