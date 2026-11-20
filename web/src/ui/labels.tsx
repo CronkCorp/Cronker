@@ -98,6 +98,7 @@ const kindTones: Record<string, string> = {
   "couldn't start": "warn",
   report: "agent",
   run: "agent",
+  transcript: "agent",
   decision: "agent",
   "to review": "info",
   unverified: "info",

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type Project, type Run, type Ticket, type Transcript, type TranscriptEntry, type Workspace } from "./api.js";
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
+import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import {
   Button,
@@ -83,7 +84,10 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
       { label: <span className="mono">{ofRun.ticket.key}</span>, to: `/tickets/${ofRun.ticket.id}` },
     );
   } else {
-    crumbs.push({ label: "Agents", to: `/workspaces/${workspace.id}/agents` });
+    crumbs.push(
+      { label: "Agents", to: `/workspaces/${workspace.id}/agents` },
+      { label: transcript.agent.name, to: `/workspaces/${workspace.id}/agents/${transcript.agent.id}` },
+    );
   }
   crumbs.push({ label: "Transcript" });
 
@@ -103,6 +107,24 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
                 </span>
                 <ModelLabel model={ofRun.run.model} />
               </>
+            )}
+            {!transcript.runId && (
+              <span>
+                session <span className="mono">{transcript.sessionId}</span>
+              </span>
+            )}
+            {transcript.tickets.length > 0 && (
+              <span>
+                naming{" "}
+                {transcript.tickets.map((ticket, index) => (
+                  <span key={ticket.id}>
+                    {index > 0 && ", "}
+                    <Link to={`/tickets/${ticket.id}`} className="mono" title={ticket.title}>
+                      {ticket.key}
+                    </Link>
+                  </span>
+                ))}
+              </span>
             )}
             <span>
               {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"}, uploaded{" "}

@@ -417,10 +417,17 @@ export interface Transcript {
   sessionId: string;
   agent: { id: string; name: string };
   runId: string | null;
+  /** For a session of no Run, the Tickets its Cronk tool calls name, in the order they first named them. */
+  tickets: { id: string; key: string; title: string }[];
   entryCount: number;
   /** Where entries were left out of a Transcript past 50 MB: after which position, how many and how large. */
   gap: { after: number; entries: number; bytes: number } | null;
   uploadedAt: string;
+}
+
+/** A Transcript as a Ticket it names lists it: placed when its Cronk tool calls first named the Ticket. */
+export interface TicketTranscript extends Transcript {
+  namedAt: string;
 }
 
 /** A message, or a tool call with its input and result, of a Transcript. */
@@ -911,6 +918,10 @@ export const api = {
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
   run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
   transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
+  agentTranscripts: (agentId: string) =>
+    call<Transcript[]>("GET", `/api/agents/${encodeURIComponent(agentId)}/transcripts`),
+  ticketTranscripts: (ticketId: string) =>
+    call<TicketTranscript[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/transcripts`),
   transcriptEntries: (id: string, after?: number) =>
     call<{ entries: TranscriptEntry[]; next: number | null }>(
       "GET",
