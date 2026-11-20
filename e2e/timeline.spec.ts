@@ -4,7 +4,7 @@ import type { StartedCronk } from "../test/harness/start-cronk.js";
 
 /**
  * A Ticket an Agent works on in a Project with a Repository: its Implement Run opens a Pull Request and finishes,
- * and the `no-review` Label skips Code review, so the Ticket waits In Review.
+ * and the `no-review` Label skips Code review, then Merge skips itself, so the Ticket waits In Review.
  */
 async function inReview(cronk: StartedCronk) {
   const { workspace } = await setUp(cronk);
@@ -103,15 +103,16 @@ test("a merge's Changes by Cronk read as one line naming who merged what, where 
   await expect(timeline).not.toContainText("Cronk changed Status");
 });
 
-test("a skipped Step's move by Cronk reads as one line naming the Step, its Label rule and where it moved on to", async ({ page, cronk }) => {
+test("a skipped Step's move by Cronk reads as one line naming the Step, why it skipped and where it moved on to", async ({ page, cronk }) => {
   const { ticket } = await inReview(cronk);
 
   await signInInBrowser(page, cronk);
   await page.goto(`${cronk.url}/tickets/${ticket.id}`);
   const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline.getByRole("listitem").filter({ hasText: "skipped" })).toHaveText(
-    /^Cronk skipped the Code review Step \(skipped by no-review\), moving on by approve to In Review \d\d:\d\d$/,
-  );
+  await expect(timeline.getByRole("listitem").filter({ hasText: "skipped" })).toHaveText([
+    /^Cronk skipped the Code review Step \(skipped by no-review\), moving on by approve to Merge \d\d:\d\d$/,
+    /^Cronk skipped the Merge Step \(agents may not merge in this Project\), moving on by review to In Review \d\d:\d\d$/,
+  ]);
   await expect(timeline).not.toContainText("Cronk changed Status");
 });
 

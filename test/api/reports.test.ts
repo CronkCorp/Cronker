@@ -47,6 +47,8 @@ async function stagedTicket(project: { id: string; workspaceId: string; statuses
  */
 async function runningRun(options: StartCronkOptions = {}) {
   cronk = await startCronk(options);
+  // Creating a Project and starting its Runs, as today's API does, needs the Merge Step's columns.
+  if (options.migrateBefore !== undefined) await cronk.applyAhead("0033_merge_step.sql");
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
@@ -60,7 +62,9 @@ async function runningRun(options: StartCronkOptions = {}) {
   const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
   const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
-  const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+  // The Run as the fake Runner was asked to start it: reading it through the API would read tables a database
+  // migrated short of today's migrations lacks.
+  const run = { id: cronk.runner.starts.at(-1)!.runId };
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, ada, project, ticket, agent, run, asAgent };
 }

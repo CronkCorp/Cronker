@@ -31,6 +31,7 @@ test("Project settings list their sections, and a section's link brings it into 
     "Delegation defaults",
     "Repositories",
     "Pull Request automation",
+    "Merges by agents",
   ]);
   await expect(sections(page).getByRole("link", { name: "Statuses and Steps" })).toHaveAttribute("aria-current", "true");
 
@@ -69,6 +70,30 @@ test("Project settings say Saved. after each change and stay open", async ({ pag
   await expect(statuses.getByRole("status")).toHaveCount(0);
 
   await expect(page.getByRole("heading", { name: "Project settings", level: 1 })).toBeVisible();
+});
+
+test("an Admin lets agents merge; a member who isn't one sees the setting but can't change it", async ({ page, cronk }) => {
+  const { workspace, project } = await signedIn(page, cronk);
+  await page.goto(`${cronk.url}/projects/${project.id}/settings`);
+
+  const merges = page.getByRole("region", { name: "Merges by agents" });
+  const setting = merges.getByLabel("Agents may merge Autonomous Delegation Tickets' Pull Requests");
+  await expect(setting).not.toBeChecked();
+  await setting.click();
+  await expect(merges.getByRole("status")).toHaveText("Saved.");
+  await expect(setting).toBeChecked();
+
+  const bea = await addMember(cronk, await signIn(cronk), workspace.id, "bea@example.com");
+  await page.context().clearCookies();
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill("bea@example.com");
+  await page.getByLabel("Password").fill(bea.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  await page.goto(`${cronk.url}/projects/${project.id}/settings`);
+  await expect(setting).toBeChecked();
+  await expect(setting).toBeDisabled();
+  await expect(merges).toContainText("Only an Admin of this Workspace changes this.");
 });
 
 test("saving a Step says Saved. beside its buttons", async ({ page, cronk }) => {

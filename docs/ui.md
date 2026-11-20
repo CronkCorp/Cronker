@@ -22,6 +22,7 @@ The web client follows this file since the styling pass at the end of milestone 
 - **Frame:** a 232px left sidebar and a main column. The main column's content is at most 1120px wide, centred, with 24px vertical and 16px horizontal padding.
 - **Sidebar, top to bottom:**
   - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace.
+  - The search box, which opens the Workspace's search results on Enter. Below 760px it takes a line of its own under the strip's links.
   - Inbox, with the number of waiting items as a red count.
   - Documents, Terms and Decisions (the Workspace's, or the current Project's).
   - **Projects**, each listed by key and name.
@@ -107,14 +108,14 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Decision status** (`<DecisionStatusPill>`): 11px uppercase pill. Proposed is outlined `--warn`, Accepted filled `--ok-soft` with `--ok` text, Superseded outlined `--info`, Rejected outlined `--muted`, and Deprecated dashed `--muted`.
 - **Pull Request state** (`<PullRequestState>`): 11px uppercase pill. Draft dashed `--muted`, Open outlined `--ok`, Merged filled `--agent-soft` with `--agent` text, Closed outlined `--danger`. **Checks** show as counts: ✓ in `--ok`, ✗ in `--danger`, ● running in `--warn`.
 - **Diff** (`<Diff>`): mono lines on `--surface`, removed lines on `--danger-soft` and struck through, added on `--ok-soft`, with a header naming the two Versions.
-- **Live indicator** (`<LiveIndicator>`): a green dot with "Live" on views that are streaming, first among the page head's switchers. It turns into a muted "Reconnecting…" while the stream is away. It is a status named "Live updates", so assistive technology reads out the change.
+- **Live indicator** (`<LiveIndicator>`): a green dot with "Live" on views that are streaming, first among the page head's switchers. It turns into a muted "Reconnecting…" while the stream is away. A stream the browser gives up on, answered with an error status such as a proxy's while Cronk restarts, is opened again after 3 seconds, doubling with each failure in a row up to 30. It is a status named "Live updates", so assistive technology reads out the change.
 
 ## Screens
 
 ### Project
 
 - **Page head:** the title, the Live indicator, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Project settings), and New Ticket as the only primary action, last. Under it, a row of filters: Status, Assignee, Priority and Label.
-- **Project settings:** in the settings layout, one section each for Statuses and their Steps (with the Brief preview), Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories and Pull Request automation. Repositories lists the Project's own at once; **Add Repository** asks GitHub for the App's Repositories only when opened, listing those not yet listed by `owner/name`, grouped under each installation's account when there are several. A Step the User opened stays open after saving.
+- **Project settings:** in the settings layout, one section each for Statuses and their Steps (with the Brief preview), Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories, Pull Request automation and Merges by agents (*agents may merge*, which only an Admin can change; for others its checkbox is disabled and says so). A Step's form chooses its kind, ordinary or Merge, and a Merge Step's summary starts with "Merge Step". Repositories lists the Project's own at once; **Add Repository** asks GitHub for the App's Repositories only when opened, listing those not yet listed by `owner/name`, grouped under each installation's account when there are several. A Step the User opened stays open after saving.
 - **List rows:** Status dot, key, title, Labels, Priority tag, the running Run's state when there is one, and the Delegate's and Assignee's avatars, each named in its tooltip ("Delegate: claude-laptop").
 - **Board:** open columns share the main column's width, each at least 240px, a card's readable width. When they don't fit, the board itself scrolls sideways (Shift + wheel, a trackpad, or holding a dragged card at its left or right edge); the page head and filters stay put and the page never scrolls sideways. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A column's name wraps rather than being cut off, with its Step's model label on a line under it. Cards show the key with the Priority beside it, then the title, then Labels and a Run state pill (while a Run is running, waiting or has gone wrong) with the avatars at the right.
 
@@ -152,8 +153,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Timeline entries**, oldest first, each with an avatar in the gutter:
   - **Comment:** the body in a bordered bubble, with replies indented under it. A Question is a Comment from the Agent in a `--warn-soft` box with its answer box. A send-back by Cronk is a Comment labelled `SENT BACK`, naming the failing checks (each linking to GitHub) or the review.
   - **Report:** a card with an `--agent` border, its title and an "Open Report" link. The body shows at body size, its headings scaled down to 14px.
-  - **Run:** a single line with the Run state pill, the Step, the Agent, the model label and the Outcome it chose ("Implement · claude-laptop · opus · done → Code review").
-  - **Change:** a single muted line with a small ring in the gutter, such as "claude-laptop changed Status from Implement to Code review in its Implement Run". Cronk's own Changes name the reason in one line, folding in the move and Verification recorded with it: "Cronk completed it: @ada merged cronkcorp/cronker#212 Rate-limit sign-in, moving it to Done, Verified by that merge", "Cronk skipped the Code review Step (skipped by no-review), moving on by approve to In Review", or "Cronk sent it back from In Review to Implement: the check test failed on cronkcorp/cronker#212", linking the check or review.
+  - **Run:** a single line with the Run state pill, the Step, the Agent, the model label and the Outcome it chose ("Implement · claude-laptop · opus · done → Code review"), then **Transcript** once one was uploaded for its session, beside its **Session** link.
+  - **Change:** a single muted line with a small ring in the gutter, such as "claude-laptop changed Status from Implement to Code review in its Implement Run". Cronk's own Changes name the reason in one line, folding in the move and Verification recorded with it: "Cronk completed it: @ada merged cronkcorp/cronker#212 Rate-limit sign-in, moving it to Done, Verified by that merge", "Cronk skipped the Code review Step (skipped by no-review), moving on by approve to Merge", "Cronk skipped the Merge Step (no Autonomous Delegation), moving on by review to In Review", or "Cronk sent it back from In Review to Implement: the check test failed on cronkcorp/cronker#212", linking the check or review.
   - **Order:** what was recorded together reads cause before effect: a move, then the `SENT BACK` Comment Cronk wrote about it, then a Report, then the Run the move started.
 - **Replying:** Comments and Questions offer Reply; Runs, Reports and Changes don't.
 
@@ -177,6 +178,16 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Files** in the side panel: every Attachment on the Ticket, in Comments and Reports too.
 - **Dropping or pasting a file** anywhere on the Ticket page attaches it to the Ticket. A paste into a text field that carries text too pastes the text and attaches nothing.
 - **Opening one**, from a thumbnail or the Files group, shows it in a wide dialog: images in full, anything else as its type with Download. Remove sits in that dialog apart from Download, behind a confirmation whose Cancel goes back to the file.
+
+#### A Run's Transcript
+
+![Transcript](ui/transcript.png)
+
+- **Page head:** the breadcrumbs lead through the Project and Ticket to "Transcript"; the title names the Run's Step ("Transcript of the Triage Run"), and a line under it holds the Agent, the Ticket, the model label, how many entries it keeps and when it was last uploaded, and the Run's Session link.
+- **Entries**, in order, at most 880px wide: a message shows who said it (the Agent's avatar and violet name, or an `INPUT` or `SYSTEM` kind label for what the session was sent) and its time over its text in full, rendered as Markdown in a bubble, the Agent's with an `--agent` border.
+- **Tool calls** are one line each: a caret, the tool's name in bold mono and a one-line summary of its input in muted mono (its description, command, file path or the like), cut off with an ellipsis. Clicking the line opens its Input (pretty-printed JSON) and Result under it, each in a `pre` scrolling past 480px; clicking again closes it. A result cut at 20 KB carries a `warn` **Cut** chip on its line and says so under the result.
+- **A Transcript past 50 MB** shows a dashed box where its gap is, saying how many entries and megabytes were left out between its start and its end.
+- Entries load a page at a time, with **Show more** at the end while there are more.
 
 ### Document
 
@@ -213,6 +224,13 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - The Artifact itself fills an iframe with `sandbox="allow-scripts"`, on white whatever the theme, beside a side list of its files (path, size, which is the page). Its description sits under the page head, whose meta names the current Version; **Open** opens the page on its own, as sandboxed as in the frame.
 - A save from elsewhere shows the new Version in place: each Version has its own address, so the frame loads it afresh.
+
+### Search
+
+- **Results page** (`/workspaces/<id>/search?q=…`, with `&project=<id>` when narrowed): breadcrumbs to the Workspace, "Search" as the `h1` with "Results for “…”" under it, and a Project filter (All Projects, or one by key and name). It marks no sidebar item.
+- **Grouped by kind:** Tickets, Documents, Reports, Terms and Decisions, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out. A kind gives its best 20 at most; a full group says so under it, and to narrow the search for others. While a search loads, the last one's results are cleared.
+- **A result:** its title as a link (a Ticket's or Report's Ticket key before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
+- **Nothing found:** an empty state saying nothing matches, and how to write a search: a phrase in quotes, `or` between alternatives, `-word` to leave out.
 
 ### Agents and Runners
 

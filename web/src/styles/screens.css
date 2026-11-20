@@ -1202,3 +1202,145 @@
   margin-left: auto;
   white-space: nowrap;
 }
+
+/* Search results: one group per kind, each result its title, where it is kept and where it matched. */
+.search-results {
+  display: grid;
+  gap: var(--space-5);
+}
+.search-group {
+  display: grid;
+  gap: var(--space-2);
+}
+.search-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  list-style: none;
+}
+.search-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+.search-result + .search-result {
+  border-top: 1px solid var(--border);
+}
+.search-title {
+  font-weight: 600;
+}
+.search-place {
+  color: var(--muted);
+  font-size: 12px;
+}
+.search-snippet {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.search-more {
+  font-size: 13px;
+}
+.search-snippet mark {
+  border-radius: var(--radius-chip);
+  background: var(--warn-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Transcript: messages in full, each tool call one line that opens to its input and result. */
+.transcript-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.transcript {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 880px;
+  padding: 0;
+  list-style: none;
+}
+.transcript-entry {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.transcript-assistant .bubble {
+  border-color: var(--agent);
+}
+.transcript-tool {
+  gap: var(--space-2);
+}
+.tool-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 6px var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-line:hover {
+  border-color: var(--muted);
+}
+.tool-line[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+.tool-caret {
+  flex: none;
+  width: 12px;
+  color: var(--muted);
+}
+.tool-name {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+.tool-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-detail {
+  display: grid;
+  gap: var(--space-3);
+  padding-left: var(--space-5);
+}
+.transcript-entry section {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.transcript-entry pre {
+  max-height: 480px;
+  overflow: auto;
+  font-size: 12px;
+}
+.transcript-gap {
+  padding: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-panel);
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}

@@ -9,7 +9,7 @@ import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { defaultRoundLimit, LabelRule, Outcome } from "./steps.js";
+import { defaultRoundLimit, LabelRule, Outcome, StepKind } from "./steps.js";
 
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
@@ -21,6 +21,8 @@ const outcomeRules =
   "Canceled Status, and no Outcome may target a Canceled Status. The *needs you* Outcome may not target the Status " +
   "the Step is on either.";
 const StepBody = Type.Object({
+  /** Ordinary unless given. */
+  kind: Type.Optional(StepKind),
   brief: Type.String({ minLength: 1, maxLength: 50_000, pattern: "\\S", description: "Markdown." }),
   model: Type.String({
     minLength: 1,
@@ -139,13 +141,20 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
                 description: "Whether a merged Pull Request completes the Tickets it links in this Project; off, merges only update its state.",
               }),
             ),
+            agentsMayMerge: Type.Optional(
+              Type.Boolean({
+                description:
+                  "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation. Only an Admin " +
+                  "may give it, whatever its value.",
+              }),
+            ),
           }),
-          response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return editProject(context, { kind: "user", id: user.id }, request.params.projectId, request.body);
+        return editProject(context, user.id, request.params.projectId, request.body);
       },
     );
 
@@ -234,8 +243,8 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         const { projectId, statusId } = request.params;
-        const { roundLimit = defaultRoundLimit, labelRule = null, ...step } = request.body;
-        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, roundLimit, labelRule } });
+        const { kind = "ordinary", roundLimit = defaultRoundLimit, labelRule = null, ...step } = request.body;
+        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, kind, roundLimit, labelRule } });
       },
     );
 

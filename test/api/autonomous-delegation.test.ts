@@ -135,7 +135,7 @@ describe("completing a Ticket by an Outcome", () => {
     const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
     expect(brief.preamble).toContain(
       [
-        "- **approve**: moves CRONK-1 to In Review.",
+        "- **approve**: moves CRONK-1 to Merge.",
         "- **changes**: moves CRONK-1 to Implement. It counts as a round: after 2, the Step's *needs you* Outcome applies instead.",
         "- **complete**: moves CRONK-1 to Done, completing it as Unverified until its Assignee Accepts or Reopens it.",
         "- **needs you**: moves CRONK-1 to In Review and hands it back to its Assignee. Give a Question saying what you need.",

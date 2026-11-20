@@ -35,11 +35,12 @@ describe("creating the GitHub App", () => {
     expect(back.headers.get("location")).toBe("/github?created=1");
 
     const [created] = cronk.github.apps;
-    // Exactly these, nothing with write access, so installing the App on an account or organization is an easy yes.
+    // Exactly these: writing contents and Pull Requests lets Runs push and open them, and agents merge (ADR 0007).
     expect(start.manifest.default_permissions).toEqual({
       emails: "read",
       metadata: "read",
-      pull_requests: "read",
+      contents: "write",
+      pull_requests: "write",
       checks: "read",
       statuses: "read",
     });

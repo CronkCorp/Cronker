@@ -103,8 +103,12 @@ export interface LabelRule {
 export const labelRuleShown = ({ kind, label }: LabelRule) =>
   kind === "requires" ? `requires ${label}` : `skipped by ${label}`;
 
+/** An ordinary Step, or a Merge Step, which skips itself unless an agent may merge the Ticket. */
+export type StepKind = "ordinary" | "merge";
+
 /** The agent work a Status asks for. */
 export interface Step {
+  kind: StepKind;
   brief: string;
   model: string;
   roundLimit: number;
@@ -140,6 +144,8 @@ export interface Project extends ProjectSummary {
   autonomousDelegationDefault: boolean;
   /** Whether a merged Pull Request completes the Tickets it links. */
   pullRequestAutomation: boolean;
+  /** Whether Merge Steps let agents merge Autonomous Delegation Tickets' Pull Requests; only Admins change it. */
+  agentsMayMerge: boolean;
   statuses: Status[];
 }
 
@@ -148,6 +154,7 @@ export interface ProjectEdit {
   newTicketsDelegated?: boolean;
   autonomousDelegationDefault?: boolean;
   pullRequestAutomation?: boolean;
+  agentsMayMerge?: boolean;
 }
 
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
@@ -398,8 +405,35 @@ export interface Run {
   questionBy: "agent" | "cronk" | null;
   endReason: string | null;
   sessionUrl: string | null;
+  /** Its Transcript, once one was uploaded for its session. */
+  transcriptId: string | null;
   startedAt: string;
   endedAt: string | null;
+}
+
+/** The record of an agent's session, as Cronk converted it into entries. */
+export interface Transcript {
+  id: string;
+  sessionId: string;
+  agent: { id: string; name: string };
+  runId: string | null;
+  entryCount: number;
+  /** Where entries were left out of a Transcript past 50 MB: after which position, how many and how large. */
+  gap: { after: number; entries: number; bytes: number } | null;
+  uploadedAt: string;
+}
+
+/** A message, or a tool call with its input and result, of a Transcript. */
+export interface TranscriptEntry {
+  position: number;
+  role: "user" | "assistant" | "system";
+  text: string | null;
+  toolName: string | null;
+  toolInput: unknown;
+  toolResult: string | null;
+  /** Whether the tool result was cut at 20 KB. */
+  cut: boolean;
+  at: string | null;
 }
 
 /** A Report as lists show it, by its id and title. */
@@ -747,6 +781,19 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
+export type SearchKind = "ticket" | "document" | "report" | "term" | "decision";
+
+export interface SearchResult {
+  kind: SearchKind;
+  id: string;
+  title: string;
+  projectId: string | null;
+  /** A Ticket's own key, or the key of the Ticket a Report is on. */
+  ticketKey: string | null;
+  /** Where it matched, the matching words marked. */
+  snippet: { text: string; match: boolean }[];
+}
+
 export const api = {
   setupNeeded: () => call<{ needed: boolean }>("GET", "/api/setup").then((r) => r.needed),
   setUp: (input: { setupCode: string; email: string; password: string; workspaceName: string }) =>
@@ -862,6 +909,13 @@ export const api = {
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
+  run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
+  transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
+  transcriptEntries: (id: string, after?: number) =>
+    call<{ entries: TranscriptEntry[]; next: number | null }>(
+      "GET",
+      `/api/transcripts/${encodeURIComponent(id)}/entries${after === undefined ? "" : `?after=${after}`}`,
+    ),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
@@ -913,6 +967,11 @@ export const api = {
     call<DecisionVersion & { body: string }>("GET", `${decision(id)}/versions/${number}`),
   compareDecisionVersions: (id: string, from: number, to: number) =>
     call<Comparison>("GET", `${decision(id)}/versions/compare?from=${from}&to=${to}`),
+  search: (workspaceId: string, query: { q: string; project?: string }) =>
+    call<SearchResult[]>(
+      "GET",
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${new URLSearchParams({ ...query })}`,
+    ),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };
 

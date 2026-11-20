@@ -42,10 +42,16 @@ export type LiveState = "live" | "reconnecting";
 
 interface Stream {
   source: EventSource;
+  /** A reopening the browser gave up on, waiting to start. */
+  retry?: ReturnType<typeof setTimeout>;
   listeners: Set<Listener>;
   state: LiveState;
   stateListeners: Set<(state: LiveState) => void>;
 }
+
+/** How long before reopening a stream the browser gave up on, doubling with each failure in a row up to the most. */
+const reopenDelayMs = 3_000;
+const maxReopenDelayMs = 30_000;
 
 /** Open streams by their address. */
 const streams = new Map<string, Stream>();
@@ -57,23 +63,39 @@ const runnersStream = "/api/runners/events";
 function open(url: string, types: string[]): Stream {
   let stream = streams.get(url);
   if (!stream) {
-    const source = new EventSource(url);
-    const created: Stream = { source, listeners: new Set(), state: "live", stateListeners: new Set() };
+    const created: Stream = { source: new EventSource(url), listeners: new Set(), state: "live", stateListeners: new Set() };
     const emit = (event: LiveEvent | RunnerEvent) => created.listeners.forEach((l) => l(event));
     const setState = (state: LiveState) => {
       created.state = state;
       created.stateListeners.forEach((l) => l(state));
     };
     let opened = false;
-    source.addEventListener("open", () => {
-      setState("live");
-      if (opened) emit({ type: "reconnected" });
-      opened = true;
-    });
-    source.addEventListener("error", () => setState("reconnecting"));
-    for (const type of types) {
-      source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent | RunnerEvent));
-    }
+    let failures = 0;
+    const watch = (source: EventSource) => {
+      source.addEventListener("open", () => {
+        failures = 0;
+        setState("live");
+        if (opened) emit({ type: "reconnected" });
+        opened = true;
+      });
+      source.addEventListener("error", () => {
+        setState("reconnecting");
+        // The browser reconnects by itself after a dropped connection, but gives up on an answer with an
+        // error status, such as a proxy's while Cronk restarts or a refusal while signed out: open it again.
+        if (source.readyState !== EventSource.CLOSED) return;
+        failures += 1;
+        created.retry = setTimeout(() => {
+          created.retry = undefined;
+          if (streams.get(url) !== created) return;
+          created.source = new EventSource(url);
+          watch(created.source);
+        }, Math.min(reopenDelayMs * 2 ** (failures - 1), maxReopenDelayMs));
+      });
+      for (const type of types) {
+        source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent | RunnerEvent));
+      }
+    };
+    watch(created.source);
     stream = created;
     streams.set(url, stream);
   }
@@ -84,6 +106,7 @@ function open(url: string, types: string[]): Stream {
 function release(url: string, stream: Stream) {
   if (stream.listeners.size === 0 && stream.stateListeners.size === 0) {
     stream.source.close();
+    clearTimeout(stream.retry);
     streams.delete(url);
   }
 }
