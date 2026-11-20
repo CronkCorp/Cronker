@@ -4,7 +4,7 @@ import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { appToken, findApp, webhookSecret } from "./app.js";
 import { appDeliveries, redeliver } from "./client.js";
-import { onCheckRunEvent, onPullRequestEvent, onPullRequestReviewEvent, onStatusEvent } from "./pull-requests.js";
+import { onCheckRunEvent, onCheckSuiteEvent, onPullRequestEvent, onPullRequestReviewEvent, onStatusEvent } from "./pull-requests.js";
 import { onRepositoryEvent } from "./repositories.js";
 
 /**
@@ -30,6 +30,7 @@ const handlers: Record<string, EventHandler> = {
   pull_request: onPullRequestEvent,
   pull_request_review: onPullRequestReviewEvent,
   check_run: onCheckRunEvent,
+  check_suite: onCheckSuiteEvent,
   status: onStatusEvent,
 };
 
