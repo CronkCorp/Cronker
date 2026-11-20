@@ -10,9 +10,9 @@ import {
   type Comment,
   labelRuleShown,
   type LabelRule,
+  type LinkedArtifact,
   type LinkedDocument,
   type PullRequest,
-  type DocumentSummary,
   type Member,
   type Priority,
   type Project,
@@ -69,7 +69,8 @@ export function TicketScreen({
   const [runs, setRuns] = useState<Run[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
-  const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
+  const [documentLinks, setDocumentLinks] = useState<LinkedDocument[] | null>(null);
+  const [artifactLinks, setArtifactLinks] = useState<LinkedArtifact[] | null>(null);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
@@ -91,6 +92,7 @@ export function TicketScreen({
   const latestRuns = useLatest();
   const latestRelations = useLatest();
   const latestLinkedDocuments = useLatest();
+  const latestLinkedArtifacts = useLatest();
   const latestPullRequests = useLatest();
   const latestProjectTickets = useLatest();
   const latestReportFiles = useLatest();
@@ -122,8 +124,9 @@ export function TicketScreen({
   );
   const loadLinks = useCallback(() => {
     latestRelations(api.relations(ticketId), setRelations, fail);
-    latestLinkedDocuments(api.linkedDocuments(ticketId), setLinkedDocuments, fail);
-  }, [ticketId, latestRelations, latestLinkedDocuments]);
+    latestLinkedDocuments(api.linkedDocuments(ticketId), setDocumentLinks, fail);
+    latestLinkedArtifacts(api.linkedArtifacts(ticketId), setArtifactLinks, fail);
+  }, [ticketId, latestRelations, latestLinkedDocuments, latestLinkedArtifacts]);
 
   useEffect(() => {
     const first = api.ticket(ticketId);
@@ -226,7 +229,7 @@ export function TicketScreen({
   };
 
   if (failure) return <FormError error={failure} />;
-  if (!ticket || !project || !relations || !linkedDocuments) return <p className="muted">Loading…</p>;
+  if (!ticket || !project || !relations || !documentLinks || !artifactLinks) return <p className="muted">Loading…</p>;
   const status = project.statuses.find((s) => s.id === ticket.statusId);
   const others = projectTickets.filter((t) => t.id !== ticket.id);
   return (
@@ -328,10 +331,21 @@ export function TicketScreen({
               loadTimeline();
             }}
           />
-          <LinkedDocuments
+          <Linked
+            kind={linkedDocuments}
             ticket={ticket}
             workspaceId={workspace.id}
-            linked={linkedDocuments}
+            linked={documentLinks}
+            onChanged={() => {
+              loadLinks();
+              loadTimeline();
+            }}
+          />
+          <Linked
+            kind={linkedArtifacts}
+            ticket={ticket}
+            workspaceId={workspace.id}
+            linked={artifactLinks}
             onChanged={() => {
               loadLinks();
               loadTimeline();
@@ -882,47 +896,86 @@ function Relations({
   );
 }
 
+/** What the Ticket links of one kind, Documents or Artifacts: how they are named, read, linked and unlinked. */
+interface Linkable {
+  /** The kind's name, such as "Document". */
+  noun: string;
+  /** Where one is shown. */
+  page: (id: string) => string;
+  /** Those of the Ticket's Project and of the Workspace that could be linked. */
+  offered: (projectId: string, workspaceId: string) => Promise<{ project: { id: string; title: string }[]; workspace: { id: string; title: string }[] }>;
+  link: (ticketId: string, id: string) => Promise<unknown>;
+  unlink: (ticketId: string, id: string) => Promise<unknown>;
+}
+
+const linkedDocuments: Linkable = {
+  noun: "Document",
+  page: (id) => `/documents/${id}`,
+  offered: async (projectId, workspaceId) => {
+    const [project, workspace] = await Promise.all([
+      api.documents({ kind: "project", id: projectId }),
+      api.documents({ kind: "workspace", id: workspaceId }),
+    ]);
+    return { project, workspace };
+  },
+  link: api.linkDocument,
+  unlink: api.unlinkDocument,
+};
+
+const linkedArtifacts: Linkable = {
+  noun: "Artifact",
+  page: (id) => `/artifacts/${id}`,
+  offered: async (projectId, workspaceId) => {
+    const [project, workspace] = await Promise.all([
+      api.artifacts({ kind: "project", id: projectId }),
+      api.artifacts({ kind: "workspace", id: workspaceId }),
+    ]);
+    return { project, workspace };
+  },
+  link: api.linkArtifact,
+  unlink: api.unlinkArtifact,
+};
+
 /**
- * The Documents linked to the Ticket, each a link to it, with a form to link another of the Ticket's Project or of
- * the Workspace.
+ * The Documents or Artifacts linked to the Ticket, each a link to it, with a picker to link another of the Ticket's
+ * Project or of the Workspace.
  */
-function LinkedDocuments({
+function Linked({
+  kind,
   ticket,
   workspaceId,
   linked,
   onChanged,
 }: {
+  kind: Linkable;
   ticket: Ticket;
   workspaceId: string;
-  linked: LinkedDocument[];
+  linked: { id: string; projectId: string | null; title: string }[];
   onChanged: () => void;
 }) {
-  const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
-  const [treesError, setTreesError] = useState<string | null>(null);
-  // Page trees aren't live, so they are read again on opening the list and after each link.
-  const loadTrees = useCallback(() => {
-    Promise.all([
-      api.documents({ kind: "project", id: ticket.projectId }),
-      api.documents({ kind: "workspace", id: workspaceId }),
-    ]).then(
-      ([project, workspace]) => {
-        setTreesError(null);
-        setTrees({ project, workspace });
+  const [choices, setChoices] = useState<Awaited<ReturnType<Linkable["offered"]>> | null>(null);
+  const [choicesError, setChoicesError] = useState<string | null>(null);
+  // What may be linked isn't live, so it is read again on opening the list and after each link.
+  const loadChoices = useCallback(() => {
+    kind.offered(ticket.projectId, workspaceId).then(
+      (found) => {
+        setChoicesError(null);
+        setChoices(found);
       },
-      (e: Error) => setTreesError(e.message),
+      (e: Error) => setChoicesError(e.message),
     );
-  }, [ticket.projectId, workspaceId]);
-  useEffect(loadTrees, [loadTrees]);
+  }, [kind, ticket.projectId, workspaceId]);
+  useEffect(loadChoices, [loadChoices]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /** Links or unlinks one Document at a time, showing why it was refused. */
+  /** Links or unlinks one at a time, showing why it was refused. */
   const change = async (save: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       await save();
-      loadTrees();
+      loadChoices();
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -931,29 +984,30 @@ function LinkedDocuments({
     }
   };
   const isLinked = new Set(linked.map((d) => d.id));
-  const unlinked = (documents: DocumentSummary[]) => documents.filter((d) => !isLinked.has(d.id));
-  const offered = trees && { project: unlinked(trees.project), workspace: unlinked(trees.workspace) };
+  const unlinked = (all: { id: string; title: string }[]) => all.filter((d) => !isLinked.has(d.id));
+  const offered = choices && { project: unlinked(choices.project), workspace: unlinked(choices.workspace) };
+  const title = `Linked ${kind.noun}s`;
   return (
-    <section aria-label="Linked Documents" className="panel side-section">
-      <h2 className="side-title">Linked Documents</h2>
+    <section aria-label={title} className="panel side-section">
+      <h2 className="side-title">{title}</h2>
       {linked.length > 0 && (
-        <ul aria-label="Linked Documents" className="side-list">
-          {linked.map((document) => (
-            <li key={document.id}>
-              <Link to={`/documents/${document.id}`}>{document.title}</Link>
-              {document.projectId === null && <span className="muted small"> Workspace</span>}{" "}
-              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => api.unlinkDocument(ticket.id, document.id))}>
+        <ul aria-label={title} className="side-list">
+          {linked.map((item) => (
+            <li key={item.id}>
+              <Link to={kind.page(item.id)}>{item.title}</Link>
+              {item.projectId === null && <span className="muted small"> Workspace</span>}{" "}
+              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => kind.unlink(ticket.id, item.id))}>
                 Unlink
               </Button>
             </li>
           ))}
         </ul>
       )}
-      <FormError error={treesError} />
+      <FormError error={choicesError} />
       <div>
         <Picker
-          label="Link a Document"
-          onOpenChange={(open) => open && loadTrees()}
+          label={`Link a${/^[AEIOU]/.test(kind.noun) ? "n" : ""} ${kind.noun}`}
+          onOpenChange={(open) => open && loadChoices()}
           options={
             offered
               ? [
@@ -962,10 +1016,10 @@ function LinkedDocuments({
                 ]
               : []
           }
-          onPick={(id) => void change(() => api.linkDocument(ticket.id, id))}
+          onPick={(id) => void change(() => kind.link(ticket.id, id))}
           trigger={
             <Button size="small" aria-haspopup="listbox" disabled={busy}>
-              Link a Document…
+              Link a{/^[AEIOU]/.test(kind.noun) ? "n" : ""} {kind.noun}…
             </Button>
           }
         />
@@ -1016,7 +1070,7 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | RelationKind>,
+  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | RelationKind>,
   string
 > = {
   delegate: "Delegate",
@@ -1093,10 +1147,11 @@ function described(change: Change): string {
     return `skipped the ${status.name} Step (${why}), moving on by ${outcome}`;
   }
   if (change.field === "description") return "changed the Description";
-  if (change.field === "linkedDocument") {
+  if (change.field === "linkedDocument" || change.field === "linkedArtifact") {
+    const noun = change.field === "linkedDocument" ? "Document" : "Artifact";
     return change.to
-      ? `linked the Document ${(change.to as { title: string }).title}`
-      : `unlinked the Document ${(change.from as { title: string }).title}`;
+      ? `linked the ${noun} ${(change.to as { title: string }).title}`
+      : `unlinked the ${noun} ${(change.from as { title: string }).title}`;
   }
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
