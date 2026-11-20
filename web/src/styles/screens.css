@@ -125,15 +125,18 @@
   color: var(--muted);
 }
 
-/* Board: open columns share the width, tight enough that the default nine Statuses fit a 1280px screen. A
-   column's name wraps rather than being cut off. Done and Canceled start collapsed. */
+/* Board: open columns share the width but keep a card's readable width; when they don't fit, the board scrolls
+   sideways itself while the page head and filters stay put. A column's name wraps rather than being cut off.
+   Done and Canceled start collapsed. */
 .board {
+  position: relative; /* holds collapsed columns' visually hidden names, so they scroll with it, not the page */
   display: flex;
   gap: var(--space-2);
   align-items: flex-start;
+  overflow-x: auto;
 }
 .column {
-  flex: 1 1 0;
+  flex: 1 0 240px;
   display: grid;
   gap: var(--space-2);
   min-width: 0;
