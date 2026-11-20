@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { api, nameOf, type ProjectSummary, type User, type WorkspaceSummary } from "./api.js";
 import { InboxLink } from "./inbox.js";
+import { keyBelongsElsewhere } from "./keys.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
 import { SearchBox } from "./search.js";
@@ -67,10 +68,10 @@ export function Frame({
           current={current}
           place={place}
           onSignOut={onSignOut}
-          hideButton={<SidebarToggle hidden={false} buttonRef={sidebar.hideButton} onToggle={sidebar.toggle} />}
+          hideToggle={<SidebarToggle sidebarHidden={false} buttonRef={sidebar.hideButton} onToggle={sidebar.toggle} />}
         />
         <main className="main">
-          {sidebar.hidden && <SidebarToggle hidden buttonRef={sidebar.showButton} onToggle={sidebar.toggle} />}
+          {sidebar.hidden && <SidebarToggle sidebarHidden buttonRef={sidebar.showButton} onToggle={sidebar.toggle} />}
           <div className="main-inner">{children}</div>
         </main>
       </div>
@@ -79,12 +80,15 @@ export function Frame({
 }
 
 /** Below this width the sidebar is a strip with a menu, which neither hides nor shows; as in `frame.css`. */
-const narrow = "(max-width: 760px)";
+const narrowQuery = "(max-width: 760px)";
 
-const onMac = /Mac|iPhone|iPad/.test(navigator.platform);
+/** The sidebar's shortcut as macOS writes it, or as other systems do; either modifier works on both. */
+const shortcut = /Mac|iPhone|iPad/.test(navigator.platform)
+  ? { keys: "Meta+\\", label: "⌘\\" }
+  : { keys: "Control+\\", label: "Ctrl+\\" };
 
 /**
- * Whether the sidebar is hidden, kept on this browser, with `Ctrl+\` (`⌘\` on macOS) toggling it outside fields.
+ * Whether the sidebar is hidden, kept on this browser, with `Ctrl+\` (`⌘\` on macOS) toggling it outside fields and dialogs.
  * A button that toggles it hands focus to the button that toggles it back.
  */
 function useSidebarHiding() {
@@ -105,9 +109,7 @@ function useSidebarHiding() {
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.key !== "\\" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-      const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
-      if (window.matchMedia(narrow).matches) return;
+      if (keyBelongsElsewhere(event) || window.matchMedia(narrowQuery).matches) return;
       event.preventDefault();
       toggle(false);
     };
@@ -119,23 +121,23 @@ function useSidebarHiding() {
 
 /** The button at the top of the sidebar that hides it, or, while it is hidden, the one in the main column that shows it. */
 function SidebarToggle({
-  hidden,
+  sidebarHidden,
   buttonRef,
   onToggle,
 }: {
-  hidden: boolean;
+  sidebarHidden: boolean;
   buttonRef: RefObject<HTMLButtonElement | null>;
   onToggle: (fromButton: boolean) => void;
 }) {
-  const label = hidden ? "Show sidebar" : "Hide sidebar";
+  const label = sidebarHidden ? "Show sidebar" : "Hide sidebar";
   return (
     <button
       ref={buttonRef}
       type="button"
-      className={`sidebar-toggle ${hidden ? "sidebar-show" : "sidebar-hide"}`}
+      className={`sidebar-toggle ${sidebarHidden ? "sidebar-show" : "sidebar-hide"}`}
       aria-label={label}
-      aria-keyshortcuts={onMac ? "Meta+\\" : "Control+\\"}
-      title={`${label} (${onMac ? "⌘\\" : "Ctrl+\\"})`}
+      aria-keyshortcuts={shortcut.keys}
+      title={`${label} (${shortcut.label})`}
       onClick={() => onToggle(true)}
     >
       <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -152,14 +154,14 @@ function Sidebar({
   current,
   place,
   onSignOut,
-  hideButton,
+  hideToggle,
 }: {
   user: User;
   workspaces: WorkspaceSummary[];
   current: WorkspaceSummary | undefined;
   place: Place;
   onSignOut: () => Promise<void>;
-  hideButton: ReactNode;
+  hideToggle: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -177,7 +179,7 @@ function Sidebar({
       <div className="sidebar-strip">
         <div className="sidebar-top">
           <WorkspaceSwitcher workspaces={workspaces} current={current} />
-          {hideButton}
+          {hideToggle}
         </div>
         {current && (
           <>

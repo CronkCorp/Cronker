@@ -134,7 +134,7 @@
     display: none;
   }
   .frame-sidebar-hidden .main {
-    padding-left: 44px;
+    padding-left: calc(var(--space-3) + 32px); /* the show button's offset and width */
   }
   .frame-sidebar-hidden .main-inner:has(.board) {
     max-width: none;

@@ -164,11 +164,24 @@ test("with the sidebar hidden, a board spans the window while other pages keep t
   expect(await width()).toBeGreaterThan(1500);
 });
 
-test("Ctrl+\\ toggles the sidebar, but not while typing in a field, and at phone width nothing hides it", async ({ page, cronk }) => {
-  await setUp(cronk);
+test("Ctrl+\\ toggles the sidebar, but not while typing in a field or in a dialog, and at phone width nothing hides it", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
   await page.setViewportSize({ width: 1280, height: 800 });
   await signInInBrowser(page, cronk);
   const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+
+  await sidebar.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("button", { name: "New Ticket" }).click();
+  await page.getByRole("dialog").getByRole("heading").click();
+  await page.keyboard.press("Control+\\");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(sidebar).toBeVisible();
 
   await page.keyboard.press("Control+\\");
   await expect(sidebar).toBeHidden();

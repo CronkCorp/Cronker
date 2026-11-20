@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
+import { keyBelongsElsewhere } from "./keys.js";
 import {
   api,
   nameOf,
@@ -145,16 +146,7 @@ function writeSelection(key: string | null) {
 }
 
 /** Whether a key press comes from a place it must not act from, such as a text field or an open dialog. */
-const typing = (event: KeyboardEvent) => {
-  const target = event.target as HTMLElement | null;
-  return (
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
-    !!target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])") ||
-    !!document.querySelector("[role=dialog]")
-  );
-};
+const typing = (event: KeyboardEvent) => event.metaKey || event.ctrlKey || event.altKey || keyBelongsElsewhere(event);
 
 /** Everything in the Workspace waiting on the signed-in User, as a split view: the list, and the selected item. */
 export function InboxScreen({ workspace, user }: { workspace: Workspace; user: User }) {
