@@ -75,7 +75,7 @@ test("an Artifact's page shows it in a sandboxed iframe, where its scripts run b
 
   await expect(page.getByRole("heading", { name: "Probe" })).toBeVisible();
   await expect(page.getByText("What a sandboxed page can reach.")).toBeVisible();
-  await expect(page.getByText("Version 1")).toBeVisible();
+  await expect(page.locator(".page-head-meta")).toContainText("Version 1");
   const frame = page.locator("iframe");
   await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
   await expect(frame).toHaveAttribute("title", "Probe");
@@ -91,4 +91,61 @@ test("an Artifact's page shows it in a sandboxed iframe, where its scripts run b
   // Nothing it sent changed anything as the signed-in User.
   const { workspaces } = await (await cronk.request("GET", "/api/me", { cookie })).json();
   expect(workspaces.map((w: { name: string }) => w.name)).toEqual([workspace.name]);
+});
+
+test("an Artifact's page lists its Versions, who saved each and when, and compares two file by file, showing files added and removed", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const agent = await (await cronk.request("POST", `/api/workspaces/${workspace.id}/agents`, { cookie, body: { name: "claude-max" } })).json();
+  const token = await (await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access: "full" } })).json();
+  const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/artifacts`, {
+    cookie,
+    body: {
+      title: "Board prototype",
+      files: [
+        { path: "index.html", contentBase64: base64("<h1>Board</h1>\n<p>Drag cards.</p>") },
+        { path: "app.js", contentBase64: base64("start();") },
+      ],
+    },
+  });
+  const artifact = await created.json();
+  const saved = await cronk.request("PATCH", `/api/artifacts/${artifact.id}`, {
+    headers: { authorization: `Bearer ${token.secret}` },
+    body: {
+      baseVersion: 1,
+      files: [
+        { path: "index.html", contentBase64: base64("<h1>Board</h1>\n<p>Drag cards between columns.</p>") },
+        { path: "data/cards.json", contentBase64: base64('["Write the spec"]') },
+      ],
+      remove: ["app.js"],
+    },
+  });
+  expect(saved.status).toBe(200);
+  await signInInBrowser(page, cronk);
+
+  await page.goto(`${cronk.url}/artifacts/${artifact.id}`);
+
+  const versions = page.getByRole("region", { name: "Versions" });
+  await expect(versions.getByRole("listitem")).toHaveText([/Version 2.*claude-max/, /Version 1.*ada@example\.com/]);
+  await versions.getByLabel("Compare Version 1").check();
+  await versions.getByLabel("Compare Version 2").check();
+
+  const dialog = page.getByRole("dialog", { name: "What changed" });
+  const fileShown = (path: string) => dialog.getByRole("region", { name: path, exact: true });
+  await expect(fileShown("app.js")).toContainText("Removed");
+  await expect(fileShown("app.js").locator("del")).toHaveText("start();");
+  await expect(fileShown("data/cards.json")).toContainText("Added");
+  await expect(fileShown("data/cards.json").locator("ins")).toHaveText('["Write the spec"]');
+  const changed = fileShown("index.html");
+  await expect(changed).toContainText("Changed");
+  await expect(changed.locator("del")).toHaveText("<p>Drag cards.</p>");
+  await expect(changed.locator("ins")).toHaveText("<p>Drag cards between columns.</p>");
+
+  // A save from elsewhere joins the list in place.
+  await cronk.request("PATCH", `/api/artifacts/${artifact.id}`, { cookie, body: { baseVersion: 2, title: "Board" } });
+  await page.keyboard.press("Escape");
+  await expect(versions.getByRole("listitem")).toHaveCount(3);
 });

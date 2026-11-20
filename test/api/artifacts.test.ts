@@ -381,7 +381,8 @@ describe("Artifacts", () => {
     const png = (byte: number) => ({ path: "logo.png", contentBase64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, byte]).toString("base64") });
     const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
       title: "Board prototype",
-      files: [file("index.html", page), file("app.js", "start();\nstop();"), png(1)],
+      // A file ending in a newline, as most do, has no empty last line.
+      files: [file("index.html", page), file("app.js", "start();\nstop();\n"), png(1)],
     });
     await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, {
       baseVersion: 1,

@@ -479,8 +479,13 @@ function textOf(bytes: Buffer): string | undefined {
   }
 }
 
-/** Two texts compared line by line, an empty one counting as no lines rather than one empty line. */
+/**
+ * Two files' texts compared line by line: the newline that ends a file's last line starts no further line, and an
+ * empty file has no lines rather than one empty line.
+ */
 function compareTexts(before: string, after: string): ComparedLine[] {
+  before = before.replace(/\r?\n$/, "");
+  after = after.replace(/\r?\n$/, "");
   if (before === "") return after === "" ? [] : after.split("\n").map((text) => ({ change: "added", text }));
   if (after === "") return before.split("\n").map((text) => ({ change: "removed", text }));
   return compareLines(before, after);

@@ -224,6 +224,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 - The Artifact itself fills an iframe with `sandbox="allow-scripts"`, on white whatever the theme, beside a side list of its files (path, size, which is the page). Its description sits under the page head, whose meta names the current Version; **Open** opens the page on its own, as sandboxed as in the frame.
 - A save from elsewhere shows the new Version in place: each Version has its own address, so the frame loads it afresh.
+- Under the files, its **Versions**, newest first, each with who saved it and when. Picking two shows what changed in a dialog: each file that differs, by path, marked **Added** (`ok` chip), **Removed** (`warn`) or **Changed** (neutral), with its Diff; a file that isn't text says so instead of a Diff. A save from elsewhere joins the list.
 
 ### Search
 
