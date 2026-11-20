@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Artifact, type ProjectSummary, type Workspace } from "./api.js";
+import { sized } from "./attachments.js";
 import { VersionMeta } from "./documents.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { buttonClass, FormError, LiveIndicator, PageHead, Panel, workspaceCrumb } from "./ui/controls.js";
-
-/** A size as people read it: bytes, KB or MB. */
-function sizeOf(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 102.4) / 10} KB`;
-  return `${Math.round(bytes / (1024 * 102.4)) / 10} MB`;
-}
 
 /**
  * An Artifact's page: the Artifact itself in an iframe sandboxed as its address serves it, scripts allowed and its
@@ -90,7 +84,7 @@ export function ArtifactScreen({
                 <li key={file.path}>
                   <span className="mono">{file.path}</span>
                   {file.path === artifact.page && <span className="muted"> · page</span>}
-                  <span className="muted artifact-file-size">{sizeOf(file.size)}</span>
+                  <span className="muted artifact-file-size">{sized(file.size)}</span>
                 </li>
               ))}
             </ul>

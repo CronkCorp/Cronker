@@ -48,6 +48,7 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 | `--accent` | `#116466` | `#4fb2aa` | Links, primary buttons, focus ring, active nav |
 | `--accent-soft` | `#d7ebe9` | `#1d3634` | Active and selected backgrounds |
 | `--on-accent` | `#ffffff` | `#0c1514` | Text on `--accent` and `--danger` |
+| `--canvas` | `#ffffff` | `#ffffff` | Behind an Artifact's page, drawn as a browser draws any page |
 | `--agent` | `#6247c2` | `#a793f2` | Agent names, avatars, Reports, running Runs |
 | `--agent-soft` | `#e9e4fb` | `#2b2545` | Agent avatar and Run card backgrounds |
 | `--danger` / `-soft` | `#b93a2b` / `#f8e1dd` | `#ee7d6b` / `#3d211d` | Failed and lost Runs, errors, Urgent, destructive actions |

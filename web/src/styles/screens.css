@@ -1179,8 +1179,7 @@
   height: max(480px, 72vh);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
-  /* An Artifact's page is drawn as a browser draws any page, on white, whatever Cronk's theme. */
-  background: #fff;
+  background: var(--canvas);
 }
 .artifact-files {
   list-style: none;
