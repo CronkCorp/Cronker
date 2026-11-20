@@ -10,6 +10,7 @@ import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { describeSize } from "../attachments/attachments.js";
+import { ComparedLine, compareLines } from "../knowledge/compare.js";
 
 /**
  * Artifacts: live pages an Actor builds, such as an HTML prototype, with the files the page refers to by relative
@@ -418,9 +419,111 @@ export async function readArtifactFile(context: Context, viewer: Viewer, artifac
   if (!artifact) throw artifactNotFound();
   const [file] = await keptFiles(context.db, artifact.id, artifact.version.number, path);
   if (!file) throw new ApiError(404, "not_found", `${artifact.title} has no file ${path}.`);
+  const bytes = await bytesOf(context, file);
+  return { path: file.path, mediaType: file.mediaType, size: file.size, contentBase64: bytes.toString("base64") };
+}
+
+/** A kept file's bytes, or a refusal when Cronk's storage has lost them. */
+async function bytesOf(context: Context, file: Kept): Promise<Buffer> {
   const content = await context.attachments.get(file.blobId);
-  if (!content) throw new ApiError(404, "artifact_file_missing", `${path}'s bytes are missing from Cronk's storage.`);
+  if (!content) throw new ApiError(404, "artifact_file_missing", `${file.path}'s bytes are missing from Cronk's storage.`);
   const chunks: Buffer[] = [];
   for await (const chunk of content) chunks.push(chunk as Buffer);
-  return { path: file.path, mediaType: file.mediaType, size: file.size, contentBase64: Buffer.concat(chunks).toString("base64") };
+  return Buffer.concat(chunks);
+}
+
+type VersionRow = Omit<ArtifactVersion, "savedAt"> & { savedAt: Date };
+
+/** An Artifact's Versions, oldest first, each with the Actor who saved it and when, without their files. */
+export async function artifactVersionsOf(db: Db, viewer: Viewer, artifactId: string): Promise<ArtifactVersion[]> {
+  const artifact = await findArtifact(db, viewer, artifactId);
+  if (!artifact) throw artifactNotFound();
+  const { rows } = await db.query<VersionRow>(
+    `select versions.number, ${actorColumn("users", "agents")} as actor, versions.saved_at as "savedAt"
+     from artifact_versions versions
+     left join users on users.id = versions.actor_user_id
+     left join agents on agents.id = versions.actor_agent_id
+     where versions.artifact_id = $1 order by versions.number`,
+    [artifact.id],
+  );
+  return rows.map((row) => ({ ...row, savedAt: row.savedAt.toISOString() }));
+}
+
+export const ComparedFile = Type.Object({
+  path: Type.String(),
+  change: Type.Union([Type.Literal("added"), Type.Literal("removed"), Type.Literal("changed")], {
+    description: "Whether the file is only in the later Version, only in the earlier one, or in both with other bytes.",
+  }),
+  text: Type.Boolean({ description: "Whether the file is text, UTF-8 without NUL bytes; only text is compared by line." }),
+  lines: Type.Array(ComparedLine, {
+    description: "Its text compared line by line, in order: all added or all removed for a file added or removed; " +
+      "empty for a file that isn't text.",
+  }),
+});
+export type ComparedFile = Static<typeof ComparedFile>;
+
+export const ArtifactComparison = Type.Object({
+  from: ArtifactVersion,
+  to: ArtifactVersion,
+  files: Type.Array(ComparedFile, { description: "The files that differ, by path; those that didn't change are left out." }),
+});
+export type ArtifactComparison = Static<typeof ArtifactComparison>;
+
+/** A file's bytes as text, when they are UTF-8 without NUL bytes; otherwise nothing. */
+function textOf(bytes: Buffer): string | undefined {
+  if (bytes.includes(0)) return undefined;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Two texts compared line by line, an empty one counting as no lines rather than one empty line. */
+function compareTexts(before: string, after: string): ComparedLine[] {
+  if (before === "") return after === "" ? [] : after.split("\n").map((text) => ({ change: "added", text }));
+  if (after === "") return before.split("\n").map((text) => ({ change: "removed", text }));
+  return compareLines(before, after);
+}
+
+/**
+ * Two of an Artifact's Versions: each file added, removed or changed from one to the other, by path, its text
+ * compared line by line.
+ */
+export async function compareArtifactVersions(
+  context: Context,
+  viewer: Viewer,
+  artifactId: string,
+  numbers: { from: number; to: number },
+): Promise<ArtifactComparison> {
+  const artifact = await findArtifact(context.db, viewer, artifactId);
+  if (!artifact) throw artifactNotFound();
+  const versions = await artifactVersionsOf(context.db, viewer, artifact.id);
+  const version = (number: number) => {
+    const found = versions.find((v) => v.number === number);
+    if (!found) throw new ApiError(404, "not_found", `${artifact.title} has no Version ${number}.`);
+    return found;
+  };
+  const [from, to] = [version(numbers.from), version(numbers.to)];
+  const filesOf = async (number: number) =>
+    new Map((await keptFiles(context.db, artifact.id, number)).map((file) => [file.path, file]));
+  const [before, after] = [await filesOf(from.number), await filesOf(to.number)];
+  const files: ComparedFile[] = [];
+  const paths = [...new Set([...before.keys(), ...after.keys()])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const path of paths) {
+    const [a, b] = [before.get(path), after.get(path)];
+    if (a && b && a.blobId === b.blobId) continue;
+    const bytesA = a && (await bytesOf(context, a));
+    const bytesB = b && (await bytesOf(context, b));
+    if (bytesA && bytesB && bytesA.equals(bytesB)) continue;
+    const [textA, textB] = [bytesA && textOf(bytesA), bytesB && textOf(bytesB)];
+    const text = (!bytesA || textA !== undefined) && (!bytesB || textB !== undefined);
+    files.push({
+      path,
+      change: !a ? "added" : !b ? "removed" : "changed",
+      text,
+      lines: text ? compareTexts(textA ?? "", textB ?? "") : [],
+    });
+  }
+  return { from, to, files };
 }
