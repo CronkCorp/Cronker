@@ -49,17 +49,23 @@ export async function tokenFor(context: Context, installationId: number): Promis
   );
 }
 
-/** Every installation of the App, with the Repositories it covers. */
+/** Orders Repositories by `owner/name`, ignoring case, so every client lists them alike. */
+function byFullName(a: { fullName: string }, b: { fullName: string }): number {
+  const [x, y] = [a.fullName.toLowerCase(), b.fullName.toLowerCase()];
+  if (x !== y) return x < y ? -1 : 1;
+  return a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0;
+}
+
+/** Every installation of the App, with the Repositories it covers, sorted by `owner/name` ignoring case. */
 export async function listInstallations(context: Context): Promise<Installation[]> {
   const { config } = context;
   const installations = await appInstallations(config, await appToken(context));
   return Promise.all(
     installations.map(async (installation) => ({
       account: installation.account.login,
-      repositories: (await installationRepositories(config, await tokenFor(context, installation.id))).map((r) => ({
-        id: r.id,
-        fullName: r.full_name,
-      })),
+      repositories: (await installationRepositories(config, await tokenFor(context, installation.id)))
+        .map((r) => ({ id: r.id, fullName: r.full_name }))
+        .sort(byFullName),
     })),
   );
 }
