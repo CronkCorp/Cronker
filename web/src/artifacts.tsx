@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Artifact, type ArtifactSummary, type Place, type ProjectSummary, type Workspace } from "./api.js";
+import { api, type Artifact, type ArtifactComparison, type ArtifactSummary, type ComparedFile, type Place, type ProjectSummary, type VersionWithBody, type Workspace } from "./api.js";
 import { sized } from "./attachments.js";
-import { VersionMeta } from "./documents.js";
+import { VersionMeta, Versions } from "./documents.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
@@ -18,6 +18,8 @@ import {
   RelativeTime,
   workspaceCrumb,
 } from "./ui/controls.js";
+import { Diff } from "./ui/diff.js";
+import { Chip, type Tone } from "./ui/labels.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
@@ -200,6 +202,15 @@ export function ArtifactScreen({
               ))}
             </ul>
           </Panel>
+          {/* A new Version remounts the list, so it reads afresh. */}
+          <Versions<VersionWithBody, ArtifactComparison>
+            key={artifact.version.number}
+            source={{
+              list: () => api.artifactVersions(artifact.id),
+              compare: (from, to) => api.compareArtifactVersions(artifact.id, from, to),
+              showComparison: (comparison) => <ComparedFiles comparison={comparison} />,
+            }}
+          />
         </aside>
       </div>
       <ConfirmDialog
@@ -216,4 +227,37 @@ export function ArtifactScreen({
       </ConfirmDialog>
     </div>
   );
+}
+
+const changeShown: Record<ComparedFile["change"], { label: string; tone: Tone }> = {
+  added: { label: "Added", tone: "ok" },
+  removed: { label: "Removed", tone: "warn" },
+  changed: { label: "Changed", tone: "neutral" },
+};
+
+/** Each file that differs between two Versions, by path: whether it was added, removed or changed, and its Diff. */
+function ComparedFiles({ comparison }: { comparison: ArtifactComparison }) {
+  const { from, to, files } = comparison;
+  if (files.length === 0) return <p className="muted">No file changed between Version {from.number} and Version {to.number}.</p>;
+  return (
+    <div className="compared-files">
+      {files.map((file) => (
+        <section key={file.path} aria-label={file.path} className="compared-file">
+          <h3 className="compared-file-head">
+            <span className="mono">{file.path}</span>
+            <Chip tone={changeShown[file.change].tone}>{changeShown[file.change].label}</Chip>
+          </h3>
+          <FileCompared file={file} from={from.number} to={to.number} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/** A file's Diff, or what to say instead where a Diff would show nothing. */
+function FileCompared({ file, from, to }: { file: ComparedFile; from: number; to: number }) {
+  if (!file.text) return <p className="muted small">Not text, so not compared line by line.</p>;
+  if (file.lines.length === 0) return <p className="muted small">Empty file.</p>;
+  if (file.lines.every((line) => line.change === "same")) return <p className="muted small">Only its line endings changed.</p>;
+  return <Diff from={`Version ${from}`} to={`Version ${to}`} lines={file.lines} label={`${file.path} compared`} />;
 }

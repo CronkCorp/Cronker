@@ -1,0 +1,17 @@
+GET /api/artifacts/:id/versions
+404
+{
+  "error": {
+    "code": "not_found",
+    "message": "Nothing is here."
+  }
+}
+
+GET /api/artifacts/:id/versions/compare?from=1&to=2
+404
+{
+  "error": {
+    "code": "not_found",
+    "message": "Nothing is here."
+  }
+}

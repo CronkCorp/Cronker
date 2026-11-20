@@ -630,6 +630,28 @@ export interface Artifact {
   files: ArtifactFile[];
 }
 
+/** One saved state of an Artifact: who saved it and when. */
+export interface ArtifactVersion {
+  number: number;
+  actor: Actor;
+  savedAt: string;
+}
+
+/** A file that differs between two of an Artifact's Versions, its text compared line by line when it is text. */
+export interface ComparedFile {
+  path: string;
+  change: "added" | "removed" | "changed";
+  text: boolean;
+  lines: ComparedLine[];
+}
+
+/** Two of an Artifact's Versions, with the files that differ between them. */
+export interface ArtifactComparison {
+  from: ArtifactVersion;
+  to: ArtifactVersion;
+  files: ComparedFile[];
+}
+
 /** An Artifact as its Project's or the Workspace's list shows it: without its files. */
 export type ArtifactSummary = Omit<Artifact, "files">;
 
@@ -972,6 +994,9 @@ export const api = {
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
   artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
+  artifactVersions: (id: string) => call<ArtifactVersion[]>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions`),
+  compareArtifactVersions: (id: string, from: number, to: number) =>
+    call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),
   deleteArtifact: (id: string) => call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}`),
   linkedArtifacts: (ticketId: string) =>
     call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),

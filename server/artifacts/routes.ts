@@ -4,7 +4,7 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "../knowledge/places.js";
-import { Artifact, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
+import { Artifact, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
 import { linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
 
@@ -110,6 +110,38 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
         if (!artifact) throw artifactNotFound();
         return artifact;
       },
+    );
+
+    app.get(
+      "/api/artifacts/:artifactId/versions",
+      {
+        schema: {
+          tags,
+          summary: "An Artifact's Versions, oldest first",
+          description: "Each Version's number, with the Actor who saved it and when, without its files.",
+          params: ArtifactParams,
+          response: { 200: Type.Array(ArtifactVersion), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => artifactVersionsOf(db, await requireCaller(context, request), request.params.artifactId),
+    );
+
+    app.get(
+      "/api/artifacts/:artifactId/versions/compare",
+      {
+        schema: {
+          tags,
+          summary: "Compare two of an Artifact's Versions",
+          description:
+            "Both Versions, and each file that differs between them, by path: added, removed or changed, with its " +
+            "text compared line by line from `from` to `to`. Files that didn't change are left out.",
+          params: ArtifactParams,
+          querystring: Type.Object({ from: Type.Integer({ minimum: 1 }), to: Type.Integer({ minimum: 1 }) }),
+          response: { 200: ArtifactComparison, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) =>
+        compareArtifactVersions(context, await requireCaller(context, request), request.params.artifactId, request.query),
     );
 
     app.get(

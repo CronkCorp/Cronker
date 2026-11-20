@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
+import { hours } from "../harness/clock.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
 
@@ -328,6 +329,141 @@ describe("Artifacts", () => {
     const missing = await call("GET", `/api/artifacts/${artifact.id}/file?path=nothing.js`, asAgent);
     expect(missing.status).toBe(404);
     expect(missing.json.error.message).toBe("Board prototype has no file nothing.js.");
+  });
+
+  test("an Artifact's Versions are listed oldest first, each with the Actor who saved it and when", async () => {
+    const { ada, user, agent, asAgent, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page)],
+    });
+    cronk.clock.advance(hours(2));
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, asAgent, { baseVersion: 1, files: [file("app.js", "run();")] });
+
+    expect(await ok("GET", `/api/artifacts/${artifact.id}/versions`, asAgent)).toEqual([
+      { number: 1, actor: { kind: "user", id: user.id, name: user.email }, savedAt: "2026-01-01T09:00:00.000Z" },
+      { number: 2, actor: { kind: "agent", id: agent.id, name: "claude-max" }, savedAt: "2026-01-01T11:00:00.000Z" },
+    ]);
+    expect((await call("GET", "/api/artifacts/00000000-0000-4000-8000-000000000000/versions", ada)).status).toBe(404);
+  });
+
+  test("comparing two Versions gives each changed file's text compared line by line, leaving out files that didn't change", async () => {
+    const { ada, asAgent, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page), file("app.js", "start();\nrender();\nstop();")],
+    });
+    // Saved again with the same bytes, a file still hasn't changed.
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, asAgent, {
+      baseVersion: 1,
+      files: [file("index.html", page), file("app.js", "start();\nrender(board);\nstop();")],
+    });
+
+    const comparison = await ok("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=2`, asAgent);
+    expect(comparison.from.number).toBe(1);
+    expect(comparison.to).toMatchObject({ number: 2, actor: { kind: "agent", name: "claude-max" } });
+    expect(comparison.files).toEqual([
+      {
+        path: "app.js",
+        change: "changed",
+        text: true,
+        lines: [
+          { change: "same", text: "start();" },
+          { change: "removed", text: "render();" },
+          { change: "added", text: "render(board);" },
+          { change: "same", text: "stop();" },
+        ],
+      },
+    ]);
+  });
+
+  test("comparing two Versions shows files added and removed as such, and a file that isn't text without its lines", async () => {
+    const { ada, workspace } = await workspaceWithProject();
+    const png = (byte: number) => ({ path: "logo.png", contentBase64: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, byte]).toString("base64") });
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      // A file ending in a newline, as most do, has no empty last line.
+      files: [file("index.html", page), file("app.js", "start();\nstop();\n"), png(1)],
+    });
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, {
+      baseVersion: 1,
+      files: [file("data/cards.json", '[\n  "Write the spec"\n]'), png(2)],
+      remove: ["app.js"],
+    });
+
+    const comparison = await ok("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=2`, ada);
+    expect(comparison.files).toEqual([
+      {
+        path: "app.js",
+        change: "removed",
+        text: true,
+        lines: [
+          { change: "removed", text: "start();" },
+          { change: "removed", text: "stop();" },
+        ],
+      },
+      {
+        path: "data/cards.json",
+        change: "added",
+        text: true,
+        lines: [
+          { change: "added", text: "[" },
+          { change: "added", text: '  "Write the spec"' },
+          { change: "added", text: "]" },
+        ],
+      },
+      { path: "logo.png", change: "changed", text: false, lines: [] },
+    ]);
+    // Compared the other way, the same files read the other way round.
+    const back = await ok("GET", `/api/artifacts/${artifact.id}/versions/compare?from=2&to=1`, ada);
+    expect(back.files.map((f: { path: string; change: string }) => [f.path, f.change])).toEqual([
+      ["app.js", "added"],
+      ["data/cards.json", "removed"],
+      ["logo.png", "changed"],
+    ]);
+    const missing = await call("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=3`, ada);
+    expect(missing.status).toBe(404);
+    expect(missing.json.error.message).toBe("Board prototype has no Version 3.");
+  });
+
+  test("comparing two Versions shows a file whose line endings alone changed with every line the same, and an empty file added with no lines", async () => {
+    const { ada, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page), file("app.js", "start();\r\nstop();\r\n")],
+    });
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, {
+      baseVersion: 1,
+      files: [file("app.js", "start();\nstop();"), file("empty.txt", "")],
+    });
+
+    expect((await ok("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=2`, ada)).files).toEqual([
+      {
+        path: "app.js",
+        change: "changed",
+        text: true,
+        lines: [
+          { change: "same", text: "start();" },
+          { change: "same", text: "stop();" },
+        ],
+      },
+      { path: "empty.txt", change: "added", text: true, lines: [] },
+    ]);
+  });
+
+  test("an Artifact of another Workspace has no Versions to list or compare for the caller", async () => {
+    const { ada, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page)],
+    });
+    const other = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
+    const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
+    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const asStranger = { headers: { authorization: `Bearer ${secret}` } };
+
+    expect((await call("GET", `/api/artifacts/${artifact.id}/versions`, asStranger)).status).toBe(404);
+    expect((await call("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=1`, asStranger)).status).toBe(404);
   });
 
   test("an Agent's delete is refused and changes nothing; a User's removes the Artifact, its Versions and their files", async () => {
