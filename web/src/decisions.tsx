@@ -400,7 +400,8 @@ export function DecisionScreen({
               )}
             </Panel>
             <Versions
-              key={`${versionsShown} ${decision.version.number}`}
+              key={versionsShown}
+              current={decision.version.number}
               source={{
                 list: () => api.decisionVersions(decision.id),
                 read: (number) => api.decisionVersion(decision.id, number),

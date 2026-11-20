@@ -319,7 +319,7 @@ export function TermScreen({
         <div className="page-split">
           <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
           <aside className="side" aria-label="Term details">
-            <Versions key={term.version.number} source={termVersions(term.id)} />
+            <Versions current={term.version.number} source={termVersions(term.id)} />
           </aside>
         </div>
       )}

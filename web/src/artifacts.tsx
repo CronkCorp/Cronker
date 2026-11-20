@@ -202,9 +202,8 @@ export function ArtifactScreen({
               ))}
             </ul>
           </Panel>
-          {/* A new Version remounts the list, so it reads afresh. */}
           <Versions<VersionWithBody, ArtifactComparison>
-            key={artifact.version.number}
+            current={artifact.version.number}
             source={{
               list: () => api.artifactVersions(artifact.id),
               compare: (from, to) => api.compareArtifactVersions(artifact.id, from, to),
