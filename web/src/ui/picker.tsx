@@ -29,6 +29,8 @@ interface PickerProps {
   onOpenChange?: (open: boolean) => void;
   /** Shown in place of the list of options, such as while they load or when they can't be had. */
   notice?: ReactNode;
+  /** Shown under the list, such as an action that loads its options again. */
+  footer?: ReactNode;
 }
 
 /**
@@ -45,6 +47,7 @@ export function Picker({
   multiple = false,
   onOpenChange,
   notice,
+  footer,
 }: PickerProps) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -164,6 +167,7 @@ export function Picker({
             {items}
           </ul>
         )}
+        {footer !== undefined && <div className="picker-footer">{footer}</div>}
       </div>
     </Popover>
   );
