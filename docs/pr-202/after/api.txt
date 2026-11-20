@@ -1,0 +1,8 @@
+GET /api/projects/:id/artifacts → 200 
+POST /api/tickets/:id/artifacts → 201 {"id":"cf9605d6-b154-4caf-b3ac-475d27e66ec7","projectId":"feb71d61-6e80-4fcb-8224-6d49bc56e54d","title":"Sprint board prototype"}
+GET /api/tickets/:id/artifacts → 200 [{"id":"cf9605d6-b154-4caf-b3ac-475d27e66ec7","projectId":"feb71d61-6e80-4fcb-8224-6d49bc56e54d","title":"Sprint board prototype"}]
+DELETE /api/artifacts/:id (Agent) → 403 {"error":{"code":"agent_not_allowed","message":"claude-max is an Agent, and only a User can delete an Artifact.","rule":"Only a User deletes an Artifact, so an agent can't remove work.","advice":"Leave the Artifact as it is, or save a new Version; ask ada@example.com, claude-max's Owner, if it shoul
+GET /api/workspaces/:id/search?q=drag → 200 kinds: ["ticket: Try drag and drop on the board","artifact: Sprint board prototype"]
+GET /api/workspaces/:id/search?q=drag&kinds=artifact → 200 [{"kind":"artifact","id":"cf9605d6-b154-4caf-b3ac-475d27e66ec7","title":"Sprint board prototype","projectId":"feb71d61-6e80-4fcb-8224-6d49bc56e54d","ticketKey":null,"snippet":[{"text":"A board with three columns, to try ","match":false},{"text":"drag","match":true},{"text":" and drop on.","match":fa
+DELETE /api/artifacts/:id (User) → 204 
+GET /api/artifacts/:id after the User's delete → 404 {"error":{"code":"not_found","message":"No such Artifact."}}

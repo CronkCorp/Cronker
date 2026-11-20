@@ -104,9 +104,22 @@ For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled
 
 Check it: create a Ticket, open it, choose **Delegate to an Agent**, and set its Status to Triage. Its Timeline shows `claude-max ran the Triage Step on haiku: running`, with a **Session** link to the claude.ai session. That session reads the Ticket through the connector and calls `finish`; the Ticket then moves to Ready on the board, or, if the Run asked a Question, back to Backlog with the Question in your **Inbox**.
 
-When a Run can't start, the Ticket waits in your Inbox as *couldn't start*, with the reason, such as a model with no trigger. A rate limit from claude.ai pauses the Runner until claude.ai says to try again. Cronk can't tell when a claude.ai session ends, so a Run that stops calling Cronk becomes lost after the Workspace's lost-Run threshold (30 minutes by default, set by an Admin on the Workspace's members page) and waits in your Inbox with **Retry**.
+When a Run can't start, the Ticket waits in your Inbox as *couldn't start*, with the reason, such as a model with no trigger. A rate limit from claude.ai pauses the Runner until claude.ai says to try again. Cronk can't tell when a claude.ai session ends, so a Run that stops calling Cronk (or, with the Transcript hook from step 8, whose session stops working) becomes lost after the Workspace's lost-Run threshold (30 minutes by default, set by an Admin on the Workspace's members page) and waits in your Inbox with **Retry**.
 
-## 8. Connect Claude Code on your laptop
+## 8. Install the Transcript hook
+
+Each Run's Transcript, the verbatim record of what its agent said and did, reaches Cronk through a Claude Code hook that Cronk serves itself, so its version always matches your Cronk. After every turn (`Stop`) it uploads the session's transcript, which Cronk matches to the Run by its session. Every upload also counts as a call naming the Run, and during a long turn the hook tells Cronk the Run is still working after a tool call (`PostToolUse`), at most once every 5 minutes, so a Run whose session is busy never becomes lost. A single tool call that runs longer than the lost-Run threshold still sends nothing until it ends, since `PostToolUse` comes after the tool. The hook never fails the agent's turn: if Cronk can't be reached or refuses the upload, it says why on stderr and lets the session carry on.
+
+1. On **Runners**, the subscription Runner's card shows a **Transcript hook** section with a `settings.json` snippet, Cronk's address already in it. Commit it as `.claude/settings.json` in each Repository the scheduled tasks work on, merging it into any hooks already there. Its commands fetch the script from `https://cronk.example.com/hooks/transcript.mjs` (afresh after every turn, so it follows Cronk's upgrades) and run it with Node.js; they need `curl` and `node`, both in Claude Code on the web's sessions.
+2. Under the snippet, choose **Make a Transcript hook token for claude-max**. Copy the token now: Cronk shows it once. It is an ordinary token of the Agent, named *Transcript hook*, so revoking it on the Agent's page stops only the hook's uploads.
+3. In Claude Code on the web, open the cloud environment of the scheduled tasks and add the token to its environment variables as `CRONK_TOKEN=cronk_agent_…`.
+4. Let that environment reach Cronk: give it **Full** network access, or keep it **Limited** and add Cronk's host (`cronk.example.com`) to its allowlist. Without that, uploads fail and the Transcript stays empty.
+
+Hooks only run in cloud sessions with **one Repository**: a scheduled task with several Repositories gets no Transcripts, and its Runs become lost if they work longer than the lost-Run threshold without calling Cronk.
+
+Check it: delegate a Ticket and let its Run take a turn. In its Timeline the Run gains a **Transcript** link beside **Session**, and the Transcript fills in after each turn. If none appears, the session's hook output (`/hooks` in the session, or its log) shows the hook's reason, such as `Cronk answered 401` for a revoked token.
+
+## 9. Connect Claude Code on your laptop
 
 Claude Code on your own machine connects to Cronk with an Agent's token.
 
@@ -120,6 +133,8 @@ Claude Code on your own machine connects to Cronk with an Agent's token.
 3. Check it: `claude mcp list` shows `cronk` as connected, and in Claude Code, asking it to list the Tickets of your Project answers from Cronk.
 
 Revoking the token on the Agent's page cuts it off from the next request.
+
+To keep Transcripts of what Claude Code on your laptop does, commit the step 8 snippet in the Repository (or put it in your own `~/.claude/settings.json`) and export `CRONK_TOKEN` with one of the Agent's full tokens in the shell Claude Code starts from. Its sessions match no Run, so each is kept as the Agent's own Transcript.
 
 ## Upgrading
 

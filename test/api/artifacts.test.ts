@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
 import { hours } from "../harness/clock.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 afterEach(async () => {
@@ -463,5 +464,49 @@ describe("Artifacts", () => {
 
     expect((await call("GET", `/api/artifacts/${artifact.id}/versions`, asStranger)).status).toBe(404);
     expect((await call("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=1`, asStranger)).status).toBe(404);
+  });
+
+  test("an Agent's delete is refused and changes nothing; a User's removes the Artifact, its Versions and their files", async () => {
+    const { ada, asAgent, project, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page), file("app.js", "1")],
+    });
+    const first = artifact.url;
+    const saved = await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 1, files: [file("app.js", "2")] });
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Try drag and drop" });
+    await ok("POST", `/api/tickets/${ticket.id}/artifacts`, ada, { artifactId: artifact.id });
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+
+    const byAgent = await call("DELETE", `/api/artifacts/${artifact.id}`, asAgent);
+
+    expect(byAgent.status).toBe(403);
+    expect(byAgent.json.error).toEqual(
+      expect.objectContaining({ code: "agent_not_allowed", rule: expect.any(String), advice: expect.any(String) }),
+    );
+    expect((await ok("GET", `/api/artifacts/${artifact.id}`, ada)).version.number).toBe(2);
+    expect((await open(saved.url)).status).toBe(200);
+    expect(await cronk.attachmentFiles()).toHaveLength(3);
+    await stream.expectQuiet();
+
+    const byUser = await call("DELETE", `/api/artifacts/${artifact.id}`, ada);
+
+    expect(byUser.status).toBe(204);
+    expect((await call("GET", `/api/artifacts/${artifact.id}`, ada)).status).toBe(404);
+    expect(await ok("GET", `/api/projects/${project.id}/artifacts`, ada)).toEqual([]);
+    expect((await open(first)).status).toBe(404);
+    expect((await open(saved.url)).status).toBe(404);
+    expect(await cronk.attachmentFiles()).toEqual([]);
+    // It drops out of its links, and the Ticket linking it shows the change.
+    expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([]);
+    const events = [await stream.next(), await stream.next()];
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { type: "artifact.changed", data: { projectId: project.id, artifactId: artifact.id } },
+        { type: "ticket.changed", data: { projectId: project.id, ticketId: ticket.id } },
+      ]),
+    );
+    expect((await call("DELETE", `/api/artifacts/${artifact.id}`, ada)).status).toBe(404);
+    stream.close();
   });
 });

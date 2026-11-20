@@ -10,9 +10,9 @@ import {
   type Comment,
   labelRuleShown,
   type LabelRule,
+  type LinkedArtifact,
   type LinkedDocument,
   type PullRequest,
-  type DocumentSummary,
   type Member,
   type Priority,
   type Project,
@@ -24,6 +24,7 @@ import {
   type TicketRef,
   type TicketRelations,
   type TicketSummary,
+  type TicketTranscript,
   type User,
   type Workspace,
 } from "./api.js";
@@ -67,9 +68,11 @@ export function TicketScreen({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [timeline, setTimeline] = useState<Change[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [transcripts, setTranscripts] = useState<TicketTranscript[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [relations, setRelations] = useState<TicketRelations | null>(null);
-  const [linkedDocuments, setLinkedDocuments] = useState<LinkedDocument[] | null>(null);
+  const [documentLinks, setDocumentLinks] = useState<LinkedDocument[] | null>(null);
+  const [artifactLinks, setArtifactLinks] = useState<LinkedArtifact[] | null>(null);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
@@ -89,8 +92,10 @@ export function TicketScreen({
   const latestAttachments = useLatest();
   const latestTimeline = useLatest();
   const latestRuns = useLatest();
+  const latestTranscripts = useLatest();
   const latestRelations = useLatest();
   const latestLinkedDocuments = useLatest();
+  const latestLinkedArtifacts = useLatest();
   const latestPullRequests = useLatest();
   const latestProjectTickets = useLatest();
   const latestReportFiles = useLatest();
@@ -98,7 +103,8 @@ export function TicketScreen({
   const loadTimeline = useCallback(() => {
     latestTimeline(api.timeline(ticketId), setTimeline);
     latestRuns(api.runs(ticketId), setRuns);
-  }, [ticketId, latestTimeline, latestRuns]);
+    latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
+  }, [ticketId, latestTimeline, latestRuns, latestTranscripts]);
   const loadAttachments = useCallback(
     () => latestAttachments(api.attachments({ kind: "ticket", id: ticketId }), setAttachments, fail),
     [ticketId, latestAttachments],
@@ -122,8 +128,9 @@ export function TicketScreen({
   );
   const loadLinks = useCallback(() => {
     latestRelations(api.relations(ticketId), setRelations, fail);
-    latestLinkedDocuments(api.linkedDocuments(ticketId), setLinkedDocuments, fail);
-  }, [ticketId, latestRelations, latestLinkedDocuments]);
+    latestLinkedDocuments(api.linkedDocuments(ticketId), setDocumentLinks, fail);
+    latestLinkedArtifacts(api.linkedArtifacts(ticketId), setArtifactLinks, fail);
+  }, [ticketId, latestRelations, latestLinkedDocuments, latestLinkedArtifacts]);
 
   useEffect(() => {
     const first = api.ticket(ticketId);
@@ -144,15 +151,17 @@ export function TicketScreen({
     const comments = api.comments(ticketId);
     const changes = api.timeline(ticketId);
     const runs = api.runs(ticketId);
+    const transcripts = api.ticketTranscripts(ticketId);
     latestComments(comments, setComments, fail);
     latestTimeline(changes, setTimeline, fail);
     latestRuns(runs, setRuns, fail);
-    void Promise.allSettled([comments, changes, runs]).then(() => setLoaded(true));
+    latestTranscripts(transcripts, setTranscripts, fail);
+    void Promise.allSettled([comments, changes, runs, transcripts]).then(() => setLoaded(true));
     loadReports();
     loadAttachments();
     loadLinks();
     loadPullRequests();
-  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
+  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestTranscripts, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
 
   // What others change shows up as it happens; what this screen saves comes back the same way.
   useLiveEvents(workspace.id, (event) => {
@@ -164,6 +173,7 @@ export function TicketScreen({
       loadLinks();
     }
     if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
+    if (all || (thisTicket && event.type === "transcripts.changed")) latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
     if (all || (thisTicket && event.type === "comment.added")) loadComments();
     if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) loadReports();
     // A Comment's Attachments come with the Comments.
@@ -226,7 +236,7 @@ export function TicketScreen({
   };
 
   if (failure) return <FormError error={failure} />;
-  if (!ticket || !project || !relations || !linkedDocuments) return <p className="muted">Loading…</p>;
+  if (!ticket || !project || !relations || !documentLinks || !artifactLinks) return <p className="muted">Loading…</p>;
   const status = project.statuses.find((s) => s.id === ticket.statusId);
   const others = projectTickets.filter((t) => t.id !== ticket.id);
   return (
@@ -293,6 +303,7 @@ export function TicketScreen({
             user={user}
             changes={timeline}
             runs={runs}
+            transcripts={transcripts}
             comments={comments}
             reports={reports}
             onAdded={addComment}
@@ -328,10 +339,21 @@ export function TicketScreen({
               loadTimeline();
             }}
           />
-          <LinkedDocuments
+          <Linked
+            kind={linkedDocuments}
             ticket={ticket}
             workspaceId={workspace.id}
-            linked={linkedDocuments}
+            linked={documentLinks}
+            onChanged={() => {
+              loadLinks();
+              loadTimeline();
+            }}
+          />
+          <Linked
+            kind={linkedArtifacts}
+            ticket={ticket}
+            workspaceId={workspace.id}
+            linked={artifactLinks}
             onChanged={() => {
               loadLinks();
               loadTimeline();
@@ -601,9 +623,11 @@ function Verification({
   const merge = completion?.merge ?? null;
   const completing = runs.filter((r) => r.state === "finished").at(-1);
   const by = merge
-    ? merge.mergedBy
-      ? `@${merge.mergedBy} merged ${pullRequestName(merge.pullRequest)}`
-      : `${pullRequestName(merge.pullRequest)} was merged`
+    ? completing?.outcome === "merged"
+      ? `${completing.agent.name}'s Run of the ${completing.step.name} Step merged ${pullRequestName(merge.pullRequest)}`
+      : merge.mergedBy
+        ? `@${merge.mergedBy} merged ${pullRequestName(merge.pullRequest)}`
+        : `${pullRequestName(merge.pullRequest)} was merged`
     : completing
       ? `${completing.agent.name}'s Run of the ${completing.step.name} Step`
       : "A Run";
@@ -882,47 +906,90 @@ function Relations({
   );
 }
 
+/** What the Ticket links of one kind, Documents or Artifacts: how they are named, read, linked and unlinked. */
+interface Linkable {
+  /** The kind's name, such as "Document". */
+  noun: string;
+  /** What linking one is called, such as "Link a Document". */
+  linkLabel: string;
+  /** Where one is shown. */
+  page: (id: string) => string;
+  /** Those of the Ticket's Project and of the Workspace that could be linked. */
+  offered: (projectId: string, workspaceId: string) => Promise<{ project: { id: string; title: string }[]; workspace: { id: string; title: string }[] }>;
+  link: (ticketId: string, id: string) => Promise<unknown>;
+  unlink: (ticketId: string, id: string) => Promise<unknown>;
+}
+
+const linkedDocuments: Linkable = {
+  noun: "Document",
+  linkLabel: "Link a Document",
+  page: (id) => `/documents/${id}`,
+  offered: async (projectId, workspaceId) => {
+    const [project, workspace] = await Promise.all([
+      api.documents({ kind: "project", id: projectId }),
+      api.documents({ kind: "workspace", id: workspaceId }),
+    ]);
+    return { project, workspace };
+  },
+  link: api.linkDocument,
+  unlink: api.unlinkDocument,
+};
+
+const linkedArtifacts: Linkable = {
+  noun: "Artifact",
+  linkLabel: "Link an Artifact",
+  page: (id) => `/artifacts/${id}`,
+  offered: async (projectId, workspaceId) => {
+    const [project, workspace] = await Promise.all([
+      api.artifacts({ kind: "project", id: projectId }),
+      api.artifacts({ kind: "workspace", id: workspaceId }),
+    ]);
+    return { project, workspace };
+  },
+  link: api.linkArtifact,
+  unlink: api.unlinkArtifact,
+};
+
 /**
- * The Documents linked to the Ticket, each a link to it, with a form to link another of the Ticket's Project or of
- * the Workspace.
+ * The Documents or Artifacts linked to the Ticket, each a link to it, with a picker to link another of the Ticket's
+ * Project or of the Workspace.
  */
-function LinkedDocuments({
+function Linked({
+  kind,
   ticket,
   workspaceId,
   linked,
   onChanged,
 }: {
+  kind: Linkable;
   ticket: Ticket;
   workspaceId: string;
-  linked: LinkedDocument[];
+  linked: { id: string; projectId: string | null; title: string }[];
   onChanged: () => void;
 }) {
-  const [trees, setTrees] = useState<{ project: DocumentSummary[]; workspace: DocumentSummary[] } | null>(null);
-  const [treesError, setTreesError] = useState<string | null>(null);
-  // Page trees aren't live, so they are read again on opening the list and after each link.
-  const loadTrees = useCallback(() => {
-    Promise.all([
-      api.documents({ kind: "project", id: ticket.projectId }),
-      api.documents({ kind: "workspace", id: workspaceId }),
-    ]).then(
-      ([project, workspace]) => {
-        setTreesError(null);
-        setTrees({ project, workspace });
+  const [choices, setChoices] = useState<Awaited<ReturnType<Linkable["offered"]>> | null>(null);
+  const [choicesError, setChoicesError] = useState<string | null>(null);
+  // What may be linked isn't live, so it is read again on opening the list and after each link.
+  const loadChoices = useCallback(() => {
+    kind.offered(ticket.projectId, workspaceId).then(
+      (found) => {
+        setChoicesError(null);
+        setChoices(found);
       },
-      (e: Error) => setTreesError(e.message),
+      (e: Error) => setChoicesError(e.message),
     );
-  }, [ticket.projectId, workspaceId]);
-  useEffect(loadTrees, [loadTrees]);
+  }, [kind, ticket.projectId, workspaceId]);
+  useEffect(loadChoices, [loadChoices]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /** Links or unlinks one Document at a time, showing why it was refused. */
+  /** Links or unlinks one at a time, showing why it was refused. */
   const change = async (save: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       await save();
-      loadTrees();
+      loadChoices();
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -931,29 +998,30 @@ function LinkedDocuments({
     }
   };
   const isLinked = new Set(linked.map((d) => d.id));
-  const unlinked = (documents: DocumentSummary[]) => documents.filter((d) => !isLinked.has(d.id));
-  const offered = trees && { project: unlinked(trees.project), workspace: unlinked(trees.workspace) };
+  const unlinked = (all: { id: string; title: string }[]) => all.filter((d) => !isLinked.has(d.id));
+  const offered = choices && { project: unlinked(choices.project), workspace: unlinked(choices.workspace) };
+  const title = `Linked ${kind.noun}s`;
   return (
-    <section aria-label="Linked Documents" className="panel side-section">
-      <h2 className="side-title">Linked Documents</h2>
+    <section aria-label={title} className="panel side-section">
+      <h2 className="side-title">{title}</h2>
       {linked.length > 0 && (
-        <ul aria-label="Linked Documents" className="side-list">
-          {linked.map((document) => (
-            <li key={document.id}>
-              <Link to={`/documents/${document.id}`}>{document.title}</Link>
-              {document.projectId === null && <span className="muted small"> Workspace</span>}{" "}
-              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => api.unlinkDocument(ticket.id, document.id))}>
+        <ul aria-label={title} className="side-list">
+          {linked.map((item) => (
+            <li key={item.id}>
+              <Link to={kind.page(item.id)}>{item.title}</Link>
+              {item.projectId === null && <span className="muted small"> Workspace</span>}{" "}
+              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => kind.unlink(ticket.id, item.id))}>
                 Unlink
               </Button>
             </li>
           ))}
         </ul>
       )}
-      <FormError error={treesError} />
+      <FormError error={choicesError} />
       <div>
         <Picker
-          label="Link a Document"
-          onOpenChange={(open) => open && loadTrees()}
+          label={kind.linkLabel}
+          onOpenChange={(open) => open && loadChoices()}
           options={
             offered
               ? [
@@ -962,10 +1030,10 @@ function LinkedDocuments({
                 ]
               : []
           }
-          onPick={(id) => void change(() => api.linkDocument(ticket.id, id))}
+          onPick={(id) => void change(() => kind.link(ticket.id, id))}
           trigger={
             <Button size="small" aria-haspopup="listbox" disabled={busy}>
-              Link a Document…
+              {kind.linkLabel}…
             </Button>
           }
         />
@@ -1016,7 +1084,10 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | RelationKind>,
+  Exclude<
+    Change["field"],
+    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | "transcriptDeleted" | RelationKind
+  >,
   string
 > = {
   delegate: "Delegate",
@@ -1071,11 +1142,24 @@ interface SentBack {
   failure: { kind: "check"; name: string; url: string | null } | { kind: "review"; reviewer: string | null; url: string | null };
 }
 
+/**
+ * What a `transcriptDeleted` Change records: the Run whose Transcript a User deleted and its Step's name (both null
+ * for a session outside a Run that named the Ticket), its session and its Agent.
+ */
+interface TranscriptDeleted {
+  runId: string | null;
+  step: string | null;
+  sessionId: string;
+  agent: { id: string; name: string };
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
     const { pullRequest, mergedBy } = change.to as Merged;
     const name = `${pullRequestName(pullRequest)} ${pullRequest.title}`;
+    // An Agent's merge through Cronk is the Agent's own Change, in its Run.
+    if (change.actor.kind === "agent") return `merged ${name}, completing it`;
     return mergedBy ? `completed it: @${mergedBy} merged ${name}` : `completed it: ${name} was merged`;
   }
   if (change.field === "sentBack") {
@@ -1086,6 +1170,10 @@ function described(change: Change): string {
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
+  if (change.field === "transcriptDeleted") {
+    const { step, agent } = change.from as TranscriptDeleted;
+    return step ? `deleted the Transcript of the ${step} Run` : `deleted a Transcript of ${agent.name}'s session outside a Run`;
+  }
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
     // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
@@ -1093,10 +1181,11 @@ function described(change: Change): string {
     return `skipped the ${status.name} Step (${why}), moving on by ${outcome}`;
   }
   if (change.field === "description") return "changed the Description";
-  if (change.field === "linkedDocument") {
+  if (change.field === "linkedDocument" || change.field === "linkedArtifact") {
+    const noun = change.field === "linkedDocument" ? "Document" : "Artifact";
     return change.to
-      ? `linked the Document ${(change.to as { title: string }).title}`
-      : `unlinked the Document ${(change.from as { title: string }).title}`;
+      ? `linked the ${noun} ${(change.to as { title: string }).title}`
+      : `unlinked the ${noun} ${(change.from as { title: string }).title}`;
   }
   if (change.field in relationChanges) {
     const { added, removed } = relationChanges[change.field as keyof typeof relationChanges];
@@ -1110,11 +1199,15 @@ function described(change: Change): string {
 
 /**
  * Cronk's Changes recorded at the same moment as one that says why: a skipped Step's move on out of its Status,
- * a send-back's move, and a merge's move to a Done Status with the Verification it completed the Ticket as.
+ * a send-back's move, and a merge's move to a Done Status with the Verification it completed the Ticket as. An
+ * Agent's merge through Cronk is recorded as that Agent's, in its Run, with its move and Verification.
  */
 function recordedWith(change: Change, changes: Change[], project: Project): Change[] {
-  if (change.actor.kind !== "cronk") return [];
-  const sameMoment = changes.filter((c) => c.actor.kind === "cronk" && c.at === change.at);
+  if (!saysWhy(change)) return [];
+  const { actor } = change;
+  const sameActor = (c: Change) =>
+    actor.kind === "cronk" ? c.actor.kind === "cronk" : c.actor.kind === actor.kind && c.actor.id === actor.id && c.runId === change.runId;
+  const sameMoment = changes.filter((c) => sameActor(c) && c.at === change.at);
   if (change.field === "stepSkipped") {
     const skipped = (change.to as StepSkipped).status.id;
     const moved = sameMoment.find((c) => c.field === "status" && (c.from as { id: string }).id === skipped);
@@ -1133,6 +1226,9 @@ function recordedWith(change: Change, changes: Change[], project: Project): Chan
   ].filter((c) => c !== undefined);
 }
 
+/** Whether the Change says why, folding in the Changes recorded with it: any of Cronk's, and an Agent's merge. */
+const saysWhy = (change: Change) => change.actor.kind === "cronk" || change.field === "merged";
+
 /** Each Change that says why with the Changes recorded with it, which show in its line instead of their own. */
 function explanations(changes: Change[], project: Project): Map<string, Change[]> {
   return new Map(
@@ -1143,10 +1239,10 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
 }
 
 /**
- * A Change Cronk made, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
+ * A Change Cronk made, or an Agent's merge, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
  * where it moved on to, and a send-back the failing check or requested changes that sent the Ticket back, and where.
  */
-function describedByCronk(change: Change, related: Change[]): ReactNode {
+function describedWithReason(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
     const verification = related.find((c) => c.field === "verification")?.to;
@@ -1202,18 +1298,22 @@ type Entry =
   | { at: string; key: string; kind: "change"; change: Change }
   | { at: string; key: string; kind: "run"; run: Run }
   | { at: string; key: string; kind: "comment"; comment: Comment }
-  | { at: string; key: string; kind: "report"; report: Report };
+  | { at: string; key: string; kind: "report"; report: Report }
+  | { at: string; key: string; kind: "transcript"; transcript: TicketTranscript };
 
 /**
- * Entries recorded at the same moment read cause before effect: a move, then the Comment Cronk wrote about it,
- * then a Report, then the Run the move started.
+ * Entries recorded at the same moment read cause before effect: the Transcript of the call that made a change,
+ * then the move, then the Comment Cronk wrote about it, then a Report, then the Run the move started.
  */
-const tieOrder: Record<Entry["kind"], number> = { change: 0, comment: 1, report: 2, run: 3 };
+const tieOrder: Record<Entry["kind"], number> = { transcript: 0, change: 1, comment: 2, report: 3, run: 4 };
 
 /** Whether the page is scrolled to its end, where new entries may scroll it on. */
 const atEnd = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 48;
 
-/** The Ticket's one chronology: its Comments (with their replies), Reports, Runs and Changes, oldest first. */
+/**
+ * The Ticket's one chronology: its Comments (with their replies), Reports, Runs, Changes and the Transcripts of
+ * sessions outside a Run that named it, oldest first.
+ */
 function Timeline({
   loaded,
   ticket,
@@ -1221,6 +1321,7 @@ function Timeline({
   user,
   changes,
   runs,
+  transcripts,
   comments,
   reports,
   onAdded,
@@ -1233,6 +1334,8 @@ function Timeline({
   user: User;
   changes: Change[];
   runs: Run[];
+  /** The Transcripts of sessions outside a Run whose Cronk tool calls named the Ticket. */
+  transcripts: TicketTranscript[];
   comments: Comment[];
   reports: Report[];
   onAdded: (comment: Comment) => void;
@@ -1250,6 +1353,12 @@ function Timeline({
       .filter((c) => c.replyToId === null)
       .map((comment) => ({ at: comment.createdAt, key: `comment:${comment.id}`, kind: "comment" as const, comment })),
     ...reports.map((report) => ({ at: report.createdAt, key: `report:${report.id}`, kind: "report" as const, report })),
+    ...transcripts.map((transcript) => ({
+      at: transcript.namedAt,
+      key: `transcript:${transcript.id}`,
+      kind: "transcript" as const,
+      transcript,
+    })),
   ].sort((a, b) => a.at.localeCompare(b.at) || tieOrder[a.kind] - tieOrder[b.kind]);
   const runOf = new Map(runs.map((run) => [run.id, run]));
   const arrived = useArrivals([...entries.map((e) => e.key), ...comments.map((c) => `comment:${c.id}`)], loaded);
@@ -1290,13 +1399,15 @@ function Timeline({
           </span>
           <p className="entry-line">
             <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
-            {change.actor.kind === "cronk" ? describedByCronk(change, explained.get(change.id) ?? []) : described(change)}
+            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : described(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,
       );
     } else if (entry.kind === "run") {
       rows.push(<RunEntry key={entry.key} run={entry.run} project={project} arrived={isNew} />);
+    } else if (entry.kind === "transcript") {
+      rows.push(<NamingTranscript key={entry.key} transcript={entry.transcript} arrived={isNew} />);
     } else if (entry.kind === "report") {
       const { report } = entry;
       rows.push(
@@ -1450,6 +1561,28 @@ function CommentThread({
   );
 }
 
+/**
+ * A Transcript of a session outside a Run, such as Claude Code connected by hand, as one line where its Cronk tool
+ * calls first named the Ticket: its Agent, how many entries it keeps, and a link to it.
+ */
+function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscript; arrived: boolean }) {
+  const agent = { kind: "agent" as const, name: transcript.agent.name };
+  return (
+    <li className={`entry entry-run${arrived ? " arrived" : ""}`}>
+      <span className="gutter">
+        <Avatar actor={agent} />
+      </span>
+      <p className="entry-line">
+        <KindLabel kind="Transcript" /> <Actor actor={agent} avatar={false} /> named it in a session outside a Run ·{" "}
+        {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"} <RelativeTime at={transcript.namedAt} clock />{" "}
+        <Link to={`/transcripts/${transcript.id}`} className="small">
+          Transcript
+        </Link>
+      </p>
+    </li>
+  );
+}
+
 /** A Run on the timeline as one line: its state, Step, Agent and model, the Outcome it chose, and its Transcript and session. */
 function RunEntry({ run, project, arrived }: { run: Run; project: Project; arrived: boolean }) {
   const step = project.statuses.find((s) => s.id === run.step.statusId)?.step;
@@ -1487,6 +1620,7 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
             </Link>
           </>
         )}
+        {run.transcriptDeleted && <span className="small muted"> Transcript deleted</span>}
         {run.sessionUrl && (
           <>
             {" "}

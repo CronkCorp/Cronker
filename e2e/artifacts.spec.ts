@@ -93,6 +93,59 @@ test("an Artifact's page shows it in a sandboxed iframe, where its scripts run b
   expect(workspaces.map((w: { name: string }) => w.name)).toEqual([workspace.name]);
 });
 
+test("Artifacts are listed per Project and for the Workspace, linked and unlinked on a Ticket, found by search, and deleted by a User", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const post = async (path: string, body: unknown) => (await cronk.request("POST", path, { cookie, body })).json();
+  const files = [{ path: "index.html", contentBase64: base64("<!doctype html><p>Board</p>") }];
+  const project = await post(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await post(`/api/projects/${project.id}/tickets`, { title: "Try drag and drop" });
+  await post(`/api/projects/${project.id}/artifacts`, { title: "Inbox sketch", description: "The Inbox, laid out.", files });
+  cronk.clock.advance(60_000);
+  await post(`/api/projects/${project.id}/artifacts`, { title: "Board prototype", description: "Cards to drag.", files });
+  await post(`/api/workspaces/${workspace.id}/artifacts`, { title: "Colour tokens", files });
+
+  await signInInBrowser(page, cronk);
+  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+  await sidebar.getByRole("link", { name: "Artifacts" }).click();
+  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
+  const list = page.getByRole("region", { name: "Artifacts" });
+  await expect(list.getByRole("link")).toHaveText(["Colour tokens"]);
+  await page.getByRole("navigation", { name: "Scope" }).getByRole("link", { name: "CRONK" }).click();
+  // Newest change first.
+  await expect(list.getByRole("link")).toHaveText(["Board prototype", "Inbox sketch"]);
+  await expect(list.getByText("Cards to drag.")).toBeVisible();
+
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const linked = page.getByRole("region", { name: "Linked Artifacts" });
+  await linked.getByRole("button", { name: "Link an Artifact…" }).click();
+  const picker = page.getByRole("listbox", { name: "Link an Artifact" });
+  await expect(picker.getByRole("option")).toHaveText(["Board prototype", "Inbox sketch", "Colour tokens"]);
+  await picker.getByRole("option", { name: "Board prototype" }).click();
+  await expect(linked.getByRole("link", { name: "Board prototype" })).toBeVisible();
+  await expect(page.getByText("linked the Artifact Board prototype")).toBeVisible();
+  await linked.getByRole("button", { name: "Unlink" }).click();
+  await expect(linked.getByRole("link", { name: "Board prototype" })).toBeHidden();
+  await expect(page.getByText("unlinked the Artifact Board prototype")).toBeVisible();
+
+  const box = sidebar.getByRole("searchbox", { name: "Search" });
+  await box.fill("drag");
+  await box.press("Enter");
+  const artifacts = page.getByRole("region", { name: "Artifacts" });
+  await expect(artifacts.getByRole("heading", { level: 2 })).toHaveText("Artifacts 1");
+  await artifacts.getByRole("link", { name: "Board prototype" }).click();
+  await expect(page.getByRole("heading", { name: "Board prototype", level: 1 })).toBeVisible();
+
+  await page.getByRole("button", { name: "More of this Artifact" }).click();
+  await page.getByRole("menuitem", { name: "Delete Artifact" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
+  await expect(list.getByRole("link")).toHaveText(["Inbox sketch"]);
+});
+
 test("an Artifact's page lists its Versions, who saved each and when, and compares two file by file, showing files added and removed", async ({
   page,
   cronk,
