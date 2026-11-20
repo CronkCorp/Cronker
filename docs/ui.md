@@ -20,8 +20,9 @@ The web client follows this file since the styling pass at the end of milestone 
 ![App frame](ui/frame.png)
 
 - **Frame:** a 232px left sidebar and a main column. The main column's content is at most 1120px wide, centred, with 24px vertical and 16px horizontal padding.
+- **Hiding the sidebar:** a button at the top of the sidebar, "Hide sidebar", hides it, and the main column widens into the window. Its content keeps the 1120px cap, but a board, which scrolls sideways, takes the full width. While it is hidden, a "Show sidebar" button at the top left of the main column brings it back, and `Ctrl+\` (`⌘\` on macOS) toggles it either way, except while typing in a field. Whichever button was used hands focus to the other. The choice is kept in the browser (`localStorage`), like the theme, so it stays hidden across reloads and pages until the User shows it again. Below 760px neither button shows and the shortcut does nothing: the strip is already small.
 - **Sidebar, top to bottom:**
-  - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace.
+  - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace, with the Hide sidebar button beside it.
   - The search box, which opens the Workspace's search results on Enter. Below 760px it takes a line of its own under the strip's links.
   - Inbox, with the number of waiting items as a red count.
   - Documents, Terms and Decisions (the Workspace's, or the current Project's).

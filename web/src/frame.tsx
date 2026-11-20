@@ -1,11 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { api, nameOf, type ProjectSummary, type User, type WorkspaceSummary } from "./api.js";
 import { InboxLink } from "./inbox.js";
 import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
 import { SearchBox } from "./search.js";
 import { Avatar } from "./ui/actor.js";
-import { chooseTheme, storedTheme, type Theme } from "./storage.js";
+import { chooseTheme, keepSidebarHidden, storedSidebarHidden, storedTheme, type Theme } from "./storage.js";
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
 
 /** Which item of the sidebar a page belongs to. */
@@ -57,15 +57,92 @@ export function Frame({
   const set = useCallback((next: Place) => {
     setPlace((shown) => (shown.area === next.area && shown.projectId === next.projectId ? shown : next));
   }, []);
+  const sidebar = useSidebarHiding();
   return (
     <PlaceContext.Provider value={set}>
-      <div className="frame">
-        <Sidebar user={user} workspaces={workspaces} current={current} place={place} onSignOut={onSignOut} />
+      <div className={`frame${sidebar.hidden ? " frame-sidebar-hidden" : ""}`}>
+        <Sidebar
+          user={user}
+          workspaces={workspaces}
+          current={current}
+          place={place}
+          onSignOut={onSignOut}
+          hideButton={<SidebarToggle hidden={false} buttonRef={sidebar.hideButton} onToggle={sidebar.toggle} />}
+        />
         <main className="main">
+          {sidebar.hidden && <SidebarToggle hidden buttonRef={sidebar.showButton} onToggle={sidebar.toggle} />}
           <div className="main-inner">{children}</div>
         </main>
       </div>
     </PlaceContext.Provider>
+  );
+}
+
+/** Below this width the sidebar is a strip with a menu, which neither hides nor shows; as in `frame.css`. */
+const narrow = "(max-width: 760px)";
+
+const onMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+/**
+ * Whether the sidebar is hidden, kept on this browser, with `Ctrl+\` (`⌘\` on macOS) toggling it outside fields.
+ * A button that toggles it hands focus to the button that toggles it back.
+ */
+function useSidebarHiding() {
+  const [hidden, setHidden] = useState(storedSidebarHidden);
+  const hideButton = useRef<HTMLButtonElement>(null);
+  const showButton = useRef<HTMLButtonElement>(null);
+  const moveFocus = useRef(false);
+  const toggle = useCallback((fromButton: boolean) => {
+    moveFocus.current = fromButton;
+    setHidden((was) => !was);
+  }, []);
+  useEffect(() => {
+    keepSidebarHidden(hidden);
+    if (!moveFocus.current) return;
+    moveFocus.current = false;
+    (hidden ? showButton : hideButton).current?.focus();
+  }, [hidden]);
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      if (event.key !== "\\" || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return;
+      if (window.matchMedia(narrow).matches) return;
+      event.preventDefault();
+      toggle(false);
+    };
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, [toggle]);
+  return { hidden, toggle, hideButton, showButton };
+}
+
+/** The button at the top of the sidebar that hides it, or, while it is hidden, the one in the main column that shows it. */
+function SidebarToggle({
+  hidden,
+  buttonRef,
+  onToggle,
+}: {
+  hidden: boolean;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  onToggle: (fromButton: boolean) => void;
+}) {
+  const label = hidden ? "Show sidebar" : "Hide sidebar";
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      className={`sidebar-toggle ${hidden ? "sidebar-show" : "sidebar-hide"}`}
+      aria-label={label}
+      aria-keyshortcuts={onMac ? "Meta+\\" : "Control+\\"}
+      title={`${label} (${onMac ? "⌘\\" : "Ctrl+\\"})`}
+      onClick={() => onToggle(true)}
+    >
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+        <path d="M6 2.75v10.5" />
+      </svg>
+    </button>
   );
 }
 
@@ -75,12 +152,14 @@ function Sidebar({
   current,
   place,
   onSignOut,
+  hideButton,
 }: {
   user: User;
   workspaces: WorkspaceSummary[];
   current: WorkspaceSummary | undefined;
   place: Place;
   onSignOut: () => Promise<void>;
+  hideButton: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +175,10 @@ function Sidebar({
   return (
     <nav aria-label="Sidebar" className={`sidebar${menuOpen ? " sidebar-open" : ""}`}>
       <div className="sidebar-strip">
-        <WorkspaceSwitcher workspaces={workspaces} current={current} />
+        <div className="sidebar-top">
+          <WorkspaceSwitcher workspaces={workspaces} current={current} />
+          {hideButton}
+        </div>
         {current && (
           <>
             <SearchBox key={`search ${current.id}`} workspaceId={current.id} />
