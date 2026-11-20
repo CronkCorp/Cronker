@@ -1014,6 +1014,14 @@
 .register td:first-child {
   width: 80px;
 }
+/* A proposed row's Reject and Accept, at the row's end. */
+.register td.register-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.register-actions .button + .button {
+  margin-left: var(--space-2);
+}
 .superseded-by {
   font-family: var(--font-mono);
   font-size: 12px;
