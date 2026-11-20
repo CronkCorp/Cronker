@@ -43,3 +43,15 @@ export function chooseTheme(theme: Theme): void {
     safely(() => localStorage.setItem(themeKey, theme));
   }
 }
+
+const sidebarHiddenKey = "cronk_sidebar_hidden";
+
+/** Whether the sidebar was hidden on this browser; shown when it wasn't, or storage can't be read. */
+export function storedSidebarHidden(): boolean {
+  return safely(() => localStorage.getItem(sidebarHiddenKey)) === "true";
+}
+
+/** Keeps whether the sidebar is hidden on this browser, like the theme, so each device can differ. */
+export function keepSidebarHidden(hidden: boolean): void {
+  safely(() => (hidden ? localStorage.setItem(sidebarHiddenKey, "true") : localStorage.removeItem(sidebarHiddenKey)));
+}
