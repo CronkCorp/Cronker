@@ -12,8 +12,8 @@ export const ChangedBy = ActorOrCronk;
  * before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
  * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
- * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check
- * or requested changes on a Pull Request, before the `status` Change moving it.
+ * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check,
+ * requested changes or a merge conflict on a Pull Request, before the `status` Change moving it.
  */
 export const changeFields = [
   "created",
@@ -56,9 +56,11 @@ export const Change = Type.Object({
       "`noAutonomousDelegation`. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
       "login of the GitHub account that merged it, or null when GitHub named none. A `sentBack` Change goes from null to " +
-      "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it, either a check " +
-      "`{ kind: \"check\", name, url }` or a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
-      "being the login of the GitHub account that wrote it, or null when GitHub named none; a `url` is null when GitHub gave none.",
+      "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it: a check " +
+      "`{ kind: \"check\", name, url }`, a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
+      "being the login of the GitHub account that wrote it, or null when GitHub named none, or a conflict with its base branch " +
+      "`{ kind: \"conflict\", branch, merge }`, `merge` being the merged Pull Request `{ repository, number, url }` that " +
+      "caused it, or null when Cronk knows none; a `url` is null when GitHub gave none.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {

@@ -6,7 +6,7 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers (listed, or one by id), and sending the App's webhook deliveries signed with its secret,
+ * installation covers (listed, or one by id), a Pull Request with its mergeability, and sending the App's webhook deliveries signed with its secret,
  * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
@@ -58,6 +58,20 @@ export interface StandInInstallation {
   repositories: StandInRepository[];
   /** The owner accepts the App's current permissions and events, as on the installation's page on GitHub. */
   accept(): void;
+}
+
+/** What GitHub answers about a Pull Request: its base branch, and whether it can merge into it. */
+export interface StandInPullRequest {
+  number: number;
+  /** The base branch's name. */
+  base: string;
+  /** The base branch's latest commit GitHub compared against. */
+  baseSha: string;
+  /**
+   * What each ask for the Pull Request answers about its mergeability, in turn, the last repeating: `true` merges
+   * cleanly, `false` conflicts, `null` while GitHub is still working it out.
+   */
+  mergeable: (boolean | null)[];
 }
 
 export interface IssuedToken {
@@ -112,6 +126,11 @@ export interface StandInGitHub {
   install(app: StandInApp, account: string, repositories?: string[]): StandInInstallation;
   /** Every installation token GitHub issued, in order. */
   tokensIssued: IssuedToken[];
+  /**
+   * Sets what GitHub answers about a Pull Request of a repository. One it wasn't told of merges cleanly into
+   * `main` at `b0`.
+   */
+  pullRequest(repository: StandInRepository, pullRequest: StandInPullRequest): void;
   /**
    * Sends one of the App's webhook deliveries to its webhook URL, as GitHub does: the event's
    * name, a delivery id and the body's `X-Hub-Signature-256`. Returns Cronk's answer.
@@ -199,6 +218,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   const accessTokens = new Map<string, GitHubAccount>();
   const installationTokens = new Map<string, IssuedToken>();
   let refuseRedelivery = false;
+  const pullRequests = new Map<string, StandInPullRequest>();
 
   const github: StandInGitHub = {
     url: "",
@@ -229,6 +249,9 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       return installation;
     },
     tokensIssued: [],
+    pullRequest(repository, pullRequest) {
+      pullRequests.set(`${repository.id}#${pullRequest.number}`, { ...pullRequest, mergeable: [...pullRequest.mergeable] });
+    },
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
       return send(app, { guid: id, event, payload, redelivery: false }, secret, fails);
     },
@@ -512,6 +535,28 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         owner: { login: repository.fullName.split("/")[0] },
         private: true,
         html_url: `${github.url}/${repository.fullName}`,
+      });
+    }
+
+    // API: a Pull Request by its repository's `owner/name` and its number, with a token of an installation covering it.
+    const pull = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(path);
+    if (request.method === "GET" && pull) {
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(pull[1]!).toLowerCase());
+      if (!repository) return json(response, 404, { message: "Not Found" });
+      const number = Number(pull[2]);
+      const known = pullRequests.get(`${repository.id}#${number}`) ?? { number, base: "main", baseSha: "b0", mergeable: [true] };
+      // Each ask takes the next answer; the last one stays.
+      const mergeable = known.mergeable.length > 1 ? known.mergeable.shift()! : known.mergeable[0]!;
+      return json(response, 200, {
+        number,
+        state: "open",
+        html_url: `${github.url}/${repository.fullName}/pull/${number}`,
+        base: { ref: known.base, sha: known.baseSha },
+        mergeable,
+        mergeable_state: mergeable === null ? "unknown" : mergeable ? "clean" : "dirty",
       });
     }
 

@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
+import { checkAfterMerge } from "../pipeline/conflicts.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
@@ -58,11 +59,28 @@ export const SentBack = Type.Union(
       url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows the review, if it says." }),
       at: Type.String({ format: "date-time" }),
     }),
+    Type.Object({
+      kind: Type.Literal("conflict"),
+      branch: Type.String({ description: "The base branch it conflicted with." }),
+      sha: Type.String({ description: "The base branch's commit it conflicted with: the merge's commit, or else the one GitHub compared against." }),
+      merge: Type.Union(
+        [
+          Type.Object({
+            repository: Type.String({ description: "The merged Pull Request's Repository's `owner/name`." }),
+            number: Type.Integer(),
+            url: Type.String({ description: "Where GitHub shows the merged Pull Request." }),
+          }),
+          Type.Null(),
+        ],
+        { description: "The merge into the base branch that caused the conflict: the latest Cronk knows of; null for none." },
+      ),
+      at: Type.String({ format: "date-time" }),
+    }),
   ],
   {
     description:
       "What last sent this Ticket back to its producing Step from this Pull Request: a failing check on its latest commit, " +
-      "or a review requesting changes.",
+      "a review requesting changes, or a conflict with its base branch.",
   },
 );
 export type SentBack = Static<typeof SentBack>;
@@ -184,6 +202,8 @@ interface PullRequestPayload {
   auto_merge?: unknown;
   html_url: string;
   head: { ref: string; sha: string };
+  base?: { ref?: unknown };
+  merge_commit_sha?: unknown;
   updated_at: string;
   created_at?: unknown;
 }
@@ -240,7 +260,8 @@ async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Pr
  * its title and branch name now. A delivery of its opening records, for each Ticket it links,
  * the Run that was running on that Ticket when GitHub says the Pull Request opened, even if
  * the delivery arrives after that Run ended: the producing Step's. A check that failed on its latest
- * commit before Cronk heard of the push sends the Tickets back now.
+ * commit before Cronk heard of the push sends the Tickets back now. A merge has Cronk ask whether the other open Pull
+ * Requests on its base branch now conflict.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, pull_request: pr } = payload as {
@@ -264,15 +285,17 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
   // Kept only when no newer delivery came first.
   const { rowCount: newest } = await tx.query(
     `insert into pull_requests (id, repository_id, repository_full_name, number, title, branch, head_sha, state, url,
-       merged_by_login, updated_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       merged_by_login, updated_at, base_branch, merge_commit_sha)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      on conflict (id) do update set repository_id = excluded.repository_id,
        repository_full_name = excluded.repository_full_name, number = excluded.number, title = excluded.title,
        branch = excluded.branch, head_sha = excluded.head_sha, state = excluded.state, url = excluded.url,
-       merged_by_login = excluded.merged_by_login, updated_at = excluded.updated_at
+       merged_by_login = excluded.merged_by_login, updated_at = excluded.updated_at,
+       base_branch = coalesce(excluded.base_branch, pull_requests.base_branch), merge_commit_sha = excluded.merge_commit_sha
      where pull_requests.updated_at <= excluded.updated_at`,
     [pr.id, repository.id, repository.full_name, pr.number, pr.title, pr.head.ref, pr.head.sha, state, pr.html_url,
-      mergedBy?.login ?? null, pr.updated_at],
+      mergedBy?.login ?? null, pr.updated_at, typeof pr.base?.ref === "string" ? pr.base.ref : null,
+      state === "merged" && typeof pr.merge_commit_sha === "string" ? pr.merge_commit_sha : null],
   );
 
   // Keys named by this delivery link even if it arrived late, since links are only ever added. A key may be
@@ -314,6 +337,8 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       mergedBy,
       autoMerged: pr.auto_merge !== null && pr.auto_merge !== undefined,
     });
+    // GitHub sends nothing when the merge makes another Pull Request conflict, so Cronk asks.
+    await checkAfterMerge(context, tx, pr.id);
   }
   await announce(context, tx, [pr.id]);
 };

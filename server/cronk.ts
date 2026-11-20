@@ -13,6 +13,7 @@ import { issueSetupCode } from "./identity/setup.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Live } from "./live/live.js";
+import { checkMergeability } from "./pipeline/conflicts.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { subscriptionRunner } from "./runs/subscription.js";
@@ -36,6 +37,8 @@ export interface Cronk {
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied. */
   replayFailedDeliveries(): Promise<void>;
+  /** Asks GitHub whether the Pull Requests waiting on a mergeability check conflict, sending conflicting ones' Tickets back. */
+  checkMergeability(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -80,6 +83,7 @@ export async function createCronk({
       checkForLostRuns: () => checkForLostRuns(context),
       resumePausedRunners: () => resumePausedRunners(context),
       replayFailedDeliveries: () => replayFailedDeliveries(context),
+      checkMergeability: () => checkMergeability(context),
       async close() {
         await app.close();
         await endPool(db);

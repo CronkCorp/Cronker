@@ -223,3 +223,29 @@ export async function redeliver({ github }: Config, jwt: string, attemptId: numb
   const response = await call(url, { method: "POST", headers: { authorization: `Bearer ${jwt}` } });
   if (!response.ok) throw unavailable(`The redelivery request answered ${response.status}`);
 }
+
+/** What GitHub says about an open Pull Request's mergeability. */
+export interface MergeabilityOnGitHub {
+  /** Whether it merges cleanly into its base branch: `false` when it conflicts, `null` while GitHub works it out. */
+  mergeable: boolean | null;
+  base: { ref: string; sha: string };
+}
+
+/**
+ * A Pull Request's mergeability, by its repository's `owner/name` and its number; nothing if the installation can't
+ * see it. Asking is what starts GitHub working it out, so a first answer is often `null`.
+ */
+export async function pullRequestMergeability(
+  { github }: Config,
+  token: string,
+  repository: string,
+  number: number,
+): Promise<MergeabilityOnGitHub | undefined> {
+  const [owner = "", name = ""] = repository.split("/");
+  const url = under(github.apiUrl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`);
+  const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  if (response.status === 404 || response.status === 403) return undefined;
+  const body = await jsonOf<{ mergeable?: unknown; base?: { ref?: unknown; sha?: unknown } }>(response, "/pulls");
+  if (typeof body.base?.ref !== "string" || typeof body.base.sha !== "string") throw unavailable("/pulls answered without its base");
+  return { mergeable: typeof body.mergeable === "boolean" ? body.mergeable : null, base: { ref: body.base.ref, sha: body.base.sha } };
+}

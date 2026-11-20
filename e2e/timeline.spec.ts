@@ -30,15 +30,41 @@ async function inReview(cronk: StartedCronk) {
 
   const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
   const pullRequest = { id: 501, number: 212, title: "CRONK-1: rate-limit sign-in", state: "open", draft: false, merged: false,
-    html_url: "https://github.com/cronkcorp/cronker/pull/212", head: { ref: "cronk-1", sha: "c1" }, updated_at: "2026-01-01T09:00:00Z" };
+    html_url: "https://github.com/cronkcorp/cronker/pull/212", head: { ref: "cronk-1", sha: "c1" }, base: { ref: "main", sha: "b0" },
+    updated_at: "2026-01-01T09:00:00Z" };
   const deliver = (event: string, payload: object) =>
     cronk.github.deliver(app, event, { installation: { id: installation.id }, repository, ...payload });
   const pullRequestEvent = (action: string, fields: object = {}) => deliver("pull_request", { action, pull_request: { ...pullRequest, ...fields } });
   await pullRequestEvent("opened");
   const [run] = await call(`/api/tickets/${ticket.id}/runs`, undefined, "GET");
   await call(`/api/runs/${run.id}/finish`, { outcome: "done" }, "POST", secret);
-  return { ticket, deliver, pullRequestEvent, call, secret };
+  return { ticket, deliver, pullRequestEvent, call, secret, cronker };
 }
+
+test("a merge conflict's send-back shows as Cronk's Comment naming the merge, and Cronk's move names the merge and the conflict", async ({ page, cronk }) => {
+  const { ticket, deliver, cronker } = await inReview(cronk);
+  cronk.github.pullRequest(cronker, { number: 212, base: "main", baseSha: "m1", mergeable: [false] });
+  await deliver("pull_request", {
+    action: "closed",
+    pull_request: { id: 502, number: 214, title: "Speed up the board", state: "closed", draft: false, merged: true, merge_commit_sha: "m1",
+      merged_by: { id: 1, login: "bea" }, html_url: "https://github.com/cronkcorp/cronker/pull/214", head: { ref: "speed-up", sha: "s1" },
+      base: { ref: "main", sha: "b0" }, updated_at: "2026-01-01T09:30:00Z" },
+  });
+  await cronk.checkMergeability();
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const sentBack = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Sent back by Cronk" });
+  await expect(sentBack.getByRole("link", { name: "cronkcorp/cronker#214" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/pull/214");
+  await expect(sentBack.getByRole("link", { name: "cronkcorp/cronker#212" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/pull/212");
+
+  const move = page.getByRole("region", { name: "Timeline" }).getByRole("listitem").filter({ hasText: "Cronk sent it back" });
+  await expect(move).toHaveText(
+    /^Cronk sent it back from In Review to Implement: cronkcorp\/cronker#214 merged into main, and cronkcorp\/cronker#212 conflicts with it \d\d:\d\d$/,
+  );
+  await expect(move.getByRole("link", { name: "cronkcorp/cronker#214" })).toHaveAttribute("href", "https://github.com/cronkcorp/cronker/pull/214");
+  await expect(page.getByRole("complementary").getByText("Sent back:")).toContainText("conflicts with main");
+});
 
 test("a failing check's send-back shows as Cronk's Comment labelled Sent back, linking the check, and Cronk's move names it", async ({ page, cronk }) => {
   const { ticket, deliver } = await inReview(cronk);

@@ -141,6 +141,12 @@ function ignoringCase(a: string, b: string): number {
  * is used again, unless `refresh` asks GitHub afresh.
  */
 export async function listInstallations(context: Context, { refresh = false } = {}): Promise<Installation[]> {
+  const listed = (await keptInstallations(context, refresh)).map(({ account, repositories }) => ({ account, repositories }));
+  return listed.sort((a, b) => ignoringCase(a.account, b.account));
+}
+
+/** Every installation of the App, by id, with the Repositories it covers, as kept for five minutes unless `refresh`. */
+async function keptInstallations(context: Context, refresh: boolean): Promise<(ListedInstallation & Installation)[]> {
   const { config, installationListings: kept } = context;
   const installations = await kept.installations.get(
     "all",
@@ -149,9 +155,9 @@ export async function listInstallations(context: Context, { refresh = false } = 
   );
   // An installation removed from GitHub isn't listed again, so nothing it covered is kept.
   kept.repositories.keepOnly(installations.map((i) => i.id));
-  const listed = await Promise.all(
+  return Promise.all(
     installations.map(async (installation) => ({
-      account: installation.account,
+      ...installation,
       repositories: await kept.repositories.get(
         installation.id,
         async () =>
@@ -162,5 +168,13 @@ export async function listInstallations(context: Context, { refresh = false } = 
       ),
     })),
   );
-  return listed.sort((a, b) => ignoringCase(a.account, b.account));
+}
+
+/**
+ * A token of the installation covering the Repository, by GitHub's id, to act on it as the App; nothing if no
+ * installation covers it. What GitHub said of the installations within the last five minutes is used again.
+ */
+export async function tokenForRepository(context: Context, repositoryId: number): Promise<string | undefined> {
+  const installation = (await keptInstallations(context, false)).find((i) => i.repositories.some((r) => r.id === repositoryId));
+  return installation && tokenFor(context, installation.id);
 }
