@@ -34,3 +34,6 @@ create table transcript_entries (
   at timestamptz,
   primary key (transcript_id, position)
 );
+
+-- An upload finds its Run by the session the Run's Runner returned.
+create index runs_agent_session_idx on runs (agent_id, session_id) where session_id is not null;

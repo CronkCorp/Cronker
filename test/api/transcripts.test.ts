@@ -269,3 +269,106 @@ describe("the caps", () => {
     expect(transcript).toMatchObject({ entryCount: 50, gap: null });
   }, 60_000);
 });
+
+describe("uploading the same session again", () => {
+  test("replaces what Cronk held for the session, never duplicating entries", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const first = await upload("session_again", [userSays("Make it so.", 1), assistantSays("On it.", 2)], asAgent);
+    expect(first.status).toBe(201);
+
+    cronk.clock.advance(60_000);
+    const second = await upload(
+      "session_again",
+      [userSays("Make it so.", 1), assistantSays("On it.", 2), assistantSays("Done.", 3)],
+      asAgent,
+    );
+
+    expect(second.status).toBe(200);
+    expect(second.json).toMatchObject({ id: first.json.id, entryCount: 3, uploadedAt: "2026-01-01T09:01:00.000Z" });
+    expect((await entriesOf(first.json.id, ada)).map((entry: { text: string }) => entry.text)).toEqual([
+      "Make it so.",
+      "On it.",
+      "Done.",
+    ]);
+  });
+
+  test("a smaller upload after a cut one leaves no gap behind", async () => {
+    const { asAgent } = await adaWithAgent();
+    const huge = Array.from({ length: 51 }, (_, index) => assistantSays("m".repeat(1024 * 1024), index));
+    expect((await uploaded("session_shrinks", huge, asAgent)).gap).not.toBeNull();
+
+    const again = await uploaded("session_shrinks", [assistantSays("Started over.", 1)], asAgent);
+
+    expect(again).toMatchObject({ entryCount: 1, gap: null });
+  }, 60_000);
+});
+
+describe("who may upload", () => {
+  test("a revoked token, a wrong token, a read-only token and a User are refused, and nothing is stored", async () => {
+    const { ada, agent, token, asAgent } = await adaWithAgent();
+    const { secret: readOnly } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "read", access: "read" });
+    const lines = [userSays("Make it so.", 1)];
+
+    expect((await upload("session_x", lines, { headers: { authorization: "Bearer cronk_agent_wrong" } })).json.error.code).toBe(
+      "invalid_token",
+    );
+    expect((await upload("session_x", lines, { headers: { authorization: `Bearer ${readOnly}` } })).json.error.code).toBe(
+      "read_only_token",
+    );
+    const asUser = await fetch(`${cronk.url}/api/transcripts/sessions/session_x`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-ndjson", cookie: ada.cookie, origin: cronk.url },
+      body: JSON.stringify(lines[0]),
+    });
+    expect(asUser.status).toBe(401);
+    await ok("DELETE", `/api/agents/${agent.id}/tokens/${token.id}`, ada);
+    const revoked = await upload("session_x", lines, asAgent);
+    expect(revoked.status).toBe(401);
+    expect(revoked.json.error.code).toBe("invalid_token");
+  });
+
+  test("an Agent of another Workspace can't read a Transcript", async () => {
+    const { asAgent } = await adaWithAgent();
+    const transcript = await uploaded("session_mine", [userSays("Make it so.", 1)], asAgent);
+    const ada = { cookie: await signIn(cronk) };
+    const other = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
+    const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
+    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "t", access: "read" });
+    const asStranger = { headers: { authorization: `Bearer ${secret}` } };
+
+    expect((await call("GET", `/api/transcripts/${transcript.id}`, asStranger)).status).toBe(404);
+    expect((await call("GET", `/api/transcripts/${transcript.id}/entries`, asStranger)).status).toBe(404);
+  });
+});
+
+describe("a Run's Transcript", () => {
+  test("an upload whose session is the one the Run's Runner returned at start is that Run's Transcript", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/session_1", transcriptId: null });
+
+    const transcript = await uploaded("session_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+
+    expect(transcript.runId).toBe(run.id);
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({
+      sessionUrl: "https://claude.ai/code/session_1",
+      transcriptId: transcript.id,
+    });
+    expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: transcript.id }]);
+  });
+
+  test("the session of another Agent's Run is not that Run's Transcript", async () => {
+    const { ada, workspace, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "laptop" });
+    const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "full" });
+
+    const transcript = await uploaded("session_1", [userSays("Hello.", 1)], { headers: { authorization: `Bearer ${secret}` } });
+
+    expect(transcript.runId).toBeNull();
+    expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: null }]);
+  });
+});

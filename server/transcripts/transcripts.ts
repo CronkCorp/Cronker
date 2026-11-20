@@ -104,13 +104,18 @@ export async function uploadTranscript(
   const now = context.clock.now();
   const { kept: entries, gap } = keepStartAndEnd(converted.map(scrub).map(cutToolResult));
   return transaction(context.db, async (tx) => {
+    // The Run whose Runner returned this session when starting it, as one of this Agent's Runs.
+    const run = await tx.query<{ id: string }>(
+      "select id from runs where agent_id = $1 and session_id = $2 order by seq desc limit 1",
+      [agent.id, sessionId],
+    );
     const { rows } = await tx.query<{ id: string; created: boolean }>(
-      `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, gap_after, gap_entries, gap_bytes)
-       values ($1, $2, $3, $4, $5, $6, $7)
-       on conflict (agent_id, session_id) do update set uploaded_at = excluded.uploaded_at,
+      `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, gap_after, gap_entries, gap_bytes, run_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (agent_id, session_id) do update set uploaded_at = excluded.uploaded_at, run_id = excluded.run_id,
          gap_after = excluded.gap_after, gap_entries = excluded.gap_entries, gap_bytes = excluded.gap_bytes
        returning id, (xmax = 0) as created`,
-      [agent.workspace.id, agent.id, sessionId, now, gap?.after ?? null, gap?.entries ?? null, gap?.bytes ?? null],
+      [agent.workspace.id, agent.id, sessionId, now, gap?.after ?? null, gap?.entries ?? null, gap?.bytes ?? null, run.rows[0]?.id ?? null],
     );
     const { id, created } = rows[0]!;
     await tx.query("delete from transcript_entries where transcript_id = $1", [id]);
