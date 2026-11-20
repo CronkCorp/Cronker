@@ -22,7 +22,7 @@ export function Button({
 const onMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 /**
- * The submit button of a Comment box, showing the shortcut that places the Comment too (`submitOnModEnter`): ⌘↵ on
+ * The submit button of a Comment box, showing the shortcut that places the Comment too (`submitOnCtrlOrCmdEnter`): ⌘↵ on
  * macOS, Ctrl+↵ elsewhere. The hint is left out of the button's name and announced as its keyboard shortcut instead.
  */
 export function CommentButton({ children, ...props }: { variant?: ButtonVariant; disabled?: boolean; children: ReactNode }) {

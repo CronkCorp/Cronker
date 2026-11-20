@@ -27,7 +27,7 @@ export const field = (form: FormData, name: string) => String(form.get(name) ?? 
  * places nothing, and not while that button is disabled, as while the Comment is being sent, nor again for a held key.
  * Plain Enter and Shift+Enter keep adding new lines.
  */
-export function submitOnModEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
+export function submitOnCtrlOrCmdEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
   if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
   event.preventDefault();
   const form = event.currentTarget.form;
