@@ -8,7 +8,16 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { convertClaudeCode } from "./claude-code.js";
 import { hookScriptPath, readHookScript, TranscriptHook, transcriptHook } from "./hook.js";
-import { entriesOf, EntryPage, findTranscript, Transcript, uploadTranscript } from "./transcripts.js";
+import {
+  agentTranscripts,
+  entriesOf,
+  EntryPage,
+  findTranscript,
+  TicketTranscript,
+  ticketTranscripts,
+  Transcript,
+  uploadTranscript,
+} from "./transcripts.js";
 
 /** The largest upload Cronk reads; what it keeps of one is capped further (ADR 0006). */
 const uploadLimitBytes = 256 * 1024 * 1024;
@@ -55,6 +64,39 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
         );
         return reply.code(created ? 201 : 200).send(transcript);
       },
+    );
+
+    app.get(
+      "/api/agents/:agentId/transcripts",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "An Agent's own Transcripts",
+          description:
+            "The Transcripts of the Agent's sessions that matched no Run, such as Claude Code connected by hand, the " +
+            "last uploaded first. A Run's Transcript is listed with its Run instead.",
+          params: Type.Object({ agentId: Type.String() }),
+          response: { 200: Type.Array(Transcript), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => agentTranscripts(context, await requireCaller(context, request), request.params.agentId),
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/transcripts",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "The Transcripts naming a Ticket",
+          description:
+            "The Transcripts of sessions of no Run, such as Claude Code connected by hand, whose Cronk tool calls " +
+            "(`mcp__cronk__…`) name the Ticket by its key or id, in the order they first named it. A Run's " +
+            "Transcript is linked from its Run instead.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(TicketTranscript), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => ticketTranscripts(context, await requireCaller(context, request), request.params.ticketId),
     );
 
     app.get(hookScriptPath, { schema: { hide: true } }, async (_request, reply) =>
