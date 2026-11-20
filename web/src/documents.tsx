@@ -578,6 +578,7 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({ source 
   const [picked, setPicked] = useState<number[]>([]);
   const [comparison, setComparison] = useState<C | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const latest = useLatest();
   // A new source each render is the same Versions; the screen remounts this to show a new one.
   const sourceRef = useRef(source);
   useEffect(() => {
@@ -589,7 +590,8 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({ source 
     setPicked(next);
     if (next.length === 2) {
       const [from, to] = [Math.min(...next), Math.max(...next)];
-      sourceRef.current.compare(from, to).then(setComparison, (e: Error) => setFailure(e.message));
+      // Picks changed quickly show only the last two's comparison, however the replies arrive.
+      latest(sourceRef.current.compare(from, to), setComparison, (e) => setFailure(e.message));
     }
   };
   const { read, show, showComparison } = sourceRef.current;
