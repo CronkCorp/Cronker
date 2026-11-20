@@ -68,6 +68,7 @@ describe("starting Runs", () => {
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
         transcriptId: null,
+        transcriptDeleted: false,
         startedAt: "2026-01-01T09:00:00.000Z",
         endedAt: null,
         lastCallAt: null,
@@ -110,6 +111,7 @@ describe("starting Runs", () => {
           "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
         "- File anything you find that isn't part of CRONK-1's work with `file_ticket`, giving your Run id: it waits " +
           "for CRONK-1's Assignee as a Discovered Ticket.",
+        "- Give your Run id when you create an Artifact with `create_artifact`, so it is linked to CRONK-1.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
     );

@@ -1,0 +1,6 @@
+GET /api/projects/:id/artifacts → 200 
+POST /api/tickets/:id/artifacts → 404 {"error":{"code":"not_found","message":"Nothing is here."}}
+GET /api/tickets/:id/artifacts → 404 {"error":{"code":"not_found","message":"Nothing is here."}}
+DELETE /api/artifacts/:id (Agent) → 404 {"error":{"code":"not_found","message":"Nothing is here.","rule":"An Agent sees only its own Workspace; anything else answers as not found.","advice":"Check the key or id, or list the Tickets of your Workspace to find the one you mean."}}
+GET /api/workspaces/:id/search?q=drag → 200 kinds: ["ticket: Try drag and drop on the board"]
+GET /api/workspaces/:id/search?q=drag&kinds=artifact → 400 {"error":{"code":"invalid_request","message":"querystring/kinds must match pattern \"^(ticket|document|report|term|decision)(,(ticket|document|report|term|decision))*$\""}}

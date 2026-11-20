@@ -92,6 +92,7 @@ describe("MCP with an Agent token", () => {
       "export_knowledge",
       "file_ticket",
       "finish",
+      "link_artifact",
       "link_document",
       "list_artifacts",
       "list_decision_versions",
@@ -100,6 +101,7 @@ describe("MCP with an Agent token", () => {
       "list_documents",
       "list_term_versions",
       "list_tickets",
+      "merge_pull_request",
       "propose_decision",
       "read_artifact",
       "read_decision",
@@ -109,6 +111,7 @@ describe("MCP with an Agent token", () => {
       "read_ticket",
       "save_artifact",
       "search",
+      "unlink_artifact",
       "unlink_document",
       "write_report",
     ]);
@@ -275,18 +278,24 @@ describe("MCP with an Agent token", () => {
     const { workspaceId } = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
     const term = await post(cookie, `/api/projects/${ticket.projectId}/terms`, { name: "Reading", definition: "Done.", avoid: [] });
     await post(cookie, `/api/workspaces/${workspaceId}/documents`, { title: "Reading list" });
+    const artifact = await post(cookie, `/api/projects/${ticket.projectId}/artifacts`, {
+      title: "Reading room",
+      files: [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }],
+    });
     const client = await connect(secret);
 
     const all = await call(client, "search", { query: "read" });
-    const narrowed = await call(client, "search", { query: "read", project: "cronk", kinds: ["ticket", "term"] });
+    const narrowed = await call(client, "search", { query: "read", project: "cronk", kinds: ["ticket", "term", "artifact"] });
     const unknown = await call(client, "search", { query: "read", project: "NOPE" });
+    const transcripts = await call(client, "search", { query: "read", kinds: ["transcript"] });
 
     const api = await cronk.request("GET", `/api/workspaces/${workspaceId}/search?q=read`, { cookie });
     expect(all.json).toEqual(await api.json());
     expect(narrowed.json.map((r: { kind: string; id: string }) => [r.kind, r.id]).sort()).toEqual(
-      [["term", term.id], ["ticket", ticket.id]].sort(),
+      [["artifact", artifact.id], ["term", term.id], ["ticket", ticket.id]].sort(),
     );
     expect(unknown).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project" }) });
+    expect(transcripts).toEqual({ isError: false, json: [] });
   });
 
   test("an Agent comments on a Ticket as itself", async () => {
@@ -343,6 +352,33 @@ describe("MCP with an Agent token", () => {
     expect(moved.statusId).toBe(status("Ready"));
     const after = await call(client, "read_ticket", { ticket: "CRONK-1" });
     expect(after.json.reports).toEqual([expect.objectContaining({ runId, title: "Triage report", body: "Clear." })]);
+  });
+
+  test("an Agent's Merge Run merges through merge_pull_request, which passes on Cronk's refusal", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    await cronk.request("PATCH", `/api/projects/${ticket.projectId}`, { cookie, body: { agentsMayMerge: true } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const merge = project.statuses.find((s: { name: string }) => s.name === "Merge").id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, autonomousDelegation: true, statusId: merge },
+    });
+    const client = await connect(secret);
+    const [run] = (await call(client, "read_ticket", { ticket: "CRONK-1" })).json.runs;
+    expect(run).toMatchObject({ state: "running", step: { name: "Merge" } });
+
+    const { isError, json } = await call(client, "merge_pull_request", { run: run.id, pullRequest: 501 });
+
+    expect(isError).toBe(true);
+    expect(json).toEqual(
+      expect.objectContaining({
+        code: "pull_request_not_linked",
+        message: "That Pull Request isn't linked to CRONK-1.",
+        rule: "A Merge Run merges only a Pull Request linked to its own Ticket.",
+      }),
+    );
   });
 
   test("during its Run an Agent edits its Ticket and writes Reports, which a later Run reads", async () => {
@@ -411,6 +447,37 @@ describe("MCP with an Agent token", () => {
     expect(unlinked.isError).toBe(false);
     const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
     expect(read.linkedDocuments).toEqual([]);
+  });
+
+  test("during its Run an Agent creates an Artifact linked to its Ticket, and links and unlinks others", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: status("Triage") } });
+    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const sketch = await post(cookie, `/api/projects/${project.id}/artifacts`, { title: "Sketch", files });
+    const client = await connect(secret);
+
+    const created = await call(client, "create_artifact", { project: "CRONK", title: "Board prototype", files, run: run.id });
+    const linked = await call(client, "link_artifact", { ticket: "CRONK-1", artifact: sketch.id });
+    const refused = await call(client, "link_artifact", { ticket: "CRONK-2", artifact: sketch.id });
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    const unlinked = await call(client, "unlink_artifact", { ticket: "CRONK-1", artifact: sketch.id });
+
+    expect(created.isError).toBe(false);
+    expect(linked).toEqual({ isError: false, json: { id: sketch.id, projectId: project.id, title: "Sketch" } });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
+    expect(read.linkedArtifacts).toEqual([
+      { id: created.json.id, projectId: project.id, title: "Board prototype" },
+      { id: sketch.id, projectId: project.id, title: "Sketch" },
+    ]);
+    expect(unlinked).toEqual({
+      isError: false,
+      json: [{ id: created.json.id, projectId: project.id, title: "Board prototype" }],
+    });
   });
 
   test("during its Run an Agent attaches files as base64 to its Ticket and to the Report it writes", async () => {
