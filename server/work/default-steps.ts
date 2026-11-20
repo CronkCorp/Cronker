@@ -47,12 +47,15 @@ const codeReview = `Review the pull request this Ticket's implementation opened.
 
 Finish with **approve** when it is ready for a User to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a User. Finish with **needs you** and a Question when you can't judge it.`;
 
-const merge = `Check whether the pull request this Ticket's implementation opened is ready to merge.
+const merge = `Merge the pull request this Ticket's implementation opened, if it is ready.
 
 - Read the Ticket, its Comments and Reports, and its Pull Request's state, checks and reviews.
+- It is ready when it is open, its checks on the latest commit all passed with none still running, and no review still requests changes.
+- Merge it with \`merge_pull_request\`, giving your Run id and the Pull Request's id. Cronk merges it on GitHub and checks the same rules first, refusing with the rule and what to do instead; a merge ends your Run as *merged*, so don't call \`finish\` after it.
+- While a check is still running, wait for it and read the Ticket again before merging.
 - Never resolve a merge conflict or change code yourself: that is Implement's work.
 
-Finish with **review** when it is ready, for a User to merge. Finish with **send back** when it has a merge conflict or a failing check, saying which in a Comment. Finish with **needs you** and a Question when you can't tell.`;
+Finish with **send back** when it has a merge conflict, a failing check or a review requesting changes, first leaving a Comment saying which: it goes back to Implement, as a round. Finish with **needs you** and a Question when you can't tell, or Cronk refuses the merge for a reason Implement can't fix.`;
 
 export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {
