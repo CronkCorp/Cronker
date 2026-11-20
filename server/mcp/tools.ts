@@ -64,7 +64,7 @@ const rights =
   "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
   "and Terms), create and save Artifacts, and propose Decisions and edit their text (only Users change a Decision's status). During your " +
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents to it and unlink " +
-  "them, and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
+  "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add blocks from " +
   "it. Anything else is refused with the rule and what to do instead.";
 
@@ -919,6 +919,26 @@ export function buildMcpServer(api: Api): McpServer {
     },
     ({ run, outcome, question, report }) =>
       answer(() => send("POST", `/api/runs/${encodeURIComponent(run)}/finish`, { outcome, question, report })),
+  );
+
+  server.registerTool(
+    "merge_pull_request",
+    {
+      title: "Merge your Ticket's Pull Request",
+      description:
+        "For your running Run of a Merge Step: Cronk merges a Pull Request linked to your Run's Ticket on GitHub, with " +
+        "its GitHub App and the Repository's default merge method. The merge ends your Run, finished as `merged`, and " +
+        "completes the Ticket as Unverified for its Assignee: don't call `finish` after it. Refused, naming the rule and " +
+        "what to do instead, unless the Ticket has Autonomous Delegation, its Project has agents may merge on, the Pull " +
+        "Request is open, its checks on the latest commit are green with none pending, no review still requests " +
+        "changes and GitHub says it is mergeable. Never merge on GitHub directly.",
+      inputSchema: {
+        run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
+        pullRequest: z.number().int().describe("GitHub's id for the Pull Request, as `read_ticket` lists it under `pullRequests`."),
+      },
+    },
+    ({ run, pullRequest }) =>
+      answer(() => send("POST", `/api/runs/${encodeURIComponent(run)}/merge`, { pullRequestId: pullRequest })),
   );
 
   return server;
