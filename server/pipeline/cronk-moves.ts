@@ -4,12 +4,14 @@ import { startRunIfNeeded, startUnblocked, stopRunningRun } from "../runs/runs.j
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { statusesOf } from "../work/projects.js";
 import type { Outcome } from "../work/steps.js";
+import { sendBackForKnownFailures } from "./sending-back.js";
 
 /**
  * Pipeline: a Ticket moved by Cronk, on a Run's behalf or with none, applying the loop's rules in one place.
  * Cronk records the Change, stops a Run still running on the Ticket, counts a round for a Step whose Outcome sends
  * work back (applying that Step's *needs you* Outcome instead, with Cronk's own Question, past its round limit),
- * completes the Ticket as Verified or Unverified when it moves to a Done Status, and starts the next Run.
+ * completes the Ticket as Verified or Unverified when it moves to a Done Status, and starts the next Run. An Outcome
+ * moving the Ticket into a Review Status sends it back for a failure already known on its Pull Request.
  */
 
 /**
@@ -142,6 +144,11 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
     const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
     await recordChanges(tx, ticket, move.by, now, [{ field: "status", from: named(ticket.statusId), to: named(to) }]);
     await startUnblocked(context, tx, [ticket.id]);
+    // A failure known before an Outcome moved it into a Review Status sends it back, before a Run starts there:
+    // that move tells the Workspace and starts the next Run.
+    if (target.kind === "outcome" && statuses.find((s) => s.id === to)!.kind === "review") {
+      if (await sendBackForKnownFailures(context, tx, ticket.id)) return decision;
+    }
   }
   if (statuses.find((s) => s.id === to)!.kind === "done") {
     // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.

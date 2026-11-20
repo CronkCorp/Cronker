@@ -103,3 +103,13 @@ test("a Runner's changes reach only its Owner's stream", async () => {
 
   await bobs.expectQuiet();
 });
+
+test("removing a Runner tells its Owner's stream, so open Runners pages drop it", async () => {
+  const { ada, runner } = await adaWithDelegatedTicket();
+  const stream = await runnerStream(ada.cookie);
+
+  await ok("DELETE", `/api/runners/${runner.id}`, ada);
+
+  expect(await stream.next()).toEqual({ type: "runner.changed", data: { runnerId: runner.id } });
+  expect(await ok("GET", "/api/runners", ada)).toEqual([]);
+});

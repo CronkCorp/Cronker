@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
 
@@ -410,6 +410,94 @@ describe("Runners and Agents", () => {
     const [run] = await runsOf(ticket.id, ada);
     await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
     expect(await ok("GET", "/api/runners", ada)).toEqual([expect.objectContaining({ limit: 2, running: 0 })]);
+  });
+});
+
+describe("removing a Runner", () => {
+  test("its Owner removes a Runner, and it is gone from their Runners", async () => {
+    const { ada, runner } = await adaWithAgent();
+
+    expect((await call("DELETE", `/api/runners/${runner.id}`, ada)).status).toBe(204);
+
+    expect(await ok("GET", "/api/runners", ada)).toEqual([]);
+    expect((await call("DELETE", `/api/runners/${runner.id}`, ada)).status).toBe(404);
+  });
+
+  test("another User can't remove it, as if it didn't exist", async () => {
+    const { workspace, ada, runner } = await adaWithAgent();
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+
+    const refused = await call("DELETE", `/api/runners/${runner.id}`, bea);
+
+    expect(refused.status).toBe(404);
+    expect(refused.json.error).toEqual({ code: "not_found", message: "You have no such Runner." });
+    expect(await ok("GET", "/api/runners", ada)).toEqual([expect.objectContaining({ id: runner.id })]);
+  });
+
+  test("removing it is refused while one of its Runs is running", async () => {
+    const { ada, ticket, agent, asAgent, runner, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+
+    const refused = await call("DELETE", `/api/runners/${runner.id}`, ada);
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toEqual({
+      code: "runner_running",
+      message: "Fake has a Run running. Wait for its running Runs to end, or stop them first.",
+    });
+    expect(await ok("GET", "/api/runners", ada)).toEqual([expect.objectContaining({ id: runner.id, running: 1 })]);
+
+    const [run] = await runsOf(ticket.id, ada);
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    expect((await call("DELETE", `/api/runners/${runner.id}`, ada)).status).toBe(204);
+  });
+
+  test("Agents pointed at it are left with no Runner, so their delegated Tickets get Runs refused as for any such Agent", async () => {
+    const { workspace, ada, ticket, agent, runner, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+
+    await ok("DELETE", `/api/runners/${runner.id}`, ada);
+
+    const agents = await ok("GET", `/api/workspaces/${workspace.id}/agents`, ada);
+    expect(agents).toEqual([expect.objectContaining({ id: agent.id, runnerId: null })]);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    expect(await runsOf(ticket.id, ada)).toEqual([
+      expect.objectContaining({
+        state: "refused",
+        endReason: "claude-max uses no Runner: its Owner points it at one of their Runners for it to start Runs.",
+      }),
+    ]);
+    expect(cronk.runner.starts).toEqual([]);
+  });
+
+  test("Tickets waiting in its paused queue stop waiting for it, as for an Agent with no Runner", async () => {
+    const { ada, ticket, agent, runner, status, project } = await adaWithAgent();
+    cronk.runner.refuseNext({ kind: "rate_limited", message: "Too many fires.", retryAt: new Date("2026-01-01T10:00:00Z") });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).waiting).toBe("runnerPaused");
+
+    await ok("DELETE", `/api/runners/${runner.id}`, ada);
+
+    const [card] = await ok("GET", `/api/projects/${project.id}/tickets`, ada);
+    expect(card).toMatchObject({ waiting: null, lastRun: expect.objectContaining({ state: "refused" }) });
+    expect(await runsOf(ticket.id, ada)).toEqual([
+      expect.objectContaining({
+        state: "refused",
+        endReason: "claude-max uses no Runner: its Owner points it at one of their Runners for it to start Runs.",
+      }),
+    ]);
+  });
+
+  test("its past Runs keep their history", async () => {
+    const { ada, ticket, agent, asAgent, runner, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+    const finished = await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    await ok("DELETE", `/api/runners/${runner.id}`, ada);
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(finished);
+    expect(await runsOf(ticket.id, ada)).toEqual([finished]);
   });
 });
 
