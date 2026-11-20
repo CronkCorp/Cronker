@@ -9,6 +9,8 @@ import type { Context } from "./context.js";
 import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
 import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
+import { artifactRoutes } from "./artifacts/routes.js";
+import { sandboxRoutes } from "./artifacts/sandbox.js";
 import { attachmentRoutes } from "./attachments/routes.js";
 import { agentRoutes } from "./agents/routes.js";
 import { refuseStoppedRunCalls } from "./runs/calls.js";
@@ -128,6 +130,8 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(termRoutes(context));
   await app.register(attachmentRoutes(context));
   await app.register(decisionRoutes(context));
+  await app.register(artifactRoutes(context));
+  await app.register(sandboxRoutes(context));
   await app.register(exportRoutes(context));
   await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
