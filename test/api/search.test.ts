@@ -141,6 +141,64 @@ describe("Search", () => {
     );
   });
 
+  test("a search finds Artifacts by their title and description, not by their files", async () => {
+    const { workspace, ada, project } = await workspaceWithProject();
+    const files = (text: string) => [{ path: "index.html", contentBase64: Buffer.from(text).toString("base64") }];
+    const byTitle = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, {
+      title: "Dragging cards",
+      description: "A board prototype.",
+      files: files("<p>Nothing</p>"),
+    });
+    const byDescription = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Colour tokens",
+      description: "Tokens to drag into the theme.",
+      files: files("<p>Nothing</p>"),
+    });
+    await ok("POST", `/api/projects/${project.id}/artifacts`, ada, {
+      title: "Inbox",
+      description: "The Inbox, laid out.",
+      files: files("<p>Drag an item to dismiss it.</p>"),
+    });
+
+    const results = await search(workspace.id, ada, { q: "drag", kinds: "artifact" });
+
+    expect(results).toEqual([
+      {
+        kind: "artifact",
+        id: byTitle.id,
+        title: "Dragging cards",
+        projectId: project.id,
+        ticketKey: null,
+        snippet: [
+          { text: "Dragging", match: true },
+          { text: " cards", match: false },
+        ],
+      },
+      {
+        kind: "artifact",
+        id: byDescription.id,
+        title: "Colour tokens",
+        projectId: null,
+        ticketKey: null,
+        snippet: [
+          { text: "Tokens to ", match: false },
+          { text: "drag", match: true },
+          { text: " into the theme.", match: false },
+        ],
+      },
+    ]);
+  });
+
+  test("a saved Artifact is found by its current title, not an earlier one", async () => {
+    const { workspace, ada } = await workspaceWithProject();
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, { title: "Sketch", files });
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 1, title: "Wireframe" });
+
+    expect(await search(workspace.id, ada, { q: "sketch" })).toEqual([]);
+    expect(await search(workspace.id, ada, { q: "wireframe" })).toEqual([expect.objectContaining({ kind: "artifact", id: artifact.id })]);
+  });
+
   test("a quoted phrase matches only its words in order, `or` either word, and `-word` leaves out what has it", async () => {
     const { workspace, ada, project } = await workspaceWithProject();
     const create = (title: string, description: string) =>

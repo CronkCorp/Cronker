@@ -2,8 +2,9 @@ import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
 
 /**
- * Search over a Workspace's Tickets and knowledge with Postgres full-text: words matched by their stem in the
- * `english` configuration, written in web-search syntax. Needs no AI service.
+ * Search over a Workspace's Tickets and knowledge, and its Artifacts by title and description, with Postgres
+ * full-text: words matched by their stem in the `english` configuration, written in web-search syntax. Needs no AI
+ * service.
  */
 
 export const SnippetPart = Type.Object({
@@ -11,7 +12,7 @@ export const SnippetPart = Type.Object({
   match: Type.Boolean({ description: "Whether this part matched the search." }),
 });
 
-export const searchKinds = ["ticket", "document", "report", "term", "decision"] as const;
+export const searchKinds = ["ticket", "document", "report", "term", "decision", "artifact"] as const;
 export type SearchKind = (typeof searchKinds)[number];
 export const SearchKind = Type.Union(searchKinds.map((kind) => Type.Literal(kind)));
 
@@ -61,7 +62,13 @@ const hits = `
     ts_rank(versions.search, query)
   from decisions
     join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version, q
-  where decisions.workspace_id = $1 and versions.search @@ query`;
+  where decisions.workspace_id = $1 and versions.search @@ query
+  union all
+  select 'artifact', artifacts.id, versions.title, artifacts.project_id, null, versions.description,
+    ts_rank(versions.search, query)
+  from artifacts
+    join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version, q
+  where artifacts.workspace_id = $1 and versions.search @@ query`;
 
 /** How many results of each kind a search gives at most: its best. */
 export const perKind = 20;

@@ -4,8 +4,9 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "../knowledge/places.js";
-import { Artifact, ArtifactFileContent, artifactNotFound, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
+import { Artifact, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
+import { linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
 
 const tags = ["Artifacts"];
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
@@ -66,13 +67,21 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
             description:
               "Creates an Artifact at Version 1 by its Actor: a title, a description, and its files, each by a path " +
               "relative to the Version and its bytes as base64. `page` names the file that is its page " +
-              "(`index.html` when left out); the page refers to the others by relative paths.",
+              "(`index.html` when left out); the page refers to the others by relative paths. An Agent names its " +
+              "running Run as `runId` to link the Artifact to the Run's Ticket (`no_running_run` when it isn't one).",
             params: place.params,
             body: Type.Object({
               title: Title,
               description: Type.Optional(Description),
               page: Type.Optional(FilePath),
               files: Type.Array(FileInput, { maxItems: 1000 }),
+              runId: Type.Optional(
+                Type.String({
+                  description:
+                    "For an Agent, its running Run the Artifact is made in: the Artifact is linked to the Run's " +
+                    "Ticket, so it must be kept in that Ticket's Project or the Workspace (`artifact_outside_project`).",
+                }),
+              ),
             }),
             response: { 201: Artifact, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 413: ErrorBody },
           },
@@ -154,6 +163,84 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => saveArtifact(context, await requireCaller(context, request), request.params.artifactId, request.body),
+    );
+
+    app.delete(
+      "/api/artifacts/:artifactId",
+      {
+        schema: {
+          tags,
+          summary: "Delete an Artifact",
+          description:
+            "Deletes the Artifact with all its Versions and their files, which are no longer served; it drops out of " +
+            "the Tickets linking it. Only a User may; Agents are refused with `agent_not_allowed`.",
+          params: ArtifactParams,
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await deleteArtifact(context, await requireCaller(context, request), request.params.artifactId);
+        return reply.code(204).send(null);
+      },
+    );
+
+    const TicketParams = Type.Object({ ticketId: Type.String() });
+
+    app.get(
+      "/api/tickets/:ticketId/artifacts",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "A Ticket's Linked Artifacts",
+          description: "Artifacts of the Ticket's Project or of the Workspace linked to it, oldest link first.",
+          params: TicketParams,
+          response: { 200: Type.Array(LinkedArtifact), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => linkedArtifactsOf(db, await requireCaller(context, request), request.params.ticketId),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/artifacts",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Link an Artifact to a Ticket",
+          description:
+            "Links an Artifact of the Ticket's Project or of the Workspace (`artifact_outside_project` for another " +
+            "Project's; `unknown_artifact` for one not in the Workspace), once (`artifact_already_linked`). An Agent " +
+            "links only during its own running Run on the Ticket (`no_running_run`). A deleted Artifact drops out of " +
+            "its links.",
+          params: TicketParams,
+          body: Type.Object({ artifactId: Type.String({ description: "An Artifact of the Ticket's Project or Workspace." }) }),
+          response: { 201: LinkedArtifact, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        const linked = await linkArtifact(context, caller, request.params.ticketId, request.body.artifactId);
+        return reply.code(201).send(linked);
+      },
+    );
+
+    app.delete(
+      "/api/tickets/:ticketId/artifacts/:artifactId",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Unlink an Artifact from a Ticket",
+          description:
+            "The Artifact stays in its Project or the Workspace; an Artifact the Ticket doesn't link answers " +
+            "`not_found`. An Agent unlinks only during its own running Run on the Ticket (`no_running_run`).",
+          params: Type.Object({ ticketId: Type.String(), artifactId: Type.String() }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        await unlinkArtifact(context, caller, request.params.ticketId, request.params.artifactId);
+        return reply.code(204).send(null);
+      },
     );
   };
 }

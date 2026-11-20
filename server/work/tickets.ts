@@ -374,10 +374,14 @@ async function holdAgentInUse(tx: Tx, agentId: string): Promise<boolean> {
 }
 
 /** The Agent's running Run of that id, with its Ticket and the Ticket's Assignee; refused if it has none. */
-async function runningRunOf(
+export async function runningRunOf(
   tx: Tx,
   agent: AgentCaller,
   runId: string,
+  refusal: { rule: string; advice: string } = {
+    rule: "An Agent files a Ticket from a Run only while that Run of its own is running.",
+    advice: "Name your running Run, as your Brief gives it, or leave the Run out to file the Ticket for your Owner.",
+  },
 ): Promise<{ id: string; ticketId: string; assigneeId: string | null }> {
   const { rows } = isUuid(runId)
     ? await tx.query<{ id: string; ticketId: string; assigneeId: string | null }>(
@@ -388,10 +392,7 @@ async function runningRunOf(
       )
     : { rows: [] };
   if (rows[0]) return rows[0];
-  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run with that id.`, {
-    rule: "An Agent files a Ticket from a Run only while that Run of its own is running.",
-    advice: "Name your running Run, as your Brief gives it, or leave the Run out to file the Ticket for your Owner.",
-  });
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run with that id.`, refusal);
 }
 
 /**

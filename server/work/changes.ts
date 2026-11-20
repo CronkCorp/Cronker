@@ -11,7 +11,7 @@ export const ChangedBy = ActorOrCronk;
  * marks Cronk passing the Ticket on past a Step it didn't pass, by its Label rule or as a Merge Step skipping itself,
  * before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
- * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
+ * unlinked (to null), as `{ id, title }` titled then, and `linkedArtifact` one Artifact likewise. `merged` marks Cronk completing the Ticket for a merged Pull Request,
  * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check
  * or requested changes on a Pull Request, before the `status` Change moving it.
  */
@@ -36,6 +36,7 @@ export const changeFields = [
   "verification",
   "dismissed",
   "linkedDocument",
+  "linkedArtifact",
   "merged",
   "sentBack",
 ] as const;

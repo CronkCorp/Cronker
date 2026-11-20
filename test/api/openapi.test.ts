@@ -81,6 +81,8 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/terms/{termId}/versions/{number}",
     "/api/tickets/{ticketId}",
     "/api/tickets/{ticketId}/accept",
+    "/api/tickets/{ticketId}/artifacts",
+    "/api/tickets/{ticketId}/artifacts/{artifactId}",
     "/api/tickets/{ticketId}/attachments",
     "/api/tickets/{ticketId}/brief",
     "/api/tickets/{ticketId}/comments",
