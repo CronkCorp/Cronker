@@ -12,30 +12,34 @@ export function fitWindow(element: HTMLElement | null) {
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
       const style = getComputedStyle(element);
-      element.style.maxHeight =
-        style.position === "sticky"
-          ? `${Math.max(0, Math.floor(window.innerHeight - element.getBoundingClientRect().top - (parseFloat(style.top) || 0)))}px`
-          : "";
+      if (style.position === "sticky") {
+        // Pushed up past its gap at the page's end, it keeps the height it had when stuck.
+        const gap = parseFloat(style.top) || 0;
+        const top = Math.max(gap, element.getBoundingClientRect().top);
+        element.style.maxHeight = `${Math.max(0, Math.floor(window.innerHeight - top - gap))}px`;
+      } else {
+        element.style.maxHeight = "";
+      }
       element.toggleAttribute("data-overflows", element.scrollHeight > element.clientHeight);
     });
   };
   // What sits above the panel can move its top, and its own groups can grow, shrink, come and go.
-  const resized = new ResizeObserver(fit);
-  const observeGroups = () => {
-    resized.disconnect();
-    resized.observe(document.documentElement);
-    for (const group of element.children) resized.observe(group);
+  const resizeObserver = new ResizeObserver(fit);
+  const observeGroupsAndFit = () => {
+    resizeObserver.disconnect();
+    resizeObserver.observe(document.documentElement);
+    for (const group of element.children) resizeObserver.observe(group);
     fit();
   };
-  const changed = new MutationObserver(observeGroups);
-  changed.observe(element, { childList: true });
-  observeGroups();
+  const childObserver = new MutationObserver(observeGroupsAndFit);
+  childObserver.observe(element, { childList: true });
+  observeGroupsAndFit();
   window.addEventListener("scroll", fit, { passive: true });
   window.addEventListener("resize", fit);
   return () => {
     cancelAnimationFrame(frame);
-    resized.disconnect();
-    changed.disconnect();
+    resizeObserver.disconnect();
+    childObserver.disconnect();
     window.removeEventListener("scroll", fit);
     window.removeEventListener("resize", fit);
   };
