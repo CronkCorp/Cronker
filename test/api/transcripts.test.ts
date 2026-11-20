@@ -431,6 +431,36 @@ describe("hand-connected Claude Code", () => {
     expect(await ok("GET", `/api/tickets/${untouched.id}/transcripts`, ada)).toEqual([]);
   });
 
+  test("uploading it again with more turns updates its Ticket links", async () => {
+    const { ada, project, ticket, agent, asAgent } = await adaWithAgent();
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
+    const firstTurn = [userSays("Look at CRONK-1.", 1), toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-1" }, 2)];
+    const before = await uploaded("laptop-1", firstTurn, asAgent);
+    expect(await ok("GET", `/api/tickets/${second.id}/transcripts`, ada)).toEqual([]);
+
+    const after = await uploaded(
+      "laptop-1",
+      [
+        ...firstTurn,
+        toolResult("t1", "{}", 3),
+        userSays("Now CRONK-2.", 4),
+        toolCall("t2", "mcp__cronk__edit_ticket", { ticket: "CRONK-2", priority: "high" }, 5),
+      ],
+      asAgent,
+    );
+
+    const ref = (t: { id: string; key: string; title: string }) => ({ id: t.id, key: t.key, title: t.title });
+    expect(after).toMatchObject({ id: before.id, tickets: [ref(ticket), ref(second)] });
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([{ ...after, namedAt: at(2) }]);
+    expect(await ok("GET", `/api/tickets/${second.id}/transcripts`, ada)).toEqual([{ ...after, namedAt: at(5) }]);
+    expect(await ok("GET", `/api/agents/${agent.id}/transcripts`, ada)).toEqual([after]);
+
+    // An upload that no longer names a Ticket, as after Claude Code's history was rewritten, unlinks it.
+    const rewritten = await uploaded("laptop-1", [userSays("Start over.", 1)], asAgent);
+    expect(rewritten.tickets).toEqual([]);
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
+  });
+
   test("an Agent of another Workspace can't list an Agent's Transcripts", async () => {
     const { agent, asAgent } = await adaWithAgent();
     await uploaded("laptop-1", [userSays("Hello.", 1)], asAgent);
