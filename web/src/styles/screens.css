@@ -127,12 +127,12 @@
 
 /* Board: open columns share the width but keep a card's readable width; when they don't fit, the board scrolls
    sideways itself while the page head and filters stay put. A column's name wraps rather than being cut off.
-   Done and Canceled start collapsed. */
+   Done and Canceled start collapsed. Every column stretches to the tallest one's height, so the board ends in one
+   straight line and a short column's empty lower part still takes a dropped card. */
 .board {
   position: relative; /* holds collapsed columns' visually hidden names, so they scroll with it, not the page */
   display: flex;
   gap: var(--space-2);
-  align-items: flex-start;
   overflow-x: auto;
 }
 .column {
