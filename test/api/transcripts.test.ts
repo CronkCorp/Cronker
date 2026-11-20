@@ -121,6 +121,7 @@ describe("uploading a transcript", () => {
       sessionId: "session_01ABC",
       agent: { id: agent.id, name: "claude-max" },
       runId: null,
+      tickets: [],
       entryCount: 5,
       gap: null,
       uploadedAt: "2026-01-01T09:00:00.000Z",
@@ -349,9 +350,16 @@ describe("a Run's Transcript", () => {
     const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
     expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/session_1", transcriptId: null });
 
-    const transcript = await uploaded("session_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+    const transcript = await uploaded(
+      "session_1",
+      [userSays("Triage CRONK-1.", 1), toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-1" }, 2)],
+      asAgent,
+    );
 
     expect(transcript.runId).toBe(run.id);
+    // It shows on the Ticket with its Run, not a second time as a Transcript naming the Ticket.
+    expect(transcript.tickets).toEqual([]);
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
     expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({
       sessionUrl: "https://claude.ai/code/session_1",
       transcriptId: transcript.id,
@@ -388,6 +396,39 @@ describe("hand-connected Claude Code", () => {
     expect(first).toMatchObject({ sessionId: "laptop-1", runId: null });
     // Newest upload first; a Run's Transcript is listed with its Run, not here.
     expect(await ok("GET", `/api/agents/${agent.id}/transcripts`, ada)).toEqual([second, first]);
+  });
+
+  test("is linked to each Ticket its Cronk tool calls name, and listed on those Tickets", async () => {
+    const { ada, project, ticket, asAgent } = await adaWithAgent();
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Second" });
+    const third = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Third" });
+    const untouched = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Only mentioned" });
+
+    const transcript = await uploaded(
+      "laptop-1",
+      [
+        userSays("Look at CRONK-4 and CRONK-1.", 1),
+        toolCall("t1", "mcp__cronk__read_ticket", { ticket: "cronk-1" }, 2),
+        toolResult("t1", "{}", 3),
+        // A Ticket named by its id, and the Ticket a block names.
+        toolCall("t2", "mcp__cronk__add_block", { ticket: third.id, blocks: "CRONK-2" }, 4),
+        toolCall("t3", "mcp__cronk__comment", { ticket: "CRONK-1", body: "Also CRONK-4." }, 5),
+        // Neither another server's tools, nor a key of no Ticket, link anything.
+        toolCall("t4", "mcp__linear__read_issue", { ticket: "CRONK-4" }, 6),
+        toolCall("t5", "mcp__cronk__read_ticket", { ticket: "CRONK-99" }, 7),
+        assistantSays("CRONK-4 is fine.", 8),
+      ],
+      asAgent,
+    );
+
+    const ref = (t: { id: string; key: string; title: string }) => ({ id: t.id, key: t.key, title: t.title });
+    // In the order the calls first named them.
+    expect(transcript.tickets).toEqual([ref(ticket), ref(third), ref(second)]);
+    expect(await ok("GET", `/api/transcripts/${transcript.id}`, ada)).toEqual(transcript);
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([{ ...transcript, namedAt: at(2) }]);
+    expect(await ok("GET", `/api/tickets/${third.id}/transcripts`, ada)).toEqual([{ ...transcript, namedAt: at(4) }]);
+    expect(await ok("GET", `/api/tickets/${second.id}/transcripts`, ada)).toEqual([{ ...transcript, namedAt: at(4) }]);
+    expect(await ok("GET", `/api/tickets/${untouched.id}/transcripts`, ada)).toEqual([]);
   });
 
   test("an Agent of another Workspace can't list an Agent's Transcripts", async () => {

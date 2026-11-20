@@ -6,7 +6,16 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { convertClaudeCode } from "./claude-code.js";
-import { agentTranscripts, entriesOf, EntryPage, findTranscript, Transcript, uploadTranscript } from "./transcripts.js";
+import {
+  agentTranscripts,
+  entriesOf,
+  EntryPage,
+  findTranscript,
+  TicketTranscript,
+  ticketTranscripts,
+  Transcript,
+  uploadTranscript,
+} from "./transcripts.js";
 
 /** The largest upload Cronk reads; what it keeps of one is capped further (ADR 0006). */
 const uploadLimitBytes = 256 * 1024 * 1024;
@@ -69,6 +78,23 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => agentTranscripts(context, await requireCaller(context, request), request.params.agentId),
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/transcripts",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "The Transcripts naming a Ticket",
+          description:
+            "The Transcripts of sessions of no Run, such as Claude Code connected by hand, whose Cronk tool calls " +
+            "(`mcp__cronk__…`) name the Ticket by its key or id, in the order they first named it. A Run's " +
+            "Transcript is linked from its Run instead.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Type.Array(TicketTranscript), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => ticketTranscripts(context, await requireCaller(context, request), request.params.ticketId),
     );
 
     const TranscriptParams = Type.Object({ transcriptId: Type.String() });

@@ -6,13 +6,15 @@ import { isUuid } from "../http/ids.js";
 import type { AgentCaller } from "../agents/tokens.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
+import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
 
 /**
  * Transcripts (ADR 0006): the record of an agent's conversation, converted on arrival from its source's format
  * into one list of entries and stored in Postgres; no raw file is kept. A Transcript belongs to the Agent that
- * uploaded it, keyed by its source session, and to the Run that ran in that session, if any. Uploading the same
- * session again replaces what Cronk holds.
+ * uploaded it, keyed by its source session, and to the Run that ran in that session, if any. One of no Run, such as
+ * Claude Code connected by hand, links to each Ticket its Cronk tool calls name. Uploading the same session again
+ * replaces what Cronk holds, links included.
  */
 
 export const TranscriptRole = Type.Union([Type.Literal("user"), Type.Literal("assistant"), Type.Literal("system")]);
@@ -36,6 +38,14 @@ export const Transcript = Type.Object({
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Run whose Runner returned this session when starting it; null for a session of no Run.",
   }),
+  tickets: Type.Array(
+    Type.Object({ id: Type.String({ format: "uuid" }), key: Type.String(), title: Type.String() }),
+    {
+      description:
+        "For a session of no Run, the Tickets its Cronk tool calls (`mcp__cronk__…`) name, in the order they first " +
+        "named them; it shows in their timelines. Empty for a Run's Transcript, which shows with its Run.",
+    },
+  ),
   entryCount: Type.Integer({ minimum: 0, description: "How many entries it keeps." }),
   gap: Type.Union(
     [
@@ -54,6 +64,18 @@ export const Transcript = Type.Object({
   uploadedAt: Type.String({ format: "date-time", description: "When it was last uploaded." }),
 });
 export type Transcript = Static<typeof Transcript>;
+
+/** A Transcript as a Ticket it names lists it, placed in the Ticket's timeline when its calls first named it. */
+export const TicketTranscript = Type.Intersect([
+  Transcript,
+  Type.Object({
+    namedAt: Type.String({
+      format: "date-time",
+      description: "When its first Cronk tool call naming this Ticket was made, or its upload's time if unknown.",
+    }),
+  }),
+]);
+export type TicketTranscript = Static<typeof TicketTranscript>;
 
 export const EntryPage = Type.Object({
   entries: Type.Array(TranscriptEntry),
@@ -75,6 +97,11 @@ const insertBatch = 500;
 type Row = Omit<Transcript, "uploadedAt"> & { uploadedAt: Date };
 const columns = `transcripts.id, transcripts.session_id as "sessionId",
   json_build_object('id', agents.id, 'name', agents.name) as agent, transcripts.run_id as "runId",
+  coalesce((select json_agg(json_build_object('id', tickets.id, 'key', projects.key || '-' || tickets.number,
+      'title', tickets.title) order by transcript_tickets.position)
+    from transcript_tickets join tickets on tickets.id = transcript_tickets.ticket_id
+    join projects on projects.id = tickets.project_id
+    where transcript_tickets.transcript_id = transcripts.id), '[]') as tickets,
   (select count(*)::int from transcript_entries where transcript_id = transcripts.id) as "entryCount",
   case when transcripts.gap_after is null then null else json_build_object('after', transcripts.gap_after,
     'entries', transcripts.gap_entries, 'bytes', transcripts.gap_bytes) end as gap,
@@ -127,6 +154,8 @@ export async function uploadTranscript(
       ],
     );
     const { id, created } = rows[0]!;
+    await tx.query("delete from transcript_tickets where transcript_id = $1", [id]);
+    if (!run.rows[0]) await linkNamedTickets(tx, agent.workspace.id, id, converted, now);
     await tx.query("delete from transcript_entries where transcript_id = $1", [id]);
     for (let start = 0; start < entries.length; start += insertBatch) {
       const batch = entries.slice(start, start + insertBatch);
@@ -149,6 +178,51 @@ export async function uploadTranscript(
     }
     return { transcript: present((await transcriptRow(tx, "transcripts.id = $1", [id]))!), created };
   });
+}
+
+/** The tool calls to Cronk's own MCP server, as Claude Code names them when the server is added as `cronk`. */
+const cronkTool = /^mcp__cronk__/i;
+/** The inputs of Cronk's tools that name a Ticket, by its key or its id. */
+const ticketInputs = ["ticket", "blocks"];
+
+/**
+ * Links the Transcript to each Ticket of the Workspace its Cronk tool calls name, in the order they first named
+ * them, each placed at the time of the first call naming it. Every entry counts, even one a cap left out.
+ */
+async function linkNamedTickets(tx: Tx, workspaceId: string, transcriptId: string, entries: ConvertedEntry[], now: Date) {
+  const named: { name: string; at: string | null }[] = [];
+  for (const entry of entries) {
+    if (entry.toolName === null || !cronkTool.test(entry.toolName)) continue;
+    const input = entry.toolInput;
+    if (typeof input !== "object" || input === null || Array.isArray(input)) continue;
+    for (const field of ticketInputs) {
+      const value = (input as Record<string, unknown>)[field];
+      if (typeof value === "string") named.push({ name: value.trim(), at: entry.at });
+    }
+  }
+  const ids = [...new Set(named.map(({ name }) => name.toLowerCase()).filter(isUuid))];
+  const keys = [...new Set(named.map(({ name }) => name).filter((name) => keysWritten(name)[0] === name))];
+  const byId = await tx.query<{ id: string }>("select id from tickets where workspace_id = $1 and id = any($2::uuid[])", [
+    workspaceId,
+    ids,
+  ]);
+  const byKey = await mentionsInEach(tx, workspaceId, keys);
+  const ticketOf = new Map<string, string>([
+    ...byId.rows.map(({ id }) => [id, id] as const),
+    ...keys.flatMap((key, index) => byKey[index]!.map((mention) => [key, mention.ticketId] as const)),
+  ]);
+  const firstNamed = new Map<string, Date>();
+  for (const { name, at } of named) {
+    const ticketId = ticketOf.get(isUuid(name) ? name.toLowerCase() : name);
+    if (ticketId && !firstNamed.has(ticketId)) firstNamed.set(ticketId, at ? new Date(at) : now);
+  }
+  if (firstNamed.size === 0) return;
+  await tx.query(
+    `insert into transcript_tickets (transcript_id, ticket_id, named_at, position)
+     select $1, ticket_id, named_at, position from unnest($2::uuid[], $3::timestamptz[]) with ordinality
+       as named (ticket_id, named_at, position)`,
+    [transcriptId, [...firstNamed.keys()], [...firstNamed.values()]],
+  );
 }
 
 /** The entry with every known secret in its text, tool input and tool result scrubbed. */
@@ -239,6 +313,21 @@ export async function agentTranscripts({ db }: Context, viewer: Viewer, agentId:
     [agentId],
   );
   return rows.map(present);
+}
+
+/** The Transcripts linked to a Ticket by the Cronk tool calls that named it, in the order they first named it. */
+export async function ticketTranscripts({ db }: Context, viewer: Viewer, ticketId: string): Promise<TicketTranscript[]> {
+  const ticket = await findTicketRow(db, viewer, ticketId);
+  if (!ticket) throw ticketNotFound();
+  const { rows } = await db.query<Row & { namedAt: Date }>(
+    `select ${columns}, transcript_tickets.named_at as "namedAt"
+     from transcript_tickets join transcripts on transcripts.id = transcript_tickets.transcript_id
+     join agents on agents.id = transcripts.agent_id
+     where transcript_tickets.ticket_id = $1
+     order by transcript_tickets.named_at, transcripts.id`,
+    [ticket.id],
+  );
+  return rows.map(({ namedAt, ...row }) => ({ ...present(row), namedAt: namedAt.toISOString() }));
 }
 
 /** A page of a Transcript's entries, in order, after the given position. */
