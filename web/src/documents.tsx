@@ -333,7 +333,8 @@ export function DocumentScreen({
           </div>
           <aside className="side" aria-label="Document details">
             <Versions
-              key={`${versionsShown} ${document.version.number}`}
+              key={versionsShown}
+              current={document.version.number}
               source={{
                 list: () => api.versions(document.id),
                 read: (number) => api.version(document.id, number),
@@ -570,20 +571,40 @@ function BodiesCompared({ comparison }: { comparison: Comparison }) {
 
 /**
  * A Document's, Decision's, Term's or Artifact's Versions, newest first, in a side list, each with who saved it and
- * when: read any one, or pick two to see what changed.
+ * when: read any one, or pick two to see what changed. A new current Version, such as one saved elsewhere, joins the
+ * list in place, leaving whatever is open and picked as it is.
  */
-export function Versions<V extends VersionWithBody, C = Comparison<V>>({ source }: { source: VersionSource<V, C> }) {
+export function Versions<V extends VersionWithBody, C = Comparison<V>>({
+  source,
+  current,
+}: {
+  source: VersionSource<V, C>;
+  /** The current Version's number; the list is read again when it changes. */
+  current: number;
+}) {
   const [versions, setVersions] = useState<ListedVersion[] | null>(null);
   const [shown, setShown] = useState<V | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
   const [comparison, setComparison] = useState<C | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // Kept apart from the others so the next list read clears it.
+  const [listFailure, setListFailure] = useState<string | null>(null);
   const latest = useLatest();
-  // A new source each render is the same Versions; the screen remounts this to show a new one.
+  const latestList = useLatest();
+  // A new source each render reads the same Versions; the latest one is used.
   const sourceRef = useRef(source);
+  sourceRef.current = source;
   useEffect(() => {
-    sourceRef.current.list().then(setVersions, (e: Error) => setFailure(e.message));
-  }, []);
+    // Lists read quickly one after another show only the last, however the replies arrive.
+    latestList(
+      sourceRef.current.list(),
+      (listed) => {
+        setVersions(listed);
+        setListFailure(null);
+      },
+      (e) => setListFailure(e.message),
+    );
+  }, [current, latestList]);
 
   const pick = (number: number, on: boolean) => {
     const next = on ? [...picked.filter((n) => n !== number), number].slice(-2) : picked.filter((n) => n !== number);
@@ -595,15 +616,16 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({ source 
     }
   };
   const { read, show, showComparison } = sourceRef.current;
+  const arrived = useArrivals(versions?.map((version) => String(version.number)) ?? [], versions !== null);
 
-  if (!versions) return failure ? <FormError error={failure} /> : null;
+  if (!versions) return listFailure ? <FormError error={listFailure} /> : null;
   return (
     <section aria-label="Versions" className="panel side-section">
       <h2 className="side-title">Versions</h2>
       {versions.length > 1 && <p className="muted small">Pick two to see what changed.</p>}
       <ol className="version-list">
         {[...versions].reverse().map((version) => (
-          <li key={version.number}>
+          <li key={version.number} className={arrived.has(String(version.number)) ? "arrived" : undefined}>
             {versions.length > 1 && (
               <input
                 type="checkbox"
@@ -627,7 +649,7 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({ source 
           </li>
         ))}
       </ol>
-      <FormError error={failure} />
+      <FormError error={failure ?? listFailure} />
       <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.title}` : ""} wide>
         {shown && (
           <>

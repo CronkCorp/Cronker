@@ -102,6 +102,66 @@ test("Documents, Terms and Decisions show what another member adds or saves, wit
   await expect(page.getByRole("complementary", { name: "Decision details" })).toContainText("Accepted");
 });
 
+test("a save by another member adds its Version to the list without closing what Ada has open", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const bob = await addMember(cronk, cookie, workspace.id, "bob@example.com");
+  const as = (who: string) => async (method: string, path: string, body?: unknown) => {
+    const response = await cronk.request(method, path, { cookie: who, body });
+    expect(response.ok).toBe(true);
+    return response.json();
+  };
+  const asAda = as(cookie);
+  const asBob = as(bob.cookie);
+  await signInInBrowser(page, cronk);
+  // An open dialog hides the page behind it from assistive technology, the side list included.
+  const versions = page.getByRole("region", { name: "Versions", includeHidden: true });
+  const comparison = page.getByRole("dialog", { name: "What changed" });
+
+  /** Opens What changed between Versions 1 and 2, has Bob save, and checks it stays open, picked, as Version 3 joins. */
+  const comparingThrough = async (save: () => Promise<unknown>) => {
+    await versions.getByLabel("Compare Version 1").check();
+    await versions.getByLabel("Compare Version 2").check();
+    await expect(comparison).toBeVisible();
+    await save();
+    await expect(versions.getByRole("listitem", { includeHidden: true })).toHaveCount(3);
+    await expect(comparison).toBeVisible();
+    await expect(versions.getByLabel("Compare Version 1")).toBeChecked();
+    await expect(versions.getByLabel("Compare Version 2")).toBeChecked();
+    await expect(versions.getByLabel("Compare Version 3")).not.toBeChecked();
+    await page.keyboard.press("Escape");
+  };
+
+  const guide = await asAda("POST", `/api/workspaces/${workspace.id}/documents`, { title: "Guide", body: "First draft." });
+  await asAda("PATCH", `/api/documents/${guide.id}`, { baseVersion: 1, title: "Guide", body: "Second draft." });
+  await page.goto(`${cronk.url}/documents/${guide.id}`);
+  await comparingThrough(() => asBob("PATCH", `/api/documents/${guide.id}`, { baseVersion: 2, title: "Guide", body: "Third draft." }));
+  // A Version Ada reads stays open as well.
+  await versions.getByRole("button", { name: "Version 1", includeHidden: true }).click();
+  const reading = page.getByRole("dialog", { name: "Version 1: Guide" });
+  await expect(reading).toContainText("First draft.");
+  await asBob("PATCH", `/api/documents/${guide.id}`, { baseVersion: 3, title: "Guide", body: "Fourth draft." });
+  await expect(versions.getByRole("listitem", { includeHidden: true })).toHaveCount(4);
+  await expect(reading).toContainText("First draft.");
+  await page.keyboard.press("Escape");
+
+  const term = await asAda("POST", `/api/workspaces/${workspace.id}/terms`, { name: "Ticket", definition: "A unit of work." });
+  await asAda("PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "A unit of work in a Project." });
+  await page.goto(`${cronk.url}/terms/${term.id}`);
+  await comparingThrough(() => asBob("PATCH", `/api/terms/${term.id}`, { baseVersion: 2, definition: "A tracked unit of work." }));
+
+  const decision = await asAda("POST", `/api/workspaces/${workspace.id}/decisions`, { title: "Use Postgres", body: "It's dependable." });
+  await asAda("PATCH", `/api/decisions/${decision.id}`, { baseVersion: 1, body: "It's dependable and we know it." });
+  await page.goto(`${cronk.url}/decisions/${decision.id}`);
+  await comparingThrough(() => asBob("PATCH", `/api/decisions/${decision.id}`, { baseVersion: 2, status: "accepted" }));
+
+  const indexPage = (text: string) => [{ path: "index.html", contentBase64: Buffer.from(text).toString("base64") }];
+  const artifact = await asAda("POST", `/api/workspaces/${workspace.id}/artifacts`, { title: "Board", files: indexPage("<h1>Board</h1>") });
+  await asAda("PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, files: indexPage("<h1>Board</h1><p>Drag cards.</p>") });
+  await page.goto(`${cronk.url}/artifacts/${artifact.id}`);
+  await comparingThrough(() => asBob("PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 2, title: "Board prototype" }));
+});
+
 test("every streaming view says it is Live, and Reconnecting… while its stream is away", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
