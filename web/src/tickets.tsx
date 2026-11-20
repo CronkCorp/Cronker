@@ -1450,7 +1450,7 @@ function CommentThread({
   );
 }
 
-/** A Run on the timeline as one line: its state, Step, Agent and model, and the Outcome it chose. */
+/** A Run on the timeline as one line: its state, Step, Agent and model, the Outcome it chose, and its Transcript and session. */
 function RunEntry({ run, project, arrived }: { run: Run; project: Project; arrived: boolean }) {
   const step = project.statuses.find((s) => s.id === run.step.statusId)?.step;
   const target = step?.outcomes.find((o) => o.name === run.outcome)?.statusId;
@@ -1479,6 +1479,14 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
           </span>
         )}{" "}
         <RelativeTime at={run.startedAt} clock />
+        {run.transcriptId && (
+          <>
+            {" "}
+            <Link to={`/transcripts/${run.transcriptId}`} className="small">
+              Transcript
+            </Link>
+          </>
+        )}
         {run.sessionUrl && (
           <>
             {" "}

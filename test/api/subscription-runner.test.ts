@@ -73,6 +73,7 @@ describe("starting a Run", () => {
         state: "running",
         model: "haiku",
         sessionUrl: "https://claude.ai/code/session_01STANDIN",
+        transcriptId: null,
       }),
     );
   });

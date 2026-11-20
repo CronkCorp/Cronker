@@ -10,12 +10,15 @@ import { appJwt, convertManifest, under } from "./client.js";
  * The installation's one GitHub App, created through GitHub's manifest flow: Cronk hands
  * the browser a manifest to post to GitHub, GitHub creates the App and sends the browser
  * back with a code, and Cronk trades the code for the App's credentials, storing its
- * secrets encrypted. The App signs Users in, reads the Repositories it's installed on and
- * sends Cronk webhooks.
+ * secrets encrypted. The App signs Users in, reads and writes the Repositories it's installed
+ * on and sends Cronk webhooks.
  *
  * Any Admin may create it, during setup or later, but only while the installation has
  * none, so no Admin can swap the App every Workspace signs in through.
  */
+
+/** How much a permission allows on GitHub; `write` includes reading. */
+export type Access = "read" | "write";
 
 export const GitHubApp = Type.Object({
   name: Type.String(),
@@ -39,14 +42,16 @@ export const createdPath = "/api/github/app/created";
 export const webhooksPath = "/api/github/webhooks";
 
 /**
- * What the App needs from GitHub: reading email addresses to sign Users in, and reading
- * Pull Requests, checks and commit statuses on the Repositories it's installed on. Never
- * write access.
+ * What the App needs from GitHub: reading email addresses to sign Users in; reading checks
+ * and commit statuses on the Repositories it's installed on; and writing their contents and
+ * Pull Requests, so Runs push branches and open Pull Requests with its token and agents
+ * merge through it (ADR 0007).
  */
-export const requiredPermissions: Readonly<Record<string, "read">> = {
+export const requiredPermissions: Readonly<Record<string, Access>> = {
   emails: "read",
   metadata: "read",
-  pull_requests: "read",
+  contents: "write",
+  pull_requests: "write",
   checks: "read",
   statuses: "read",
 };
