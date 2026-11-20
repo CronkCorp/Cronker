@@ -6,6 +6,9 @@ import { Link, navigate, usePath, useQuery } from "./router.js";
 import { EmptyState, FormError, PageHead, workspaceCrumb } from "./ui/controls.js";
 import { Key } from "./ui/labels.js";
 
+/** How many results of each kind a search gives at most, as the API does. */
+const perKind = 20;
+
 /** Where a search of the Workspace shows its results, narrowed to a Project when one is given. */
 function searchPage(workspaceId: string, q: string, project?: string): string {
   const query = new URLSearchParams({ q });
@@ -73,6 +76,8 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
   }, [workspace.id]);
   useEffect(() => {
     setFailure(null);
+    // Another search's results never stand under this one's head while it loads.
+    setResults(null);
     if (!q.trim()) {
       setResults([]);
       return;
@@ -126,7 +131,9 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
                           {result.ticketKey && <Key>{result.ticketKey}</Key>} {result.title}
                         </Link>
                         {result.projectId ? (
-                          <span className="search-place mono">{keyOf.get(result.projectId) ?? ""}</span>
+                          <span className="search-place">
+                            <Key>{keyOf.get(result.projectId) ?? ""}</Key>
+                          </span>
                         ) : (
                           <span className="search-place">Workspace</span>
                         )}
@@ -138,6 +145,9 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
                       </li>
                     ))}
                   </ul>
+                  {found.length === perKind && (
+                    <p className="muted search-more">The best {perKind} shown; narrow the search for others.</p>
+                  )}
                 </section>
               );
             })}

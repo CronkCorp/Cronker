@@ -99,7 +99,7 @@ function Sidebar({
         <WorkspaceSwitcher workspaces={workspaces} current={current} />
         {current && (
           <>
-            <SearchBox key={current.id} workspaceId={current.id} />
+            <SearchBox key={`search ${current.id}`} workspaceId={current.id} />
             <InboxLink key={current.id} workspaceId={current.id} current={area === "inbox"} />
             <SideLink to={knowledge("documents")} current={area === "documents"}>
               Documents

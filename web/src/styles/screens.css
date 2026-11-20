@@ -1209,8 +1209,11 @@
   color: var(--muted);
   font-size: 13px;
 }
+.search-more {
+  font-size: 13px;
+}
 .search-snippet mark {
-  border-radius: 2px;
+  border-radius: var(--radius-chip);
   background: var(--warn-soft);
   color: var(--text);
   font-weight: 600;
