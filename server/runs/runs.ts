@@ -217,6 +217,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
       { field: "status", from: named(status), to: named(target) },
     ]);
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
+    // A failure known before the default Outcome moved it into a Review Status sends it back, and Runs start from there.
+    if (target.kind === "review") await sendBackForKnownFailures(context, tx, ticketId);
     return enterStatus(context, tx, ticketId, now, skipped);
   }
   // A running Run holds its Ticket: no other is recorded beside it, not even a refused one.
@@ -599,8 +601,6 @@ export async function finishRun(
         if (applied!.needsYou && questionBy === "agent") await askQuestion(context, tx, ticket, asking, question!, now);
       },
     });
-    // A failure that arrived before the Ticket reached a Review Status sends it back once the Outcome moves it into one.
-    await sendBackForKnownFailures(context, tx, ticket.id);
     return present((await findRunRow(tx, caller, run.id))!);
   });
 }

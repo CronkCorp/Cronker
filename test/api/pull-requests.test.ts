@@ -876,7 +876,7 @@ describe("Failures sending work back", () => {
       expect(finished.status, await finished.clone().text()).toBe(200);
     };
     const status = (name: string) => statusNamed(project, name);
-    return { ...setup, ticket, pr, status, finishImplementing };
+    return { ...setup, ticket, pr, status, secret, finishImplementing };
   }
 
   /** The Ticket of `implementing`, its Implement Run finished with *done*, moving it to In Review. */
@@ -1116,6 +1116,71 @@ describe("Failures sending work back", () => {
     await finishImplementing();
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
     expect(await commentsOf(ticket.id, cookie)).toHaveLength(1);
+  });
+
+  test("a check that failed while the Code review Run was working sends the Ticket back once that Run approves, and the Workspace hears of it", async () => {
+    const { workspace, cookie, app, installation, project, cronker, ticket, status, secret, finishImplementing } = await implementing();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { labels: [] });
+    // Implement's *done* moves it to Code review, an Active Status, whose Run starts working.
+    await finishImplementing();
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Code review") });
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+    const running = (await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie)).find((r: { state: string }) => r.state === "running");
+    const stream = await openStream(cronk, cookie, workspace.id);
+
+    const approved = await cronk.request("POST", `/api/runs/${running.id}/finish`, {
+      headers: { authorization: `Bearer ${secret}` },
+      body: { outcome: "approve" },
+    });
+    expect(approved.status, await approved.clone().text()).toBe(200);
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect((await commentsOf(ticket.id, cookie)).map((c: { body: string }) => c.body)).toEqual([
+      "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed on " +
+        "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
+    ]);
+    const heard: unknown[] = [];
+    for (;;) {
+      try {
+        heard.push(await stream.next(300));
+      } catch {
+        break;
+      }
+    }
+    stream.close();
+    expect(heard).toContainEqual({ type: "pull_requests.changed", data: { projectId: project.id, ticketId: ticket.id } });
+  });
+
+  test("a failure known before a skipped Step's default Outcome moves the Ticket into a Review Status sends it back", async () => {
+    const { cookie, app, installation, cronker, ticket, status } = await implementing();
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    // Ada moves it to Code review, which its `no-review` Label skips by its default Outcome, into In Review.
+    await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { statusId: status("Code review") });
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    expect(await commentsOf(ticket.id, cookie)).toHaveLength(1);
+  });
+
+  test("a Step on the Review Status gets no Run when a known failure sends the Ticket straight back", async () => {
+    const { cookie, app, installation, project, cronker, ticket, status, finishImplementing } = await implementing();
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("In Review")}/step`, cookie, {
+      brief: "Look it over.",
+      model: "opus",
+      outcomes: [
+        { name: "park", statusId: status("Backlog"), default: true, needsYou: false, countsAsRound: false },
+        { name: "done", statusId: status("Done"), default: false, needsYou: false, countsAsRound: false },
+        { name: "needs you", statusId: status("Ready"), default: false, needsYou: true, countsAsRound: false },
+      ],
+    });
+    await deliver(app, "check_run", checkRunEvent(installation, cronker, { id: 10, name: "test", sha: "c1", status: "completed", conclusion: "failure" }));
+
+    await finishImplementing();
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("Implement") });
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, cookie);
+    expect(runs.map((r: { state: string; statusName: string }) => r.state)).toEqual(["finished", "running"]);
+    expect(cronk.runner.stops).toEqual([]);
   });
 
   const failing = (installation: StandInInstallation, repository: StandInRepository, sha: string) =>

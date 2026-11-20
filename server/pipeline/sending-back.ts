@@ -131,38 +131,62 @@ export async function sendBackForFailure(
   return sent;
 }
 
+/** A failed check on the commit, if Cronk knows one: the first GitHub reported, as the commit's failure. */
+export async function failingCheckOn(tx: Tx, repositoryId: number | string, sha: string): Promise<Failure | null> {
+  const { rows } = await tx.query<{ name: string; url: string | null }>(
+    `select name, url from commit_checks where repository_id = $1 and sha = $2 and state = 'failed'
+     order by source_id limit 1`,
+    [repositoryId, sha],
+  );
+  return rows[0] ? { kind: "check", sha, ...rows[0] } : null;
+}
+
 /**
  * Sends the Ticket back for a failure Cronk already knows on one of its open Pull Requests, now that an Outcome has
- * moved it: a failing check on the latest commit, or a review still requesting changes. Failures that sent it back
- * before are passed over, and the first that sends it back ends the search. Call it in the transaction that moved it.
+ * moved it into a Review Status: a failing check on the latest commit, or a review still requesting changes. Failures
+ * that sent it back before are passed over, and the first that sends it back ends the search. Says whether one did.
+ * Call it in the transaction that moved the Ticket, before a Run starts in the Review Status.
  */
-export async function sendBackForKnownFailures(context: Context, tx: Tx, ticketId: string): Promise<void> {
-  const { rows: pullRequests } = await tx.query<FailedPullRequest & { id: string; repositoryId: string; sha: string }>(
+export async function sendBackForKnownFailures(context: Context, tx: Tx, ticketId: string): Promise<boolean> {
+  const { rows: pullRequests } = await tx.query<{
+    id: string;
+    repositoryId: string;
+    sha: string;
+    repository: string;
+    number: number;
+    url: string;
+    workspaceId: string;
+    projectId: string;
+  }>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId", pull_requests.head_sha as sha,
-       pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.url
-     from pull_request_links join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+       pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.url,
+       tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"
+     from pull_request_links
+     join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+     join tickets on tickets.id = pull_request_links.ticket_id
      where pull_request_links.ticket_id = $1 and pull_requests.state in ('open', 'draft')
      order by pull_request_links.linked_at, pull_requests.id`,
     [ticketId],
   );
-  for (const { repositoryId, sha, ...row } of pullRequests) {
+  for (const { id, repositoryId, sha, repository, number, url, workspaceId, projectId } of pullRequests) {
     // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
-    const pullRequest = { ...row, id: Number(row.id) };
+    const pullRequest = { id: Number(id), repository, number, url };
     const failures: Failure[] = [];
-    const { rows: checks } = await tx.query<{ name: string; url: string | null }>(
-      `select name, url from commit_checks where repository_id = $1 and sha = $2 and state = 'failed'
-       order by source_id limit 1`,
-      [repositoryId, sha],
-    );
-    if (checks[0]) failures.push({ kind: "check", sha, ...checks[0] });
+    const check = await failingCheckOn(tx, repositoryId, sha);
+    if (check) failures.push(check);
     const { rows: reviews } = await tx.query<{ id: string; reviewer: string; url: string | null }>(
       `select review_id as id, reviewer, url from pull_request_reviews
        where pull_request_id = $1 and state = 'changes_requested' order by review_id`,
-      [pullRequest.id],
+      [id],
     );
-    failures.push(...reviews.map((r) => ({ kind: "review" as const, id: Number(r.id), reviewer: r.reviewer, url: r.url })));
+    for (const review of reviews) failures.push({ kind: "review", id: Number(review.id), reviewer: review.reviewer, url: review.url });
     for (const failure of failures) {
-      if (await sendBackForFailure(context, tx, pullRequest, failure, ticketId)) return;
+      if (await sendBackForFailure(context, tx, pullRequest, failure, ticketId)) {
+        // What last sent the Ticket back shows on its Pull Request.
+        context.live.publish(tx, workspaceId, { type: "pull_requests.changed", projectId, ticketId });
+        return true;
+      }
     }
   }
+  return false;
 }
