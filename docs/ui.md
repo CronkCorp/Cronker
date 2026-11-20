@@ -24,7 +24,7 @@ The web client follows this file since the styling pass at the end of milestone 
   - The Workspace name and mark, which opens a menu to switch Workspace or start a New Workspace.
   - The search box, which opens the Workspace's search results on Enter. Below 760px it takes a line of its own under the strip's links.
   - Inbox, with the number of waiting items as a red count.
-  - Documents, Terms and Decisions (the Workspace's, or the current Project's).
+  - Documents, Terms, Decisions and Artifacts (the Workspace's, or the current Project's).
   - **Projects**, each listed by key and name.
   - **Workspace**: Agents and Runners, plus Members, GitHub and Settings for Admins. Runners shows even without a Workspace, since a User's Runners belong to none.
   - The signed-in User, marked "Admin" for an Admin, which opens a menu: the theme, a System / Light / Dark segmented control that defaults to System; Password; and Sign out. The theme is kept in the browser (`localStorage`), not on the User, so each device can differ, and a small script in `index.html` applies it before first paint.
@@ -32,7 +32,7 @@ The web client follows this file since the styling pass at the end of milestone 
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
 - **Page head:** breadcrumbs (13px, muted, with `--accent` links), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title, and a Document's, Term's or Decision's Version, who saved it and when on a muted line under it. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action. Reject on a proposed Decision is not one, since nothing is lost: it sits beside Accept, though it still asks first.
 - **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, which used to sit on Members), so the sidebar's Settings has a page of its own.
-- **A Ticket's or Document's Project:** a page tells the frame which item it belongs to and which Project it is in (`usePlace`), and the sidebar's Documents, Terms and Decisions then lead to that Project's.
+- **A Ticket's or Document's Project:** a page tells the frame which item it belongs to and which Project it is in (`usePlace`), and the sidebar's Documents, Terms, Decisions and Artifacts then lead to that Project's.
 
 ## Design tokens
 
@@ -97,7 +97,7 @@ The web client keeps its own small component set, styled with the tokens in plai
   - Buttons size to their label and are never full width outside sign-in forms.
 - **Forms:** the label sits above the field, in 12px `--muted`. Inputs have a `--surface` background and a 1px border, and show the `--accent` focus ring. Markdown inputs use the mono face. Each error sits under its form in `--danger` with `role="alert"`, and a refusal's rule and advice show as Cronk gives them. A settings page stays open after saving and says "Saved." beside its buttons (`role="status"`), or under a section's checkboxes where a toggle saves at once.
 - **Settings layout** (`<SettingsLayout>`): every settings page (Project settings, the Workspace's Settings, Members and GitHub) lists its sections in a 180px column beside them, named "Settings sections". Every section stays on the page: a link in the list brings its section into view, and the section in view is marked like a selected list item (`--accent-soft`, with an `--accent` left border). Below 760px the list wraps above the sections.
-- **Pickers** (`<FieldPicker>`): Ticket fields are edited in place. Clicking the value opens a popover list with type-to-filter; once something is typed, Enter picks the first match, and a picker that takes new values (Labels) offers the typed text. Bare `<select>` rows are not used for this. The same list (`<Picker>`) opens from a button for other choices on the Ticket, such as Link a Document… (its options grouped under This Project and The Workspace) and the kind of a Relation to add, and for Add Repository in Project settings. A list whose options come from elsewhere loads them when first opened and shows a line in their place while they load or when they can't be had. Add Repository's list ends with **Refresh**, which asks GitHub afresh instead of using the few minutes' list Cronk keeps, for a Repository just installed there.
+- **Pickers** (`<FieldPicker>`): Ticket fields are edited in place. Clicking the value opens a popover list with type-to-filter; once something is typed, Enter picks the first match, and a picker that takes new values (Labels) offers the typed text. Bare `<select>` rows are not used for this. The same list (`<Picker>`) opens from a button for other choices on the Ticket, such as Link a Document… and Link an Artifact… (their options grouped under This Project and The Workspace) and the kind of a Relation to add, and for Add Repository in Project settings. A list whose options come from elsewhere loads them when first opened and shows a line in their place while they load or when they can't be had. Add Repository's list ends with **Refresh**, which asks GitHub afresh instead of using the few minutes' list Cronk keeps, for a Repository just installed there.
 - **Times** (`<RelativeTime>`):
   - "just now" under a minute, then relative under an hour ("12 min ago").
   - Then clock time for today ("10:18") and "yesterday".
@@ -114,7 +114,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Project
 
-- **Page head:** the title, the Live indicator, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Project settings), and New Ticket as the only primary action, last. Under it, a row of filters: Status, Assignee, Priority and Label.
+- **Page head:** the title, the Live indicator, a List / Board segmented control, a "…" menu (Documents, Terms, Decisions, Artifacts, Project settings), and New Ticket as the only primary action, last. Under it, a row of filters: Status, Assignee, Priority and Label.
 - **Project settings:** in the settings layout, one section each for Statuses and their Steps (with the Brief preview), Delegation defaults (new Tickets delegated, Autonomous Delegation), Repositories, Pull Request automation and Merges by agents (*agents may merge*, which only an Admin can change; for others its checkbox is disabled and says so). A Step's form chooses its kind, ordinary or Merge, and a Merge Step's summary starts with "Merge Step". Repositories lists the Project's own at once; **Add Repository** asks GitHub for the App's Repositories only when opened, listing those not yet listed by `owner/name`, grouped under each installation's account when there are several. A Step the User opened stays open after saving.
 - **List rows:** Status dot, key, title, Labels, Priority tag, the running Run's state when there is one, and the Delegate's and Assignee's avatars, each named in its tooltip ("Delegate: claude-laptop").
 - **Board:** open columns share the main column's width, each at least 240px, a card's readable width. When they don't fit, the board itself scrolls sideways (Shift + wheel, a trackpad, or holding a dragged card at its left or right edge); the page head and filters stay put and the page never scrolls sideways. Done and Canceled columns start collapsed to their dot and count; clicking one opens it until the User leaves the page, and nothing is stored. A column's name wraps rather than being cut off, with its Step's model label on a line under it. Cards show the key with the Priority beside it, then the title, then Labels and a Run state pill (while a Run is running, waiting or has gone wrong) with the avatars at the right.
@@ -148,7 +148,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Side panel (280px, sticky):**
   - Status, Priority, Assignee, Delegate, Autonomous Delegation (On, Off, or the Project's once delegated) and Labels, each edited in place, then Due date and Estimate. An agent's completion adds a Verification row among them: an Unverified chip with Accept and Reopen…, or Verified.
   - The **Run card**, in `--agent-soft`, while a Run is running or waiting: the Agent, the Step and its model label, the Run state, when it started and its session link (a waiting Run has not started, so it shows why it waits instead). A Run gone wrong shows here with Retry, in `--danger-soft`. It is hidden otherwise.
-  - Pull Requests, Parent, Sub-Tickets, Relations, Linked Documents (with Link and Unlink) and Files.
+  - Pull Requests, Parent, Sub-Tickets, Relations, Linked Documents and Linked Artifacts (each with Link and Unlink) and Files.
 - **Below 900px** the side panel moves above the main column, as on a Document's, Term's or Decision's page.
 - **Timeline entries**, oldest first, each with an avatar in the gutter:
   - **Comment:** the body in a bordered bubble, with replies indented under it. A Question is a Comment from the Agent in a `--warn-soft` box with its answer box. A send-back by Cronk is a Comment labelled `SENT BACK`, naming the failing checks (each linking to GitHub) or the review.
@@ -218,17 +218,22 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **A Decision's page:** number and status, the title at 24px, a banner for what it supersedes (`--info`) or what superseded it (`--warn`), the body at Document size, and a side panel with status and who proposed it, each label over its value, then its Versions.
 - **Status actions,** which only Users see, sit in the page head and save at once, saying so ("Accepted.", `role="status"`) beside them; the pill, banners and register follow, live on other open pages too. A proposed Decision's head holds **Edit**, **Reject** and **Accept** (primary, last). Reject asks first in a confirming dialog naming the Decision, since a rejected Decision is never deleted and stays in the register. Every other change is in the head's "…" menu: an accepted Decision offers **Deprecate** and **Supersede…**, which opens a dialog to choose the replacing Decision of the same place; a rejected, deprecated or superseded one offers **Back to proposed**, and a superseded one also Supersede… to change what replaces it. A refusal, such as for a change based on an outdated Version, closes any dialog and shows under the head, and the page shows the current Version.
 
+### Artifacts
+
+- **List** (`/projects/<id>/artifacts`, `/workspaces/<id>/artifacts`): the page head holds the same scope switch as Documents, Terms and Decisions, and no action, since Artifacts are created over the API and MCP. Below it, a table of title (its description under it in 12px `--muted`), who saved its current Version and when, last change first. An empty list says how Artifacts get there.
+
 ### Artifact
 
 ![Artifact](ui/artifact.png)
 
+- **Page head:** crumbs to its Project and its list, the title, the Live indicator, a "…" menu holding **Delete Artifact**, and **Open** last. Delete asks first in a confirming dialog naming the Artifact, then returns to its list.
 - The Artifact itself fills an iframe with `sandbox="allow-scripts"`, on white whatever the theme, beside a side list of its files (path, size, which is the page). Its description sits under the page head, whose meta names the current Version; **Open** opens the page on its own, as sandboxed as in the frame.
 - A save from elsewhere shows the new Version in place: each Version has its own address, so the frame loads it afresh.
 
 ### Search
 
 - **Results page** (`/workspaces/<id>/search?q=…`, with `&project=<id>` when narrowed): breadcrumbs to the Workspace, "Search" as the `h1` with "Results for “…”" under it, and a Project filter (All Projects, or one by key and name). It marks no sidebar item.
-- **Grouped by kind:** Tickets, Documents, Reports, Terms and Decisions, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out. A kind gives its best 20 at most; a full group says so under it, and to narrow the search for others. While a search loads, the last one's results are cleared.
+- **Grouped by kind:** Tickets, Documents, Reports, Terms, Decisions and Artifacts, in that order, each an `h2` with its count over a panel of results, best first. A group with no results is left out. A kind gives its best 20 at most; a full group says so under it, and to narrow the search for others. While a search loads, the last one's results are cleared.
 - **A result:** its title as a link (a Ticket's or Report's Ticket key before it in the mono face), where it is kept at the right (the Project's key, or "Workspace"), and under it the snippet in 13px `--muted`, the matching words marked in `--warn-soft` at 600.
 - **Nothing found:** an empty state saying nothing matches, and how to write a search: a phrase in quotes, `or` between alternatives, `-word` to leave out.
 
@@ -253,8 +258,8 @@ Server-sent events keep open views current: each Workspace has its stream, and a
 
 - New entries appear in place (timeline entries at the end, Inbox items in their group), with a short `--accent` ring that fades over about 2s. The page never scrolls on its own unless the User is already at the end.
 - A changed field updates where it is shown, such as the side panel, a card on the board or the Run card. Nothing reloads the whole page or flashes empty while reloading.
-- An item the User is acting on is never removed under them. If it is resolved elsewhere, it stays visible as "Resolved elsewhere", with its actions disabled and a link to its Ticket, until the User moves on. A Document or Term deleted elsewhere while open stays shown under a `warn` banner, "Deleted elsewhere", without its actions and with a link back to its list.
-- Every streaming view shows the Live indicator, and reconnecting reloads its lists. The streaming views are the board and list, a Ticket, the Inbox, Runners, and Documents, Terms and Decisions: their lists, and each one's own page; and an Artifact's page.
+- An item the User is acting on is never removed under them. If it is resolved elsewhere, it stays visible as "Resolved elsewhere", with its actions disabled and a link to its Ticket, until the User moves on. A Document, Term or Artifact deleted elsewhere while open stays shown under a `warn` banner, "Deleted elsewhere", without its actions and with a link back to its list.
+- Every streaming view shows the Live indicator, and reconnecting reloads its lists. The streaming views are the board and list, a Ticket, the Inbox, Runners, and Documents, Terms, Decisions and Artifacts: their lists, and each one's own page.
 
 ## Changing this document
 
