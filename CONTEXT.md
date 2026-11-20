@@ -123,7 +123,7 @@ A recorded choice with its reasoning and a status: proposed, accepted, rejected,
 _Avoid_: ADR (in the product), RFC
 
 **Artifact**:
-A live, viewable thing an Actor builds, such as an HTML prototype, kept with Versions in a Project or the Workspace and shown in isolation from Cronk itself.
+A live, viewable page an Actor builds, such as an HTML prototype, with the files it refers to, kept with Versions in a Project or the Workspace and shown in isolation from Cronk itself.
 _Avoid_: Prototype (as the general term), preview, app
 
 **Transcript**:
