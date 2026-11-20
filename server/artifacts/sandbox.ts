@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { sandboxPath, servedFile } from "./artifacts.js";
@@ -25,24 +25,34 @@ export function sandboxRoutes(context: Context): FastifyPluginAsync {
       return payload;
     });
 
-    app.get<{ Params: { key: string; "*": string } }>(
-      "/sandbox/:key/*",
-      { schema: { hide: true } },
-      async (request, reply) => {
-        const { key, "*": path } = request.params;
-        const found = await servedFile(context.db, key, path);
-        const notFound = new ApiError(404, "not_found", "Nothing is here.");
-        if (!found) throw notFound;
-        if ("page" in found) return reply.redirect(sandboxPath(key, found.page));
-        const content = await context.attachments.get(found.blobId);
-        if (!content) throw notFound;
-        return reply
-          .header("content-type", textual(found.mediaType) ? `${found.mediaType}; charset=utf-8` : found.mediaType)
-          .header("content-length", found.size)
-          // A Version never changes, so what is served under its key stays as it is.
-          .header("cache-control", "private, max-age=31536000, immutable")
-          .send(content);
-      },
+    const notFound = () => new ApiError(404, "not_found", "Nothing is here.");
+
+    /** Serves the file at the path of the Version under the key; with no path, leads to the Version's page. */
+    async function serve(key: string, path: string, reply: FastifyReply) {
+      const found = await servedFile(context.db, key, path);
+      if (!found) throw notFound();
+      if ("page" in found) return reply.redirect(sandboxPath(key, found.page));
+      const content = await context.attachments.get(found.blobId);
+      if (!content) throw notFound();
+      return reply
+        .header("content-type", textual(found.mediaType) ? `${found.mediaType}; charset=utf-8` : found.mediaType)
+        .header("content-length", found.size)
+        // A Version never changes, so what is served under its key stays as it is.
+        .header("cache-control", "private, max-age=31536000, immutable")
+        .send(content);
+    }
+
+    app.get<{ Params: { key: string; "*": string } }>("/sandbox/:key/*", { schema: { hide: true } }, (request, reply) =>
+      serve(request.params.key, request.params["*"], reply),
     );
+    app.get<{ Params: { key: string } }>("/sandbox/:key", { schema: { hide: true } }, (request, reply) =>
+      serve(request.params.key, "", reply),
+    );
+    // Anything else under the sandbox's path is answered here, sandboxed, rather than by the web client.
+    for (const url of ["/sandbox", "/sandbox/"]) {
+      app.get(url, { schema: { hide: true } }, async () => {
+        throw notFound();
+      });
+    }
   };
 }

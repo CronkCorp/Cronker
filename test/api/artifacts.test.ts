@@ -116,6 +116,23 @@ describe("Artifacts", () => {
     expect(missing.headers.get("content-security-policy")).toBe("sandbox allow-scripts");
     // Nor does a path climb out of the Version.
     expect((await open(new URL("../other/index.html", pageUrl).href)).status).toBe(404);
+    // Asked only for its headers, a file is sandboxed all the same.
+    const head = await fetch(pageUrl, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-security-policy")).toBe("sandbox allow-scripts");
+    // The Version's own address, with or without its last slash, leads to its page, sandboxed on the way.
+    const key = pageUrl.pathname.split("/")[2];
+    for (const path of [`/sandbox/${key}`, `/sandbox/${key}/`]) {
+      const response = await fetch(new URL(path, cronk.url), { redirect: "manual" });
+      expect(response.status, path).toBe(302);
+      expect(response.headers.get("location"), path).toBe(pageUrl.pathname);
+      expect(response.headers.get("content-security-policy"), path).toBe("sandbox allow-scripts");
+    }
+    for (const path of ["/sandbox", "/sandbox/", "/sandbox/unknown"]) {
+      const response = await open(path);
+      expect(response.status, path).toBe(404);
+      expect(response.headers.get("content-security-policy"), path).toBe("sandbox allow-scripts");
+    }
   });
 
   test("a save makes the next Version holding the whole set of files, adding, replacing and removing some, while the earlier Version stays served as it was", async () => {
@@ -212,6 +229,13 @@ describe("Artifacts", () => {
     expect(save.status).toBe(413);
     expect(save.json.error.code).toBe("artifact_too_large");
     expect(await ok("GET", `/api/artifacts/${artifact.id}`, ada)).toEqual(artifact);
+    // Files far over the limit are refused alike, before Cronk reads them all.
+    const huge = await call("POST", `/api/workspaces/${workspace.id}/artifacts`, asAgent, {
+      title: "Board prototype",
+      files: [file("index.html", "x".repeat(2 * 1024 * 1024))],
+    });
+    expect(huge.status).toBe(413);
+    expect(huge.json.error).toMatchObject({ code: "artifact_too_large", rule: expect.any(String), advice: expect.any(String) });
     // Replacing a file counts only what replaces it.
     expect((await call("PATCH", `/api/artifacts/${artifact.id}`, asAgent, { baseVersion: 1, files: [tooLarge("index.html")] })).status).toBe(200);
   });

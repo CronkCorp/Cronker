@@ -4,7 +4,7 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "../knowledge/places.js";
-import { Artifact, ArtifactFileContent, artifactNotFound, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
+import { Artifact, ArtifactFileContent, artifactNotFound, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
 
 const tags = ["Artifacts"];
@@ -30,6 +30,14 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
   const bodyLimit = Math.ceil(context.config.attachments.limitBytes / 3) * 4 + 1024 * 1024;
 
   return async (app) => {
+    // A body too large to read holds files over the limit: it is refused as such, with the rule and what to do.
+    app.setErrorHandler((error, _request, _reply) => {
+      if ((error as { code?: string }).code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+        throw artifactTooLarge(context.config.attachments.limitBytes);
+      }
+      throw error;
+    });
+
     const places = knowledgePlaces(db).map((place) => ({ ...place, path: `${place.path}/artifacts` }));
     for (const place of places) {
       app.get(

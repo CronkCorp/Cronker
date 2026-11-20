@@ -179,7 +179,7 @@ function decodeBase64(file: FileInput): Buffer {
 }
 
 /** Refuses a Version whose files are over the Attachments size limit in all, naming it. */
-function artifactTooLarge(limitBytes: number): ApiError {
+export function artifactTooLarge(limitBytes: number): ApiError {
   const limit = describeSize(limitBytes);
   return new ApiError(413, "artifact_too_large", `An Artifact's files may be at most ${limit} in all.`, {
     rule: `Each Version of an Artifact holds at most ${limit} of files in all, the Attachments size limit Cronk is configured with.`,
@@ -379,12 +379,12 @@ async function lockArtifact(tx: Tx, viewer: Viewer, artifactId: string): Promise
   return rowCount ? findArtifact(tx, viewer, artifactId) : undefined;
 }
 
-/** A Version's files as kept. */
-async function keptFiles(tx: Tx, artifactId: string, version: number): Promise<Kept[]> {
-  const { rows } = await tx.query<Kept>(
+/** A Version's files as kept, or only the one at the path. */
+async function keptFiles(db: Db | Tx, artifactId: string, version: number, path?: string): Promise<Kept[]> {
+  const { rows } = await db.query<Kept>(
     `select path, media_type as "mediaType", size, blob_id as "blobId" from artifact_files
-     where artifact_id = $1 and version = $2`,
-    [artifactId, version],
+     where artifact_id = $1 and version = $2 and ($3::text is null or path = $3)`,
+    [artifactId, version, path ?? null],
   );
   return rows.map((row) => ({ ...row, size: Number(row.size) }));
 }
@@ -416,16 +416,11 @@ export type ArtifactFileContent = Static<typeof ArtifactFileContent>;
 export async function readArtifactFile(context: Context, viewer: Viewer, artifactId: string, path: string): Promise<ArtifactFileContent> {
   const artifact = await findArtifact(context.db, viewer, artifactId);
   if (!artifact) throw artifactNotFound();
-  const { rows } = await context.db.query<Kept>(
-    `select path, media_type as "mediaType", size, blob_id as "blobId" from artifact_files
-     where artifact_id = $1 and version = $2 and path = $3`,
-    [artifact.id, artifact.version.number, path],
-  );
-  const file = rows[0];
+  const [file] = await keptFiles(context.db, artifact.id, artifact.version.number, path);
   if (!file) throw new ApiError(404, "not_found", `${artifact.title} has no file ${path}.`);
   const content = await context.attachments.get(file.blobId);
   if (!content) throw new ApiError(404, "artifact_file_missing", `${path}'s bytes are missing from Cronk's storage.`);
   const chunks: Buffer[] = [];
   for await (const chunk of content) chunks.push(chunk as Buffer);
-  return { path: file.path, mediaType: file.mediaType, size: Number(file.size), contentBase64: Buffer.concat(chunks).toString("base64") };
+  return { path: file.path, mediaType: file.mediaType, size: file.size, contentBase64: Buffer.concat(chunks).toString("base64") };
 }
