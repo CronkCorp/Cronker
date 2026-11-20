@@ -10,7 +10,7 @@ import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../knowledge/reports.js";
-import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
+import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "../work/tickets.js";
 import { moveByCronk } from "../pipeline/cronk-moves.js";
 import { sendBackForKnownFailures } from "../pipeline/sending-back.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
@@ -61,6 +61,7 @@ export const Run = Type.Object({
   transcriptId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Transcript, once one was uploaded for the session its Runner returned when starting it.",
   }),
+  transcriptDeleted: Type.Boolean({ description: "Whether a User deleted its Transcript." }),
   startedAt: Type.String({ format: "date-time" }),
   endedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
   lastCallAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
@@ -83,7 +84,10 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
-  (select transcripts.id from transcripts where transcripts.run_id = runs.id limit 1) as "transcriptId",
+  (select transcripts.id from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)
+    as "transcriptId",
+  exists (select from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is not null)
+    as "transcriptDeleted",
   runs.started_at as "startedAt", runs.ended_at as "endedAt", runs.last_call_at as "lastCallAt",
   runs.workspace_id as "workspaceId", runs.agent_id as "agentId", runs.status_id as "statusId", runs.brief`;
 
@@ -558,6 +562,62 @@ function passes(rule: LabelRule | null, labels: string[]): boolean {
   return rule.kind === "requires" ? has : !has;
 }
 
+/** A running Run, locked with its Ticket, as only its own Agent may act on it. */
+export interface OwnRunningRun {
+  ticket: TicketRow;
+  run: { id: string; agentId: string; statusId: string | null; step: { name: string }; agent: { name: string } };
+}
+
+/**
+ * Locks the Ticket, then the Run (as everything that starts Runs locks them), refusing unless the caller is the Run's
+ * own Agent and the Run is running. `rule` names the rule a refusal breaks, `action` what only its Agent does, as in
+ * "Only claude-max, the Run's Agent, finishes it.", and `notRunning` what can't be done to a Run that isn't running.
+ */
+export async function lockOwnRunningRun(
+  tx: Tx,
+  caller: Caller,
+  runId: string,
+  { rule, action, notRunning }: { rule: string; action: string; notRunning: string },
+): Promise<OwnRunningRun> {
+  const found = await findRunRow(tx, caller, runId);
+  if (!found) throw runNotFound();
+  const ticket = (await findTicketRow(tx, caller, found.ticketId, { lock: true }))!;
+  const run = (await findRunRow(tx, caller, runId, { lock: true }))!;
+  if (caller.kind !== "agent") {
+    throw new ApiError(403, "not_runs_agent", `Only ${run.agent.name}, the Run's Agent, ${action}.`, {
+      rule,
+      advice: "Leave the Run to its Agent; a User moves its Ticket instead.",
+    });
+  }
+  if (run.agentId !== caller.id) {
+    throw new ApiError(403, "not_your_run", `This Run is ${run.agent.name}'s, not yours.`, {
+      rule,
+      advice: "Use the Run whose id your own Brief gives you.",
+    });
+  }
+  if (run.state !== "running") {
+    throw new ApiError(409, "run_not_running", `This Run is ${run.state}, not running, so it ${notRunning}.`, {
+      rule,
+      advice: "Nothing more is needed for this Run; leave a Comment on its Ticket if you have more to say.",
+    });
+  }
+  return { ticket, run };
+}
+
+/**
+ * Ends the Ticket's running Run as finished with an Outcome that moved nothing itself, such as *merged*: its slot
+ * goes to its Runner's next waiting Ticket. Call it in the transaction that locked the Run with `lockOwnRunningRun`.
+ */
+export async function endRunFinished(context: Context, tx: Tx, runId: string, outcome: string, now: Date): Promise<void> {
+  await freeSlot(context, tx, runId);
+  await tx.query("update runs set state = 'finished', outcome = $2, ended_at = $3 where id = $1", [runId, outcome, now]);
+}
+
+/** A Run as the API shows it, read in the caller's view. */
+export async function presentRun(tx: Tx, viewer: Viewer, runId: string): Promise<Run> {
+  return present((await findRunRow(tx, viewer, runId))!);
+}
+
 /**
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
  * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
@@ -570,27 +630,12 @@ export async function finishRun(
 ): Promise<Run> {
   const { db } = context;
   return transaction(db, async (tx) => {
-    const found = await findRunRow(tx, caller, runId);
-    if (!found) throw runNotFound();
-    // The Ticket is locked before its Run, as everything else that starts Runs locks them.
-    const ticket = (await findTicketRow(tx, caller, found.ticketId, { lock: true }))!;
-    const run = (await findRunRow(tx, caller, runId, { lock: true }))!;
     const finishRule = "A Run is finished only by its own Agent, once, while it is running, with an Outcome its Brief offers.";
-    if (caller.kind !== "agent") {
-      throw new ApiError(403, "not_runs_agent", `Only ${run.agent.name}, the Run's Agent, finishes it.`);
-    }
-    if (run.agentId !== caller.id) {
-      throw new ApiError(403, "not_your_run", `This Run is ${run.agent.name}'s, not yours.`, {
-        rule: finishRule,
-        advice: "Finish the Run whose id your own Brief gives you.",
-      });
-    }
-    if (run.state !== "running") {
-      throw new ApiError(409, "run_not_running", `This Run is ${run.state}, not running, so it can't be finished.`, {
-        rule: finishRule,
-        advice: "Nothing more is needed for this Run; leave a Comment on its Ticket if you have more to say.",
-      });
-    }
+    const { ticket, run } = await lockOwnRunningRun(tx, caller, runId, {
+      rule: finishRule,
+      action: "finishes it",
+      notRunning: "can't be finished",
+    });
     const statuses = await statusesOf(tx, ticket.projectId);
     const step = statuses.find((s) => s.id === run.statusId)?.step;
     const offered = step ? offeredOutcomes(step, statuses, ticket.autonomousDelegation === true) : [];
@@ -615,7 +660,7 @@ export async function finishRun(
     const asking = { id: run.id, agentId: run.agentId, statusId: run.statusId, stepName: run.step.name };
     await moveByCronk(context, tx, ticket, {
       target: { kind: "outcome", step: { statusId: run.statusId!, name: run.step.name }, outcome },
-      by: { kind: "agent", id: caller.id, runId: run.id },
+      by: { kind: "agent", id: run.agentId, runId: run.id },
       runId: run.id,
       // A Run completing its Ticket leaves it Unverified, until a User Accepts or Reopens it.
       verification: "unverified",
@@ -724,11 +769,12 @@ export async function checkForLostRuns(context: Context): Promise<void> {
   }
 }
 
-/** What a request names: a Run, a Ticket by id, or a Ticket by its key. */
+/** What a request names: a Run, a Ticket by id, a Ticket by its key, or the session a Run's Runner returned. */
 export interface NamedInCall {
   runId?: string;
   ticketId?: string;
   ticketKey?: string;
+  sessionId?: string;
 }
 
 /**
@@ -736,18 +782,18 @@ export interface NamedInCall {
  * call was allowed or not: a Run long without such a call is lost.
  */
 export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
-  const { runId, ticketId, ticketKey } = named;
+  const { runId, ticketId, ticketKey, sessionId } = named;
   const ticket = ticketId && isUuid(ticketId)
     ? ticketId
     : ticketKey
       ? (await findTicketRefByKey(db, agent.workspace.id, ticketKey))?.id
       : undefined;
   const run = runId && isUuid(runId) ? runId : undefined;
-  if (!ticket && !run) return;
+  if (!ticket && !run && !sessionId) return;
   await db.query(
     `update runs set last_call_at = $3
-     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4)`,
-    [agent.id, run ?? null, clock.now(), ticket ?? null],
+     where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4 or session_id = $5)`,
+    [agent.id, run ?? null, clock.now(), ticket ?? null, sessionId ?? null],
   );
 }
 

@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, nameOf, type Agent, type AgentToken, type Runner, type TicketSummary, type User, type WorkspaceSummary } from "./api.js";
+import {
+  api,
+  nameOf,
+  type Agent,
+  type AgentToken,
+  type Runner,
+  type TicketSummary,
+  type Transcript,
+  type User,
+  type WorkspaceSummary,
+} from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
-import { Banner, Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, workspaceCrumb } from "./ui/controls.js";
+import { Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, ShownOnce, workspaceCrumb } from "./ui/controls.js";
 import { Key, RunState } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -255,6 +265,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
           <AgentTokens agent={agent} />
         </Panel>
       )}
+      {agent && <AgentTranscripts agent={agent} />}
       {agent && renaming && <RenameAgent agent={agent} onClose={() => setRenaming(false)} onRenamed={setAgent} />}
       {agent && (
         <ConfirmDialog
@@ -271,6 +282,57 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
         </ConfirmDialog>
       )}
     </div>
+  );
+}
+
+/**
+ * The Agent's own Transcripts, of its sessions outside a Run such as Claude Code connected by hand, the last
+ * uploaded first: each by its session, with the Tickets its Cronk tool calls named.
+ */
+function AgentTranscripts({ agent }: { agent: Agent }) {
+  const [transcripts, setTranscripts] = useState<Transcript[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api.agentTranscripts(agent.id).then(setTranscripts, (e: Error) => setError(e.message));
+  }, [agent.id]);
+  return (
+    <Panel
+      title="Transcripts"
+      id="transcripts"
+      description="Its sessions outside a Run, such as Claude Code connected by hand, each shown on the Tickets it named."
+    >
+      <FormError error={error} />
+      {transcripts === null ? (
+        !error && <p className="muted small">Loading…</p>
+      ) : transcripts.length === 0 ? (
+        <p className="muted small">No Transcripts yet. A session's Transcript arrives with its Transcript hook's upload.</p>
+      ) : (
+        <ul className="agent-transcripts" aria-label="Transcripts">
+          {transcripts.map((transcript) => (
+            <li key={transcript.id}>
+              <Link to={`/transcripts/${transcript.id}`} className="mono agent-transcript-session">
+                {transcript.sessionId}
+              </Link>
+              <span className="agent-transcript-tickets">
+                {transcript.tickets.length === 0 ? (
+                  <span className="muted small">No Tickets named</span>
+                ) : (
+                  transcript.tickets.map((ticket) => (
+                    <Link key={ticket.id} to={`/tickets/${ticket.id}`} title={ticket.title}>
+                      <Key>{ticket.key}</Key>
+                    </Link>
+                  ))
+                )}
+              </span>
+              <span className="muted small">
+                {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"}, uploaded{" "}
+                <RelativeTime at={transcript.uploadedAt} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
@@ -341,20 +403,12 @@ function ManageTokens({
       description="An Agent connects with a token, such as from Claude Code on your laptop."
     >
       {issued && (
-        <Banner tone="warn" label="Token issued">
-          <Field label={`Token ${issued.token.name}`}>
-            <div className="copy-row">
-              <input readOnly value={issued.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
-              <CopyButton text={issued.secret} />
-            </div>
-          </Field>
-          <p>
-            Copy it now: it is shown only once. Connect Claude Code with{" "}
-            <code>
-              claude mcp add --transport http cronk {mcpUrl} --header "Authorization: Bearer {issued.secret}"
-            </code>
-          </p>
-        </Banner>
+        <ShownOnce banner="Token issued" label={`Token ${issued.token.name}`} secret={issued.secret}>
+          Connect Claude Code with{" "}
+          <code>
+            claude mcp add --transport http cronk {mcpUrl} --header "Authorization: Bearer {issued.secret}"
+          </code>
+        </ShownOnce>
       )}
       {tokens.length > 0 && (
         <table>
@@ -415,26 +469,5 @@ function ManageTokens({
         Whatever connects with it stops working until it is given a new token.
       </ConfirmDialog>
     </Dialog>
-  );
-}
-
-/** Copies a secret to the clipboard and says so. */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const copy = () => {
-    setCopied(false);
-    setError(null);
-    navigator.clipboard.writeText(text).then(
-      () => setCopied(true),
-      () => setError("Couldn't copy: select it and copy it yourself."),
-    );
-  };
-  return (
-    <>
-      <Button onClick={copy}>Copy</Button>
-      <Saved shown={copied}>Copied.</Saved>
-      <FormError error={error} />
-    </>
   );
 }

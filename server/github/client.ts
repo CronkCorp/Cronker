@@ -193,11 +193,69 @@ export async function installationRepositories({ github }: Config, token: string
   );
 }
 
+/** A repository as GitHub's API answers about it, with the merge methods its settings allow, if GitHub says. */
+export interface RepositoryOnGitHub {
+  id: number;
+  full_name: string;
+  allow_merge_commit?: boolean;
+  allow_squash_merge?: boolean;
+  allow_rebase_merge?: boolean;
+}
+
 /** A repository by GitHub's id, as an installation covering it sees it now; nothing if it no longer covers it. */
-export async function repositoryById({ github }: Config, token: string, id: number): Promise<{ id: number; full_name: string } | undefined> {
+export async function repositoryById({ github }: Config, token: string, id: number): Promise<RepositoryOnGitHub | undefined> {
   const response = await call(under(github.apiUrl, `/repositories/${id}`), { headers: { authorization: `Bearer ${token}` } });
   if (response.status === 404 || response.status === 403) return undefined;
-  return jsonOf<{ id: number; full_name: string }>(response, "/repositories");
+  return jsonOf<RepositoryOnGitHub>(response, "/repositories");
+}
+
+/** A Pull Request as GitHub has it now. `mergeable` is null while GitHub is still working it out, as after a push. */
+export interface PullRequestOnGitHub {
+  state: string;
+  merged?: boolean;
+  mergeable: boolean | null;
+  head: { sha: string };
+}
+
+const pullPath = (fullName: string, number: number) =>
+  `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/pulls/${number}`;
+
+/** A Pull Request of a repository, by `owner/name` and number, as an installation covering it sees it; nothing if it can't. */
+export async function pullRequestOnGitHub(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  number: number,
+): Promise<PullRequestOnGitHub | undefined> {
+  const response = await call(under(github.apiUrl, pullPath(fullName, number)), { headers: { authorization: `Bearer ${token}` } });
+  if (response.status === 404 || response.status === 403) return undefined;
+  return jsonOf<PullRequestOnGitHub>(response, "The Pull Request");
+}
+
+export type MergeMethod = "merge" | "squash" | "rebase";
+
+/**
+ * Asks GitHub to merge a Pull Request by the method (GitHub's own default without one), only while its head is still `sha`. GitHub's refusals (405 when
+ * it can't be merged that way, 409 when its head moved, 422 when it isn't valid) come back with GitHub's message.
+ */
+export async function mergeOnGitHub(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  number: number,
+  { method, sha }: { method: MergeMethod | undefined; sha: string },
+): Promise<{ merged: true } | { merged: false; status: number; message: string }> {
+  const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/merge`), {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(method ? { merge_method: method, sha } : { sha }),
+  });
+  if (response.status === 405 || response.status === 409 || response.status === 422) {
+    const body = (await response.json().catch(() => ({}))) as { message?: unknown };
+    return { merged: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
+  }
+  await jsonOf<unknown>(response, "The merge");
+  return { merged: true };
 }
 
 /** One attempt at one of the App's webhook deliveries, as GitHub's delivery log lists it. */

@@ -222,6 +222,17 @@ describe("Search", () => {
     expect(await ids("cache")).toEqual([transcript.id]);
   });
 
+  test("a deleted Transcript is no longer found", async () => {
+    const { workspace, ada, asAgent } = await workspaceWithRun();
+    const transcript = await uploadTranscript("session_1", ["Triage CRONK-1.", "The webhook retries."], asAgent);
+    const ids = async () => ((await search(workspace.id, ada, { q: "webhook" })) as { id: string }[]).map((r) => r.id);
+    expect(await ids()).toEqual([transcript.id]);
+
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, ada);
+
+    expect(await ids()).toEqual([]);
+  });
+
   test("a quoted phrase matches only its words in order, `or` either word, and `-word` leaves out what has it", async () => {
     const { workspace, ada, project } = await workspaceWithProject();
     const create = (title: string, description: string) =>

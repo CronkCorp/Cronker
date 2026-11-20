@@ -74,7 +74,7 @@ const hits = `
       select distinct on (entries.transcript_id) entries.transcript_id, transcripts.agent_id, transcripts.run_id,
         entries.text, ts_rank(entries.search, query) as rank
       from transcript_entries entries join transcripts on transcripts.id = entries.transcript_id, q
-      where transcripts.workspace_id = $1 and entries.search @@ query
+      where transcripts.workspace_id = $1 and transcripts.deleted_at is null and entries.search @@ query
       order by entries.transcript_id, rank desc, entries.position
     ) best
     join agents on agents.id = best.agent_id
