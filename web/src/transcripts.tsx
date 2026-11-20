@@ -1,24 +1,45 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Project, type Run, type Ticket, type Transcript, type TranscriptEntry, type Workspace } from "./api.js";
 import { usePlace } from "./frame.js";
+import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
-import { Link } from "./router.js";
+import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import {
   Button,
+  DeletedElsewhere,
   EmptyState,
   ExternalLink,
   FormError,
+  LiveIndicator,
   PageHead,
   RelativeTime,
   workspaceCrumb,
   type Crumb,
 } from "./ui/controls.js";
 import { Chip, KindLabel, ModelLabel } from "./ui/labels.js";
+import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
+
+/**
+ * The entries of a Transcript from its start, a page at a time until at least `count` are read or none are left;
+ * with `count` Infinity, all of them.
+ */
+async function entriesFromStart(transcriptId: string, count: number): Promise<{ entries: TranscriptEntry[]; next: number | null }> {
+  const entries: TranscriptEntry[] = [];
+  let next: number | null = null;
+  do {
+    const page = await api.transcriptEntries(transcriptId, next ?? undefined);
+    entries.push(...page.entries);
+    next = page.next;
+  } while (next !== null && entries.length < count);
+  return { entries, next };
+}
 
 /**
  * A Transcript's page: the conversation's messages in full, each tool call collapsed to its name and a one-line
  * summary of what it was called with, opening on click to its input and result. Entries load a page at a time.
+ * It follows new uploads of its session live, so a running Run's turns appear as they arrive, and offers Users
+ * Delete, for when the scrubbing missed a secret.
  */
 export function TranscriptScreen({ workspace, transcriptId }: { workspace: Workspace; transcriptId: string }) {
   const [transcript, setTranscript] = useState<Transcript | null>(null);
@@ -28,7 +49,13 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   const [next, setNext] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { gone, failed, deleteHere } = useDeletedElsewhere();
   usePlace("project", ofRun?.project.id ?? null);
+  // How far the page has read, so a refetch after an upload reads at least as far again: to the end when it was
+  // there, so the session's new turns appear, else as many entries as are shown, leaving the rest to Show more.
+  const shown = useRef(0);
+  shown.current = transcript !== null && next === null ? Infinity : entries.length;
 
   useEffect(() => {
     let current = true;
@@ -36,10 +63,10 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
     api
       .transcript(transcriptId)
       .then(async (found) => {
-        if (!current) return;
-        setTranscript(found);
         const page = await api.transcriptEntries(transcriptId);
         if (!current) return;
+        // Shown together, so the first entries don't count as arrivals.
+        setTranscript(found);
         setEntries(page.entries);
         setNext(page.next);
         if (!found.runId) return;
@@ -54,13 +81,35 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
     };
   }, [transcriptId]);
 
+  // A new upload replaces the session's entries: read them again, as far as shown, plus whatever came after.
+  const latest = useLatest();
+  const refresh = useCallback(() => {
+    latest(
+      Promise.all([api.transcript(transcriptId), entriesFromStart(transcriptId, shown.current)]),
+      ([found, page]) => {
+        setTranscript(found);
+        setEntries(page.entries);
+        setNext(page.next);
+      },
+      failed,
+    );
+  }, [transcriptId, latest, failed]);
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "transcript.changed" && event.transcriptId === transcriptId)) refresh();
+  });
+  const arrived = useArrivals(entries.map((entry) => String(entry.position)), transcript !== null);
+
   const more = () => {
     if (next === null) return;
     setLoading(true);
     api
       .transcriptEntries(transcriptId, next)
       .then((page) => {
-        setEntries((shown) => [...shown, ...page.entries]);
+        // A live refresh may have read past where this page starts meanwhile: add only what is still new.
+        setEntries((shown) => {
+          const last = shown.at(-1)?.position ?? 0;
+          return [...shown, ...page.entries.filter((entry) => entry.position > last)];
+        });
         setNext(page.next);
       })
       .catch((error: Error) => setFailure(error.message))
@@ -92,11 +141,25 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   crumbs.push({ label: "Transcript" });
 
   const agent = { kind: "agent" as const, name: transcript.agent.name };
+  // Where the page leads once the Transcript is gone: its Run's Ticket, or its Agent's page.
+  const back = ofRun
+    ? { to: `/tickets/${ofRun.ticket.id}`, label: `Back to ${ofRun.ticket.key}` }
+    : { to: `/workspaces/${workspace.id}/agents/${transcript.agent.id}`, label: `Back to ${transcript.agent.name}` };
   return (
     <div className="page transcript-page">
       <PageHead
         crumbs={crumbs}
         title={run ? `Transcript of the ${run.step.name} Run` : "Transcript"}
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
+        actions={
+          !gone && (
+            <Menu label="More of this Transcript">
+              <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
+                Delete Transcript
+              </MenuItem>
+            </Menu>
+          )
+        }
         meta={
           <span className="transcript-meta">
             <Actor actor={agent} />
@@ -134,6 +197,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
           </span>
         }
       />
+      {gone && <DeletedElsewhere back={back}>this Transcript's entries are gone.</DeletedElsewhere>}
       <FormError error={failure} />
       {entries.length === 0 ? (
         <EmptyState title="Nothing was said in this session yet.">
@@ -142,24 +206,58 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
       ) : (
         <ol className="transcript" aria-label="Entries">
           {entries.map((entry) => (
-            <TranscriptItem key={entry.position} entry={entry} agentName={transcript.agent.name} gap={transcript.gap} />
+            <TranscriptItem
+              key={entry.position}
+              entry={entry}
+              agentName={transcript.agent.name}
+              gap={transcript.gap}
+              arrived={arrived.has(String(entry.position))}
+            />
           ))}
         </ol>
       )}
-      {next !== null && (
+      {next !== null && !gone && (
         <Button variant="secondary" disabled={loading} onClick={more}>
           Show more
         </Button>
       )}
+      <ConfirmDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        title={run ? `Delete the Transcript of the ${run.step.name} Run?` : "Delete this Transcript?"}
+        confirm="Delete"
+        onConfirm={async () => {
+          await deleteHere(() => api.deleteTranscript(transcript.id));
+          navigate(back.to);
+        }}
+      >
+        All its entries go, for good{run ? `; the Run keeps its Session link and says its Transcript was deleted` : ""}. Later
+        uploads of its session are refused, so nothing it was deleted for comes back.
+      </ConfirmDialog>
     </div>
   );
 }
 
 /** An entry, followed by the mark of the gap after it when that is where a Transcript past 50 MB was cut. */
-function TranscriptItem({ entry, agentName, gap }: { entry: TranscriptEntry; agentName: string; gap: Transcript["gap"] }) {
+function TranscriptItem({
+  entry,
+  agentName,
+  gap,
+  arrived,
+}: {
+  entry: TranscriptEntry;
+  agentName: string;
+  gap: Transcript["gap"];
+  /** Whether it arrived with an upload since the page loaded, for the short accent ring. */
+  arrived: boolean;
+}) {
   return (
     <>
-      {entry.toolName === null ? <Message entry={entry} agentName={agentName} /> : <ToolCall entry={entry} />}
+      {entry.toolName === null ? (
+        <Message entry={entry} agentName={agentName} arrived={arrived} />
+      ) : (
+        <ToolCall entry={entry} arrived={arrived} />
+      )}
       {gap && gap.after === entry.position && <Gap gap={gap} />}
     </>
   );
@@ -171,9 +269,9 @@ function Speaker({ entry, agentName }: { entry: TranscriptEntry; agentName: stri
   return <KindLabel kind={entry.role === "system" ? "System" : "Input"} />;
 }
 
-function Message({ entry, agentName }: { entry: TranscriptEntry; agentName: string }) {
+function Message({ entry, agentName, arrived }: { entry: TranscriptEntry; agentName: string; arrived: boolean }) {
   return (
-    <li className={`transcript-entry transcript-${entry.role}`}>
+    <li className={`transcript-entry transcript-${entry.role}${arrived ? " arrived" : ""}`}>
       <div className="entry-head">
         <Speaker entry={entry} agentName={agentName} />
         {entry.at && <RelativeTime at={entry.at} clock />}
@@ -189,11 +287,11 @@ function Message({ entry, agentName }: { entry: TranscriptEntry; agentName: stri
 }
 
 /** A tool call as one line, its name and a summary of its input, opening on click to the input and the result. */
-function ToolCall({ entry }: { entry: TranscriptEntry }) {
+function ToolCall({ entry, arrived }: { entry: TranscriptEntry; arrived: boolean }) {
   const [open, setOpen] = useState(false);
   const summary = summarize(entry.toolInput);
   return (
-    <li className="transcript-entry transcript-tool">
+    <li className={`transcript-entry transcript-tool${arrived ? " arrived" : ""}`}>
       <button
         type="button"
         className="tool-line"

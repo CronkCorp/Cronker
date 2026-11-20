@@ -390,6 +390,7 @@ export interface Change {
     | "linkedDocument"
     | "merged"
     | "sentBack"
+    | "transcriptDeleted"
     | RelationKind;
   from: unknown;
   to: unknown;
@@ -414,6 +415,8 @@ export interface Run {
   sessionUrl: string | null;
   /** Its Transcript, once one was uploaded for its session. */
   transcriptId: string | null;
+  /** Whether a User deleted its Transcript. */
+  transcriptDeleted: boolean;
   startedAt: string;
   endedAt: string | null;
 }
@@ -935,6 +938,7 @@ export const api = {
       "GET",
       `/api/transcripts/${encodeURIComponent(id)}/entries${after === undefined ? "" : `?after=${after}`}`,
     ),
+  deleteTranscript: (id: string) => call<void>("DELETE", `/api/transcripts/${encodeURIComponent(id)}`),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),

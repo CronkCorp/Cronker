@@ -1024,7 +1024,10 @@ function CommentForm({
 }
 
 const fieldNames: Record<
-  Exclude<Change["field"], "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | RelationKind>,
+  Exclude<
+    Change["field"],
+    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "merged" | "sentBack" | "transcriptDeleted" | RelationKind
+  >,
   string
 > = {
   delegate: "Delegate",
@@ -1079,6 +1082,17 @@ interface SentBack {
   failure: { kind: "check"; name: string; url: string | null } | { kind: "review"; reviewer: string | null; url: string | null };
 }
 
+/**
+ * What a `transcriptDeleted` Change records: the Run whose Transcript a User deleted and its Step's name (both null
+ * for a session outside a Run that named the Ticket), its session and its Agent.
+ */
+interface TranscriptDeleted {
+  runId: string | null;
+  step: string | null;
+  sessionId: string;
+  agent: { id: string; name: string };
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
@@ -1094,6 +1108,10 @@ function described(change: Change): string {
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
+  if (change.field === "transcriptDeleted") {
+    const { step, agent } = change.from as TranscriptDeleted;
+    return step ? `deleted the Transcript of the ${step} Run` : `deleted a Transcript of ${agent.name}'s session outside a Run`;
+  }
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
     // A Step skipped by its Label rule records the rule; a Merge Step that skipped itself records why instead.
@@ -1532,6 +1550,7 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
             </Link>
           </>
         )}
+        {run.transcriptDeleted && <span className="small muted"> Transcript deleted</span>}
         {run.sessionUrl && (
           <>
             {" "}

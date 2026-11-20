@@ -3,9 +3,11 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import type { AgentCaller } from "../agents/tokens.js";
+import { ownerName, type AgentCaller } from "../agents/tokens.js";
+import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
+import { recordChanges } from "../work/changes.js";
 import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
 
@@ -136,6 +138,17 @@ export async function uploadTranscript(
       "select id from runs where agent_id = $1 and session_id = $2 order by seq desc limit 1",
       [agent.id, sessionId],
     );
+    const held = await tx.query<{ deleted: boolean; runId: string | null }>(
+      `select deleted_at is not null as deleted, run_id as "runId" from transcripts
+       where agent_id = $1 and session_id = $2 for update`,
+      [agent.id, sessionId],
+    );
+    if (held.rows[0]?.deleted) {
+      throw new ApiError(410, "transcript_deleted", "A User deleted this session's Transcript, so Cronk keeps no more of it.", {
+        rule: "A deleted Transcript stays deleted, so an upload after it can't bring back a secret it was deleted for.",
+        advice: "Nothing to do: later turns of this session aren't recorded.",
+      });
+    }
     const { rows } = await tx.query<{ id: string; created: boolean }>(
       `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, gap_after, gap_entries, gap_bytes, run_id)
        values ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -188,7 +201,11 @@ export async function uploadTranscript(
         ],
       );
     }
-    return { transcript: present((await transcriptRow(tx, "transcripts.id = $1", [id]))!), created };
+    const transcript = present((await transcriptRow(tx, "transcripts.id = $1", [id]))!);
+    // A Run that gains its Transcript links it on its Ticket's timeline.
+    if (transcript.runId && transcript.runId !== held.rows[0]?.runId) await runTicketChanged(context, tx, transcript.runId);
+    transcriptChanged(context, tx, agent.workspace.id, transcript);
+    return { transcript, created };
   });
 }
 
@@ -314,7 +331,10 @@ function keepStartAndEnd(entries: TranscriptEntry[]): { kept: TranscriptEntry[];
 export async function findTranscript({ db }: Context, viewer: Viewer, transcriptId: string): Promise<Transcript> {
   if (!isUuid(transcriptId)) throw transcriptNotFound();
   const view = inView(viewer, "transcripts.workspace_id", "$2");
-  const row = await transcriptRow(db, `transcripts.id = $1 and ${view.sql}`, [transcriptId, view.value]);
+  const row = await transcriptRow(db, `transcripts.id = $1 and transcripts.deleted_at is null and ${view.sql}`, [
+    transcriptId,
+    view.value,
+  ]);
   if (!row) throw transcriptNotFound();
   return present(row);
 }
@@ -331,7 +351,7 @@ export async function agentTranscripts({ db }: Context, viewer: Viewer, agentId:
   if (agent.rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
   const { rows } = await db.query<Row>(
     `select ${columns} from transcripts join agents on agents.id = transcripts.agent_id
-     where transcripts.agent_id = $1 and transcripts.run_id is null
+     where transcripts.agent_id = $1 and transcripts.run_id is null and transcripts.deleted_at is null
      order by transcripts.uploaded_at desc, transcripts.id`,
     [agentId],
   );
@@ -369,4 +389,102 @@ export async function entriesOf(
   const more = rows.length > limit;
   const entries = rows.slice(0, limit).map(({ at, ...entry }) => ({ ...entry, at: at?.toISOString() ?? null }));
   return { entries, next: more ? entries.at(-1)!.position : null };
+}
+
+/**
+ * Deletes a Transcript's entries, for when the scrubbing missed a secret; only a User may. Its row stays behind,
+ * marked deleted, so its Run says it was deleted and a later upload of its session is refused.
+ */
+export async function deleteTranscript(context: Context, actor: Caller, transcriptId: string): Promise<void> {
+  const transcript = await findTranscript(context, actor, transcriptId);
+  if (actor.kind === "agent") {
+    throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Transcript.`, {
+      rule: "Only a User deletes a Transcript, so an agent can't remove the record of what it did.",
+      advice: `Leave the Transcript as it is; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+    });
+  }
+  await transaction(context.db, async (tx) => {
+    const { rows } = await tx.query<{ workspaceId: string }>(
+      `update transcripts set deleted_at = $2, deleted_by = $3 where id = $1 and deleted_at is null
+       returning workspace_id as "workspaceId"`,
+      [transcript.id, context.clock.now(), actor.id],
+    );
+    // Another User deleted it first.
+    if (!rows[0]) throw transcriptNotFound();
+    await tx.query("delete from transcript_entries where transcript_id = $1", [transcript.id]);
+    const deleted: TranscriptDeleted = {
+      runId: transcript.runId,
+      step: null,
+      sessionId: transcript.sessionId,
+      agent: transcript.agent,
+    };
+    if (transcript.runId) {
+      const ticket = await runTicketChanged(context, tx, transcript.runId);
+      await recordTranscriptDeleted(context, tx, ticket, actor.id, { ...deleted, step: ticket.step });
+    }
+    // A session outside a Run drops out of the Tickets it named, each recording that it was deleted.
+    const unlinked = await tx.query<{ id: string; projectId: string; workspaceId: string }>(
+      `with unlinked as (delete from transcript_tickets where transcript_id = $1 returning ticket_id)
+       select tickets.id, tickets.project_id as "projectId", tickets.workspace_id as "workspaceId"
+       from unlinked join tickets on tickets.id = unlinked.ticket_id order by tickets.id`,
+      [transcript.id],
+    );
+    for (const ticket of unlinked.rows) {
+      await recordTranscriptDeleted(context, tx, ticket, actor.id, deleted);
+      context.live.publish(tx, ticket.workspaceId, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
+    transcriptChanged(context, tx, rows[0].workspaceId, transcript);
+  });
+}
+
+/**
+ * What a `transcriptDeleted` Change records: the deleted Transcript's Run and its Step's name (both null for a
+ * session outside a Run), its session and its Agent.
+ */
+interface TranscriptDeleted {
+  runId: string | null;
+  step: string | null;
+  sessionId: string;
+  agent: { id: string; name: string };
+}
+
+/** Records on a Ticket that a User deleted a Transcript of its Run, or one that named it. */
+async function recordTranscriptDeleted(
+  context: Context,
+  tx: Tx,
+  ticket: { id: string; workspaceId: string },
+  userId: string,
+  deleted: TranscriptDeleted,
+): Promise<void> {
+  await recordChanges(tx, ticket, userId, context.clock.now(), [{ field: "transcriptDeleted", from: deleted, to: null }]);
+}
+
+interface RunTicket {
+  id: string;
+  projectId: string;
+  workspaceId: string;
+  /** The name of the Run's Step. */
+  step: string;
+}
+
+async function runTicket(tx: Tx, runId: string): Promise<RunTicket> {
+  const { rows } = await tx.query<RunTicket>(
+    `select tickets.id, tickets.project_id as "projectId", tickets.workspace_id as "workspaceId",
+       runs.status_name as step
+     from runs join tickets on tickets.id = runs.ticket_id where runs.id = $1`,
+    [runId],
+  );
+  return rows[0]!;
+}
+
+/** Tells the viewers of the Run's Ticket that it changed, as its Run's Transcript did. */
+async function runTicketChanged(context: Context, tx: Tx, runId: string): Promise<RunTicket> {
+  const ticket = await runTicket(tx, runId);
+  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  return ticket;
+}
+
+/** Tells the Workspace's streams that a Transcript changed, so an open Transcript page shows it. */
+function transcriptChanged({ live }: Context, tx: Tx, workspaceId: string, transcript: Pick<Transcript, "id" | "runId">): void {
+  live.publish(tx, workspaceId, { type: "transcript.changed", transcriptId: transcript.id, runId: transcript.runId });
 }

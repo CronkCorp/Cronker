@@ -10,6 +10,7 @@ import { convertClaudeCode } from "./claude-code.js";
 import { hookScriptPath, readHookScript, TranscriptHook, transcriptHook } from "./hook.js";
 import {
   agentTranscripts,
+  deleteTranscript,
   entriesOf,
   EntryPage,
   findTranscript,
@@ -48,10 +49,11 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "An Agent uploads the whole Claude Code transcript of one of its sessions, the JSONL file as it is " +
             "(`content-type: application/x-ndjson`, up to 256 MB). Cronk converts it into entries and replaces " +
-            "whatever it held for that session of the Agent. Answers 201 for a new Transcript, 200 for a replaced one.",
+            "whatever it held for that session of the Agent. Answers 201 for a new Transcript, 200 for a replaced one, and " +
+            "refuses with 410 `transcript_deleted` once a User deleted the session's Transcript.",
           params: Type.Object({ sessionId: Type.String({ minLength: 1, maxLength: 200 }) }),
           body: Type.String(),
-          response: { 200: Transcript, 201: Transcript, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 413: ErrorBody },
+          response: { 200: Transcript, 201: Transcript, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 410: ErrorBody, 413: ErrorBody },
         },
       },
       async (request, reply) => {
@@ -154,6 +156,26 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => findTranscript(context, await requireCaller(context, request), request.params.transcriptId),
+    );
+
+    app.delete(
+      "/api/transcripts/:transcriptId",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "Delete a Transcript",
+          description:
+            "Deletes the Transcript's entries, for when the scrubbing missed a secret. Only a User may; Agents are " +
+            "refused with `agent_not_allowed`. Its Run then says its Transcript was deleted (`transcriptDeleted`), and " +
+            "a later upload of the same session is refused with `transcript_deleted`.",
+          params: TranscriptParams,
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await deleteTranscript(context, await requireCaller(context, request), request.params.transcriptId);
+        return reply.code(204).send(null);
+      },
     );
 
     app.get(
