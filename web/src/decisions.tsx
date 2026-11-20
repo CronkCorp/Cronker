@@ -19,9 +19,9 @@ import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
-import { Actions, Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime } from "./ui/controls.js";
+import { Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, Saved } from "./ui/controls.js";
 import { DecisionStatusPill, decisionStatusLabel } from "./ui/labels.js";
-import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
+import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
 /** A Decision's number as it is written, such as 0007. */
 const numbered = (number: number) => String(number).padStart(4, "0");
@@ -105,6 +105,9 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
                     <th>Title</th>
                     <th>Status</th>
                     <th>Changed</th>
+                    <th>
+                      <span className="sr-only">Actions</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -129,6 +132,14 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
                         </td>
                         <td>
                           <RelativeTime at={decision.version.savedAt} />
+                        </td>
+                        <td className="register-actions">
+                          <RowActions
+                            decision={decision}
+                            onChanged={(next) => setDecisions((all) => all?.map((d) => (d.id === next.id ? next : d)) ?? null)}
+                            onOutdated={load}
+                            onFailed={setFailure}
+                          />
                         </td>
                       </tr>
                     );
@@ -234,6 +245,31 @@ export function DecisionScreen({
     setDecision(next);
     setVersionsShown((n) => n + 1);
   };
+  // What its last status change from this page said, while that is still the Version shown.
+  const [said, setSaid] = useState<{ text: string; version: number } | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const outdated = () => {
+    load();
+    setVersionsShown((n) => n + 1);
+  };
+  const changeStatus = async (status: DecisionStatus, supersededById?: string) => {
+    if (!decision) return;
+    setBusy(true);
+    setStatusError(null);
+    try {
+      const next = await saveStatus(decision, status, outdated, supersededById);
+      saved(next);
+      setSaid({ text: statusSaid[status], version: next.version.number });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const [rejecting, setRejecting] = useState(false);
+  const [superseding, setSuperseding] = useState(false);
+  const changeFromMenu = (status: DecisionStatus) => () => {
+    changeStatus(status).catch((e: Error) => setStatusError(e.message));
+  };
 
   if (failure) return <FormError error={failure} />;
   if (!decision || !place) return <p className="muted">Loading…</p>;
@@ -255,12 +291,65 @@ export function DecisionScreen({
         meta={<VersionMeta version={decision.version} />}
         actions={
           !editing && (
-            <Button variant="primary" onClick={() => setEditing(true)}>
-              Edit
-            </Button>
+            <>
+              <Saved shown={said?.version === decision.version.number}>{said?.text}</Saved>
+              {decision.status !== "proposed" && (
+                <Menu label="More of this Decision">
+                  {decision.status === "accepted" && (
+                    <MenuItem disabled={busy} onSelect={changeFromMenu("deprecated")}>
+                      Deprecate
+                    </MenuItem>
+                  )}
+                  {decision.status !== "accepted" && (
+                    <MenuItem disabled={busy} onSelect={changeFromMenu("proposed")}>
+                      Back to proposed
+                    </MenuItem>
+                  )}
+                  {(decision.status === "accepted" || decision.status === "superseded") && (
+                    <MenuItem disabled={busy} onSelect={() => setSuperseding(true)}>
+                      Supersede…
+                    </MenuItem>
+                  )}
+                </Menu>
+              )}
+              <Button variant={decision.status === "proposed" ? "secondary" : "primary"} onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+              {decision.status === "proposed" && (
+                <>
+                  <Button disabled={busy} onClick={() => setRejecting(true)}>
+                    Reject
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={busy}
+                    onClick={() => changeStatus("accepted").catch((e: Error) => setStatusError(e.message))}
+                  >
+                    Accept
+                  </Button>
+                </>
+              )}
+            </>
           )
         }
       />
+      {!editing && <FormError error={statusError} />}
+      <RejectDialog decision={decision} open={rejecting} onOpenChange={setRejecting} onReject={() => changeStatus("rejected")} />
+      <Dialog
+        open={superseding}
+        onOpenChange={setSuperseding}
+        title={`Supersede ${numbered(decision.number)} ${decision.title}`}
+        description="Name the Decision that replaces it. This one stays in the register as Superseded, pointing at it."
+      >
+        <SupersedeForm
+          decision={decision}
+          others={others.filter((d) => d.id !== decision.id)}
+          onSupersede={async (replacement) => {
+            await changeStatus("superseded", replacement);
+            setSuperseding(false);
+          }}
+        />
+      </Dialog>
       {decision.supersededById && (
         <Banner tone="warn" label="Superseded">
           <p>
@@ -321,16 +410,6 @@ export function DecisionScreen({
                   <Actor actor={first.actor} />
                 </div>
               )}
-              <StatusForm
-                key={decision.version.number}
-                decision={decision}
-                others={others.filter((d) => d.id !== decision.id)}
-                onChanged={saved}
-                onOutdated={() => {
-                  load();
-                  setVersionsShown((n) => n + 1);
-                }}
-              />
             </Panel>
             <Versions
               key={`${versionsShown} ${decision.version.number}`}
@@ -347,72 +426,143 @@ export function DecisionScreen({
   );
 }
 
-/** Changes the Decision's status, naming the Decision of the same place that replaces it when superseded. */
-function StatusForm({
+/** What a page or row says once a status change of its own is saved. */
+const statusSaid: Record<DecisionStatus, string> = {
+  proposed: "Back to proposed.",
+  accepted: "Accepted.",
+  rejected: "Rejected.",
+  deprecated: "Deprecated.",
+  superseded: "Superseded.",
+};
+
+/**
+ * Saves a Decision's status from the Version shown, naming the Decision replacing it when superseded. A save based on
+ * an outdated Version is refused: `onOutdated` shows the current one, and the refusal says to look again.
+ */
+async function saveStatus(
+  decision: DecisionSummary,
+  status: DecisionStatus,
+  onOutdated: () => void,
+  supersededById?: string,
+): Promise<Decision> {
+  try {
+    return await api.editDecision(decision.id, {
+      baseVersion: decision.version.number,
+      status,
+      ...(status === "superseded" ? { supersededById: supersededById ?? null } : {}),
+    });
+  } catch (e) {
+    if (e instanceof ApiError && e.code === "outdated_version") {
+      onOutdated();
+      throw new Error(`${e.message} It now shows the current Version: check it, then change the status again.`);
+    }
+    throw e;
+  }
+}
+
+/** Asks before rejecting a proposed Decision, naming it: a rejected Decision is never deleted. */
+function RejectDialog({
   decision,
-  others,
+  open,
+  onOpenChange,
+  onReject,
+}: {
+  decision: DecisionSummary;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onReject: () => Promise<void>;
+}) {
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Reject ${numbered(decision.number)} ${decision.title}?`}
+      confirm="Reject"
+      onConfirm={onReject}
+    >
+      A rejected Decision is never deleted: it stays in the register as Rejected, and a User can put it back to proposed.
+    </ConfirmDialog>
+  );
+}
+
+/** Accept and Reject on a proposed Decision's row of the register, which save at once as on its page. */
+function RowActions({
+  decision,
   onChanged,
   onOutdated,
+  onFailed,
+}: {
+  decision: DecisionSummary;
+  onChanged: (next: Decision) => void;
+  /** Someone saved the Decision since the register was loaded; the register loads again. */
+  onOutdated: () => void;
+  onFailed: (error: string | null) => void;
+}) {
+  const [said, setSaid] = useState<{ text: string; version: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const change = async (status: DecisionStatus) => {
+    setBusy(true);
+    onFailed(null);
+    try {
+      const next = await saveStatus(decision, status, onOutdated);
+      onChanged(next);
+      setSaid({ text: statusSaid[status], version: next.version.number });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (decision.status !== "proposed") return <Saved shown={said?.version === decision.version.number}>{said?.text}</Saved>;
+  return (
+    <>
+      <Button variant="ghost" size="small" disabled={busy} onClick={() => setRejecting(true)}>
+        Reject
+      </Button>
+      <Button size="small" disabled={busy} onClick={() => change("accepted").catch((e: Error) => onFailed(e.message))}>
+        Accept
+      </Button>
+      <RejectDialog decision={decision} open={rejecting} onOpenChange={setRejecting} onReject={() => change("rejected")} />
+    </>
+  );
+}
+
+/** Names the Decision of the same place that replaces this one, and supersedes it. */
+function SupersedeForm({
+  decision,
+  others,
+  onSupersede,
 }: {
   decision: Decision;
   /** The other Decisions of its Project, or of the Workspace's own. */
   others: DecisionSummary[];
-  onChanged: (next: Decision) => void;
-  /** Someone saved the Decision since it was shown; the screen shows its current Version again. */
-  onOutdated: () => void;
+  onSupersede: (replacement: string) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<DecisionStatus>(decision.status);
   // Held here, not left to the picker, so it shows the Decision replacing this one even when the list arrives later.
   const [replacement, setReplacement] = useState(decision.supersededById ?? "");
-  const unchanged = status === decision.status && (status !== "superseded" || replacement === decision.supersededById);
-  const { error, busy, onSubmit } = useSubmit(async () => {
-    try {
-      onChanged(
-        await api.editDecision(decision.id, {
-          baseVersion: decision.version.number,
-          status,
-          ...(status === "superseded" ? { supersededById: replacement || null } : {}),
-        }),
-      );
-    } catch (e) {
-      if (e instanceof ApiError && e.code === "outdated_version") {
-        onOutdated();
-        throw new Error(`${e.message} It now shows the current Version: check it, then change the status again.`);
-      }
-      throw e;
-    }
-  });
+  const { error, busy, onSubmit } = useSubmit(() => onSupersede(replacement));
   return (
     <form onSubmit={onSubmit}>
-      <Field label="Change status">
-        <select value={status} onChange={(e) => setStatus(e.target.value as DecisionStatus)}>
-          {decisionStatuses.map((s) => (
-            <option key={s} value={s}>
-              {decisionStatusLabel(s)}
+      <Field label="Replaced by">
+        <select required value={replacement} onChange={(e) => setReplacement(e.target.value)} autoFocus>
+          <option value="" disabled>
+            Choose a Decision
+          </option>
+          {others.map((d) => (
+            <option key={d.id} value={d.id}>
+              {numbered(d.number)} {d.title}
             </option>
           ))}
         </select>
       </Field>
-      {status === "superseded" && (
-        <Field label="Replaced by">
-          <select required value={replacement} onChange={(e) => setReplacement(e.target.value)}>
-            <option value="" disabled>
-              Choose a Decision
-            </option>
-            {others.map((d) => (
-              <option key={d.id} value={d.id}>
-                {numbered(d.number)} {d.title}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
       <FormError error={error} />
-      <Actions>
-        <Button type="submit" disabled={busy || unchanged}>
-          Save status
+      <DialogActions>
+        <DialogClose asChild>
+          <Button>Cancel</Button>
+        </DialogClose>
+        <Button type="submit" variant="primary" disabled={busy || replacement === decision.supersededById}>
+          Supersede
         </Button>
-      </Actions>
+      </DialogActions>
     </form>
   );
 }
