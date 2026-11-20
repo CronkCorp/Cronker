@@ -29,6 +29,14 @@ async function post(cookie: string, path: string, body: unknown) {
   return response.json();
 }
 
+/** The App's installations as the Add Repository picker gets them: account, then each Repository's `owner/name`. */
+async function installationsListed(cookie: string) {
+  const response = await cronk.request("GET", "/api/github/installations", { cookie });
+  expect(response.status, await response.clone().text()).toBe(200);
+  const installations: { account: string; repositories: { fullName: string }[] }[] = await response.json();
+  return installations.map((i) => [i.account, i.repositories.map((r) => r.fullName)]);
+}
+
 const repositoriesOf = async (projectId: string, cookie: string) =>
   (await cronk.request("GET", `/api/projects/${projectId}/repositories`, { cookie })).json();
 
@@ -81,6 +89,45 @@ describe("Repositories on a Project", () => {
     expect(added.status).toBe(409);
     expect((await added.json()).error.code).toBe("repository_not_installed");
     expect(await repositoriesOf(project.id, cookie)).toEqual([]);
+  });
+
+  test("adding a Repository asks GitHub, so one the App no longer covers is refused though the kept list still has it", async () => {
+    const { cookie, project, installation, website } = await projectWithApp();
+    expect(await installationsListed(cookie)).toEqual([["cronkcorp", ["cronkcorp/cronker", "cronkcorp/website"]]]);
+
+    // Removed from the installation on GitHub since.
+    installation.repositories.splice(installation.repositories.indexOf(website), 1);
+    const added = await cronk.request("POST", `/api/projects/${project.id}/repositories`, { cookie, body: { id: website.id } });
+
+    expect(added.status).toBe(409);
+    expect((await added.json()).error.code).toBe("repository_not_installed");
+    expect(await repositoriesOf(project.id, cookie)).toEqual([]);
+  });
+
+  test("a Repository just installed on GitHub is added though the kept list doesn't have it yet", async () => {
+    const { cookie, project, installation } = await projectWithApp();
+    await installationsListed(cookie);
+
+    installation.repositories.push({ id: 990001, name: "docs", fullName: "cronkcorp/docs" });
+    const added = await cronk.request("POST", `/api/projects/${project.id}/repositories`, { cookie, body: { id: 990001 } });
+
+    expect(added.status).toBe(201);
+    expect(await repositoriesOf(project.id, cookie)).toEqual([{ id: 990001, fullName: "cronkcorp/docs", keyClash: false }]);
+  });
+
+  test("adding or removing a Repository has the App's installations asked of GitHub again", async () => {
+    const { cookie, project, installation, cronker } = await projectWithApp();
+    await installationsListed(cookie);
+
+    installation.repositories.push({ id: 990001, name: "docs", fullName: "cronkcorp/docs" });
+    await post(cookie, `/api/projects/${project.id}/repositories`, { id: cronker.id });
+    expect(await installationsListed(cookie)).toEqual([["cronkcorp", ["cronkcorp/cronker", "cronkcorp/docs", "cronkcorp/website"]]]);
+
+    installation.repositories.push({ id: 990002, name: "api", fullName: "cronkcorp/api" });
+    await cronk.request("DELETE", `/api/projects/${project.id}/repositories/${cronker.id}`, { cookie });
+    expect(await installationsListed(cookie)).toEqual([
+      ["cronkcorp", ["cronkcorp/api", "cronkcorp/cronker", "cronkcorp/docs", "cronkcorp/website"]],
+    ]);
   });
 
   test("a Repository the Project lists already is refused", async () => {
@@ -220,5 +267,44 @@ describe("Repositories renamed or transferred on GitHub", () => {
     });
 
     expect(await repositoriesOf(project.id, cookie)).toEqual([{ id: cronker.id, fullName: "ada-gh/cronker", keyClash: false }]);
+  });
+
+  test("a rename shows in the App's installations at once, for a Repository no Project lists too", async () => {
+    const { cookie, app, installation, cronker } = await projectWithApp();
+    expect(await installationsListed(cookie)).toEqual([["cronkcorp", ["cronkcorp/cronker", "cronkcorp/website"]]]);
+
+    cronker.name = "zeta";
+    cronker.fullName = "cronkcorp/zeta";
+    await cronk.github.deliver(app, "repository", {
+      action: "renamed",
+      installation: { id: installation.id },
+      repository: { id: cronker.id, name: "zeta", full_name: "cronkcorp/zeta", owner: { login: "cronkcorp" } },
+    });
+
+    expect(await installationsListed(cookie)).toEqual([["cronkcorp", ["cronkcorp/website", "cronkcorp/zeta"]]]);
+  });
+
+  test("a transfer to another account the App is installed on shows in the App's installations at once", async () => {
+    const { cookie, app, installation, cronker } = await projectWithApp();
+    const bea = cronk.github.install(app, "bea", ["notes"]);
+    expect(await installationsListed(cookie)).toEqual([
+      ["bea", ["bea/notes"]],
+      ["cronkcorp", ["cronkcorp/cronker", "cronkcorp/website"]],
+    ]);
+
+    installation.repositories.splice(installation.repositories.indexOf(cronker), 1);
+    cronker.fullName = "bea/cronker";
+    bea.repositories.push(cronker);
+    await cronk.github.deliver(app, "repository", {
+      action: "transferred",
+      installation: { id: bea.id },
+      changes: { owner: { from: { user: { login: "cronkcorp" } } } },
+      repository: { id: cronker.id, name: "cronker", full_name: "bea/cronker", owner: { login: "bea" } },
+    });
+
+    expect(await installationsListed(cookie)).toEqual([
+      ["bea", ["bea/cronker", "bea/notes"]],
+      ["cronkcorp", ["cronkcorp/website"]],
+    ]);
   });
 });

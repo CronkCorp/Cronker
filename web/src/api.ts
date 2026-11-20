@@ -754,7 +754,9 @@ export const api = {
     call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
   githubApp: () => call<{ app: GitHubApp | null }>("GET", "/api/github/app").then((r) => r.app),
   githubChecklist: () => call<GitHubChecklist>("GET", "/api/github/app/checklist"),
-  githubInstallations: () => call<GitHubInstallation[]>("GET", "/api/github/installations"),
+  /** What Cronk keeps of the App's installations, or with `refresh` what GitHub says now. */
+  githubInstallations: (refresh = false) =>
+    call<GitHubInstallation[]>("GET", `/api/github/installations${refresh ? "?refresh=true" : ""}`),
   startGitHubApp: (githubOrganization?: string) =>
     call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization }),
   lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),

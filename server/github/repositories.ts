@@ -54,11 +54,15 @@ export async function repositoriesOf({ db }: Context, viewer: Viewer, projectId:
   return repositoriesListed(db, project.id);
 }
 
-/** Adds a Repository one of the App's installations covers to a Project, by GitHub's id. */
+/**
+ * Adds a Repository one of the App's installations covers to a Project, by GitHub's id. GitHub
+ * is asked afresh which Repositories that is, so a list kept from before can't add one the App
+ * no longer reads, nor refuse one just installed.
+ */
 export async function addRepository(context: Context, userId: string, projectId: string, repositoryId: number): Promise<Repository> {
   const viewer = userViewer(userId);
   if (!(await findProject(context.db, viewer, projectId))) throw projectNotFound();
-  const covered = (await listInstallations(context)).flatMap((i) => i.repositories).find((r) => r.id === repositoryId);
+  const covered = (await listInstallations(context, { refresh: true })).flatMap((i) => i.repositories).find((r) => r.id === repositoryId);
   if (!covered) {
     throw new ApiError(
       409,
@@ -119,6 +123,8 @@ export async function removeRepository(context: Context, userId: string, project
     );
     await announceListChanged(context, tx, project, repositoryId);
   });
+  // Someone is changing which Repositories the Project lists, so the next listing asks GitHub afresh, as adding did.
+  context.installationListings.forget();
 }
 
 /**
@@ -126,7 +132,10 @@ export async function removeRepository(context: Context, userId: string, project
  * Repository a Project lists. Deliveries can arrive late or out of order, so the name is
  * read from GitHub as it is now, falling back to the delivery's own only when the App's
  * installation no longer covers the Repository, as after a transfer to another owner.
- * Other actions, and Repositories no Project lists, change nothing.
+ * What Cronk keeps of the App's installations is asked of GitHub again, whether or not a
+ * Project lists this Repository: a rename's installation's Repositories, or everything after a
+ * transfer, which may move the Repository to another installation. Other actions change
+ * nothing, and for Repositories no Project lists, nothing else.
  */
 export const onRepositoryEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, installation } = payload as {
@@ -136,6 +145,8 @@ export const onRepositoryEvent: EventHandler = async (context, tx, { payload }) 
   };
   if (action !== "renamed" && action !== "transferred") return;
   if (typeof repository?.id !== "number" || typeof repository.full_name !== "string") return;
+  if (action === "renamed" && typeof installation?.id === "number") context.installationListings.forgetRepositoriesOf(installation.id);
+  else context.installationListings.forget();
   const { rows: known } = await tx.query("select from repositories where id = $1 for update", [repository.id]);
   if (known.length === 0) return;
   const current =

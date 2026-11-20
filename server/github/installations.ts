@@ -8,6 +8,8 @@ import { appInstallations, installationRepositories, installationToken } from ".
  * The App's installations on GitHub accounts and organizations, and the tokens Cronk acts
  * on an installation's Repositories with. GitHub's installation tokens last an hour; Cronk
  * fetches one when it first needs it and reuses it until five minutes before it expires.
+ * What GitHub says the installations cover is kept for five minutes, per installation, so
+ * the Add Repository picker answers quickly after the first time.
  */
 
 /** How long before a token expires Cronk stops using it, so none expires mid-call. */
@@ -30,6 +32,83 @@ export class InstallationTokens {
       if (this.#tokens.get(installationId) === fetching) this.#tokens.delete(installationId);
     });
     return (await fetching).token;
+  }
+}
+
+/** How long Cronk keeps what GitHub said the App's installations are and which Repositories each covers. */
+const listingLifetimeMs = 5 * 60 * 1000;
+
+interface ListedInstallation {
+  id: number;
+  account: string;
+}
+
+interface ListedRepository {
+  id: number;
+  fullName: string;
+}
+
+/** Values fetched from GitHub, kept in memory by key until their lifetime passes or they are forgotten. */
+class Kept<K, V> {
+  readonly #held = new Map<K, { until: number; value: Promise<V> }>();
+
+  constructor(private readonly clock: Clock) {}
+
+  /** The value kept for `key`, unless it has expired or `refresh` asks GitHub again; then `fetch`'s, which is kept. */
+  async get(key: K, fetch: () => Promise<V>, refresh: boolean): Promise<V> {
+    const now = this.clock.now().getTime();
+    const held = this.#held.get(key);
+    if (!refresh && held && held.until > now) return held.value;
+    const fetching = fetch();
+    const entry = { until: now + listingLifetimeMs, value: fetching };
+    this.#held.set(key, entry);
+    // A failed fetch isn't kept, so the next call tries again.
+    fetching.catch(() => {
+      if (this.#held.get(key) === entry) this.#held.delete(key);
+    });
+    return fetching;
+  }
+
+  /** Forgets the value kept for `key`, so the next call asks GitHub. */
+  forget(key: K): void {
+    this.#held.delete(key);
+  }
+
+  /** Forgets every value kept. */
+  clear(): void {
+    this.#held.clear();
+  }
+
+  /** Forgets every value but those kept for `keys`. */
+  keepOnly(keys: K[]): void {
+    for (const key of this.#held.keys()) if (!keys.includes(key)) this.#held.delete(key);
+  }
+}
+
+/**
+ * What GitHub last said the App's installations are, and the Repositories each covers, in
+ * memory only. Each is asked again five minutes after it was last asked, or at once once forgotten.
+ */
+export class InstallationListings {
+  /** The installations, under the one key `all`. */
+  readonly installations: Kept<"all", ListedInstallation[]>;
+  /** Each installation's Repositories, by installation id. */
+  readonly repositories: Kept<number, ListedRepository[]>;
+
+  constructor(clock: Clock) {
+    this.installations = new Kept(clock);
+    this.repositories = new Kept(clock);
+  }
+
+  /** Forgets the Repositories kept for one installation, as after a rename there. */
+  forgetRepositoriesOf(installationId: number): void {
+    this.repositories.forget(installationId);
+  }
+
+  /** Forgets everything kept, as when Cronk learns the Repositories the App covers may have changed. */
+  forget(): void {
+    this.installations.clear();
+    this.repositories.clear();
   }
 }
 
@@ -58,17 +137,29 @@ function ignoringCase(a: string, b: string): number {
 
 /**
  * Every installation of the App, by account, with the Repositories it covers by `owner/name`, both
- * ignoring case, so every client lists them alike.
+ * ignoring case, so every client lists them alike. What GitHub said within the last five minutes
+ * is used again, unless `refresh` asks GitHub afresh.
  */
-export async function listInstallations(context: Context): Promise<Installation[]> {
-  const { config } = context;
-  const installations = await appInstallations(config, await appToken(context));
+export async function listInstallations(context: Context, { refresh = false } = {}): Promise<Installation[]> {
+  const { config, installationListings: kept } = context;
+  const installations = await kept.installations.get(
+    "all",
+    async () => (await appInstallations(config, await appToken(context))).map((i) => ({ id: i.id, account: i.account.login })),
+    refresh,
+  );
+  // An installation removed from GitHub isn't listed again, so nothing it covered is kept.
+  kept.repositories.keepOnly(installations.map((i) => i.id));
   const listed = await Promise.all(
     installations.map(async (installation) => ({
-      account: installation.account.login,
-      repositories: (await installationRepositories(config, await tokenFor(context, installation.id)))
-        .map((r) => ({ id: r.id, fullName: r.full_name }))
-        .sort((a, b) => ignoringCase(a.fullName, b.fullName)),
+      account: installation.account,
+      repositories: await kept.repositories.get(
+        installation.id,
+        async () =>
+          (await installationRepositories(config, await tokenFor(context, installation.id)))
+            .map((r) => ({ id: r.id, fullName: r.full_name }))
+            .sort((a, b) => ignoringCase(a.fullName, b.fullName)),
+        refresh,
+      ),
     })),
   );
   return listed.sort((a, b) => ignoringCase(a.account, b.account));

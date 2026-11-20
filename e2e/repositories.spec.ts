@@ -88,7 +88,7 @@ test("the Repositories section asks GitHub only once Add Repository opens its Pi
 
   await repositories.getByRole("button", { name: "Add Repository" }).click();
   const picker = page.getByRole("listbox", { name: "Repository to add" });
-  await expect(page.getByRole("dialog", { name: "Repository to add" })).toHaveText("Asking GitHub which Repositories the App is installed on…", { useInnerText: true });
+  await expect(page.getByRole("dialog", { name: "Repository to add" })).toHaveText("Asking GitHub which Repositories the App is installed on…\nJust installed the App on GitHub?\nRefresh", { useInnerText: true });
   answer();
   await expect(picker.getByRole("option")).toHaveText(["bea/Atlas", "bea/notes", "cronkcorp/api", "cronkcorp/Cronker", "cronkcorp/Docs"]);
   await expect(picker.getByRole("group", { name: "bea" }).getByRole("option")).toHaveText(["bea/Atlas", "bea/notes"]);
@@ -106,6 +106,12 @@ test("the Repositories section asks GitHub only once Add Repository opens its Pi
   await repositories.getByRole("button", { name: "Add Repository" }).click();
   await expect(picker.getByRole("option")).toHaveText(["bea/notes", "cronkcorp/api", "cronkcorp/Cronker", "cronkcorp/Docs"]);
   expect(asked).toHaveLength(1);
+
+  // Installed on another Repository on GitHub since, it shows once Refresh asks GitHub afresh.
+  cronkcorp.repositories.push({ id: 990001, name: "blog", fullName: "cronkcorp/blog" });
+  await page.getByRole("dialog", { name: "Repository to add" }).getByRole("button", { name: "Refresh" }).click();
+  await expect(picker.getByRole("option")).toHaveText(["bea/notes", "cronkcorp/api", "cronkcorp/blog", "cronkcorp/Cronker", "cronkcorp/Docs"]);
+  expect(asked).toEqual([expect.not.stringContaining("refresh"), expect.stringContaining("refresh=true")]);
 });
 
 test("the Repositories section says when there is no App, GitHub can't be asked, or nothing is left to add", async ({ page, cronk }) => {
@@ -136,5 +142,5 @@ test("the Repositories section says when there is no App, GitHub can't be asked,
   await page.keyboard.press("Escape");
   cronk.github.unavailable = false;
   await repositories.getByRole("button", { name: "Add Repository" }).click();
-  await expect(popover).toHaveText("No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here.", { useInnerText: true });
+  await expect(popover).toHaveText("No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here.\nJust installed the App on GitHub?\nRefresh", { useInnerText: true });
 });
