@@ -211,6 +211,50 @@ describe("the App's installations", () => {
     expect(installations[1]).toEqual({ account: "bea", repositories: [{ id: bea.repositories[0]!.id, fullName: "bea/notes" }] });
   });
 
+  test("each installation's Repositories are sorted by owner/name, ignoring case", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    cronk.github.install(cronk.github.apps[0]!, "acme", ["website", "Cronker", "api", "Docs", "cronk"]);
+
+    const installations = await (await cronk.request("GET", "/api/github/installations", { cookie })).json();
+
+    expect(installations[0].repositories.map((r: { fullName: string }) => r.fullName)).toEqual([
+      "acme/api",
+      "acme/cronk",
+      "acme/Cronker",
+      "acme/Docs",
+      "acme/website",
+    ]);
+  });
+
+  test("installations are listed by account, ignoring case", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    cronk.github.install(app, "zeta", ["api"]);
+    cronk.github.install(app, "Bea", ["notes"]);
+    cronk.github.install(app, "acme", ["site"]);
+
+    const installations = await (await cronk.request("GET", "/api/github/installations", { cookie })).json();
+
+    expect(installations.map((i: { account: string }) => i.account)).toEqual(["acme", "Bea", "zeta"]);
+  });
+
+  test("GitHub being unavailable is refused with github_unavailable", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    cronk.github.install(cronk.github.apps[0]!, "acme", ["api"]);
+    cronk.github.unavailable = true;
+
+    const response = await cronk.request("GET", "/api/github/installations", { cookie });
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: { code: "github_unavailable", message: expect.any(String) } });
+  });
+
   test("installation tokens are fetched once and reused until shortly before they expire", async () => {
     await setUp(cronk);
     const cookie = await signIn(cronk);

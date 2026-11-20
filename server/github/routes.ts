@@ -124,7 +124,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["GitHub"],
           summary: "The GitHub App's installations and the Repositories each covers",
           description:
-            "Every GitHub account or organization the App is installed on, with the Repositories it covers there, as GitHub reports them now. Installing the App on GitHub is what makes a Repository available to Cronk. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
+            "Every GitHub account or organization the App is installed on, with the Repositories it covers there, as GitHub reports them now, by account and then by `owner/name`, ignoring case. Installing the App on GitHub is what makes a Repository available to Cronk. Refused with `github_not_set_up` while there is no App, and with `github_unavailable` if GitHub can't be asked.",
           response: { 200: Type.Array(Installation), 401: ErrorBody, 403: ErrorBody, 409: ErrorBody, 502: ErrorBody },
         },
       },

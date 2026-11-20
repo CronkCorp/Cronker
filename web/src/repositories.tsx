@@ -1,32 +1,48 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError, type GitHubInstallation, type Project, type Repository } from "./api.js";
-import { field, useSave } from "./forms.js";
+import { useSave } from "./forms.js";
 import { useLatest } from "./live.js";
-import { Actions, Banner, Button, Field, FormError, Panel, Saved } from "./ui/controls.js";
+import { Banner, Button, FormError, Panel, Saved } from "./ui/controls.js";
+import { Picker, type PickerOption } from "./ui/picker.js";
 
 /**
  * The Repositories a Project lists as holding its code, added from those the GitHub App's
- * installations cover. Reloads whenever the Project changes, as on a rename on GitHub.
+ * installations cover. Reloads whenever the Project changes, as on a rename on GitHub. GitHub
+ * is asked which Repositories the App covers only once Add Repository is first opened.
  */
 export function RepositoriesSettings({ project }: { project: Project }) {
   const [repositories, setRepositories] = useState<Repository[] | undefined>(undefined);
+  // Whether the installation has a GitHub App, which Cronk answers without asking GitHub.
+  const [hasApp, setHasApp] = useState<boolean | undefined>(undefined);
   const [installations, setInstallations] = useState<GitHubInstallation[] | undefined>(undefined);
   const [installationsError, setInstallationsError] = useState<string | null>(null);
-  const [noApp, setNoApp] = useState(false);
+  const [asking, setAsking] = useState(false);
   const { error, busy, saved, save } = useSave();
   const [loadError, setLoadError] = useState<string | null>(null);
   const latest = useLatest();
-  const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
   useEffect(() => {
     latest(api.repositories(project.id), setRepositories, (e) => setLoadError(e.message));
   }, [project]);
   useEffect(() => {
-    api.githubInstallations().then(setInstallations, (e: unknown) => {
-      if (e instanceof ApiError && e.code === "github_not_set_up") setNoApp(true);
-      else setInstallationsError(message(e));
-    });
+    // If Cronk can't say, Add Repository is offered and asking GitHub says what's wrong.
+    api.githubApp().then((app) => setHasApp(app !== null), () => setHasApp(true));
   }, []);
+
+  // Asks GitHub on the first opening, and again on the next after a failure.
+  const askGitHub = () => {
+    if (installations || asking) return;
+    setAsking(true);
+    setInstallationsError(null);
+    api
+      .githubInstallations()
+      .then(setInstallations, (e: unknown) => {
+        // The App went away since the page asked Cronk.
+        if (e instanceof ApiError && e.code === "github_not_set_up") setHasApp(false);
+        else setInstallationsError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => setAsking(false));
+  };
 
   const change = (act: () => Promise<unknown>) =>
     save(async () => {
@@ -35,14 +51,25 @@ export function RepositoriesSettings({ project }: { project: Project }) {
       setLoadError(null);
     });
 
-  const add = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const id = Number(field(new FormData(event.currentTarget), "repository"));
-    if (id) void change(() => api.addRepository(project.id, id));
-  };
-
   const listed = new Set(repositories?.map((r) => r.id));
-  const available = (installations ?? []).flatMap((i) => i.repositories).filter((r) => !listed.has(r.id));
+  // Cronk answers by account and owner/name; several installations are told apart by their account.
+  const options: PickerOption[] = (installations ?? []).flatMap((installation) =>
+    installation.repositories
+      .filter((r) => !listed.has(r.id))
+      .map((r) => ({
+        value: String(r.id),
+        label: r.fullName,
+        group: installations!.length > 1 ? installation.account : undefined,
+      })),
+  );
+  const notice = installationsError ? (
+    <FormError error={`Couldn't ask GitHub which Repositories the App is installed on: ${installationsError}`} />
+  ) : !installations ? (
+    "Asking GitHub which Repositories the App is installed on…"
+  ) : options.length === 0 ? (
+    "No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here."
+  ) : undefined;
+
   return (
     <Panel
       title="Repositories"
@@ -76,37 +103,27 @@ export function RepositoriesSettings({ project }: { project: Project }) {
           ))}
         </ul>
       )}
-      {noApp ? (
+      {hasApp === false ? (
         <p className="muted">
           This installation has no GitHub App yet. Once an Admin creates it on the GitHub page and installs it on GitHub,
           its Repositories can be added here.
         </p>
-      ) : installationsError ? (
-        <FormError error={`Couldn't ask GitHub which Repositories the App is installed on: ${installationsError}`} />
-      ) : !installations ? (
-        <p className="muted">Asking GitHub which Repositories the App is installed on…</p>
-      ) : available.length === 0 ? (
-        <p className="muted">
-          No other Repository is available. Install the GitHub App on more Repositories on GitHub to add them here.
-        </p>
-      ) : (
-        <form onSubmit={add}>
-          <Field label="Repository to add">
-            <select name="repository" required disabled={busy}>
-              {available.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.fullName}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Actions>
-            <Button type="submit" variant="primary" disabled={busy}>
-              Add Repository
-            </Button>
-          </Actions>
-        </form>
-      )}
+      ) : hasApp === true ? (
+        <div>
+          <Picker
+            label="Repository to add"
+            onOpenChange={(open) => open && askGitHub()}
+            options={options}
+            notice={notice}
+            onPick={(id) => void change(() => api.addRepository(project.id, Number(id)))}
+            trigger={
+              <Button variant="primary" aria-haspopup="listbox" disabled={busy}>
+                Add Repository
+              </Button>
+            }
+          />
+        </div>
+      ) : null}
       <Saved shown={saved} />
     </Panel>
   );
