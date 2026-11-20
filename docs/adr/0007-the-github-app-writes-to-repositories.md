@@ -1,0 +1,4 @@
+# The GitHub App writes to Repositories
+
+Until milestone 3 the installation's GitHub App only read Repositories, and code reached GitHub through each User's own claude.ai GitHub connection. From milestone 3 the App also has `contents: write` and `pull_requests: write`, because Managed Agents Runs push branches and open Pull Requests with an App installation token Cronk hands each session, and merges by agents go through Cronk's `merge_pull_request`, which merges with the App token. Existing Apps are upgraded by hand from the GitHub page's checklist, and every installation's owner accepts the new permissions. Cronk still never commits to a Repository itself: it only passes the token to Runs and merges where its rules allow, so who may write stays governed by Cronk's rules (*agents may merge*, Autonomous Delegation) rather than by GitHub's.
+
