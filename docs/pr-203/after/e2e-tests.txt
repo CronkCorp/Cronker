@@ -1,0 +1,3 @@
+  ✓  1 e2e/artifacts.spec.ts:52:1 › an Artifact's page shows it in a sandboxed iframe, where its scripts run but can't read Cronk's cookies or call its API, also when opened directly (1.5s)
+  ✓  2 e2e/artifacts.spec.ts:96:1 › an Artifact's page lists its Versions, who saved each and when, and compares two file by file, showing files added and removed (1.6s)
+  2 passed (2.5s)

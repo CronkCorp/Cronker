@@ -5,7 +5,7 @@ GET /api/artifacts/:id/versions
     "number": 1,
     "actor": {
       "kind": "user",
-      "id": "b07fb5e3-f2b4-412f-a82e-be771cd348df",
+      "id": "c7795a36-1d8f-4b4a-a548-3ed739997878",
       "name": "ada@example.com"
     },
     "savedAt": "2026-01-01T09:00:00.000Z"
@@ -14,7 +14,7 @@ GET /api/artifacts/:id/versions
     "number": 2,
     "actor": {
       "kind": "agent",
-      "id": "e7eea0ca-e17b-447f-ba01-6a142ad8614e",
+      "id": "fe3f5bd3-15b6-47af-85f8-f08e79ab00b9",
       "name": "claude-max"
     },
     "savedAt": "2026-01-01T09:00:00.000Z"
@@ -23,7 +23,7 @@ GET /api/artifacts/:id/versions
     "number": 3,
     "actor": {
       "kind": "user",
-      "id": "b07fb5e3-f2b4-412f-a82e-be771cd348df",
+      "id": "c7795a36-1d8f-4b4a-a548-3ed739997878",
       "name": "ada@example.com"
     },
     "savedAt": "2026-01-01T09:00:00.000Z"
@@ -37,7 +37,7 @@ GET /api/artifacts/:id/versions/compare?from=1&to=2
     "number": 1,
     "actor": {
       "kind": "user",
-      "id": "b07fb5e3-f2b4-412f-a82e-be771cd348df",
+      "id": "c7795a36-1d8f-4b4a-a548-3ed739997878",
       "name": "ada@example.com"
     },
     "savedAt": "2026-01-01T09:00:00.000Z"
@@ -46,7 +46,7 @@ GET /api/artifacts/:id/versions/compare?from=1&to=2
     "number": 2,
     "actor": {
       "kind": "agent",
-      "id": "e7eea0ca-e17b-447f-ba01-6a142ad8614e",
+      "id": "fe3f5bd3-15b6-47af-85f8-f08e79ab00b9",
       "name": "claude-max"
     },
     "savedAt": "2026-01-01T09:00:00.000Z"
