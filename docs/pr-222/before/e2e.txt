@@ -1,0 +1,14 @@
+  1) e2e/comment-shortcut.spec.ts:36:1 › Ctrl+Enter places a Comment from the Ticket's Comment box, while Enter and Shift+Enter add new lines 
+    Error: expect(locator).toHaveCount(expected) failed
+  2) e2e/comment-shortcut.spec.ts:59:1 › Cmd+Enter places a Reply to a Comment ─────────────────────
+    Error: expect(locator).toContainText(expected) failed
+  3) e2e/comment-shortcut.spec.ts:71:1 › Ctrl+Enter answers a Question from the Inbox's answer box ─
+    Error: expect(locator).toHaveCount(expected) failed
+  4) e2e/comment-shortcut.spec.ts:90:1 › pressing Ctrl+Enter again while a Comment is being sent doesn't place it twice 
+  5) e2e/comment-shortcut.spec.ts:141:1 › on macOS the hint is ⌘↵ ──────────────────────────────────
+    Error: expect(locator).toHaveText(expected) failed
+  6) e2e/comment-shortcut.spec.ts:127:1 › the buttons that place a Comment show the shortcut as a hint, Ctrl+↵ off macOS 
+    Error: expect(locator).toHaveText(expected) failed
+  7) e2e/comment-shortcut.spec.ts:155:1 › a Comment Cronk refuses stays in its box with the refusal under it 
+    Error: expect(locator).toBeVisible() failed
+  7 failed
