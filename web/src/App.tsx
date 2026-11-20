@@ -25,6 +25,7 @@ import { navigate, replace, usePath } from "./router.js";
 import { RunnersScreen } from "./runners.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
+import { TranscriptScreen } from "./transcripts.js";
 import { Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved, workspaceCrumb } from "./ui/controls.js";
 import { SettingsLayout } from "./ui/settings.js";
@@ -285,6 +286,7 @@ function SignedIn({
   const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
   const termPath = /^\/terms\/([^/]+)\/?$/.exec(path);
   const decisionPath = /^\/decisions\/([^/]+)\/?$/.exec(path);
+  const transcriptPath = /^\/transcripts\/([^/]+)\/?$/.exec(path);
   const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
 
   // The Workspace on screen: the one in the path, else the last one shown (pages such as a
@@ -365,6 +367,8 @@ function SignedIn({
         onOtherWorkspace={onOtherWorkspace}
       />
     );
+  } else if (current && transcriptPath) {
+    page = <TranscriptScreen key={`${current.id} ${transcriptPath[1]}`} workspace={current} transcriptId={transcriptPath[1]!} />;
   } else if (current && workspacePath?.[2] === "glossary" && !workspacePath[3]) {
     page = <WorkspaceGlossary key={current.id} workspace={current} />;
   } else if (current && workspacePath?.[2] === "decisions" && !workspacePath[3]) {

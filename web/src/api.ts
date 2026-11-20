@@ -398,8 +398,35 @@ export interface Run {
   questionBy: "agent" | "cronk" | null;
   endReason: string | null;
   sessionUrl: string | null;
+  /** Its Transcript, once one was uploaded for its session. */
+  transcriptId: string | null;
   startedAt: string;
   endedAt: string | null;
+}
+
+/** The record of an agent's session, as Cronk converted it into entries. */
+export interface Transcript {
+  id: string;
+  sessionId: string;
+  agent: { id: string; name: string };
+  runId: string | null;
+  entryCount: number;
+  /** Where entries were left out of a Transcript past 50 MB: after which position, how many and how large. */
+  gap: { after: number; entries: number; bytes: number } | null;
+  uploadedAt: string;
+}
+
+/** A message, or a tool call with its input and result, of a Transcript. */
+export interface TranscriptEntry {
+  position: number;
+  role: "user" | "assistant" | "system";
+  text: string | null;
+  toolName: string | null;
+  toolInput: unknown;
+  toolResult: string | null;
+  /** Whether the tool result was cut at 20 KB. */
+  cut: boolean;
+  at: string | null;
 }
 
 /** A Report as lists show it, by its id and title. */
@@ -840,6 +867,13 @@ export const api = {
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
   runs: (ticketId: string) => call<Run[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/runs`),
+  run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
+  transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
+  transcriptEntries: (id: string, after?: number) =>
+    call<{ entries: TranscriptEntry[]; next: number | null }>(
+      "GET",
+      `/api/transcripts/${encodeURIComponent(id)}/entries${after === undefined ? "" : `?after=${after}`}`,
+    ),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
