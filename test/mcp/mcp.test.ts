@@ -280,6 +280,7 @@ describe("MCP with an Agent token", () => {
     const all = await call(client, "search", { query: "read" });
     const narrowed = await call(client, "search", { query: "read", project: "cronk", kinds: ["ticket", "term"] });
     const unknown = await call(client, "search", { query: "read", project: "NOPE" });
+    const transcripts = await call(client, "search", { query: "read", kinds: ["transcript"] });
 
     const api = await cronk.request("GET", `/api/workspaces/${workspaceId}/search?q=read`, { cookie });
     expect(all.json).toEqual(await api.json());
@@ -287,6 +288,7 @@ describe("MCP with an Agent token", () => {
       [["term", term.id], ["ticket", ticket.id]].sort(),
     );
     expect(unknown).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project" }) });
+    expect(transcripts).toEqual({ isError: false, json: [] });
   });
 
   test("an Agent comments on a Ticket as itself", async () => {
