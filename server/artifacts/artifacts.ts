@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, type Db, type Tx } from "../db.js";
+import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
@@ -9,7 +9,11 @@ import { inView, type Viewer } from "../identity/viewers.js";
 import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
-import { describeSize } from "../attachments/attachments.js";
+import { describeSize, forgetAttachments } from "../attachments/attachments.js";
+import { ownerName } from "../agents/tokens.js";
+import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
+import { insertLink } from "./linked-artifacts.js";
+import { ComparedLine, compareWords } from "../knowledge/compare.js";
 
 /**
  * Artifacts: live pages an Actor builds, such as an HTML prototype, with the files the page refers to by relative
@@ -265,16 +269,29 @@ async function keepingFiles<T>(context: Context, files: FileInput[], work: (kept
   }
 }
 
-/** Creates an Artifact in the Project or the Workspace, at Version 1 by its Actor, with its page and files. */
+/**
+ * Creates an Artifact in the Project or the Workspace, at Version 1 by its Actor, with its page and files. An Agent
+ * creating it during its running Run names the Run, and the Artifact is linked to the Run's Ticket.
+ */
 export async function createArtifact(
   context: Context,
   actor: Caller,
   place: Place,
-  input: { title: string; description?: string; page?: string; files: FileInput[] },
+  input: { title: string; description?: string; page?: string; files: FileInput[]; runId?: string },
 ): Promise<Artifact> {
   const { db, clock } = context;
+  if (input.runId !== undefined && actor.kind === "user") {
+    throw new ApiError(400, "run_for_agents", "Only an Agent names the Run it creates an Artifact in.");
+  }
   return keepingFiles(context, input.files, (files) =>
     transaction(db, async (tx) => {
+      const run =
+        input.runId !== undefined && actor.kind === "agent"
+          ? await runningRunOf(tx, actor, input.runId, {
+              rule: "An Agent creates an Artifact in a Run only while that Run of its own is running.",
+              advice: "Name your running Run, as your Brief gives it, or leave the Run out to create the Artifact linked to no Ticket.",
+            })
+          : null;
       const now = clock.now();
       const { rows } = await tx.query<{ id: string }>(
         `insert into artifacts (workspace_id, project_id, version, created_at) values ($1, $2, 1, $3) returning id`,
@@ -285,7 +302,14 @@ export async function createArtifact(
       checkVersion(content, context.config.attachments.limitBytes);
       await insertVersion(tx, { id, workspaceId: place.workspaceId }, 1, content, actor, now);
       context.live.publish(tx, place.workspaceId, { type: "artifact.changed", projectId: place.projectId, artifactId: id });
-      return (await findArtifact(tx, actor, id))!;
+      const created = (await findArtifact(tx, actor, id))!;
+      if (run && actor.kind === "agent") {
+        const ticket = (await findTicketRow(tx, actor, run.ticketId, { lock: true }))!;
+        // Asked again under the Ticket's lock, so a Run stopped meanwhile, as by a move, refuses the create.
+        const runId = await runOfAgent(tx, actor, ticket);
+        await insertLink(context, tx, ticket, { kind: "agent", id: actor.id, runId }, created);
+      }
+      return created;
     }),
   );
 }
@@ -368,6 +392,41 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
   );
 }
 
+/**
+ * Deletes the Artifact with all its Versions, their files' bytes once the delete is committed. Only a User may, so an
+ * agent can't remove work. It drops out of its links, and the Tickets linking it show the change.
+ */
+export async function deleteArtifact(context: Context, actor: Caller, artifactId: string): Promise<void> {
+  const { db, live } = context;
+  await transaction(db, async (tx) => {
+    const artifact = await lockArtifact(tx, actor, artifactId);
+    if (!artifact) throw artifactNotFound();
+    if (actor.kind === "agent") {
+      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete an Artifact.`, {
+        rule: "Only a User deletes an Artifact, so an agent can't remove work.",
+        advice: `Leave the Artifact as it is, or save a new Version; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+      });
+    }
+    const linking = await tx.query<{ ticketId: string; projectId: string }>(
+      `select tickets.id as "ticketId", tickets.project_id as "projectId"
+       from linked_artifacts join tickets on tickets.id = linked_artifacts.ticket_id
+       where linked_artifacts.artifact_id = $1 order by linked_artifacts.seq`,
+      [artifact.id],
+    );
+    for (const { ticketId, projectId } of linking.rows) {
+      live.publish(tx, artifact.workspaceId, { type: "ticket.changed", projectId, ticketId });
+    }
+    const blobs = await tx.query<{ blobId: string }>(
+      `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
+      [artifact.id],
+    );
+    // Its Versions, their files and its links go with it.
+    await tx.query("delete from artifacts where id = $1", [artifact.id]);
+    afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
+    live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });
+  });
+}
+
 /** The Artifact at its current Version, its row locked until the transaction ends, so saves of it queue up. */
 async function lockArtifact(tx: Tx, viewer: Viewer, artifactId: string): Promise<Artifact | undefined> {
   if (!isUuid(artifactId)) return undefined;
@@ -418,9 +477,116 @@ export async function readArtifactFile(context: Context, viewer: Viewer, artifac
   if (!artifact) throw artifactNotFound();
   const [file] = await keptFiles(context.db, artifact.id, artifact.version.number, path);
   if (!file) throw new ApiError(404, "not_found", `${artifact.title} has no file ${path}.`);
+  const bytes = await bytesOf(context, file);
+  return { path: file.path, mediaType: file.mediaType, size: file.size, contentBase64: bytes.toString("base64") };
+}
+
+/** A kept file's bytes, or a refusal when Cronk's storage has lost them. */
+async function bytesOf(context: Context, file: Kept): Promise<Buffer> {
   const content = await context.attachments.get(file.blobId);
-  if (!content) throw new ApiError(404, "artifact_file_missing", `${path}'s bytes are missing from Cronk's storage.`);
+  if (!content) throw new ApiError(404, "artifact_file_missing", `${file.path}'s bytes are missing from Cronk's storage.`);
   const chunks: Buffer[] = [];
   for await (const chunk of content) chunks.push(chunk as Buffer);
-  return { path: file.path, mediaType: file.mediaType, size: file.size, contentBase64: Buffer.concat(chunks).toString("base64") };
+  return Buffer.concat(chunks);
+}
+
+type VersionRow = Omit<ArtifactVersion, "savedAt"> & { savedAt: Date };
+
+/** The Versions of an Artifact already found in the caller's view, oldest first. */
+async function versionsOfFound(db: Db, artifactId: string): Promise<ArtifactVersion[]> {
+  const { rows } = await db.query<VersionRow>(
+    `select versions.number, ${actorColumn("users", "agents")} as actor, versions.saved_at as "savedAt"
+     from artifact_versions versions
+     left join users on users.id = versions.actor_user_id
+     left join agents on agents.id = versions.actor_agent_id
+     where versions.artifact_id = $1 order by versions.number`,
+    [artifactId],
+  );
+  return rows.map((row) => ({ ...row, savedAt: row.savedAt.toISOString() }));
+}
+
+/** An Artifact's Versions, oldest first, each with the Actor who saved it and when, without their files. */
+export async function artifactVersionsOf(db: Db, viewer: Viewer, artifactId: string): Promise<ArtifactVersion[]> {
+  const artifact = await findArtifact(db, viewer, artifactId);
+  if (!artifact) throw artifactNotFound();
+  return versionsOfFound(db, artifact.id);
+}
+
+export const ComparedFile = Type.Object({
+  path: Type.String(),
+  change: Type.Union([Type.Literal("added"), Type.Literal("removed"), Type.Literal("changed")], {
+    description: "Whether the file is only in the later Version, only in the earlier one, or in both with other bytes.",
+  }),
+  text: Type.Boolean({ description: "Whether the file is text, UTF-8 without NUL bytes; only text is compared by line." }),
+  lines: Type.Array(ComparedLine, {
+    description: "Its text compared line by line, in order: all added or all removed for a file added or removed; " +
+      "empty for a file that isn't text.",
+  }),
+});
+export type ComparedFile = Static<typeof ComparedFile>;
+
+export const ArtifactComparison = Type.Object({
+  from: ArtifactVersion,
+  to: ArtifactVersion,
+  files: Type.Array(ComparedFile, { description: "The files that differ, by path; those that didn't change are left out." }),
+});
+export type ArtifactComparison = Static<typeof ArtifactComparison>;
+
+/** A file's bytes as text, when they are UTF-8 without NUL bytes; otherwise nothing. */
+function textOf(bytes: Buffer): string | undefined {
+  if (bytes.includes(0)) return undefined;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A file's text as lines: `\r\n` ends a line as `\n` does, the newline ending the last line starts no further one,
+ * and an empty file has none.
+ */
+const linesOf = (text: string) => (text === "" ? [] : text.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n"));
+
+/**
+ * Two of an Artifact's Versions: each file added, removed or changed from one to the other, by path, its text
+ * compared line by line.
+ */
+export async function compareArtifactVersions(
+  context: Context,
+  viewer: Viewer,
+  artifactId: string,
+  numbers: { from: number; to: number },
+): Promise<ArtifactComparison> {
+  const artifact = await findArtifact(context.db, viewer, artifactId);
+  if (!artifact) throw artifactNotFound();
+  const versions = await versionsOfFound(context.db, artifact.id);
+  const version = (number: number) => {
+    const found = versions.find((v) => v.number === number);
+    if (!found) throw new ApiError(404, "not_found", `${artifact.title} has no Version ${number}.`);
+    return found;
+  };
+  const [from, to] = [version(numbers.from), version(numbers.to)];
+  const filesOf = async (number: number) =>
+    new Map((await keptFiles(context.db, artifact.id, number)).map((file) => [file.path, file]));
+  const [filesBefore, filesAfter] = [await filesOf(from.number), await filesOf(to.number)];
+  const paths = [...new Set([...filesBefore.keys(), ...filesAfter.keys()])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const files: ComparedFile[] = [];
+  for (const path of paths) {
+    const [before, after] = [filesBefore.get(path), filesAfter.get(path)];
+    if (before && after && before.blobId === after.blobId) continue;
+    const bytesBefore = before ? await bytesOf(context, before) : Buffer.alloc(0);
+    const bytesAfter = after ? await bytesOf(context, after) : Buffer.alloc(0);
+    if (before && after && bytesBefore.equals(bytesAfter)) continue;
+    // A side the file is missing from reads as empty text.
+    const [textBefore, textAfter] = [textOf(bytesBefore), textOf(bytesAfter)];
+    const text = textBefore !== undefined && textAfter !== undefined;
+    files.push({
+      path,
+      change: !before ? "added" : !after ? "removed" : "changed",
+      text,
+      lines: text ? compareWords(linesOf(textBefore), linesOf(textAfter)) : [],
+    });
+  }
+  return { from, to, files };
 }

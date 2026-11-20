@@ -471,3 +471,64 @@ describe("a merge and GitHub's own delivery of it", () => {
     );
   });
 });
+
+describe("an Agent's merge making another Pull Request conflicting", () => {
+  /**
+   * Beside `mergeRunning`'s CRONK-1, Ada's CRONK-2, its `no-review` Label skipping Code review and without Autonomous
+   * Delegation Merge skipping itself, waits In Review with Pull Request #8 on `main` its Implement Run opened, which
+   * GitHub says conflicts once #7 merges as `m1`.
+   */
+  async function anotherInReview() {
+    const merging = await mergeRunning();
+    const { ada, project, agent, asAgent, status, deliver, cronker } = merging;
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Speed up the board" });
+    await ok("PATCH", `/api/tickets/${other.id}`, ada, { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") });
+    await deliver("pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 502, number: 8, title: "CRONK-2: speed up the board", state: "open", draft: false, merged: false,
+        html_url: "https://github.com/cronkcorp/cronker/pull/8", head: { ref: "cronk-2", sha: "d1" }, base: { ref: "main", sha: "b0" },
+        created_at: "2026-01-01T09:00:00Z", updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    const runs = await ok("GET", `/api/tickets/${other.id}/runs`, ada);
+    const running = runs.find((r: { state: string }) => r.state === "running");
+    await ok("POST", `/api/runs/${running.id}/finish`, asAgent, { outcome: "done" });
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review") });
+    // Entering In Review had Cronk ask about #8, which merged cleanly then.
+    cronk.github.pullRequest(cronker, 8, { headSha: "d1", base: "main", baseSha: "b0", mergeable: true });
+    await cronk.checkMergeability();
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review") });
+    cronk.github.pullRequest(cronker, 8, { baseSha: "m1", mergeable: false });
+    const mergedDelivery = {
+      action: "closed",
+      pull_request: {
+        ...merging.pullRequest, base: { ref: "main", sha: "b0" }, state: "closed", merged: true, merge_commit_sha: "m1",
+        merged_by: { login: "cronk-app[bot]", id: 4242, type: "Bot" }, updated_at: "2026-01-01T09:05:00Z",
+      },
+    };
+    return { ...merging, other, mergedDelivery };
+  }
+
+  test("sends that Pull Request's Ticket back once GitHub's delivery of the merge comes, after GitHub answered the merge", async () => {
+    const { merge, ada, other, status, deliver, mergedDelivery } = await anotherInReview();
+    expect((await merge()).status).toBe(200);
+
+    await deliver("pull_request", mergedDelivery);
+    await cronk.checkMergeability();
+
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("Implement") });
+  });
+
+  test("sends that Pull Request's Ticket back when GitHub's delivery of the merge comes before GitHub answers it", async () => {
+    const { merge, ada, other, status, deliver, mergedDelivery } = await anotherInReview();
+    cronk.github.onMerge = async () => {
+      await deliver("pull_request", mergedDelivery);
+    };
+    expect((await merge()).status).toBe(200);
+
+    await cronk.checkMergeability();
+
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("Implement") });
+  });
+});

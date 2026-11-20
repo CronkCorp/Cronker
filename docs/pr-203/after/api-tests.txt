@@ -1,0 +1,15 @@
+ ✓ test/api/artifacts.test.ts > Artifacts > a User creates an Artifact in a Project and reads it at Version 1, with its files, saved by them 947ms
+ ✓ test/api/artifacts.test.ts > Artifacts > every file of a Version is served sandboxed from Cronk's own address, opened directly, its relative paths resolving within the Version 603ms
+ ✓ test/api/artifacts.test.ts > Artifacts > a save makes the next Version holding the whole set of files, adding, replacing and removing some, while the earlier Version stays served as it was 638ms
+ ✓ test/api/artifacts.test.ts > Artifacts > a save based on an outdated Version is refused with the current Version, and changes nothing 630ms
+ ✓ test/api/artifacts.test.ts > Artifacts > a Version whose files are over the Attachments size limit is refused, on create and on save, naming the limit 698ms
+ ✓ test/api/artifacts.test.ts > Artifacts > a file set is refused when a path leaves the Version, repeats, or the page isn't among the files 611ms
+ ✓ test/api/artifacts.test.ts > Artifacts > a Project's Artifacts and the Workspace's are listed apart, last changed first, without their files 675ms
+ ✓ test/api/artifacts.test.ts > Artifacts > an Artifact outside the caller's Workspace answers as not found, and a read-only token can't create or save one 768ms
+ ✓ test/api/artifacts.test.ts > Artifacts > an Actor reads a file of an Artifact's current Version, its bytes as base64 593ms
+ ✓ test/api/artifacts.test.ts > Artifacts > an Artifact's Versions are listed oldest first, each with the Actor who saved it and when 711ms
+ ✓ test/api/artifacts.test.ts > Artifacts > comparing two Versions gives each changed file's text compared line by line, leaving out files that didn't change 709ms
+ ✓ test/api/artifacts.test.ts > Artifacts > comparing two Versions shows files added and removed as such, and a file that isn't text without its lines 693ms
+ ✓ test/api/artifacts.test.ts > Artifacts > comparing two Versions shows a file whose line endings alone changed with every line the same, and an empty file added with no lines 656ms
+ ✓ test/api/artifacts.test.ts > Artifacts > an Artifact of another Workspace has no Versions to list or compare for the caller 601ms
+      Tests  14 passed (14)

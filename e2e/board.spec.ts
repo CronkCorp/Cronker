@@ -146,3 +146,84 @@ test("dragging a card to the board's edge scrolls it, so the card reaches a colu
   await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeHidden();
   expect(await page.evaluate(() => window.scrollX)).toBe(0);
 });
+
+test("every board column, open or collapsed, is as tall as the tallest, and stays so as cards come and go live", async ({
+  page,
+  cronk,
+}) => {
+  const { call, project, status, open } = await crowdedBoard(page, cronk);
+  const inImplement = async (title: string) => {
+    const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title });
+    await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: status("Implement") });
+    return ticket;
+  };
+  for (let i = 1; i <= 8; i++) await inImplement(`Busy ticket ${i}`);
+  await call("POST", `/api/projects/${project.id}/tickets`, { title: "Lonely" });
+  const { lane } = await open();
+  await expect(lane("Implement").getByRole("link", { name: /Busy ticket 8/ })).toBeVisible();
+
+  const names = [
+    ...["Backlog", "Triage", "Ready", "Investigate", "Implement", "Code review", "Merge", "In Review"],
+    ...["Design", "Release", "Staging", "Done", "Canceled"],
+  ];
+  const bottom = async (name: string) => {
+    const box = (await lane(name).boundingBox())!;
+    return Math.round(box.y + box.height);
+  };
+  const bottoms = () => Promise.all(names.map(bottom));
+  const implementBottom = () => bottom("Implement");
+  // Eight cards take Implement well past the 60vh floor (480px of the 800px window), more than a card's height beyond it.
+  expect(await implementBottom(), "Implement outgrows the 60vh floor").toBeGreaterThan(page.viewportSize()!.height * 0.6 + 200);
+  expect(new Set(await bottoms()).size, "every column ends at the same height").toBe(1);
+
+  // Cards stay at the top of a short column rather than spreading over its extra height.
+  const top = async (name: string, title: RegExp) => (await lane(name).getByRole("link", { name: title }).boundingBox())!.y;
+  const first = await top("Implement", /Busy ticket 1$/);
+  expect(await top("Backlog", /Lonely/), "Backlog's card sits at its top, level with Implement's first").toBe(first);
+
+  // A live update adds two more cards: every column grows with Implement, without a reload.
+  const eightCards = await implementBottom();
+  const ninth = await inImplement("Busy ticket 9");
+  const tenth = await inImplement("Busy ticket 10");
+  await expect(lane("Implement").getByRole("link", { name: /Busy ticket 10/ })).toBeVisible();
+  expect(await implementBottom()).toBeGreaterThan(eightCards);
+  expect(new Set(await bottoms()).size, "every column still ends at the same height").toBe(1);
+
+  // Live updates move both out to Done, still collapsed: every column shrinks back with Implement.
+  await call("PATCH", `/api/tickets/${ninth.id}`, { statusId: status("Done") });
+  await call("PATCH", `/api/tickets/${tenth.id}`, { statusId: status("Done") });
+  await expect(lane("Implement").getByRole("link", { name: /Busy ticket 10/ })).toBeHidden();
+  await expect.poll(implementBottom).toBe(eightCards);
+  expect(new Set(await bottoms()).size, "every column ends at the same height after cards leave").toBe(1);
+});
+
+test("a dragged card dropped on the empty lower part of a short column moves into that column", async ({ page, cronk }) => {
+  const { call, project, status, open } = await crowdedBoard(page, cronk);
+  const windowHeight = 1000;
+  await page.setViewportSize({ width: 1280, height: windowHeight });
+  for (let i = 1; i <= 12; i++) {
+    const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: `Busy ticket ${i}` });
+    await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: status("Ready") });
+  }
+  const { lane } = await open();
+  const card = lane("Ready").getByRole("link", { name: /Busy ticket 1$/ });
+  await expect(card).toBeVisible();
+
+  // Backlog has no cards; the point to drop on is below its 60vh floor, in the part it stretches to.
+  const backlog = (await lane("Backlog").boundingBox())!;
+  const floor = (await lane("Backlog").evaluate((e) => e.getBoundingClientRect().top)) + 0.6 * windowHeight;
+  const y = floor + 40;
+  expect(y, "the drop point is inside the stretched Backlog").toBeLessThan(backlog.y + backlog.height);
+  expect(y, "the drop point is on screen").toBeLessThan(windowHeight);
+
+  const from = (await card.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(backlog.x + backlog.width / 2, y, { steps: 5 });
+  // The whole stretched column lights up as the target, not just the part above the floor.
+  await expect(lane("Backlog")).toHaveClass(/column-target/);
+  await page.mouse.up();
+
+  await expect(lane("Backlog").getByRole("link", { name: /Busy ticket 1$/ })).toBeVisible();
+  await expect(lane("Ready").getByRole("link", { name: /Busy ticket 1$/ })).toBeHidden();
+});
