@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { setUp, signIn } from "../harness/flows.js";
+import { openStream } from "../harness/stream.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -372,3 +373,102 @@ describe("a Run's Transcript", () => {
     expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: null }]);
   });
 });
+
+describe("deleting a Transcript", () => {
+  test("a User deletes a Run's Transcript: its entries are gone and its Run says it was deleted", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const transcript = await uploaded("session_1", [userSays("Triage CRONK-1.", 1), assistantSays("ghp_missed", 2)], asAgent);
+
+    expect((await call("DELETE", `/api/transcripts/${transcript.id}`, ada)).status).toBe(204);
+
+    expect((await call("GET", `/api/transcripts/${transcript.id}`, ada)).status).toBe(404);
+    expect((await call("GET", `/api/transcripts/${transcript.id}/entries`, ada)).status).toBe(404);
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    expect(run).toMatchObject({ transcriptId: null, transcriptDeleted: true });
+  });
+
+  test("an Agent's delete is refused, its own Transcript included, and the Transcript is kept", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays("Hello.", 1)], asAgent);
+
+    const refused = await call("DELETE", `/api/transcripts/${transcript.id}`, asAgent);
+
+    expect(refused).toMatchObject({ status: 403, json: { error: { code: "agent_not_allowed" } } });
+    expect(await entriesOf(transcript.id, ada)).toMatchObject([{ text: "Hello." }]);
+  });
+
+  test("a later upload of a deleted Transcript's session is refused, so the hook's next turn can't bring it back", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const transcript = await uploaded("session_1", [userSays("ghp_missed", 1)], asAgent);
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, ada);
+
+    const again = await upload("session_1", [userSays("ghp_missed", 1), assistantSays("Next turn.", 2)], asAgent);
+
+    expect(again).toMatchObject({ status: 410, json: { error: { code: "transcript_deleted" } } });
+    expect((await call("GET", `/api/transcripts/${transcript.id}`, ada)).status).toBe(404);
+    expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: null, transcriptDeleted: true }]);
+  });
+
+  test("deleting a Run's Transcript is recorded on its Ticket's timeline, naming the Run, and tells the Workspace's streams", async () => {
+    const { workspace, ada, project, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    const transcript = await uploaded("session_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, ada);
+
+    expect([await stream.next(), await stream.next()]).toEqual(
+      expect.arrayContaining([
+        { type: "ticket.changed", data: { projectId: project.id, ticketId: ticket.id } },
+        { type: "transcript.changed", data: { transcriptId: transcript.id, runId: run.id } },
+      ]),
+    );
+    const [deleted] = (await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada)).slice(-1);
+    expect(deleted).toEqual(
+      expect.objectContaining({
+        field: "transcriptDeleted",
+        from: { runId: run.id, step: "Triage" },
+        to: null,
+        actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }),
+        runId: null,
+      }),
+    );
+  });
+});
+
+describe("following a Transcript live", () => {
+  test("each upload of a session tells the Workspace's streams, so an open Transcript page shows its new entries", async () => {
+    const { workspace, ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays("Hello.", 1)], asAgent);
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+
+    await uploaded("laptop-session", [userSays("Hello.", 1), assistantSays("Hi.", 2)], asAgent);
+
+    expect(await stream.next()).toEqual({ type: "transcript.changed", data: { transcriptId: transcript.id, runId: null } });
+    expect(await entriesOf(transcript.id, ada)).toMatchObject([{ text: "Hello." }, { text: "Hi." }]);
+  });
+
+  test("the first upload of a Run's session also tells the Run's Ticket's viewers, so its timeline links the Transcript", async () => {
+    const { workspace, ada, project, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+
+    const transcript = await uploaded("session_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+
+    expect([await stream.next(), await stream.next()]).toEqual(
+      expect.arrayContaining([
+        { type: "ticket.changed", data: { projectId: project.id, ticketId: ticket.id } },
+        { type: "transcript.changed", data: { transcriptId: transcript.id, runId: run.id } },
+      ]),
+    );
+  });
+});
+

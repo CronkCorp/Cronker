@@ -19,7 +19,8 @@ export type LiveEvent =
   | { type: "document.changed"; projectId: string | null; documentId: string }
   | { type: "term.changed"; projectId: string | null; termId: string }
   | { type: "decision.changed"; projectId: string | null; decisionId: string }
-  | { type: "artifact.changed"; projectId: string | null; artifactId: string };
+  | { type: "artifact.changed"; projectId: string | null; artifactId: string }
+  | { type: "transcript.changed"; transcriptId: string; runId: string | null };
 
 export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.created": "A Project was created, with its Statuses.",
@@ -36,6 +37,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "term.changed": "A Term in a glossary, the Workspace's (`projectId` null) or a Project's, was created, saved or deleted.",
   "decision.changed": "A Decision in a register, the Workspace's (`projectId` null) or a Project's, was recorded or saved.",
   "artifact.changed": "An Artifact of the Workspace (`projectId` null) or of a Project was created or saved.",
+  "transcript.changed":
+    "A Transcript was uploaded again, with the session's newer entries, or deleted; `runId` names the Run it records, or null.",
   "attachments.changed":
     "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
 };
