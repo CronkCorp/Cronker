@@ -23,10 +23,12 @@ export type LiveEvent =
   | { type: "term.changed"; projectId: string | null; termId: string }
   /** A Decision in a register was recorded or saved. */
   | { type: "decision.changed"; projectId: string | null; decisionId: string }
+  /** An Artifact of the Workspace (`projectId` null) or of a Project was created or saved. */
+  | { type: "artifact.changed"; projectId: string | null; artifactId: string }
   /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
   | { type: "reconnected" };
 
-const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "document.changed", "term.changed", "decision.changed"];
+const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "document.changed", "term.changed", "decision.changed", "artifact.changed"];
 
 /** What the User's own Runners' stream tells: a Run started or ended on one, or its queue paused or resumed. */
 export type RunnerEvent = { type: "runner.changed"; runnerId: string } | { type: "reconnected" };

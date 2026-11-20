@@ -1169,6 +1169,40 @@
   gap: var(--space-2);
 }
 
+/* Artifact: the page itself in its sandboxed frame, its files beside it. */
+.artifact-description {
+  max-width: 720px;
+  color: var(--muted);
+}
+.artifact-frame {
+  width: 100%;
+  height: max(480px, 72vh);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--canvas);
+}
+.artifact-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.artifact-files li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.artifact-files li:first-child {
+  border-top: 0;
+}
+.artifact-file-size {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 /* Search results: one group per kind, each result its title, where it is kept and where it matched. */
 .search-results {
   display: grid;

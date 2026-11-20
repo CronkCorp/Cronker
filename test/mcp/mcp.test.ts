@@ -81,6 +81,7 @@ describe("MCP with an Agent token", () => {
       "compare_decision_versions",
       "compare_term_versions",
       "compare_versions",
+      "create_artifact",
       "create_document",
       "create_sub_ticket",
       "create_term",
@@ -92,6 +93,7 @@ describe("MCP with an Agent token", () => {
       "file_ticket",
       "finish",
       "link_document",
+      "list_artifacts",
       "list_decision_versions",
       "list_decisions",
       "list_document_versions",
@@ -99,11 +101,13 @@ describe("MCP with an Agent token", () => {
       "list_term_versions",
       "list_tickets",
       "propose_decision",
+      "read_artifact",
       "read_decision",
       "read_document",
       "read_glossary",
       "read_term",
       "read_ticket",
+      "save_artifact",
       "search",
       "unlink_document",
       "write_report",
@@ -774,5 +778,43 @@ describe("MCP with an Agent token", () => {
     await cronk.request("DELETE", `/api/agents/${agent.id}/tokens/${token.id}`, { cookie });
 
     await expect(client.callTool({ name: "read_ticket", arguments: { ticket: "CRONK-1" } })).rejects.toThrow();
+  });
+
+  test("an Agent creates, saves, reads and lists Artifacts, with files as base64", async () => {
+    const { cookie, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const base64 = (text: string) => Buffer.from(text).toString("base64");
+
+    const created = await call(client, "create_artifact", {
+      project: "cronk",
+      title: "Board prototype",
+      description: "Drag and drop.",
+      files: [
+        { path: "index.html", contentBase64: base64("<script src=app.js></script>") },
+        { path: "app.js", contentBase64: base64("1"), mediaType: "text/javascript" },
+      ],
+    });
+    expect(created.isError).toBe(false);
+    expect(created.json).toMatchObject({ title: "Board prototype", version: { number: 1, actor: { kind: "agent" } } });
+
+    const saved = await call(client, "save_artifact", {
+      artifact: created.json.id,
+      baseVersion: 1,
+      files: [{ path: "app.js", contentBase64: base64("2") }],
+      remove: [],
+    });
+    expect(saved.json).toMatchObject({ version: { number: 2 } });
+    const outdated = await call(client, "save_artifact", { artifact: created.json.id, baseVersion: 1, title: "Again" });
+    expect(outdated).toEqual({ isError: true, json: expect.objectContaining({ code: "outdated_version" }) });
+
+    const read = await call(client, "read_artifact", { artifact: created.json.id });
+    const byApi = await (await cronk.request("GET", `/api/artifacts/${created.json.id}`, { cookie })).json();
+    expect(read.json).toEqual(byApi);
+    const readFile = await call(client, "read_artifact", { artifact: created.json.id, path: "app.js" });
+    expect(readFile.json).toEqual({ path: "app.js", mediaType: "text/javascript", size: 1, contentBase64: base64("2") });
+
+    const listed = await call(client, "list_artifacts", { project: "CRONK" });
+    expect(listed.json.map((artifact: { id: string }) => artifact.id)).toEqual([created.json.id]);
+    expect((await call(client, "list_artifacts", {})).json).toEqual([]);
   });
 });
