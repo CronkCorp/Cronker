@@ -597,6 +597,28 @@ export interface DocumentEdit {
   position?: number;
 }
 
+/** A file of an Artifact's Version, by its path relative to the Version. */
+export interface ArtifactFile {
+  path: string;
+  mediaType: string;
+  size: number;
+}
+
+/** A live page with its files, at its current Version, served sandboxed at `url`. */
+export interface Artifact {
+  id: string;
+  workspaceId: string;
+  /** Null for the Workspace's. */
+  projectId: string | null;
+  title: string;
+  description: string;
+  page: string;
+  /** Where its page is served, sandboxed, on Cronk's own address. */
+  url: string;
+  version: { number: number; actor: Actor; savedAt: string };
+  files: ArtifactFile[];
+}
+
 /** A Document linked to a Ticket, from its Project's page tree or the Workspace's. */
 export interface LinkedDocument {
   id: string;
@@ -922,6 +944,7 @@ export const api = {
   createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
+  artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
   editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
   deleteDocument: (id: string) => call<void>("DELETE", doc(id)),
   versions: (documentId: string) => call<Version[]>("GET", `${doc(documentId)}/versions`),

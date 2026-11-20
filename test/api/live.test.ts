@@ -186,6 +186,28 @@ describe("a Workspace's event stream", () => {
     }
   });
 
+  test("tells about an Artifact created or saved, in the Workspace or a Project", async () => {
+    const { workspace, cookie, project } = await newProject();
+    const stream = await openStream(cookie, workspace.id);
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const create = async (path: string, title: string) => {
+      const response = await cronk.request("POST", path, { cookie, body: { title, files } });
+      expect(response.status).toBe(201);
+      return (await response.json()) as { id: string };
+    };
+
+    const report = await create(`/api/workspaces/${workspace.id}/artifacts`, "Weekly report");
+    const board = await create(`/api/projects/${project.id}/artifacts`, "Board");
+    const saved = await cronk.request("PATCH", `/api/artifacts/${board.id}`, { cookie, body: { baseVersion: 1, title: "Board, take two" } });
+    expect(saved.status).toBe(200);
+
+    const inWorkspace = { type: "artifact.changed", data: { projectId: null, artifactId: report.id } };
+    const inProject = { type: "artifact.changed", data: { projectId: project.id, artifactId: board.id } };
+    for (const expected of [inWorkspace, inProject, inProject]) {
+      expect(await stream.next()).toEqual(expected);
+    }
+  });
+
   test("tells about a Term created, saved or deleted, in the Workspace's glossary or a Project's", async () => {
     const { workspace, cookie, project } = await newProject();
     const stream = await openStream(cookie, workspace.id);

@@ -9,6 +9,8 @@ import type { Context } from "./context.js";
 import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
 import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
+import { artifactRoutes } from "./artifacts/routes.js";
+import { sandboxRoutes } from "./artifacts/sandbox.js";
 import { attachmentRoutes } from "./attachments/routes.js";
 import { agentRoutes } from "./agents/routes.js";
 import { refuseStoppedRunCalls } from "./runs/calls.js";
@@ -115,7 +117,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             type: "http",
             scheme: "bearer",
             description:
-              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, attach files to Documents and their own Comments, create and save Terms, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit some of its fields, attach files to it, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
+              "An Agent's token. Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, attach files to Documents and their own Comments, create and save Terms, create and save Artifacts, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit some of its fields, attach files to it, split it into Sub-Tickets, write Reports on it and finish the Run; they edit and add blocks from a Discovered Ticket they filed until a User takes it up; a read-only token may only read. Anything else is refused with `agent_not_allowed` or `read_only_token`, naming the `rule` and `advice`.",
           },
         },
       },
@@ -136,6 +138,8 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(termRoutes(context));
   await app.register(attachmentRoutes(context));
   await app.register(decisionRoutes(context));
+  await app.register(artifactRoutes(context));
+  await app.register(sandboxRoutes(context));
   await app.register(exportRoutes(context));
   await app.register(searchRoutes(context));
   await app.register(runRoutes(context));

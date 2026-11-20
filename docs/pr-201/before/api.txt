@@ -1,0 +1,1 @@
+POST /api/workspaces/:id/artifacts → 404 {"error":{"code":"not_found","message":"Nothing is here."}}

@@ -62,7 +62,7 @@ const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CR
 const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
   "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
-  "and Terms), and propose Decisions and edit their text (only Users change a Decision's status). During your " +
+  "and Terms), create and save Artifacts, and propose Decisions and edit their text (only Users change a Decision's status). During your " +
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents to it and unlink " +
   "them, and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add blocks from " +
@@ -75,7 +75,8 @@ export function buildMcpServer(api: Api): McpServer {
       instructions:
         "Cronk tracks Tickets for Users and their Agents, and keeps written knowledge as Documents in the page tree of " +
         "each Project and of the Workspace, as Terms in their glossaries (a Project's glossary is its Terms over the " +
-        "Workspace's), and recorded choices as numbered Decisions of each Project and of the Workspace; " +
+        "Workspace's), recorded choices as numbered Decisions of each Project and of the Workspace, and live pages such " +
+        "as HTML prototypes as Artifacts, shown sandboxed; " +
         "`export_knowledge` gives both as `GLOSSARY.md` and `docs/adr/` files to commit into your branch. You act as " +
         `one Agent. ${rights}`,
     },
@@ -684,6 +685,99 @@ export function buildMcpServer(api: Api): McpServer {
         const file = { bytes: Buffer.from(content, "base64"), mediaType: mediaType?.trim() || "application/octet-stream" };
         return send("POST", `${path}/attachments?name=${encodeURIComponent(name)}`, undefined, file);
       }),
+  );
+
+  const artifactArgument = z.string().min(1).describe("The Artifact's id.");
+  const artifactPath = (artifact: string) => `/api/artifacts/${encodeURIComponent(artifact)}`;
+  const artifactPathArgument = z.string().min(1).describe("A path relative to the Version, such as `index.html` or `scripts/app.js`.");
+  const artifactFiles = z.array(
+    z.object({
+      path: artifactPathArgument,
+      contentBase64: z.string().describe("The file's bytes, in base64."),
+      mediaType: z.string().optional().describe("Its media type; from its extension when left out, such as `text/html` for `.html`."),
+    }),
+  );
+  const sizeLimit =
+    "A Version's files are at most the Attachments size limit Cronk is configured with (25 MB by default) in all; " +
+    "load libraries from a CDN rather than adding them.";
+
+  server.registerTool(
+    "list_artifacts",
+    {
+      title: "List Artifacts",
+      description:
+        "A Project's Artifacts, or the Workspace's when no Project is given, last changed first, without their files. " +
+        "Read one with `read_artifact`.",
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(await placePath(project, "artifacts"))),
+  );
+
+  server.registerTool(
+    "read_artifact",
+    {
+      title: "Read an Artifact",
+      description:
+        "An Artifact of your Workspace at its current Version, whose number a save names as its `baseVersion`: its " +
+        "title, description, page, files (path, media type and size) and the address its page is served at; or, given " +
+        "a path, that file with its bytes as base64.",
+      inputSchema: {
+        artifact: artifactArgument,
+        path: artifactPathArgument.optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ artifact, path }) =>
+      answer(() =>
+        get(path === undefined ? artifactPath(artifact) : `${artifactPath(artifact)}/file?path=${encodeURIComponent(path)}`),
+      ),
+  );
+
+  server.registerTool(
+    "create_artifact",
+    {
+      title: "Create an Artifact",
+      description:
+        "Creates an Artifact, a live page such as an HTML prototype, in a Project or the Workspace when no Project is " +
+        "given, at Version 1 by your Agent: its page and the files it refers to by relative paths (scripts, styles, " +
+        "images, data), each with its bytes as base64. It is served sandboxed: its scripts run, and may load from " +
+        "CDNs, but can't call Cronk's API, and `attachment:` references don't work in it. " +
+        sizeLimit,
+      inputSchema: {
+        project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
+        title: z.string().min(1),
+        description: z.string().optional().describe("What it shows, in a sentence or two."),
+        page: artifactPathArgument.optional().describe("The path of the file that is its page; `index.html` when left out."),
+        files: artifactFiles,
+      },
+    },
+    ({ project, ...input }) => answer(async () => send("POST", await placePath(project, "artifacts"), input)),
+  );
+
+  server.registerTool(
+    "save_artifact",
+    {
+      title: "Save an Artifact",
+      description:
+        "Saves an Artifact as its next Version by your Agent, holding the whole set of files: the current Version's, " +
+        "with `files` added or replacing those at the same paths and those in `remove` taken out; a new title, " +
+        "description or page may come with it. Name the Version it's based on as `baseVersion`; a save based on an " +
+        "outdated Version is refused with the current one. " +
+        sizeLimit,
+      inputSchema: {
+        artifact: artifactArgument,
+        baseVersion: z.number().int().min(1).describe("The number of the Version the save is based on."),
+        title: z.string().min(1).optional(),
+        description: z.string().optional(),
+        page: artifactPathArgument.optional().describe("The path of the file that is its page."),
+        files: artifactFiles.optional().describe("Files to add, or to replace at their paths."),
+        remove: z.array(artifactPathArgument).optional().describe("Paths of files to remove."),
+      },
+    },
+    ({ artifact, ...save }) => answer(() => send("PATCH", artifactPath(artifact), save)),
   );
 
   const decisionArgument = z.string().min(1).describe("The Decision's id.");
