@@ -60,21 +60,25 @@ const hits = `
     join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version, q
   where decisions.workspace_id = $1 and versions.search @@ query`;
 
-/** The Workspace's Tickets and knowledge matching the query, best first, each with a snippet. */
+/** How many results of each kind a search gives at most: its best. */
+export const perKind = 20;
+
+/** The Workspace's Tickets and knowledge matching the query, best first and at most `perKind` of each kind, each with a snippet. */
 export async function search(db: Db, workspaceId: string, input: { q: string; project: string | null; kinds: SearchKind[] }): Promise<SearchResult[]> {
   const { rows } = await db.query<Omit<SearchResult, "snippet"> & { headline: string }>(
     `with q as (select websearch_to_tsquery('english', $2) as query),
      hits as (${hits})
      select kind, id, title, project_id as "projectId", ticket_key as "ticketKey",
-       ts_headline('english', snippet_source, query, $3) as headline
+       ts_headline('english', translate(case when to_tsvector('english', body) @@ query then body else title end, $4, ''),
+         query, $3) as headline
      from (
-       select hits.*, translate(case when to_tsvector('english', body) @@ query then body else title end, $4, '')
-         as snippet_source
+       select hits.*, row_number() over (partition by kind order by rank desc, title, id) as place
        from hits, q
        where kind = any($5) and ($6::uuid is null or project_id = $6)
      ) found, q
-     order by rank desc, title`,
-    [workspaceId, input.q, `StartSel=${start}, StopSel=${stop}`, start + stop, input.kinds, input.project],
+     where place <= $7
+     order by rank desc, title, id`,
+    [workspaceId, input.q, `StartSel=${start}, StopSel=${stop}`, start + stop, input.kinds, input.project, perKind],
   );
   return rows.map(({ headline, ...row }) => ({ ...row, snippet: parts(headline) }));
 }

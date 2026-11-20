@@ -5,7 +5,7 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { findWorkspace } from "../workspaces/workspaces.js";
 import { findProject, projectNotFound } from "../work/projects.js";
-import { search, searchKinds, SearchResult, type SearchKind } from "./search.js";
+import { perKind, search, searchKinds, SearchResult, type SearchKind } from "./search.js";
 
 const kindList = `(${searchKinds.join("|")})`;
 
@@ -19,7 +19,8 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Search"],
           summary: "Search the Workspace",
           description:
-            "Tickets and knowledge of the Workspace matching `q`, best first. Words match by their stem in English " +
+            `Tickets and knowledge of the Workspace matching \`q\`, best first, at most ${perKind} of each kind. ` +
+            "Words match by their stem in English " +
             "(\"merging\" finds \"merged\"), written in web-search syntax.",
           params: Type.Object({ workspaceId: Type.String() }),
           querystring: Type.Object({

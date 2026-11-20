@@ -228,4 +228,17 @@ describe("Search", () => {
       { text: " retries twice", match: false },
     ]);
   });
+
+  test("each kind gives at most its best 20 results", async () => {
+    const { workspace, ada, project } = await workspaceWithProject();
+    for (let n = 1; n <= 21; n++) {
+      await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: `Flaky test ${n}` });
+    }
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Flaky", definition: "Fails at times.", avoid: [] });
+
+    const results = (await search(workspace.id, ada, { q: "flaky" })) as { kind: string; id: string }[];
+
+    expect(results.filter((r) => r.kind === "ticket")).toHaveLength(20);
+    expect(results.filter((r) => r.kind === "term").map((r) => r.id)).toEqual([term.id]);
+  });
 });
