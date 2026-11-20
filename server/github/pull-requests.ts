@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
+import { recordMergeAskedByRun } from "../runs/merging.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
@@ -308,7 +309,8 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       await sendBackForFailure(context, tx, { id: pr.id, repository: repository.full_name, number: pr.number, url: pr.html_url }, failed);
     }
   }
-  if (newest && state === "merged" && !wasMerged) {
+  // A merge a Run asked Cronk for is that Run's, even when GitHub's delivery of it comes before GitHub's answer.
+  if (newest && state === "merged" && !wasMerged && !(await recordMergeAskedByRun(context, tx, pr.id))) {
     await completeMergedTickets(context, tx, {
       pullRequest: { id: pr.id, repository: repository.full_name, number: pr.number, title: pr.title, url: pr.html_url },
       mergedBy,

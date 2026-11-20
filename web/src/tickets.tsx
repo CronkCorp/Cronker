@@ -1118,7 +1118,7 @@ function described(change: Change): string {
  * Agent's merge through Cronk is recorded as that Agent's, in its Run, with its move and Verification.
  */
 function recordedWith(change: Change, changes: Change[], project: Project): Change[] {
-  if (change.actor.kind !== "cronk" && change.field !== "merged") return [];
+  if (!saysWhy(change)) return [];
   const { actor } = change;
   const sameActor = (c: Change) =>
     actor.kind === "cronk" ? c.actor.kind === "cronk" : c.actor.kind === actor.kind && c.actor.id === actor.id && c.runId === change.runId;
@@ -1141,6 +1141,9 @@ function recordedWith(change: Change, changes: Change[], project: Project): Chan
   ].filter((c) => c !== undefined);
 }
 
+/** Whether the Change says why, folding in the Changes recorded with it: any of Cronk's, and an Agent's merge. */
+const saysWhy = (change: Change) => change.actor.kind === "cronk" || change.field === "merged";
+
 /** Each Change that says why with the Changes recorded with it, which show in its line instead of their own. */
 function explanations(changes: Change[], project: Project): Map<string, Change[]> {
   return new Map(
@@ -1154,7 +1157,7 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
  * A Change Cronk made, or an Agent's merge, naming why: a merge names who merged what and how it completed the Ticket, a skipped Step
  * where it moved on to, and a send-back the failing check or requested changes that sent the Ticket back, and where.
  */
-function describedByCronk(change: Change, related: Change[]): ReactNode {
+function describedWithReason(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
     const verification = related.find((c) => c.field === "verification")?.to;
@@ -1298,9 +1301,7 @@ function Timeline({
           </span>
           <p className="entry-line">
             <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
-            {change.actor.kind === "cronk" || change.field === "merged"
-              ? describedByCronk(change, explained.get(change.id) ?? [])
-              : described(change)}
+            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : described(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,

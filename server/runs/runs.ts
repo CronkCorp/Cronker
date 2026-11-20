@@ -580,7 +580,10 @@ export async function lockOwnRunningRun(
   const ticket = (await findTicketRow(tx, caller, found.ticketId, { lock: true }))!;
   const run = (await findRunRow(tx, caller, runId, { lock: true }))!;
   if (caller.kind !== "agent") {
-    throw new ApiError(403, "not_runs_agent", `Only ${run.agent.name}, the Run's Agent, ${action}.`);
+    throw new ApiError(403, "not_runs_agent", `Only ${run.agent.name}, the Run's Agent, ${action}.`, {
+      rule,
+      advice: "Leave the Run to its Agent; a User moves its Ticket instead.",
+    });
   }
   if (run.agentId !== caller.id) {
     throw new ApiError(403, "not_your_run", `This Run is ${run.agent.name}'s, not yours.`, {

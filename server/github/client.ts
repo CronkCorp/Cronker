@@ -212,7 +212,6 @@ export async function repositoryById({ github }: Config, token: string, id: numb
 /** A Pull Request as GitHub has it now. `mergeable` is null while GitHub is still working it out, as after a push. */
 export interface PullRequestOnGitHub {
   state: string;
-  draft?: boolean;
   merged?: boolean;
   mergeable: boolean | null;
   head: { sha: string };
@@ -236,7 +235,7 @@ export async function pullRequestOnGitHub(
 export type MergeMethod = "merge" | "squash" | "rebase";
 
 /**
- * Asks GitHub to merge a Pull Request by the method, only while its head is still `sha`. GitHub's refusals (405 when
+ * Asks GitHub to merge a Pull Request by the method (GitHub's own default without one), only while its head is still `sha`. GitHub's refusals (405 when
  * it can't be merged that way, 409 when its head moved, 422 when it isn't valid) come back with GitHub's message.
  */
 export async function mergeOnGitHub(
@@ -244,12 +243,12 @@ export async function mergeOnGitHub(
   token: string,
   fullName: string,
   number: number,
-  { method, sha }: { method: MergeMethod; sha: string },
+  { method, sha }: { method: MergeMethod | undefined; sha: string },
 ): Promise<{ merged: true } | { merged: false; status: number; message: string }> {
   const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/merge`), {
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ merge_method: method, sha }),
+    body: JSON.stringify(method ? { merge_method: method, sha } : { sha }),
   });
   if (response.status === 405 || response.status === 409 || response.status === 422) {
     const body = (await response.json().catch(() => ({}))) as { message?: unknown };

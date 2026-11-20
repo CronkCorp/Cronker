@@ -328,6 +328,32 @@ describe("Cronk refuses a merge, naming the rule, and the Run goes on", () => {
     expect(error.message).toBe("@bea still requests changes on cronkcorp/cronker#7, so it can't be merged.");
   });
 
+  test("a Project with Pull Request automation off, where merges complete nothing", async () => {
+    const setup = await mergeRunning();
+    await ok("PATCH", `/api/projects/${setup.project.id}`, setup.ada, { pullRequestAutomation: false });
+
+    await refused(setup, setup.merge(), {
+      status: 409,
+      code: "pull_request_automation_off",
+      rule: "Agents merge only in Projects whose merges complete their Tickets, with Pull Request automation on.",
+    });
+  });
+
+  test("GitHub's own refusal, such as a merge its settings or branch protection forbid, goes to the Assignee", async () => {
+    const setup = await mergeRunning();
+    setup.cronker.mergeMethods = { merge: false, squash: false, rebase: false };
+
+    const error = await refused(setup, setup.merge(), {
+      status: 409,
+      code: "not_mergeable",
+      rule: "Cronk merges only a Pull Request GitHub says is mergeable.",
+    });
+    expect(error.message).toBe("GitHub refused to merge cronkcorp/cronker#7: Merge commits are not allowed on this repository.");
+    expect(error.advice).toBe(
+      "Finish with needs you, asking in your Question for what GitHub needs before cronkcorp/cronker#7 can be merged.",
+    );
+  });
+
   test("a Run of a Step that isn't a Merge Step, and anyone but the Run's own Agent", async () => {
     const setup = await mergeRunning();
     const other = await ok("POST", `/api/projects/${setup.project.id}/tickets`, setup.ada, { title: "Something else" });
@@ -397,5 +423,51 @@ describe("the default Merge Step's Brief", () => {
     await ok("PATCH", `/api/tickets/${other.id}`, ada, { statusId: status("Implement") });
 
     expect((await ok("GET", `/api/tickets/${other.id}/brief`, ada)).preamble).not.toContain("merge_pull_request");
+  });
+});
+
+describe("a merge and GitHub's own delivery of it", () => {
+  test("when GitHub's delivery of the merge reaches Cronk before GitHub answers the merge, the merge is still the Agent's", async () => {
+    const { merge, ada, ticket, status, run, agent, deliver, pullRequest } = await mergeRunning();
+    let delivered: Promise<void> | undefined;
+    cronk.github.onMerge = async () => {
+      delivered = deliver("pull_request", {
+        action: "closed",
+        pull_request: { ...pullRequest, state: "closed", merged: true, merged_by: { login: "cronk-app[bot]", id: 4242, type: "Bot" }, updated_at: "2026-01-01T09:05:00Z" },
+      });
+      await delivered;
+    };
+
+    const merged = await merge();
+
+    expect(merged.json).toMatchObject({ state: "finished", outcome: "merged" });
+    await delivered;
+    expect(await ok("GET", `/api/tickets/${ticket.id}`, ada)).toMatchObject({ statusId: status("Done"), verification: "unverified" });
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.filter((c: { field: string }) => c.field === "merged")).toEqual([
+      expect.objectContaining({ actor: expect.objectContaining({ kind: "agent", id: agent.id }), runId: run.id }),
+    ]);
+  });
+
+  test("a Ticket of another Workspace the Pull Request links completes as Cronk's, not naming this Workspace's Agent", async () => {
+    const setup = await mergeRunning();
+    const { ada, cronker, merge } = setup;
+    const friends = await ok("POST", "/api/workspaces", ada, { name: "Friends" });
+    const theirs = await ok("POST", `/api/workspaces/${friends.id}/projects`, ada, { name: "Their Cronker", key: "CRONK" });
+    await ok("POST", `/api/projects/${theirs.id}/repositories`, ada, { id: cronker.id });
+    const theirTicket = await ok("POST", `/api/projects/${theirs.id}/tickets`, ada, { title: "Theirs" });
+    await setup.deliver("pull_request", { action: "edited", pull_request: { ...setup.pullRequest, updated_at: "2026-01-01T09:01:00Z" } });
+    expect((await ok("GET", `/api/tickets/${theirTicket.id}/pull-requests`, ada)).map((p: { id: number }) => p.id)).toEqual([501]);
+
+    expect((await merge()).status).toBe(200);
+
+    const done = theirs.statuses.find((s: { name: string }) => s.name === "Done").id;
+    expect(await ok("GET", `/api/tickets/${theirTicket.id}`, ada)).toMatchObject({ statusId: done, verification: "unverified" });
+    const timeline = await ok("GET", `/api/tickets/${theirTicket.id}/timeline`, ada);
+    expect(timeline.filter((c: { field: string }) => ["merged", "status", "verification"].includes(c.field))).toEqual(
+      ["merged", "status", "verification"].map((field) =>
+        expect.objectContaining({ field, actor: { kind: "cronk", name: "Cronk" }, runId: null }),
+      ),
+    );
   });
 });

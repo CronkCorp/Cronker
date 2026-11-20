@@ -8,8 +8,8 @@ import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cr
  * Canceled Status, in a Project with Pull Request automation on that still lists the Pull Request's Repository,
  * moves to its Project's first Done Status as a move by Cronk: Verified when the merging GitHub account is a User
  * of the Ticket's Workspace, otherwise
- * Unverified. A merge an Agent's Run asked Cronk for completes them Unverified, as that Agent in that Run, and
- * completes the Run's own Ticket in any case. Other Pull Requests and unfinished Sub-Tickets don't hold it back, and a Run running on it stops
+ * Unverified. A merge an Agent's Run asked Cronk for completes them Unverified, as that Agent in that Run in its own
+ * Workspace. Other Pull Requests and unfinished Sub-Tickets don't hold it back, and a Run running on it stops
  * as if a User had moved it. Reopen then sends it back to the producing Step's Status, or, without one, leaves it.
  */
 
@@ -21,10 +21,10 @@ export interface Merge {
   /** Whether GitHub merged it itself, by auto-merge, whoever turned that on. */
   autoMerged: boolean;
   /**
-   * The Agent whose Run merged it through Cronk, and that Run's Ticket, which completes whatever its Project's Pull
-   * Request automation says, since its Run has ended with the merge. The Changes are the Agent's, in that Run.
+   * The Agent whose Run asked Cronk for the merge, and that Run's Workspace: the Changes on its Tickets are the
+   * Agent's, in that Run, and on other Workspaces' Tickets Cronk's, naming no Agent of another Workspace.
    */
-  byAgent?: { id: string; runId: string; ticketId: string };
+  byAgent?: { id: string; name: string; runId: string; workspaceId: string };
 }
 
 /** Completes the Tickets the merged Pull Request links. Call it in the transaction that recorded the merge. */
@@ -45,21 +45,19 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
      join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      left join runs on runs.id = pull_request_links.producing_run_id
-     where pull_request_links.pull_request_id = $1 and statuses.kind not in ('done', 'canceled')
-       and ((projects.pull_request_automation and ${listsPullRequestsRepository}) or tickets.id = $3)
+     where pull_request_links.pull_request_id = $1 and projects.pull_request_automation
+       and statuses.kind not in ('done', 'canceled')
+       and ${listsPullRequestsRepository}
      order by tickets.id
      for update of tickets`,
-    [pullRequest.id, mergedBy?.id ?? null, merge.byAgent?.ticketId ?? null],
+    [pullRequest.id, mergedBy?.id ?? null],
   );
   const name = `${pullRequest.repository}#${pullRequest.number}`;
   const { byAgent } = merge;
-  const merger = byAgent
-    ? ((await tx.query<{ name: string }>("select name from agents where id = $1", [byAgent.id])).rows[0]?.name ?? "An Agent")
-    : mergedBy
-      ? `@${mergedBy.login}`
-      : "GitHub";
-  const by: ChangeActor = byAgent ? { kind: "agent", id: byAgent.id, runId: byAgent.runId } : { kind: "cronk" };
   for (const { doneStatusId, producingStatusId, produced, byMember, ...ticket } of tickets) {
+    const agentsOwn = byAgent?.workspaceId === ticket.workspaceId;
+    const by: ChangeActor = byAgent && agentsOwn ? { kind: "agent", id: byAgent.id, runId: byAgent.runId } : { kind: "cronk" };
+    const merger = byAgent ? (agentsOwn ? byAgent.name : "Cronk") : mergedBy ? `@${mergedBy.login}` : "GitHub";
     await moveByCronk(context, tx, ticket, {
       target: { kind: "status", statusId: doneStatusId, completedFrom: producingStatusId, withoutStep: !produced },
       by,

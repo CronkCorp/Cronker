@@ -145,6 +145,11 @@ export interface StandInGitHub {
   /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
   merges: StandInMerge[];
   /**
+   * Called once GitHub has made a merge, before it answers the request, as when GitHub's webhook delivery of the
+   * merge reaches Cronk before the answer does.
+   */
+  onMerge: ((merge: StandInMerge) => Promise<void>) | null;
+  /**
    * Sends one of the App's webhook deliveries to its webhook URL, as GitHub does: the event's
    * name, a delivery id and the body's `X-Hub-Signature-256`. Returns Cronk's answer.
    */
@@ -284,6 +289,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       return pullRequest;
     },
     merges: [],
+    onMerge: null,
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
       return send(app, { guid: id, event, payload, redelivery: false }, secret, fails);
     },
@@ -606,13 +612,9 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       }
       pullRequest.state = "closed";
       pullRequest.merged = true;
-      github.merges.push({
-        repository: repository.fullName,
-        number: pullRequest.number,
-        method,
-        sha: body.sha ?? null,
-        installationId: installation.id,
-      });
+      const merge = { repository: repository.fullName, number: pullRequest.number, method, sha: body.sha ?? null, installationId: installation.id };
+      github.merges.push(merge);
+      await github.onMerge?.(merge);
       return json(response, 200, { sha: randomBytes(20).toString("hex"), merged: true, message: "Pull Request successfully merged" });
     }
 
