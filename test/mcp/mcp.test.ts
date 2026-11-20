@@ -104,6 +104,7 @@ describe("MCP with an Agent token", () => {
       "read_glossary",
       "read_term",
       "read_ticket",
+      "search",
       "unlink_document",
       "write_report",
     ]);
@@ -263,6 +264,25 @@ describe("MCP with an Agent token", () => {
     ]);
     const triage = await call(client, "list_tickets", { project: "CRONK", status: "Triage" });
     expect(triage.json).toEqual([]);
+  });
+
+  test("an Agent searches its Workspace, narrowed by a Project's key and kinds, as the API answers", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const { workspaceId } = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const term = await post(cookie, `/api/projects/${ticket.projectId}/terms`, { name: "Reading", definition: "Done.", avoid: [] });
+    await post(cookie, `/api/workspaces/${workspaceId}/documents`, { title: "Reading list" });
+    const client = await connect(secret);
+
+    const all = await call(client, "search", { query: "read" });
+    const narrowed = await call(client, "search", { query: "read", project: "cronk", kinds: ["ticket", "term"] });
+    const unknown = await call(client, "search", { query: "read", project: "NOPE" });
+
+    const api = await cronk.request("GET", `/api/workspaces/${workspaceId}/search?q=read`, { cookie });
+    expect(all.json).toEqual(await api.json());
+    expect(narrowed.json.map((r: { kind: string; id: string }) => [r.kind, r.id]).sort()).toEqual(
+      [["term", term.id], ["ticket", ticket.id]].sort(),
+    );
+    expect(unknown).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project" }) });
   });
 
   test("an Agent comments on a Ticket as itself", async () => {
