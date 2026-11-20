@@ -32,8 +32,23 @@ const everyMinute = setInterval(() => {
   cronk.resumePausedRunners().catch((error: unknown) => cronk.app.log.error(error));
 }, 60_000);
 
+// Every five seconds: GitHub is asked whether the Pull Requests waiting on a mergeability check conflict. One pass at a
+// time, since a pass waits on GitHub.
+let checkingMergeability = false;
+const everyFiveSeconds = setInterval(() => {
+  if (checkingMergeability) return;
+  checkingMergeability = true;
+  cronk
+    .checkMergeability()
+    .catch((error: unknown) => cronk.app.log.error(error))
+    .finally(() => {
+      checkingMergeability = false;
+    });
+}, 5_000);
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
+    clearInterval(everyFiveSeconds);
     clearInterval(everyMinute);
     clearInterval(everyFiveMinutes);
     void cronk.close().then(() => process.exit(0));

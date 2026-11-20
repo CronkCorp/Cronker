@@ -39,7 +39,7 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
     "A Document in a page tree, the Workspace's (`projectId` null) or a Project's, was created, saved, moved or deleted.",
   "term.changed": "A Term in a glossary, the Workspace's (`projectId` null) or a Project's, was created, saved or deleted.",
   "decision.changed": "A Decision in a register, the Workspace's (`projectId` null) or a Project's, was recorded or saved.",
-  "artifact.changed": "An Artifact of the Workspace (`projectId` null) or of a Project was created or saved.",
+  "artifact.changed": "An Artifact of the Workspace (`projectId` null) or of a Project was created, saved or deleted.",
   "transcript.changed":
     "A Transcript was uploaded again, with the session's newer entries, or deleted; `runId` names the Run it records, or null.",
   "attachments.changed":

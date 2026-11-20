@@ -11,9 +11,9 @@ export const ChangedBy = ActorOrCronk;
  * marks Cronk passing the Ticket on past a Step it didn't pass, by its Label rule or as a Merge Step skipping itself,
  * before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
- * unlinked (to null), as `{ id, title }` titled then. `merged` marks Cronk completing the Ticket for a merged Pull Request,
- * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check
- * or requested changes on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
+ * unlinked (to null), as `{ id, title }` titled then, and `linkedArtifact` one Artifact likewise. `merged` marks Cronk completing the Ticket for a merged Pull Request,
+ * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check,
+ * requested changes or a merge conflict on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
  * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket.
  */
 export const changeFields = [
@@ -37,6 +37,7 @@ export const changeFields = [
   "verification",
   "dismissed",
   "linkedDocument",
+  "linkedArtifact",
   "merged",
   "sentBack",
   "transcriptDeleted",
@@ -58,9 +59,11 @@ export const Change = Type.Object({
       "`noAutonomousDelegation`. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
       "login of the GitHub account that merged it, or null when GitHub named none. A `sentBack` Change goes from null to " +
-      "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it, either a check " +
-      "`{ kind: \"check\", name, url }` or a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
-      "being the login of the GitHub account that wrote it, or null when GitHub named none; a `url` is null when GitHub gave none. " +
+      "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it: a check " +
+      "`{ kind: \"check\", name, url }`, a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
+      "being the login of the GitHub account that wrote it, or null when GitHub named none, or a conflict with its base branch " +
+      "`{ kind: \"conflict\", branch, merge }`, `merge` being the merged Pull Request `{ repository, number, url }` that " +
+      "caused it, or null when Cronk knows none; a `url` is null when GitHub gave none. " +
       "A `transcriptDeleted` Change goes from `{ runId, step, sessionId, agent: { id, name } }` to null: the Run whose " +
       "Transcript a User deleted and its Step's name (both null for a session outside a Run that named the Ticket), " +
       "its session and its Agent.",

@@ -1217,7 +1217,7 @@ describe("Failures sending work back", () => {
         outcome: "needs you",
         step: { statusId: status("Implement"), name: "Implement" },
         question:
-          "Failing checks and requested changes sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
+          "Failing checks, requested changes and merge conflicts sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
           "instead. Read the latest Comments, then move it on yourself.",
       }),
     ]);

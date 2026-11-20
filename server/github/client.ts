@@ -213,8 +213,11 @@ export async function repositoryById({ github }: Config, token: string, id: numb
 export interface PullRequestOnGitHub {
   state: string;
   merged?: boolean;
+  /** Whether it merges cleanly into its base branch: `false` when it conflicts, `null` while GitHub works it out. */
   mergeable: boolean | null;
   head: { sha: string };
+  /** Its base branch, and the commit of it GitHub worked mergeability out against. */
+  base: { ref: string; sha: string };
 }
 
 const pullPath = (fullName: string, number: number) =>

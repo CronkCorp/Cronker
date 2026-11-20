@@ -81,7 +81,7 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor, or Cronk itself, writes on a Ticket, possibly as a reply to another Comment on the same Ticket. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it.
+A Markdown message an Actor, or Cronk itself, writes on a Ticket, possibly as a reply to another Comment on the same Ticket. Cronk writes one when a failing check, a review requesting changes or a merge conflict sends a Ticket back, linking it (for a conflict, the merge that caused it).
 _Avoid_: Note, message, post
 
 **Change**:
@@ -127,7 +127,7 @@ A recorded choice with its reasoning and a status: proposed, accepted, rejected,
 _Avoid_: ADR (in the product), RFC
 
 **Artifact**:
-A live, viewable page an Actor builds, such as an HTML prototype, with the files it refers to, kept with Versions in a Project or the Workspace and shown in isolation from Cronk itself.
+A live, viewable page an Actor builds, such as an HTML prototype, with the files it refers to, kept with Versions in a Project or the Workspace and shown in isolation from Cronk itself. One made during a Run is linked to its Ticket, which may link others as it links Documents. Only a User may delete one.
 _Avoid_: Prototype (as the general term), preview, app
 
 **Transcript**:
