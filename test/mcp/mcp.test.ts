@@ -101,6 +101,7 @@ describe("MCP with an Agent token", () => {
       "list_documents",
       "list_term_versions",
       "list_tickets",
+      "merge_pull_request",
       "propose_decision",
       "read_artifact",
       "read_decision",
@@ -286,6 +287,7 @@ describe("MCP with an Agent token", () => {
     const all = await call(client, "search", { query: "read" });
     const narrowed = await call(client, "search", { query: "read", project: "cronk", kinds: ["ticket", "term", "artifact"] });
     const unknown = await call(client, "search", { query: "read", project: "NOPE" });
+    const transcripts = await call(client, "search", { query: "read", kinds: ["transcript"] });
 
     const api = await cronk.request("GET", `/api/workspaces/${workspaceId}/search?q=read`, { cookie });
     expect(all.json).toEqual(await api.json());
@@ -293,6 +295,7 @@ describe("MCP with an Agent token", () => {
       [["artifact", artifact.id], ["term", term.id], ["ticket", ticket.id]].sort(),
     );
     expect(unknown).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project" }) });
+    expect(transcripts).toEqual({ isError: false, json: [] });
   });
 
   test("an Agent comments on a Ticket as itself", async () => {
@@ -349,6 +352,33 @@ describe("MCP with an Agent token", () => {
     expect(moved.statusId).toBe(status("Ready"));
     const after = await call(client, "read_ticket", { ticket: "CRONK-1" });
     expect(after.json.reports).toEqual([expect.objectContaining({ runId, title: "Triage report", body: "Clear." })]);
+  });
+
+  test("an Agent's Merge Run merges through merge_pull_request, which passes on Cronk's refusal", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    await cronk.request("PATCH", `/api/projects/${ticket.projectId}`, { cookie, body: { agentsMayMerge: true } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const merge = project.statuses.find((s: { name: string }) => s.name === "Merge").id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, autonomousDelegation: true, statusId: merge },
+    });
+    const client = await connect(secret);
+    const [run] = (await call(client, "read_ticket", { ticket: "CRONK-1" })).json.runs;
+    expect(run).toMatchObject({ state: "running", step: { name: "Merge" } });
+
+    const { isError, json } = await call(client, "merge_pull_request", { run: run.id, pullRequest: 501 });
+
+    expect(isError).toBe(true);
+    expect(json).toEqual(
+      expect.objectContaining({
+        code: "pull_request_not_linked",
+        message: "That Pull Request isn't linked to CRONK-1.",
+        rule: "A Merge Run merges only a Pull Request linked to its own Ticket.",
+      }),
+    );
   });
 
   test("during its Run an Agent edits its Ticket and writes Reports, which a later Run reads", async () => {

@@ -275,3 +275,52 @@ function LiveStatus({ state }: { state: LiveState }) {
     </span>
   );
 }
+
+/** Copies text, such as a secret, to the clipboard and says so. */
+export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const copy = () => {
+    setCopied(false);
+    setError(null);
+    navigator.clipboard.writeText(text).then(
+      () => setCopied(true),
+      () => setError("Couldn't copy: select it and copy it yourself."),
+    );
+  };
+  return (
+    <>
+      <Button onClick={copy}>{label}</Button>
+      <Saved shown={copied}>Copied.</Saved>
+      <FormError error={error} />
+    </>
+  );
+}
+
+/**
+ * A secret Cronk shows only once, such as a new token, in a `warn` banner with Copy, under a line saying so and
+ * whatever else the screen adds.
+ */
+export function ShownOnce({
+  banner,
+  label,
+  secret,
+  children,
+}: {
+  banner: string;
+  label: string;
+  secret: string;
+  children?: ReactNode;
+}) {
+  return (
+    <Banner tone="warn" label={banner}>
+      <Field label={label}>
+        <div className="copy-row">
+          <input readOnly value={secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
+          <CopyButton text={secret} />
+        </div>
+      </Field>
+      <p>Copy it now: it is shown only once. {children}</p>
+    </Banner>
+  );
+}

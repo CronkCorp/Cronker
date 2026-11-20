@@ -64,7 +64,7 @@ const rights =
   "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
   "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only Users change a Decision's status). During your " +
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
-  "them, and finish the Run. A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
+  "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, and add blocks from " +
   "it. Anything else is refused with the rule and what to do instead.";
 
@@ -159,20 +159,23 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Search",
       description:
-        "Finds Tickets, Documents, Reports, Terms, Decisions and Artifacts (by title and description) of your " +
-        "Workspace, best first, each with its kind, id, " +
-        "title, Project, Ticket key (a Ticket's own, or the Ticket a Report is on) and a snippet whose matching words " +
+        "Finds Tickets, Documents, Reports, Terms, Decisions, Artifacts (by title and description) and Transcripts of " +
+        "your Workspace, best first with Transcripts last, each with its kind, id, title, Project, Ticket key (a " +
+        "Ticket's own, or the Ticket a Report is on or a Transcript's Run was on) and a snippet whose matching words " +
         "are marked. Words match by their stem in English (`merging` finds `merged`); write `\"a phrase\"` for words " +
         "in order, `or` between alternatives and `-word` to leave out what has it. Search before filing a Ticket or " +
-        "writing knowledge, to build on what's there; read a result with its own tool.",
+        "writing knowledge, to build on what's there; read a result with its own tool (Transcripts have none yet).",
       inputSchema: {
         query: z.string().min(1).max(1000),
         project: z
           .string()
           .optional()
-          .describe("A Project's key, such as `CRONK`: only its own Tickets and knowledge. The whole Workspace when left out."),
+          .describe(
+            "A Project's key, such as `CRONK`: only its own Tickets and knowledge and the Transcripts of Runs on its " +
+              "Tickets. The whole Workspace when left out.",
+          ),
         kinds: z
-          .array(z.enum(["ticket", "document", "report", "term", "decision", "artifact"]))
+          .array(z.enum(["ticket", "document", "report", "term", "decision", "artifact", "transcript"]))
           .min(1)
           .optional()
           .describe("Only these kinds. All when left out."),
@@ -960,6 +963,26 @@ export function buildMcpServer(api: Api): McpServer {
     },
     ({ run, outcome, question, report }) =>
       answer(() => send("POST", `/api/runs/${encodeURIComponent(run)}/finish`, { outcome, question, report })),
+  );
+
+  server.registerTool(
+    "merge_pull_request",
+    {
+      title: "Merge your Ticket's Pull Request",
+      description:
+        "For your running Run of a Merge Step: Cronk merges a Pull Request linked to your Run's Ticket on GitHub, with " +
+        "its GitHub App and the Repository's default merge method. The merge ends your Run, finished as `merged`, and " +
+        "completes the Ticket as Unverified for its Assignee: don't call `finish` after it. Refused, naming the rule and " +
+        "what to do instead, unless the Ticket has Autonomous Delegation, its Project has agents may merge on, the Pull " +
+        "Request is open, its checks on the latest commit are green with none pending, no review still requests " +
+        "changes and GitHub says it is mergeable. Never merge on GitHub directly.",
+      inputSchema: {
+        run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
+        pullRequest: z.number().int().describe("GitHub's id for the Pull Request, as `read_ticket` lists it under `pullRequests`."),
+      },
+    },
+    ({ run, pullRequest }) =>
+      answer(() => send("POST", `/api/runs/${encodeURIComponent(run)}/merge`, { pullRequestId: pullRequest })),
   );
 
   return server;

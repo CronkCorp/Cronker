@@ -51,3 +51,46 @@ test("a search that finds nothing says so", async ({ page, cronk }) => {
 
   await expect(page.getByText("Nothing matches nothing like it.")).toBeVisible();
 });
+
+test("a Transcript found by its text shows after every other kind and opens its page", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const send = async (method: string, path: string, body: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await send("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await send("POST", `/api/projects/${project.id}/tickets`, { title: "Flaky webhook" });
+  const runner = await send("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const created = await send("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  const agent = await send("PATCH", `/api/agents/${created.id}`, { runnerId: runner.id });
+  const { secret } = await send("POST", `/api/agents/${agent.id}/tokens`, { name: "Transcript hook", access: "full" });
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  await send("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
+  // The fake Runner's first Run ran in session_1; the hook uploads its transcript.
+  const lines = [
+    { type: "user", uuid: "u-1", message: { role: "user", content: "Triage CRONK-1." } },
+    {
+      type: "assistant",
+      uuid: "a-1",
+      message: { id: "m-1", role: "assistant", content: [{ type: "text", text: "The webhook fires before the deploy finishes." }] },
+    },
+  ];
+  await fetch(`${cronk.url}/api/transcripts/sessions/session_1`, {
+    method: "PUT",
+    headers: { "content-type": "application/x-ndjson", authorization: `Bearer ${secret}` },
+    body: lines.map((line) => JSON.stringify(line)).join("\n") + "\n",
+  });
+
+  await signInInBrowser(page, cronk);
+  const box = page.getByRole("searchbox", { name: "Search" });
+  await box.fill("webhook");
+  await box.press("Enter");
+
+  const results = page.getByRole("region", { name: "Search results" });
+  await expect(results.getByRole("heading", { level: 2 })).toHaveText(["Tickets 1", "Transcripts 1"]);
+  const transcripts = page.getByRole("region", { name: "Transcripts" });
+  await expect(transcripts.getByText("CRONK-1")).toBeVisible();
+  await expect(transcripts.locator("mark")).toHaveText("webhook");
+
+  await transcripts.getByRole("link", { name: /Transcript of the Triage Run/ }).click();
+  await expect(page).toHaveURL(/\/transcripts\//);
+  await expect(page.getByRole("heading", { name: "Transcript of the Triage Run", level: 1 })).toBeVisible();
+});
