@@ -269,13 +269,6 @@ export interface Trigger {
 }
 
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
-/** How to install the Transcript hook: the `settings.json` snippet to commit, with this Cronk's address in it. */
-export interface TranscriptHook {
-  script: string;
-  tokenVariable: string;
-  settings: { hooks: Record<string, unknown> };
-}
-
 export interface Runner {
   id: string;
   name: string;
@@ -287,6 +280,13 @@ export interface Runner {
   pausedUntil: string | null;
   triggers: Trigger[];
   createdAt: string;
+}
+
+/** How to install the Transcript hook: the `settings.json` snippet to commit, with this Cronk's address in it. */
+export interface TranscriptHook {
+  script: string;
+  tokenVariable: string;
+  settings: { hooks: Record<string, unknown> };
 }
 
 export type TokenAccess = "full" | "read";

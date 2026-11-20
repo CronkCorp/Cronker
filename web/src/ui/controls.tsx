@@ -296,3 +296,31 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
     </>
   );
 }
+
+/**
+ * A secret Cronk shows only once, such as a new token, in a `warn` banner with Copy, under a line saying so and
+ * whatever else the screen adds.
+ */
+export function ShownOnce({
+  banner,
+  label,
+  secret,
+  children,
+}: {
+  banner: string;
+  label: string;
+  secret: string;
+  children?: ReactNode;
+}) {
+  return (
+    <Banner tone="warn" label={banner}>
+      <Field label={label}>
+        <div className="copy-row">
+          <input readOnly value={secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
+          <CopyButton text={secret} />
+        </div>
+      </Field>
+      <p>Copy it now: it is shown only once. {children}</p>
+    </Banner>
+  );
+}

@@ -12,7 +12,7 @@ import {
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
-import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved } from "./ui/controls.js";
+import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
@@ -326,13 +326,15 @@ function TranscriptHookSetup({ hook, agents }: { hook: TranscriptHook; agents: A
       </p>
       <ol className="runner-hook-steps">
         <li>
-          Commit this as <code>.claude/settings.json</code> in each Repository the scheduled tasks work on, merging it
-          into any hooks already there:
-          <pre aria-label="settings.json snippet">
-            {snippet}
-          </pre>
-          <div>
-            <CopyButton text={snippet} label="Copy snippet" />
+          <div className="runner-hook-snippet">
+            <span>
+              Commit this as <code>.claude/settings.json</code> in each Repository the scheduled tasks work on, merging
+              it into any hooks already there:
+            </span>
+            <pre aria-label="settings.json snippet">{snippet}</pre>
+            <div>
+              <CopyButton text={snippet} label="Copy snippet" />
+            </div>
           </div>
         </li>
         <li>
@@ -371,18 +373,10 @@ function HookToken({ agent, variable }: { agent: Agent; variable: string }) {
       </Actions>
       <FormError error={make.error} />
       {issued && (
-        <Banner tone="warn" label="Token made">
-          <Field label={`${variable} for ${agent.name}`}>
-            <div className="copy-row">
-              <input readOnly value={issued.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
-              <CopyButton text={issued.secret} />
-            </div>
-          </Field>
-          <p>
-            Copy it now: it is shown only once. It is listed among {agent.name}'s tokens as <em>Transcript hook</em>,
-            where revoking it stops only the hook's uploads.
-          </p>
-        </Banner>
+        <ShownOnce banner="Token made" label={`${variable} for ${agent.name}`} secret={issued.secret}>
+          It is listed among {agent.name}'s tokens as <em>Transcript hook</em>, where revoking it stops only the hook's
+          uploads.
+        </ShownOnce>
       )}
     </form>
   );

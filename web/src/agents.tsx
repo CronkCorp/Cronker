@@ -4,7 +4,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
-import { Banner, Button, CopyButton, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, workspaceCrumb } from "./ui/controls.js";
+import { Button, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, Saved, ShownOnce, workspaceCrumb } from "./ui/controls.js";
 import { Key, RunState } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -341,20 +341,12 @@ function ManageTokens({
       description="An Agent connects with a token, such as from Claude Code on your laptop."
     >
       {issued && (
-        <Banner tone="warn" label="Token issued">
-          <Field label={`Token ${issued.token.name}`}>
-            <div className="copy-row">
-              <input readOnly value={issued.secret} className="mono" onFocus={(event) => event.currentTarget.select()} />
-              <CopyButton text={issued.secret} />
-            </div>
-          </Field>
-          <p>
-            Copy it now: it is shown only once. Connect Claude Code with{" "}
-            <code>
-              claude mcp add --transport http cronk {mcpUrl} --header "Authorization: Bearer {issued.secret}"
-            </code>
-          </p>
-        </Banner>
+        <ShownOnce banner="Token issued" label={`Token ${issued.token.name}`} secret={issued.secret}>
+          Connect Claude Code with{" "}
+          <code>
+            claude mcp add --transport http cronk {mcpUrl} --header "Authorization: Bearer {issued.secret}"
+          </code>
+        </ShownOnce>
       )}
       {tokens.length > 0 && (
         <table>
