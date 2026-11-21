@@ -436,7 +436,7 @@ const edgeHold = 700;
 /**
  * Scrolls the board sideways while a dragged card is held near its left or right edge, faster nearer the edge, so the
  * card reaches columns that start off screen. Only Chromium scrolls a dragged-over element by itself; Firefox and
- * Safari don't.
+ * Safari (WebKit) don't.
  */
 function useEdgeScroll() {
   const board = useRef<HTMLElement>(null);
@@ -456,8 +456,10 @@ function useEdgeScroll() {
       frame.current = null;
       return;
     }
+    const before = board.current.scrollLeft;
     board.current.scrollLeft += speed;
-    frame.current = requestAnimationFrame(step);
+    // At its end the board can't scroll further: stop until the next dragover asks again.
+    frame.current = board.current.scrollLeft === before ? null : requestAnimationFrame(step);
   }, []);
 
   const onDragOver = (event: DragEvent<HTMLElement>) => {
@@ -465,13 +467,19 @@ function useEdgeScroll() {
     const { left, right } = board.current.getBoundingClientRect();
     const fromLeft = event.clientX - left;
     const fromRight = right - event.clientX;
-    const speed =
-      fromLeft < edgeZone ? -edgeSpeed * (1 - fromLeft / edgeZone) : fromRight < edgeZone ? edgeSpeed * (1 - fromRight / edgeZone) : 0;
+    // Whole pixels: browsers that round scrollLeft would never move on a fraction of one.
+    const toward = (distance: number) => (distance < edgeZone ? Math.ceil(edgeSpeed * (1 - distance / edgeZone)) : 0);
+    const speed = toward(fromRight) - toward(fromLeft);
     held.current = { speed, at: performance.now() };
     if (speed !== 0 && frame.current === null) frame.current = requestAnimationFrame(step);
   };
 
-  return { ref: board, onDragOver, stop };
+  /** A card dragged off the board stops it scrolling, rather than it running on until the hold lapses. */
+  const onDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stop();
+  };
+
+  return { ref: board, onDragOver, onDragLeave, stop };
 }
 
 /**
@@ -554,6 +562,7 @@ function Board({
         className="board"
         ref={edge.ref}
         onDragOver={edge.onDragOver}
+        onDragLeave={edge.onDragLeave}
         onDrop={edge.stop}
         onDragEnd={edge.stop}
       >
