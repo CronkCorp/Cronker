@@ -1,12 +1,12 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { afterCommit, transaction, type Db, type Tx } from "../db.js";
+import { afterCommit, transaction, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
-import { setUpManagedAgents } from "./managed-agents.js";
+import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
@@ -55,6 +55,13 @@ export const RunnerRecord = Type.Object({
       Type.Object({
         agentId: Type.String({ description: "The agent definition Cronk created in the Owner's Anthropic workspace." }),
         environmentId: Type.String({ description: "The cloud environment Cronk created there." }),
+        webhookUrl: Type.String({
+          format: "uri",
+          description: "The webhook endpoint URL to add in the Anthropic Console, for the session events that end Runs at once.",
+        }),
+        webhookSecretSaved: Type.Boolean({
+          description: "Whether the endpoint's signing secret is saved; without one, Runs end only by polling.",
+        }),
       }),
       Type.Null(),
     ],
@@ -65,7 +72,8 @@ export const RunnerRecord = Type.Object({
 export type RunnerRecord = Static<typeof RunnerRecord>;
 
 type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
-type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers"> & {
+type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers" | "managedAgents"> & {
+  managedAgents: Omit<NonNullable<RunnerRecord["managedAgents"]>, "webhookUrl"> | null;
   createdAt: Date;
   pausedUntil: Date | null;
   triggers: TriggerRow[];
@@ -75,12 +83,14 @@ const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId'
 const columns = `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
   paused_until as "pausedUntil", created_at as "createdAt",
-  case when kind = 'managed_agents' then json_build_object('agentId', managed_agent_id, 'environmentId', managed_environment_id)
+  case when kind = 'managed_agents' then json_build_object('agentId', managed_agent_id, 'environmentId', managed_environment_id,
+    'webhookSecretSaved', webhook_secret_sealed is not null)
   end as "managedAgents",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
-const present = (row: Row): RunnerRecord => ({
+const present = (context: Context, row: Row): RunnerRecord => ({
   ...row,
+  managedAgents: row.managedAgents && { ...row.managedAgents, webhookUrl: managedAgentsWebhookUrl(context, row.id) },
   pausedUntil: row.pausedUntil?.toISOString() ?? null,
   triggers: row.triggers.map(presentTrigger),
   createdAt: row.createdAt.toISOString(),
@@ -96,9 +106,9 @@ const presentTrigger = (t: TriggerRow): Trigger => ({
 });
 
 /** The User's own Runners, oldest first. */
-export async function runnersOf(db: Db, userId: string): Promise<RunnerRecord[]> {
-  const { rows } = await db.query<Row>(`select ${columns} from runners where owner_id = $1 order by created_at, id`, [userId]);
-  return rows.map(present);
+export async function runnersOf(context: Context, userId: string): Promise<RunnerRecord[]> {
+  const { rows } = await context.db.query<Row>(`select ${columns} from runners where owner_id = $1 order by created_at, id`, [userId]);
+  return rows.map((row) => present(context, row));
 }
 
 export async function createRunner(
@@ -127,14 +137,14 @@ export async function createRunner(
      values ($1, $2, $3, $4, $5, $6, $7) returning id`,
     [userId, input.kind, input.name.trim(), clock.now(), managed?.apiKeySealed ?? null, managed?.agentId ?? null, managed?.environmentId ?? null],
   );
-  return (await findRunner(db, userId, rows[0]!.id))!;
+  return (await findRunner(context, userId, rows[0]!.id))!;
 }
 
 /** One of the User's own Runners; otherwise nothing, as if it didn't exist. */
-export async function findRunner(db: Db, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
+export async function findRunner(context: Context, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
   if (!isUuid(runnerId)) return undefined;
-  const { rows } = await db.query<Row>(`select ${columns} from runners where id = $1 and owner_id = $2`, [runnerId, userId]);
-  return rows[0] && present(rows[0]);
+  const { rows } = await context.db.query<Row>(`select ${columns} from runners where id = $1 and owner_id = $2`, [runnerId, userId]);
+  return rows[0] && present(context, rows[0]);
 }
 
 export const noSuchRunner = () => new ApiError(404, "not_found", "You have no such Runner.");
@@ -151,7 +161,7 @@ export async function saveTrigger(
   runnerId: string,
   input: { model: string; projectId?: string | null; triggerId: string; token?: string },
 ): Promise<RunnerRecord> {
-  const runner = await findRunner(context.db, userId, runnerId);
+  const runner = await findRunner(context, userId, runnerId);
   if (!runner) throw noSuchRunner();
   if (runner.kind !== "subscription") {
     throw new ApiError(409, "runner_has_no_triggers", `${runner.name} is a Runner of the kind ${runner.kind}, which fires no triggers.`);
@@ -174,7 +184,7 @@ export async function saveTrigger(
        created_at = excluded.created_at`,
     [runnerId, projectId, model, input.triggerId.trim(), sealed, context.clock.now()],
   );
-  return (await findRunner(context.db, userId, runnerId))!;
+  return (await findRunner(context, userId, runnerId))!;
 }
 
 /**
@@ -214,7 +224,7 @@ export async function pasteTriggerToken(
   triggerId: string,
   token: string,
 ): Promise<RunnerRecord> {
-  const runner = await findRunner(context.db, userId, runnerId);
+  const runner = await findRunner(context, userId, runnerId);
   if (!runner) throw noSuchRunner();
   const sealed = requireSecretBox(context.config).seal(token.trim());
   await transaction(context.db, async (tx) => {
@@ -230,7 +240,7 @@ export async function pasteTriggerToken(
     await tx.query("update runner_triggers set token_sealed = $2 where id = $1", [triggerId, sealed]);
     if (trigger.waited) await recheckCouldntStart(context, tx, trigger);
   });
-  return (await findRunner(context.db, userId, runnerId))!;
+  return (await findRunner(context, userId, runnerId))!;
 }
 
 /** A trigger whose token was just pasted: whose Runner, for which model and Project. */
@@ -262,13 +272,45 @@ async function recheckCouldntStart(context: Context, tx: Tx, trigger: PastedTrig
 
 /** Removes one of a Runner's triggers; Runs needing it then can't start until another is saved. */
 export async function removeTrigger(context: Context, userId: string, runnerId: string, triggerId: string): Promise<RunnerRecord> {
-  const runner = await findRunner(context.db, userId, runnerId);
+  const runner = await findRunner(context, userId, runnerId);
   if (!runner) throw noSuchRunner();
   const { rowCount } = isUuid(triggerId)
     ? await context.db.query("delete from runner_triggers where id = $1 and runner_id = $2", [triggerId, runnerId])
     : { rowCount: 0 };
   if (!rowCount) throw new ApiError(404, "not_found", `${runner.name} has no such trigger.`);
-  return (await findRunner(context.db, userId, runnerId))!;
+  return (await findRunner(context, userId, runnerId))!;
+}
+
+/**
+ * Saves the signing secret of a `managed_agents` Runner's webhook endpoint, as the Anthropic Console shows it once,
+ * sealed under `CRONK_SECRET_KEY` and never returned, replacing any saved before.
+ */
+export async function saveWebhookSecret(context: Context, userId: string, runnerId: string, secret: string): Promise<RunnerRecord> {
+  const trimmed = secret.trim();
+  if (!/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
+    throw new ApiError(400, "invalid_webhook_secret", "A webhook signing secret starts with `whsec_`: copy it from the endpoint in the Anthropic Console.");
+  }
+  return setWebhookSecret(context, userId, runnerId, () => requireSecretBox(context.config).seal(trimmed));
+}
+
+/** Forgets a `managed_agents` Runner's webhook signing secret, so its deliveries are refused and Runs end by polling alone. */
+export async function forgetWebhookSecret(context: Context, userId: string, runnerId: string): Promise<RunnerRecord> {
+  return setWebhookSecret(context, userId, runnerId, () => null);
+}
+
+async function setWebhookSecret(
+  context: Context,
+  userId: string,
+  runnerId: string,
+  sealed: () => string | null,
+): Promise<RunnerRecord> {
+  const runner = await findRunner(context, userId, runnerId);
+  if (!runner) throw noSuchRunner();
+  if (runner.kind !== "managed_agents") {
+    throw new ApiError(409, "runner_has_no_webhook", `${runner.name} is a Runner of the kind ${runner.kind}, which takes no webhooks.`);
+  }
+  await context.db.query("update runners set webhook_secret_sealed = $2 where id = $1", [runnerId, sealed()]);
+  return (await findRunner(context, userId, runnerId))!;
 }
 
 /** Removes one of the User's own Runners with its triggers; Agents pointed at it are left with none. */
@@ -333,6 +375,6 @@ export async function setRunnerLimit(context: Context, userId: string, runnerId:
       : { rows: [] };
     if (!rows[0]) throw noSuchRunner();
     afterCommit(tx, () => startWaitingRuns(context, runnerId));
-    return present(rows[0]);
+    return present(context, rows[0]);
   });
 }

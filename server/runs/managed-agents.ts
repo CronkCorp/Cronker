@@ -1,6 +1,8 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Context } from "../context.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
+import { isUuid } from "../http/ids.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import { transaction } from "../db.js";
 import { appToken } from "../github/app.js";
@@ -408,6 +410,108 @@ async function letGo(context: Context, runId: string): Promise<void> {
   }
 }
 
+/** Where Anthropic sends a `managed_agents` Runner's webhook deliveries; one per Runner, as each has its own secret. */
+export const managedAgentsWebhookPath = "/api/runners/:runnerId/managed-agents/webhook";
+
+/** The webhook endpoint URL a Runner's Owner adds in the Anthropic Console. */
+export const managedAgentsWebhookUrl = (context: Context, runnerId: string): string =>
+  new URL(managedAgentsWebhookPath.replace(":runnerId", encodeURIComponent(runnerId)), context.config.publicUrl).toString();
+
+/** The session events that may end a Run; any other delivery is acknowledged and ignored. */
+const endingEvents = new Set(["session.status_idled", "session.status_terminated"]);
+
+/** How far a delivery's `webhook-timestamp` may be from Cronk's clock, as Anthropic's SDKs allow, against replays. */
+const deliveryTolerance = 5 * 60_000;
+
+const invalidSignature = () =>
+  new ApiError(401, "invalid_signature", "The delivery isn't signed with this Runner's webhook signing secret.");
+
+/** The Standard Webhooks headers Anthropic signs a delivery with. */
+export interface WebhookHeaders {
+  id?: string;
+  timestamp?: string;
+  signature?: string;
+}
+
+/**
+ * Whether a delivery is signed with the secret, as Standard Webhooks says: one of the space-separated `v1,` signatures
+ * is the base64 HMAC-SHA256, keyed with the secret's base64 after `whsec_`, of `id.timestamp.body`, and the timestamp
+ * is within five minutes of Cronk's clock.
+ */
+function isSigned(context: Context, secret: string, body: Buffer, headers: WebhookHeaders): boolean {
+  const { id, timestamp, signature } = headers;
+  if (!id || !timestamp || !signature || !/^\d+$/.test(timestamp)) return false;
+  if (Math.abs(context.clock.now().getTime() - Number(timestamp) * 1000) > deliveryTolerance) return false;
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const expected = createHmac("sha256", key).update(`${id}.${timestamp}.`).update(body).digest();
+  return signature.split(" ").some((given) => {
+    if (!given.startsWith("v1,")) return false;
+    const decoded = Buffer.from(given.slice(3), "base64");
+    return decoded.length === expected.length && timingSafeEqual(decoded, expected);
+  });
+}
+
+/**
+ * Takes a webhook delivery to a `managed_agents` Runner's endpoint. One not signed with the Runner's saved secret, or
+ * to a Runner with none, is refused with `invalid_signature` before anything else is looked at. A signed
+ * `session.status_idled` or `session.status_terminated` about the session of one of the Runner's running Runs reads
+ * that session and ends the Run as polling would; anything else, such as a session of no running Run of this Runner or
+ * a delivery repeated after its Run ended, changes nothing. Returns whether this delivery ended a Run.
+ */
+export async function receiveManagedAgentsDelivery(
+  context: Context,
+  reports: RunReports,
+  runnerId: string,
+  body: Buffer,
+  headers: WebhookHeaders,
+): Promise<boolean> {
+  const { rows: runners } = isUuid(runnerId)
+    ? await context.db.query<{ secretSealed: string }>(
+        `select webhook_secret_sealed as "secretSealed" from runners
+         where id = $1 and kind = 'managed_agents' and webhook_secret_sealed is not null`,
+        [runnerId],
+      )
+    : { rows: [] };
+  if (!runners[0]) throw invalidSignature();
+  let secret: string;
+  try {
+    secret = requireSecretBox(context.config).open(runners[0].secretSealed);
+  } catch {
+    // CRONK_SECRET_KEY changed or is unset, so no delivery can be checked: its Owner saves the secret again.
+    throw invalidSignature();
+  }
+  if (!isSigned(context, secret, body, headers)) throw invalidSignature();
+  let event: { data?: { type?: unknown; id?: unknown } };
+  try {
+    event = JSON.parse(body.toString("utf8")) as typeof event;
+  } catch {
+    throw new ApiError(400, "invalid_request", "A delivery's body must be JSON.");
+  }
+  const type = event?.data?.type;
+  const sessionId = event?.data?.id;
+  if (typeof type !== "string" || !endingEvents.has(type) || typeof sessionId !== "string") return false;
+  const { rows } = await context.db.query<{ runId: string; apiKeySealed: string }>(
+    `select m.run_id as "runId", m.api_key_sealed as "apiKeySealed"
+     from managed_agent_runs m join runs on runs.id = m.run_id
+     where runs.state = 'running' and runs.runner_id = $1 and m.session_id = $2`,
+    [runnerId, sessionId],
+  );
+  const run = rows[0];
+  if (!run) return false;
+  // The payload is thin and may be stale or out of order: the session as Anthropic has it now decides, as for polling.
+  let why: string | null;
+  try {
+    why = await whySessionStopped(context, requireSecretBox(context.config).open(run.apiKeySealed), sessionId);
+  } catch (error) {
+    // Failing the delivery has Anthropic send it again shortly; polling is the backstop if every try fails.
+    if (!(error instanceof SessionUnreadable)) throw error;
+    throw new ApiError(502, "anthropic_unavailable", error.message);
+  }
+  if (!why) return false;
+  await reports.endedWithoutFinishing(run.runId, why);
+  return true;
+}
+
 /**
  * Reads the session of each running Managed Agents Run, ending the Runs whose sessions stopped without their Agent
  * calling `finish`: one that went idle fails with its stop reason, one asking for a confirmation fails with *needs a
@@ -428,7 +532,8 @@ export async function pollManagedAgentsSessions(context: Context, reports: RunRe
       const why = await whySessionStopped(context, requireSecretBox(context.config).open(apiKeySealed), sessionId);
       if (why) await reports.endedWithoutFinishing(runId, why);
     } catch (error) {
-      failures.push(error);
+      // A session Anthropic can't answer about now is read again at the next poll.
+      if (!(error instanceof SessionUnreadable)) failures.push(error);
     }
   }
   // A Run whose refused start was unrecorded, as for a rate limit, has no row in `runs` left.
@@ -440,16 +545,23 @@ export async function pollManagedAgentsSessions(context: Context, reports: RunRe
   for (const { runId } of unfinished) await letGo(context, runId).catch((error: unknown) => failures.push(error));
   if (failures.length > 0) throw failures[0];
 }
-/** Why the session stopped without its Agent calling `finish`, or nothing while it is still at work. */
+/** Anthropic answered something other than the session or its events, such as a 429 or a 5xx: ask again later. */
+class SessionUnreadable extends Error {}
+
+/**
+ * Why the session stopped without its Agent calling `finish`, or nothing while it is still at work. Throws
+ * `SessionUnreadable` when Anthropic doesn't answer with the session or its events.
+ */
 async function whySessionStopped(context: Context, apiKey: string, sessionId: string): Promise<string | null> {
   const path = `v1/sessions/${encodeURIComponent(sessionId)}`;
   const session = await anthropic(context, apiKey, "GET", path);
   if (session.status === 404) return "Its session is gone from Anthropic, without the agent calling finish.";
-  if (session.status !== 200) return null;
+  if (session.status !== 200) throw new SessionUnreadable(`Anthropic answered ${errorOf(session)} when Cronk read session ${sessionId}.`);
   if (session.body.status === "terminated") return "Its session terminated without the agent calling finish.";
   if (session.body.status !== "idle") return null;
   // The session carries no stop reason: its latest idle event does.
   const events = await anthropic(context, apiKey, "GET", `${path}/events?order=desc&limit=100`);
+  if (events.status !== 200) throw new SessionUnreadable(`Anthropic answered ${errorOf(events)} when Cronk read the events of session ${sessionId}.`);
   const idle = ((events.body.data ?? []) as { type?: string; stop_reason?: { type?: string } }[]).find(
     (event) => event.type === "session.status_idle",
   );

@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 
 /**
@@ -10,6 +11,9 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
  * with `initial_events` starts running. Each of a session's `github_repository` resources gets an id, and its
  * `authorization_token` can be replaced on the running session, as the real service allows. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, and
  * stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
+ *
+ * It also sends webhook deliveries as Anthropic does from an endpoint registered in the Console: `deliver(url, …)`
+ * posts a thin event about a session, signed with the endpoint's `whsec_` secret (`webhookSecret()` makes one).
  */
 
 /** A `github_repository` resource of a session. */
@@ -75,7 +79,29 @@ export interface StandInManagedAgents {
   idle(id: string, stopReason: string): void;
   /** The session terminated, recording a `session.status_terminated` event. */
   terminate(id: string): void;
+  /** A new signing secret, as the Console shows once for a webhook endpoint: `whsec_` and 32 random bytes in base64. */
+  webhookSecret(): string;
+  /**
+   * Sends a webhook delivery to `url` as Anthropic does: a thin event of this type about the session, with the
+   * `webhook-id`, `webhook-timestamp` and `webhook-signature` headers, signed with `secret` (another secret signs it
+   * wrongly). `id` is the event's id, the same on every retry of it; `at` the time of this attempt. Returns Cronk's answer.
+   */
+  deliver(url: string, delivery: WebhookDelivery): Promise<Response>;
   stop(): Promise<void>;
+}
+
+export interface WebhookDelivery {
+  secret: string;
+  type: string;
+  sessionId: string;
+  at: Date;
+  id?: string;
+}
+
+/** Signs a webhook delivery as Standard Webhooks, which Anthropic follows, says: `v1,` and the base64 HMAC-SHA256 of `id.timestamp.body`. */
+function signature(secret: string, id: string, timestamp: string, body: string): string {
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  return `v1,${createHmac("sha256", key).update(`${id}.${timestamp}.${body}`).digest("base64")}`;
 }
 
 export async function startStandInManagedAgents(): Promise<StandInManagedAgents> {
@@ -305,6 +331,26 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const s = session(id);
       s.status = "terminated";
       emit(s, { type: "session.status_terminated" });
+    },
+    webhookSecret: () => `whsec_${randomBytes(32).toString("base64")}`,
+    deliver(url, { secret, type, sessionId, at, id = nextId("whe") }) {
+      const body = JSON.stringify({
+        type: "event",
+        id,
+        created_at: at.toISOString(),
+        data: { type, id: sessionId, organization_id: "org-standin", workspace_id: "wrkspc-standin" },
+      });
+      const timestamp = String(Math.floor(at.getTime() / 1000));
+      return fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "webhook-id": id,
+          "webhook-timestamp": timestamp,
+          "webhook-signature": signature(secret, id, timestamp, body),
+        },
+        body,
+      });
     },
     stop: () =>
       new Promise((resolve) => {
