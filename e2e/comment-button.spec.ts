@@ -30,7 +30,7 @@ test("the page head's Comment button takes the User from the top of a long Ticke
   await expect(box).toBeFocused();
   await expect(box).toBeInViewport();
 
-  // The box is where it was, at the end, and posting from it works as before.
+  // The box is where it was, at the end, and placing a Comment from it works as before.
   await box.fill("Picked up from the top.");
   await box.press("Control+Enter");
   const timeline = page.getByRole("region", { name: "Timeline" });
@@ -51,6 +51,15 @@ test("C takes the User to the Comment box without typing a c, and does nothing w
   await page.keyboard.press("c");
   await expect(box).toBeFocused();
   await expect(box).toBeInViewport();
+  await expect(box).toHaveValue("");
+
+  // Holding C types no c's once it has focused the box.
+  await box.blur();
+  await page.keyboard.down("c");
+  await page.keyboard.down("c");
+  await page.keyboard.down("c");
+  await page.keyboard.up("c");
+  await expect(box).toBeFocused();
   await expect(box).toHaveValue("");
 
   // Typing in the box types; the c is the User's.
@@ -75,6 +84,7 @@ test("C does nothing while a dialog is open", async ({ page, cronk }) => {
   await expect(page.getByRole("dialog")).toBeVisible();
   // Out of the Picker's filter box, so only the open dialog keeps C from acting.
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
   await page.keyboard.press("c");
   await expect(box).not.toBeFocused();
 });

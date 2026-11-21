@@ -16,10 +16,3 @@ export function keyBelongsElsewhere(event: KeyboardEvent): boolean {
  */
 export const shortcutStandsAside = (event: KeyboardEvent): boolean =>
   event.metaKey || event.ctrlKey || event.altKey || keyBelongsElsewhere(event);
-
-/** Scrolls an element into view as the User asked, smoothly unless they prefer reduced motion, and focuses it. */
-export function scrollToAndFocus(element: HTMLElement) {
-  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  element.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
-  element.focus({ preventScroll: true });
-}

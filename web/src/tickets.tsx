@@ -31,7 +31,7 @@ import {
 import { attachAll, Attachments, FileList } from "./attachments.js";
 import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
-import { scrollToAndFocus, shortcutStandsAside } from "./keys.js";
+import { shortcutStandsAside } from "./keys.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
@@ -89,13 +89,25 @@ export function TicketScreen({
   const commentBox = useRef<HTMLTextAreaElement>(null);
   const toCommentBox = () => commentBox.current && scrollToAndFocus(commentBox.current);
   useEffect(() => {
+    // Once C has focused the box, its repeats while held land in the box, and must not type there either.
+    let held = false;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== "c" || shortcutStandsAside(event) || !commentBox.current) return;
+      if (event.key.toLowerCase() !== "c") return;
+      if (held && event.repeat) return event.preventDefault();
+      if (shortcutStandsAside(event) || !commentBox.current) return;
       event.preventDefault();
+      held = true;
       toCommentBox();
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "c") held = false;
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, []);
   usePlace("project", project?.id ?? null);
 
@@ -1071,6 +1083,13 @@ function Linked({
       <FormError error={error} />
     </section>
   );
+}
+
+/** Scrolls an element into view as the User asked, smoothly unless they prefer reduced motion, and focuses it. */
+function scrollToAndFocus(element: HTMLElement) {
+  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  element.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
+  element.focus({ preventScroll: true });
 }
 
 function CommentForm({
