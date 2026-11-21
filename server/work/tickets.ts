@@ -329,14 +329,7 @@ export async function createTicket(
         actor = await discoveringAgent(tx, creator, parent);
         discovery = { runId: parent.discovered!.runId, sourceTicketId: parent.discovered!.sourceTicket?.id ?? null };
       } else if (creator.kind === "agent") {
-        const runId = await runOfAgent(tx, creator, parent, {
-          rule:
-            "An Agent makes Sub-Tickets only of its own running Run's Ticket, or, outside a Run, of a Discovered " +
-            "Ticket it filed until a User delegates, moves or dismisses it.",
-          advice:
-            `File the work with \`file_ticket\` as a Discovered Ticket instead, naming ${parent.key} at the top of ` +
-            `its description, or leave a Comment on ${parent.key} asking its Users to split it.`,
-        });
+        const runId = await runForSubTicket(tx, creator, parent);
         actor = { kind: "agent", id: creator.id, runId };
       }
       // A Sub-Ticket inherits its parent's Delegation and Autonomous Delegation, and so its Assignee, whose Agent the
@@ -950,22 +943,51 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
   );
 }
 
-/** The Agent's running Run on the Ticket, which locked the Ticket; refused, with the refusal given, if it has none. */
-export async function runOfAgent(
-  tx: Tx,
-  agent: AgentCaller,
-  ticket: TicketRow,
-  refusal: { rule: string; advice: string } = {
-    rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
-    advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
-  },
-): Promise<string> {
+/** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
+export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
   const { rows } = await tx.query<{ id: string }>(
     "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
     [ticket.id, agent.id],
   );
   if (rows[0]) return rows[0].id;
-  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, refusal);
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
+    rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
+    advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
+  });
+}
+
+/**
+ * The Agent's running Run on the parent it makes a Sub-Ticket of; refused if it has none, saying where an Agent may
+ * make Sub-Tickets. A Discovered Ticket another Agent filed, or a User took up, gets `not_your_discovered_ticket`.
+ */
+async function runForSubTicket(tx: Tx, agent: AgentCaller, parent: TicketRow): Promise<string> {
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
+    [parent.id, agent.id],
+  );
+  if (rows[0]) return rows[0].id;
+  const refusal = {
+    rule:
+      "An Agent makes Sub-Tickets only of its own running Run's Ticket, or, in or outside a Run, of a Discovered " +
+      "Ticket it filed until a User delegates, moves or dismisses it.",
+    advice:
+      `File the work with \`file_ticket\` as a Discovered Ticket of your own and split that instead, naming ` +
+      `${parent.key} at the top of its description, or leave a Comment on ${parent.key} asking its Users to split it.`,
+  };
+  if (parent.discovered !== null) {
+    throw new ApiError(
+      403,
+      "not_your_discovered_ticket",
+      `${agent.name} didn't file ${parent.key}, or a User has taken it up.`,
+      refusal,
+    );
+  }
+  throw new ApiError(
+    403,
+    "no_running_run",
+    `${agent.name} has no running Run on ${parent.key}, and didn't file it as a Discovered Ticket.`,
+    refusal,
+  );
 }
 
 /** A Status or User, looked up by the query, as `{ id, name }` as it is named now; or null for no id. */

@@ -47,7 +47,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "(or, naming none, to the Agent's Owner), and waiting in their Inbox until a User delegates, moves or " +
             "dismisses it. Until then the Agent may also split it, in or outside a Run: its Sub-Tickets are " +
             "Discovered Tickets of the same Agent and source, waiting with their parent rather than in the Inbox, " +
-            "and settled along with it. An Agent gets `no_running_run` for any other parent.",
+            "and settled along with it. An Agent gets `not_your_discovered_ticket` for any other Discovered Ticket as parent, and `no_running_run` for any other parent.",
           params: Type.Object({ projectId: Type.String() }),
           body: Type.Object({
             title: Title,

@@ -41,7 +41,7 @@ How urgent a Ticket is: Urgent, High, Medium, Low or None. Waiting Tickets get R
 _Avoid_: Severity, importance, rank
 
 **Sub-Ticket**:
-A Ticket that splits up part of a parent Ticket's work, in the same Project, inheriting its Delegation. A parent gets no Runs while a Sub-Ticket is unfinished. An Agent makes them of its Run's Ticket, or, in or outside a Run, of a waiting Discovered Ticket it filed: those are Discovered Tickets of the same Agent and source, waiting with their parent.
+A Ticket that splits up part of a parent Ticket's work, in the same Project, inheriting its Delegation. A parent gets no Runs while a Sub-Ticket is unfinished. An Agent makes Sub-Tickets of its Run's Ticket, and of a Discovered Ticket it filed that still waits for a User.
 _Avoid_: Subtask, child issue
 
 **Relation**:

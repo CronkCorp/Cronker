@@ -369,16 +369,13 @@ describe("Sub-Tickets of a waiting Discovered Ticket, outside a Run", () => {
       expect(refused.status).toBe(403);
       return refused.json.error;
     };
-    const rule = expect.objectContaining({
-      code: "no_running_run",
-      rule: expect.stringContaining("Discovered Ticket it filed"),
-      advice: expect.any(String),
-    });
+    const rule = (code: string) =>
+      expect.objectContaining({ code, rule: expect.stringContaining("Discovered Ticket it filed"), advice: expect.any(String) });
 
-    expect(await refusedUnder(other.id)).toEqual(rule);
-    expect(await refusedUnder(found.id, asOther)).toEqual(rule);
+    expect(await refusedUnder(other.id)).toEqual(rule("no_running_run"));
+    expect(await refusedUnder(found.id, asOther)).toEqual(rule("not_your_discovered_ticket"));
     await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
-    expect(await refusedUnder(found.id)).toEqual(rule);
+    expect(await refusedUnder(found.id)).toEqual(rule("not_your_discovered_ticket"));
     expect(await ok("GET", `/api/projects/${project.id}/tickets`, ada)).toHaveLength(3);
   });
 });
