@@ -72,6 +72,7 @@ describe("creating a Ticket", () => {
       lastRun: null,
       waiting: null,
       blockedBy: [],
+      blockedByHidden: 0,
       mentions: [],
       cost: [],
     });
