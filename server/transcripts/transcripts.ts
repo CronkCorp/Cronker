@@ -302,8 +302,8 @@ export async function appendTranscript(context: Context, tx: Tx, session: RunSes
   );
   const after = Math.max(last[0]!.last, gap ? gap.after + gap.entries : 0);
   const entries = appended.entries.map(scrub).map((entry, index) => {
-    const cut = cutToolParts(entry, index);
-    return { ...cut, position: after + cut.position };
+    const prepared = cutToolParts(entry, index);
+    return { ...prepared, position: after + prepared.position };
   });
   await insertEntries(tx, id, entries);
   const results = appended.results.map(({ callId, toolResult }) => ({
@@ -466,7 +466,7 @@ function scrub<Entry extends ConvertedEntry>(entry: Entry): Entry {
  */
 function cutToolParts<Entry extends ConvertedEntry>(entry: Entry, index: number): Entry & StoredEntry {
   const toolResult = entry.toolResult === null ? null : cutToLimit(entry.toolResult);
-  const inputJson = entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null);
+  const inputJson = toolInputJson(entry);
   const cutInput = inputJson === null ? null : cutToLimit(inputJson);
   const toolInputCut = cutInput !== inputJson;
   return {
@@ -500,7 +500,7 @@ function cutToLimit(text: string): string {
 }
 
 /** A tool call's input as stored, in JSON; none for a message. */
-const toolInputJson = (entry: StoredEntry): string | null =>
+const toolInputJson = (entry: Pick<ConvertedEntry, "toolName" | "toolInput">): string | null =>
   entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null);
 
 /** How much an entry takes up: its text, tool name, tool input and tool result, in bytes. */
