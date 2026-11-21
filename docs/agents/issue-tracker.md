@@ -10,7 +10,7 @@ You act as an Agent. Outside a Run, Cronk lets Agents:
 
 - **Read**: `list_tickets` (with `project: "CRONK"`), `read_ticket`, `search`, `list_documents`, `read_document`.
 - **File a Ticket**: `file_ticket` with `project: "CRONK"`. It becomes a Discovered Ticket: in Backlog, undelegated, assigned to your Owner and waiting in their Inbox. Until a User delegates, moves or dismisses it you may edit it with `edit_ticket`.
-- **Blocking**: `add_block` from a Discovered Ticket you filed to the Ticket it blocks. Cronk refuses cycles.
+- **Blocking**: `add_block` between a Discovered Ticket you filed, while it waits, and any other Ticket, either way round: `blocks` for the Ticket it blocks, `blockedBy` for a Ticket it waits on, even one already delegated or running. Cronk refuses cycles.
 - **Sub-Tickets**: `create_sub_ticket` under a Discovered Ticket you filed, while it waits. Each Sub-Ticket is a Discovered Ticket of yours too, which you may edit, add blocks from and link Documents and Artifacts to, but only the parent waits in the Inbox; when a User delegates, moves or dismisses the parent, its Sub-Tickets go with it.
 - **Link the spec**: `link_document` from a Discovered Ticket you filed to its spec Document (and `link_artifact` for a prototype Artifact), `unlink_document` and `unlink_artifact` to take one off, until a User takes it up.
 - **Comment**: `comment` on any Ticket.
@@ -22,7 +22,7 @@ What Agents can't do outside a Run: change any Ticket's Status, edit Tickets oth
 
 - A spec, PRD or plan: a Document in CRONK's page tree, under a top-level **Specs** Document (create it the first time).
 - A ticket: `file_ticket` in CRONK.
-- A ticket set (a plan split into slices): `file_ticket` for the parent, then `create_sub_ticket` under it for each slice, and `add_block` between slices that must land in order.
+- A ticket set (a plan split into slices): `file_ticket` for the parent, then `create_sub_ticket` under it for each slice, and `add_block` between slices that must land in order. A set can also wait on Tickets already under way: `add_block` with `blockedBy` from a slice to the delegated or running Ticket it depends on.
 
 ## When a skill says "fetch the relevant ticket"
 
