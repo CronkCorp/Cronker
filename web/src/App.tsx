@@ -23,6 +23,7 @@ import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { navigate, replace, usePath } from "./router.js";
 import { ArtifactScreen, WorkspaceArtifacts } from "./artifacts.js";
+import { ModelIdsPanel } from "./model-ids.js";
 import { RunnersScreen } from "./runners.js";
 import { SearchScreen } from "./search.js";
 import { takeReturnAfterSignIn } from "./storage.js";
@@ -576,6 +577,11 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
                 </form>
               </Panel>
             ),
+          },
+          {
+            id: "model-ids",
+            label: "Model ids",
+            children: <ModelIdsPanel workspaceId={workspace.id} />,
           },
         ]}
       />

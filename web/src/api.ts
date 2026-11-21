@@ -551,6 +551,12 @@ export interface WorkspaceSettings {
   lostRunMinutes: number;
 }
 
+/** The exact model id a model label, as Steps use it, stands for in the Workspace; labels match ignoring case. */
+export interface ModelId {
+  label: string;
+  modelId: string;
+}
+
 export interface Inbox {
   count: number;
   items: InboxItem[];
@@ -869,6 +875,10 @@ export const api = {
   workspaceSettings: (id: string) => call<WorkspaceSettings>("GET", `${ws(id)}/settings`),
   changeWorkspaceSettings: (id: string, change: Partial<WorkspaceSettings>) =>
     call<WorkspaceSettings>("PATCH", `${ws(id)}/settings`, change),
+  modelIds: (id: string) => call<ModelId[]>("GET", `${ws(id)}/model-ids`),
+  saveModelId: (id: string, label: string, modelId: string) =>
+    call<ModelId>("PUT", `${ws(id)}/model-ids/${encodeURIComponent(label)}`, { modelId }),
+  removeModelId: (id: string, label: string) => call<void>("DELETE", `${ws(id)}/model-ids/${encodeURIComponent(label)}`),
   members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
   addMember: (id: string, email: string) =>
     call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email }),

@@ -32,7 +32,7 @@ The web client follows this file since the styling pass at the end of milestone 
 - **Active item:** `--accent-soft` background with `--accent` text. There is exactly one active item; a Ticket or Document marks its Project or Documents. A page the sidebar doesn't lead to, such as the Workspace's home, Password, New Workspace or a page that isn't there, marks none.
 - **Below 760px** the sidebar becomes a wrapping strip with the main links, and Projects, Workspace and the User move into a menu. Two-pane screens stack.
 - **Page head:** breadcrumbs (13px, muted, with `--accent` links), then a row holding the `h1`, the view switcher and the actions. A Decision's number and status sit on a line of their own between the breadcrumbs and the title, and a Document's, Term's or Decision's Version, who saved it and when on a muted line under it. The primary action comes last. Destructive actions such as Remove go in a "…" menu, never next to the primary action. Reject on a proposed Decision is not one, since nothing is lost: it sits beside Accept, though it still asks first.
-- **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, which used to sit on Members), so the sidebar's Settings has a page of its own.
+- **Routes stay as they are.** The styling pass changes how screens look, not their addresses. The one page it added is the Workspace's Settings (`/workspaces/<id>/settings`: its name and lost-Run threshold, later joined by its model ids, which used to sit on Members), so the sidebar's Settings has a page of its own.
 - **A Ticket's or Document's Project:** a page tells the frame which item it belongs to and which Project it is in (`usePlace`), and the sidebar's Documents, Terms, Decisions and Artifacts then lead to that Project's.
 
 ## Design tokens
@@ -256,7 +256,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Workspace settings, Members and GitHub
 
-- **In the settings layout:** the Workspace's Settings with its Name and Lost Runs; Members with Add a member (for Admins), Added, not joined yet (while there are any) and Members, which says "Saved." after Make Admin or Remove Admin; GitHub with The App, What the App needs (its upgrade checklist, for Admins) and Installations.
+- **In the settings layout:** the Workspace's Settings with its Name, Lost Runs and Model ids (a table of each model label, in the mono face, with its model id and a ghost Remove, then a form setting a label's model id: a label matching one ignoring case changes it); Members with Add a member (for Admins), Added, not joined yet (while there are any) and Members, which says "Saved." after Make Admin or Remove Admin; GitHub with The App, What the App needs (its upgrade checklist, for Admins) and Installations.
 
 ### Signed-out pages and the consent screen
 
