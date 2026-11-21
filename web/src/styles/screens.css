@@ -1195,6 +1195,16 @@
   align-items: center;
   gap: var(--space-2);
 }
+/* Trigger ids run to 30 characters: on a phone they break, and the table's cells close up, rather than widen the card. */
+.runner-trigger-id code {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .runner-triggers th,
+  .runner-triggers td {
+    padding-inline: var(--space-1);
+  }
+}
 /* A trigger waiting for its token and the row pasting it read as one: no rule between them. */
 .runner-trigger-waits > td {
   border-bottom: 0;
