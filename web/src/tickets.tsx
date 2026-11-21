@@ -30,6 +30,7 @@ import {
   type Workspace,
 } from "./api.js";
 import { attachAll, Attachments, FileList } from "./attachments.js";
+import { costsText, costText } from "./costs.js";
 import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { shortcutStandsAside } from "./keys.js";
@@ -624,6 +625,12 @@ function Fields({
       >
         <input id="ticket-estimate" name="estimate" type="number" min={0} step="any" defaultValue={ticket.estimate ?? ""} className="field-inline" />
       </FieldForm>
+      {ticket.cost.length > 0 && (
+        <div className="field-row" title="What its Runs cost in all, where their Runner reports it">
+          <span className="field-row-label">Cost</span>
+          <span className="field-row-value">{costsText(ticket.cost)}</span>
+        </div>
+      )}
     </section>
   );
 }
@@ -778,6 +785,7 @@ function RunCard({
       <Actor actor={{ kind: "agent", name: latest.agent.name }} />
       <p className="small">
         {latest.step.name} <ModelLabel model={latest.model} />
+        {latest.cost && <> · {costText(latest.cost)}</>}
       </p>
       {latest.endReason && <p className="small">{latest.endReason}</p>}
       <Actions>
@@ -1661,7 +1669,10 @@ function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscrip
   );
 }
 
-/** A Run on the timeline as one line: its state, Step, Agent and model, the Outcome it chose, and its Transcript and session. */
+/**
+ * A Run on the timeline as one line: its state, Step, Agent and model, the Outcome it chose, what it cost where its
+ * Runner reports it, and its Transcript and session.
+ */
 function RunEntry({ run, project, arrived }: { run: Run; project: Project; arrived: boolean }) {
   const to = useAddresses();
   const step = project.statuses.find((s) => s.id === run.step.statusId)?.step;
@@ -1684,6 +1695,7 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
             {targetName && <> → {targetName}</>}
           </span>
         )}
+        {run.cost && <span> · {costText(run.cost)}</span>}
         {run.endReason && <span className="muted">: {run.endReason}</span>}
         {run.question && run.questionBy === "cronk" && (
           <span>

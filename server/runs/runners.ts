@@ -6,6 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
+import { Cost, costTotalsSql } from "./costs.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 
@@ -26,6 +27,14 @@ export const Trigger = Type.Object({
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Trigger = Static<typeof Trigger>;
+
+/** A Runner's budget per Run as its record shows it. */
+const BudgetPerRunField = Type.Union([Cost, Type.Null()], {
+  description:
+    "For a `managed_agents` Runner, the most each of its Runs may cost at Anthropic's list prices, passed as each " +
+    "session's budget; a Run whose session reaches it fails with *budget reached*. Null for none, the default, and " +
+    "for other kinds.",
+});
 
 /** A Runner a User set up: a way for Cronk to start Runs of their Agents with their own credentials. */
 export const RunnerRecord = Type.Object({
@@ -67,6 +76,12 @@ export const RunnerRecord = Type.Object({
     ],
     { description: "For a `managed_agents` Runner, what Cronk created with its API key; null for other kinds." },
   ),
+  budgetPerRun: BudgetPerRunField,
+  costThisMonth: Type.Array(Cost, {
+    description:
+      "What its Runs that ended this calendar month (in UTC) cost, one total per currency; empty when none reported a " +
+      "cost, as subscription Runs don't.",
+  }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type RunnerRecord = Static<typeof RunnerRecord>;
@@ -80,12 +95,17 @@ type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers" | "manage
 };
 const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
   'waitingForToken', t.token_sealed is null, 'createdAt', t.created_at)`;
-const columns = `id, name, kind, run_limit as limit,
+/** The Runners' columns, given the placeholder of the current time, which sets the month `costThisMonth` totals. */
+const columns = (now: string) => `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
   paused_until as "pausedUntil", created_at as "createdAt",
   case when kind = 'managed_agents' then json_build_object('agentId', managed_agent_id, 'environmentId', managed_environment_id,
     'webhookSecretSaved', webhook_secret_sealed is not null)
   end as "managedAgents",
+  case when budget_per_run is not null then json_build_object('amount', budget_per_run, 'currency', 'USD') end
+    as "budgetPerRun",
+  ${costTotalsSql(`runs.runner_id = runners.id and runs.ended_at >= date_trunc('month', ${now}::timestamptz, 'UTC')`)}
+    as "costThisMonth",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
 const present = (context: Context, row: Row): RunnerRecord => ({
@@ -107,7 +127,10 @@ const presentTrigger = (t: TriggerRow): Trigger => ({
 
 /** The User's own Runners, oldest first. */
 export async function runnersOf(context: Context, userId: string): Promise<RunnerRecord[]> {
-  const { rows } = await context.db.query<Row>(`select ${columns} from runners where owner_id = $1 order by created_at, id`, [userId]);
+  const { rows } = await context.db.query<Row>(`select ${columns("$2")} from runners where owner_id = $1 order by created_at, id`, [
+    userId,
+    context.clock.now(),
+  ]);
   return rows.map((row) => present(context, row));
 }
 
@@ -143,7 +166,11 @@ export async function createRunner(
 /** One of the User's own Runners; otherwise nothing, as if it didn't exist. */
 export async function findRunner(context: Context, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
   if (!isUuid(runnerId)) return undefined;
-  const { rows } = await context.db.query<Row>(`select ${columns} from runners where id = $1 and owner_id = $2`, [runnerId, userId]);
+  const { rows } = await context.db.query<Row>(`select ${columns("$3")} from runners where id = $1 and owner_id = $2`, [
+    runnerId,
+    userId,
+    context.clock.now(),
+  ]);
   return rows[0] && present(context, rows[0]);
 }
 
@@ -363,18 +390,56 @@ export async function removeRunner(context: Context, userId: string, runnerId: s
   });
 }
 
-/** Sets how many Runs one of the User's own Runners keeps running at once; a higher limit starts waiting Tickets. */
-export async function setRunnerLimit(context: Context, userId: string, runnerId: string, limit: number): Promise<RunnerRecord> {
+/** A `managed_agents` Runner's budget per Run, in US cents, as the API takes it; null for none. */
+export const BudgetPerRun = Type.Union(
+  [
+    Type.Object({
+      amount: Type.Integer({ minimum: 1, maximum: 100_000_000, description: "In US cents: 500 is $5.00." }),
+      currency: Type.Literal("USD", { description: "Anthropic budgets sessions in US dollars only." }),
+    }),
+    Type.Null(),
+  ],
+  {
+    description:
+      "For a `managed_agents` Runner, the most each Run may cost at Anthropic's list prices, passed as each session's " +
+      "budget: a Run whose session reaches it fails with *budget reached*. Null for none, the default.",
+  },
+);
+export type BudgetPerRun = Static<typeof BudgetPerRun>;
+
+/**
+ * Changes one of the User's own Runners: how many Runs it keeps running at once, where a higher limit starts waiting
+ * Tickets, and for a `managed_agents` Runner its budget per Run, which Runs started from then on get.
+ */
+export async function updateRunner(
+  context: Context,
+  userId: string,
+  runnerId: string,
+  input: { limit?: number; budgetPerRun?: BudgetPerRun },
+): Promise<RunnerRecord> {
   return transaction(context.db, async (tx) => {
-    const { rows } = isUuid(runnerId)
-      ? await tx.query<Row>(`update runners set run_limit = $3 where id = $1 and owner_id = $2 returning ${columns}`, [
+    const { rows: found } = isUuid(runnerId)
+      ? await tx.query<{ name: string; kind: string }>("select name, kind from runners where id = $1 and owner_id = $2 for update", [
           runnerId,
           userId,
-          limit,
         ])
       : { rows: [] };
-    if (!rows[0]) throw noSuchRunner();
-    afterCommit(tx, () => startWaitingRuns(context, runnerId));
-    return present(context, rows[0]);
+    const runner = found[0];
+    if (!runner) throw noSuchRunner();
+    if (input.budgetPerRun !== undefined && runner.kind !== "managed_agents") {
+      throw new ApiError(
+        409,
+        "runner_has_no_budget",
+        `${runner.name} is a Runner of the kind ${runner.kind}, which reports no cost to budget: only a Managed Agents Runner has a budget per Run.`,
+      );
+    }
+    const { rows } = await tx.query<Row>(
+      `update runners set run_limit = coalesce($3, run_limit),
+         budget_per_run = case when $4::boolean then $5::integer else budget_per_run end
+       where id = $1 and owner_id = $2 returning ${columns("$6")}`,
+      [runnerId, userId, input.limit ?? null, input.budgetPerRun !== undefined, input.budgetPerRun?.amount ?? null, context.clock.now()],
+    );
+    if (input.limit !== undefined) afterCommit(tx, () => startWaitingRuns(context, runnerId));
+    return present(context, rows[0]!);
   });
 }

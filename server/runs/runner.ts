@@ -1,3 +1,5 @@
+import type { Cost } from "./costs.js";
+
 /**
  * The Runner interface: the one narrow seam between Cronk and whatever runs agents (ADR 0001).
  * Cronk asks a Runner to start a Run with its Brief and model; a Runner that can see a Run end
@@ -50,6 +52,8 @@ export type StartResult = { started: true; reference: RunReference } | { started
 export interface RunReports {
   /** The Run's session ended without the agent calling `finish`: the Run becomes failed. */
   endedWithoutFinishing(runId: string, reason: string): Promise<void>;
+  /** What the Run's session cost, once the Run ended; a later report replaces an earlier one. */
+  cost(runId: string, cost: Cost): Promise<void>;
 }
 
 export interface Runner {

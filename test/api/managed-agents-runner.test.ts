@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { minutes } from "../harness/clock.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openRunnerStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -345,6 +346,158 @@ describe("polling sessions with running Runs", () => {
     const before = reads();
     await cronk.pollManagedAgentsSessions();
     expect(reads()).toBe(before);
+  });
+});
+
+describe("cost", () => {
+  test("a Run records what its session cost when it ends", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+    expect(run.cost).toBeNull();
+    cronk.managedAgents.charge(session.id, 137);
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).cost).toEqual({ amount: 137, currency: "USD" });
+  });
+
+  test("a cost reported once the Run ended tells its Owner's Runner stream again, for the month's total", async () => {
+    const { ada, runner, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+    cronk.managedAgents.charge(session.id, 137);
+    const stream = await openRunnerStream(cronk, ada.cookie);
+    try {
+      await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+      // The Run ending frees its slot; its cost, reported after, changes the month's total.
+      expect(await stream.next()).toEqual({ type: "runner.changed", data: { runnerId: runner.id } });
+      expect(await stream.next()).toEqual({ type: "runner.changed", data: { runnerId: runner.id } });
+      expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([{ amount: 137, currency: "USD" }]);
+    } finally {
+      stream.close();
+    }
+  });
+
+  test("a stopped Run records what its session cost once its interrupt made it idle", async () => {
+    const { ada, ticket, status, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    cronk.managedAgents.charge(session.id, 42);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Backlog") });
+
+    const stopped = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(stopped.state).toBe("stopped");
+    expect(stopped.cost).toEqual({ amount: 42, currency: "USD" });
+  });
+
+  test("the Ticket totals what its Runs cost", async () => {
+    const { ada, ticket, startRun } = await adaWithManagedAgentsRunner();
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([]);
+    const first = await startRun();
+    cronk.managedAgents.charge(first.session.id, 100);
+    cronk.managedAgents.idle(first.session.id, "end_turn");
+    await cronk.pollManagedAgentsSessions();
+    await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
+    const second = cronk.managedAgents.sessions.at(-1)!;
+    cronk.managedAgents.charge(second.id, 250);
+    cronk.managedAgents.terminate(second.id);
+    await cronk.pollManagedAgentsSessions();
+
+    expect((await runsOf(ticket.id, ada)).map((r: { cost: unknown }) => r.cost)).toEqual([
+      { amount: 100, currency: "USD" },
+      { amount: 250, currency: "USD" },
+    ]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([{ amount: 350, currency: "USD" }]);
+  });
+
+  test("the Runner totals what its Runs that ended this calendar month cost", async () => {
+    const { ada, project, ticket, runner, startRun } = await adaWithManagedAgentsRunner();
+    expect(runner.costThisMonth).toEqual([]);
+    const first = await startRun();
+    cronk.managedAgents.charge(first.session.id, 100);
+    cronk.managedAgents.idle(first.session.id, "end_turn");
+    await cronk.pollManagedAgentsSessions();
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "And this" });
+    const second = await startRun("Triage", other);
+    cronk.managedAgents.charge(second.session.id, 30);
+    cronk.managedAgents.terminate(second.session.id);
+    await cronk.pollManagedAgentsSessions();
+    expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([{ amount: 130, currency: "USD" }]);
+
+    const now = cronk.clock.now();
+    cronk.clock.advance(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) - now.getTime());
+    const nextMonth = { cookie: await signIn(cronk) };
+    expect((await ok("GET", "/api/runners", nextMonth))[0].costThisMonth).toEqual([]);
+    await ok("POST", `/api/tickets/${ticket.id}/retry`, nextMonth);
+    const third = cronk.managedAgents.sessions.at(-1)!;
+    cronk.managedAgents.charge(third.id, 45);
+    cronk.managedAgents.idle(third.id, "end_turn");
+    await cronk.pollManagedAgentsSessions();
+
+    expect((await ok("GET", "/api/runners", nextMonth))[0].costThisMonth).toEqual([{ amount: 45, currency: "USD" }]);
+  });
+});
+
+describe("budget per Run", () => {
+  test("is empty by default, and each session then has no budget", async () => {
+    const { runner, startRun } = await adaWithManagedAgentsRunner();
+
+    const { session } = await startRun();
+
+    expect(runner.budgetPerRun).toBeNull();
+    expect(session.body).not.toHaveProperty("budget");
+  });
+
+  test("once set, is passed to each session as its budget, until cleared", async () => {
+    const { ada, project, runner, startRun } = await adaWithManagedAgentsRunner();
+
+    const saved = await ok("PATCH", `/api/runners/${runner.id}`, ada, { budgetPerRun: { amount: 500, currency: "USD" } });
+    const { session } = await startRun();
+
+    expect(saved.budgetPerRun).toEqual({ amount: 500, currency: "USD" });
+    expect(saved.limit).toBe(2);
+    expect(session.body.budget).toEqual({ type: "limit", max_list_cost: { amount: "500", currency: "USD" } });
+
+    const cleared = await ok("PATCH", `/api/runners/${runner.id}`, ada, { budgetPerRun: null });
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "And this" });
+    const { session: next } = await startRun("Triage", other);
+
+    expect(cleared.budgetPerRun).toBeNull();
+    expect(next.body).not.toHaveProperty("budget");
+  });
+
+  test("a Run stopped by it fails with budget reached, records its cost, and waits in the Inbox with Retry", async () => {
+    const { ada, ticket, runner, startRun, inbox } = await adaWithManagedAgentsRunner();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { budgetPerRun: { amount: 500, currency: "USD" } });
+    const { run, session } = await startRun();
+    cronk.managedAgents.charge(session.id, 503);
+    cronk.managedAgents.idle(session.id, "budget_reached");
+
+    await cronk.pollManagedAgentsSessions();
+
+    const failed = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(failed.state).toBe("failed");
+    expect(failed.endReason).toMatch(/^Budget reached/);
+    expect(failed.endReason).toContain("$5.00");
+    expect(failed.cost).toEqual({ amount: 503, currency: "USD" });
+    expect(cronk.managedAgents.session(session.id).archived).toBe(true);
+    expect(JSON.stringify(await inbox())).toContain(ticket.id);
+    await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
+    expect((await runsOf(ticket.id, ada)).map((r: { state: string }) => r.state)).toEqual(["failed", "running"]);
+  });
+
+  test("only a Managed Agents Runner has one", async () => {
+    await setUp(cronk);
+    const ada = { cookie: await signIn(cronk) };
+    const runner = await ok("POST", "/api/runners", ada, { name: "Claude Max", kind: "subscription" });
+
+    const refused = await call("PATCH", `/api/runners/${runner.id}`, ada, { budgetPerRun: { amount: 500, currency: "USD" } });
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("runner_has_no_budget");
+    expect((await ok("GET", "/api/runners", ada))[0].budgetPerRun).toBeNull();
   });
 });
 

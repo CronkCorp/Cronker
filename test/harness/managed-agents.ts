@@ -9,8 +9,8 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
  * Only API keys it is given with `apiKey(key)` are accepted (`x-api-key`); any other answers 401. As the real
  * service does, a vault holds one active credential per MCP server URL (a second answers 409), and a session made
  * with `initial_events` starts running. Each of a session's `github_repository` resources gets an id, and its
- * `authorization_token` can be replaced on the running session, as the real service allows. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, and
- * stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
+ * `authorization_token` can be replaced on the running session, as the real service allows. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, has
+ * it spend with `charge(id, cents)`, and stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
  *
  * It also sends webhook deliveries as Anthropic does from an endpoint registered in the Console: `deliver(url, …)`
  * posts a thin event about a session, signed with the endpoint's `whsec_` secret (`webhookSecret()` makes one).
@@ -35,6 +35,8 @@ export interface StandInSession {
   events: Record<string, unknown>[];
   archived: boolean;
   deleted: boolean;
+  /** What the session has cost so far at list prices, in US cents, as its `usage.list_cost` reports it. */
+  listCost: number;
 }
 
 export interface StandInCredential {
@@ -81,6 +83,8 @@ export interface StandInManagedAgents {
   idle(id: string, stopReason: string): void;
   /** The session terminated, recording a `session.status_terminated` event. */
   terminate(id: string): void;
+  /** The session spent this many more US cents at list prices, adding to its `usage.list_cost`. */
+  charge(id: string, cents: number): void;
   /**
    * The session recorded these events, as the agent's work does (`agent.message`, `agent.tool_use`, …): each gets an
    * id and a `processed_at` unless given one.
@@ -137,6 +141,8 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     vault_ids: s.body.vault_ids ?? [],
     // The token is never echoed, as Anthropic never echoes it.
     resources: s.resources.map((r) => ({ type: r.type, id: r.id, url: r.url })),
+    budget: s.body.budget ?? null,
+    usage: { list_cost: { amount: String(s.listCost), currency: "USD" } },
   });
 
   const server: Server = createServer(async (request, response) => {
@@ -249,6 +255,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
         events: [],
         archived: false,
         deleted: false,
+        listCost: 0,
       };
       for (const event of initial) emit(session, event);
       sessions.push(session);
@@ -341,6 +348,9 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const s = session(id);
       s.status = "terminated";
       emit(s, { type: "session.status_terminated" });
+    },
+    charge(id, cents) {
+      session(id).listCost += cents;
     },
     emit(id, ...events) {
       const s = session(id);

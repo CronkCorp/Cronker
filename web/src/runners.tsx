@@ -10,6 +10,7 @@ import {
   type Trigger,
   type WorkspaceSummary,
 } from "./api.js";
+import { costsText } from "./costs.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
@@ -174,6 +175,15 @@ function RunnerSettings({
     onChanged(await api.setRunnerLimit(runner.id, Number(field(form, "limit"))));
     setLimitSaved(true);
   });
+  const [budgetSaved, setBudgetSaved] = useState(false);
+  const budget = useSubmit(async (form) => {
+    setBudgetSaved(false);
+    // Typed in dollars, sent in cents; an empty field is no budget.
+    const dollars = field(form, "budgetPerRun").trim();
+    const amount = dollars === "" ? null : Math.round(Number(dollars) * 100);
+    onChanged(await api.setBudgetPerRun(runner.id, amount === null ? null : { amount, currency: "USD" }));
+    setBudgetSaved(true);
+  });
   const save = useSubmit(async (form, element) => {
     const projectId = field(form, "projectId");
     const token = field(form, "token");
@@ -202,6 +212,12 @@ function RunnerSettings({
         <span className="runner-usage">
           <strong>{runner.running}</strong> of <strong>{runner.limit}</strong> <span className="muted">running</span>
         </span>
+        {(runner.kind === "managed_agents" || runner.costThisMonth.length > 0) && (
+          <span className="runner-cost" title="What its Runs that ended this calendar month (UTC) cost, at Anthropic's list prices">
+            <strong>{runner.costThisMonth.length > 0 ? costsText(runner.costThisMonth) : "$0.00"}</strong>{" "}
+            <span className="muted">this month</span>
+          </span>
+        )}
         <Menu label={`More for ${runner.name}`}>
           <MenuItem tone="danger" onSelect={() => setRemoving(true)}>
             Remove…
@@ -393,6 +409,27 @@ function RunnerSettings({
               <code>{runner.managedAgents.environmentId}</code>
             </dd>
           </dl>
+          <form onSubmit={budget.onSubmit} className="form-row runner-budget">
+            <Field label="Budget per Run (USD)">
+              <input
+                name="budgetPerRun"
+                type="number"
+                min={0.01}
+                step={0.01}
+                placeholder="No budget"
+                defaultValue={runner.budgetPerRun ? (runner.budgetPerRun.amount / 100).toFixed(2) : ""}
+              />
+            </Field>
+            <Button type="submit" disabled={budget.busy}>
+              Save budget
+            </Button>
+            <Saved shown={budgetSaved} />
+            <FormError error={budget.error} />
+          </form>
+          <p className="muted small">
+            Each session gets it as its budget, at Anthropic's list prices. A Run whose session reaches it fails with{" "}
+            <em>budget reached</em> and waits in your Inbox with Retry. Leave it empty for no budget.
+          </p>
           <ManagedAgentsWebhook runner={runner} webhook={runner.managedAgents} onChanged={onChanged} />
         </div>
       )}

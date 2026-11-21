@@ -73,6 +73,7 @@ describe("creating a Ticket", () => {
       waiting: null,
       blockedBy: [],
       mentions: [],
+      cost: [],
     });
 
     const second = await createTicket(cookie, project.id, { title: "Second" });

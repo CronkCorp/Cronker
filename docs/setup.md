@@ -179,6 +179,8 @@ Cronk refuses deliveries that aren't signed with the saved secret, or signed mor
 
 Saving checks only that the secret starts with `whsec_`. With a wrong one, or none, every delivery is refused, and the Console disables an endpoint whose deliveries keep failing; Runs still end by polling. If the Console shows the endpoint disabled, save the right secret, then enable the endpoint again there. To stop using the webhook, choose **Forget it** on the card and remove the endpoint in the Console.
 
+Each Run records what its session cost at Anthropic's list prices once it ends: the Run shows it on the Ticket's timeline, the Ticket's side panel totals its Runs, and the Runner's card totals its Runs that ended this calendar month (in UTC). List prices are not what a discounted contract bills, so your invoice may be lower. Subscription Runs report no cost. To cap what one Run may spend, set the card's **Budget per Run** (in US dollars; empty, the default, is none): each session started from then on gets it as its budget, and a Run whose session reaches it fails with *budget reached* and waits in your Inbox with **Retry**. A session may pass its budget by up to one model request before Anthropic stops it.
+
 ## Upgrading
 
 Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releases](https://github.com/CronkCorp/Cronker/releases). Read the notes of every release you skip: they call out anything to do by hand, such as a GitHub App permission to accept.
