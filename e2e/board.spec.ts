@@ -248,9 +248,12 @@ test("a dragged card dropped on the empty lower part of a short column moves int
   await expect(lane("Ready").getByRole("link", { name: /Busy ticket 1$/ })).toBeHidden();
 });
 
-/** Drags a card with the mouse, as a User does, and drops it at the middle of a column, below its head. */
+/**
+ * Drags a card with the mouse, as a User does, and drops it at the middle of a column, below its head. It picks the
+ * card up by its title, the text a User most often presses on.
+ */
 async function dragCard(page: Page, card: Locator, column: Locator) {
-  const from = (await card.boundingBox())!;
+  const from = (await card.locator(".card-title").boundingBox())!;
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   const to = (await column.boundingBox())!;
@@ -320,4 +323,57 @@ test("a card dragged onto another column moves its Ticket there, onto its own co
   expect((await refusal.boundingBox())!.y, "the reason shows above the board").toBeLessThan((await board.boundingBox())!.y);
   await expect(shippedCard("Done")).toBeVisible();
   await expect(shippedCard("In Review")).toBeHidden();
+});
+
+test("a card picked up by its title or key drags without selecting text, while a click on it still opens its Ticket and a modified click a new tab", { tag: "@every-browser" }, async ({
+  page,
+  cronk,
+  browserName,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const shipIt = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const lane = (name: string) => board.getByRole("region", { name, exact: true });
+  const card = (name: string) => lane(name).getByRole("link", { name: /CRONK-1 Ship it/ });
+  await expect(card("Backlog")).toBeVisible();
+  const selected = () => page.evaluate(() => window.getSelection()?.toString() ?? "");
+
+  // By its title: the Ticket moves, and none of the card's text is selected on the way.
+  await dragCard(page, card("Backlog"), lane("Ready"));
+  await expect(card("Ready")).toBeVisible();
+  await expect(card("Backlog")).toBeHidden();
+  await expect.poll(async () => (await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status("Ready"));
+  expect(await selected(), "no text is selected by the drag").toBe("");
+
+  // By its key, at the card's top left.
+  const key = (await card("Ready").locator(".card-key").boundingBox())!;
+  await page.mouse.move(key.x + key.width / 2, key.y + key.height / 2);
+  await page.mouse.down();
+  const to = (await lane("Triage").boundingBox())!;
+  await page.mouse.move(to.x + to.width / 2, to.y + 160, { steps: 8 });
+  await page.mouse.up();
+  await expect(card("Triage")).toBeVisible();
+  expect(await selected(), "no text is selected by the drag").toBe("");
+
+  // A Ctrl/Cmd+click on the title opens the Ticket in a new tab and leaves the board where it is.
+  if (browserName === "chromium") {
+    const modifier = process.platform === "darwin" ? "Meta" : "Control";
+    const [opened] = await Promise.all([page.context().waitForEvent("page"), card("Triage").locator(".card-title").click({ modifiers: [modifier] })]);
+    await opened.waitForLoadState();
+    await expect(opened.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
+    await opened.close();
+    await expect(board).toBeVisible();
+  }
+
+  // A plain click on the title opens the Ticket.
+  await card("Triage").locator(".card-title").click();
+  await expect(page.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
 });
