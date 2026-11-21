@@ -8,7 +8,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { findTicketRow, holdsDiscoveredTicket, runOfAgent, ticketNotFound } from "../work/tickets.js";
 
@@ -82,7 +82,7 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
     return { ...owner, workspaceId: ticket.workspaceId, ticket: { id: ticket.id, projectId: ticket.projectId } };
   }
   if (owner.kind === "document") {
-    const view = inView(viewer, "documents.workspace_id", "$2");
+    const view = inReach(viewer, { project: "documents.project_id", workspace: "documents.workspace_id" }, "$2");
     const { rows } = await db.query<{ workspaceId: string }>(
       `select documents.workspace_id as "workspaceId" from documents where documents.id = $1 and ${view.sql}`,
       [owner.id, view.value],
@@ -90,7 +90,7 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
     if (!rows[0]) throw notFound;
     return { ...owner, workspaceId: rows[0].workspaceId, ticket: null };
   }
-  const view = inView(viewer, "comments.workspace_id", "$2");
+  const view = inReach(viewer, { project: "tickets.project_id", workspace: "comments.workspace_id" }, "$2");
   const { rows } = await db.query<{ workspaceId: string; ticketId: string; projectId: string; author: FoundOwner["author"] }>(
     `select comments.workspace_id as "workspaceId", comments.ticket_id as "ticketId", tickets.project_id as "projectId",
        case when comments.actor_agent_id is null then json_build_object('kind', 'user', 'id', comments.actor_user_id)
@@ -203,6 +203,13 @@ function publishChange({ live }: Context, tx: Tx, owner: FoundOwner): void {
   );
 }
 
+/** The Project an Attachment is in, as SQL: its Ticket's, its Comment's Ticket's or its Document's; none for the Workspace's own. */
+const attachmentProject = `coalesce(
+  (select attachment_tickets.project_id from tickets attachment_tickets
+   where attachment_tickets.id = coalesce(attachments.ticket_id,
+     (select attachment_comments.ticket_id from comments attachment_comments where attachment_comments.id = attachments.comment_id))),
+  (select attachment_documents.project_id from documents attachment_documents where attachment_documents.id = attachments.document_id))`;
+
 /** An Attachment in the Viewer's view; otherwise nothing, as if it didn't exist. */
 export async function findAttachment(db: Db | Tx, viewer: Viewer, attachmentId: string): Promise<Attachment | undefined> {
   const row = await findRow(db, viewer, attachmentId);
@@ -211,7 +218,7 @@ export async function findAttachment(db: Db | Tx, viewer: Viewer, attachmentId: 
 
 async function findRow(db: Db | Tx, viewer: Viewer, attachmentId: string, { lock = false } = {}): Promise<Row | undefined> {
   if (!isUuid(attachmentId)) return undefined;
-  const view = inView(viewer, "attachments.workspace_id", "$2");
+  const view = inReach(viewer, { project: attachmentProject, workspace: "attachments.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromAttachments} where attachments.id = $1 and ${view.sql}
      ${lock ? "for update of attachments" : ""}`,

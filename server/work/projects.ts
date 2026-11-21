@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inView, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
@@ -72,10 +72,12 @@ const defaultStatuses: { name: string; kind: StatusKind }[] = [
 
 const summaryColumns = `projects.id, projects.workspace_id as "workspaceId", projects.name, projects.key`;
 
-export async function projectsOf(db: Db, workspaceId: string): Promise<ProjectSummary[]> {
+/** The Workspace's Projects the Viewer may read. */
+export async function projectsOf(db: Db, viewer: Viewer, workspaceId: string): Promise<ProjectSummary[]> {
+  const view = inReach(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, "$2");
   const { rows } = await db.query<ProjectSummary>(
-    `select ${summaryColumns} from projects where workspace_id = $1 order by lower(name), id`,
-    [workspaceId],
+    `select ${summaryColumns} from projects where workspace_id = $1 and ${view.sql} order by lower(name), id`,
+    [workspaceId, view.value],
   );
   return rows;
 }
@@ -100,7 +102,7 @@ export async function findProject(
   { lock = false } = {},
 ): Promise<Project | undefined> {
   if (!isUuid(projectId)) return undefined;
-  const view = inView(viewer, "projects.workspace_id", "$2");
+  const view = inReach(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, "$2");
   const { rows } = await db.query<Omit<Project, "statuses">>(
     `select ${summaryColumns}, projects.new_tickets_delegated as "newTicketsDelegated",
        projects.autonomous_delegation_default as "autonomousDelegationDefault",

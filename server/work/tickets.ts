@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inView, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
@@ -213,7 +213,7 @@ export async function findTicketRow(
   { lock = false } = {},
 ): Promise<TicketRow | undefined> {
   if (!isUuid(ticketId)) return undefined;
-  const view = inView(viewer, "tickets.workspace_id", "$2");
+  const view = inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(
     `select ${ticketColumns}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
