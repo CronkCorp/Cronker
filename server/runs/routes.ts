@@ -256,8 +256,8 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "The claude.ai scheduled task your `subscription` Runner fires for Steps wanting the model, with its API " +
             "trigger's id and token. With a `projectId`, it overrides the Runner's own trigger for the model on that " +
             "Project's Tickets. Replaces the trigger saved for the same model and Project. The token is stored " +
-            "encrypted and never returned. Without a token, the trigger waits for one (`waitingForToken`): Runs " +
-            "needing it can't start until it is pasted. Refused with `runner_has_no_triggers` for other kinds of " +
+            "encrypted and never returned. Without a token, the trigger keeps the token it has under the same trigger " +
+            "id, or else waits for one (`waitingForToken`): Runs needing it can't start until it is pasted. Refused with `runner_has_no_triggers` for other kinds of " +
             "Runner, and with `no_secret_key`, when it has a token, while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
           body: Type.Object({
@@ -291,8 +291,8 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Gives a trigger waiting for its token (`waitingForToken`) the token generated for its routine in claude.ai, " +
             "or replaces the one it has: generating a new token in claude.ai revokes the previous one. The token is " +
-            "stored encrypted and never returned. Tickets whose Runs couldn't start for want of it are rechecked, so " +
-            "they start or wait for a slot. Refused with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+            "stored encrypted and never returned. Pasted into a waiting trigger, the Tickets whose Runs couldn't start " +
+            "for want of it are rechecked, so they start or wait for a slot; otherwise they wait for Retry. Refused with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
           body: Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) }),
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },

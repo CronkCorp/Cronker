@@ -294,8 +294,9 @@ function RunnerSettings({
               </Field>
             </div>
             <p className="field-hint">
-              The token is stored encrypted and never shown again. Without one, the trigger waits for its token, which you
-              paste here later. Saving a model again replaces its trigger.
+              The token is stored encrypted and never shown again. Without one, a new trigger waits for its token, which
+              you paste here later. Saving a model again replaces its trigger, keeping its token if the trigger id is the
+              same.
             </p>
             <FormError error={save.error} />
             <Actions>

@@ -213,6 +213,18 @@ describe("Runner settings", () => {
     ]);
   });
 
+  test("saving the same trigger id again without a token keeps its token; another id waits for one", async () => {
+    const { ada, ticket, runner, agent, status } = await adaWithSubscriptionRunner();
+
+    const kept = await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_haiku" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const other = await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_new" });
+
+    expect(kept.triggers).toEqual([expect.objectContaining({ triggerId: "trig_haiku", waitingForToken: false })]);
+    expect(cronk.claude.fires.map((f) => [f.triggerId, f.token])).toEqual([["trig_haiku", haikuToken]]);
+    expect(other.triggers).toEqual([expect.objectContaining({ triggerId: "trig_new", waitingForToken: true })]);
+  });
+
   test("pasting a token needs one, into a trigger the Runner has", async () => {
     const { ada, runner } = await adaWithSubscriptionRunner();
     const [trigger] = (await ok("GET", "/api/runners", ada))[0].triggers;
@@ -387,7 +399,7 @@ describe("Runs that couldn't start", () => {
     expect(await inbox()).toEqual({ count: 0, items: [] });
   });
 
-  test("a token pasted or saved restarts only the Tickets whose Runs would fire that trigger", async () => {
+  test("pasting into a waiting trigger restarts only the Tickets whose Runs would fire it", async () => {
     const { workspace, ada, project, ticket, runner, agent, status } = await adaWithSubscriptionRunner();
     const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
     const otherTriage = other.statuses.find((s: { name: string }) => s.name === "Triage").id;
@@ -401,7 +413,7 @@ describe("Runs that couldn't start", () => {
         triggerId: "trig_cronker_haiku",
       })
     ).triggers.find((t: { triggerId: string }) => t.triggerId === "trig_cronker_haiku");
-    await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_haiku" });
+    await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_haiku_new" });
     for (const t of [ticket, movedOn]) {
       await ok("PATCH", `/api/tickets/${t.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
     }
@@ -421,11 +433,17 @@ describe("Runs that couldn't start", () => {
 
     expect(await states()).toEqual([["refused", "running"], ["refused"], ["refused"], ["refused"]]);
 
-    // Saving the trigger for all Projects with its token restarts the other Project's Ticket, not Cronker's.
-    await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "HAIKU", triggerId: "trig_haiku", token: haikuToken });
+    // Only pasting into a waiting trigger restarts Tickets: saving a trigger with its token, or pasting over a working
+    // token, leaves them to Retry.
+    const allProjects = (await ok("POST", `/api/runners/${runner.id}/triggers`, ada, {
+      model: "HAIKU",
+      triggerId: "trig_haiku",
+      token: haikuToken,
+    })).triggers.find((t: { projectId: string | null }) => t.projectId === null);
+    await ok("PUT", `/api/runners/${runner.id}/triggers/${allProjects.id}/token`, ada, { token: haikuToken });
 
-    expect(await states()).toEqual([["refused", "running"], ["refused", "running"], ["refused"], ["refused"]]);
-    expect(cronk.claude.fires.map((f) => f.triggerId)).toEqual(["trig_cronker_haiku", "trig_haiku"]);
+    expect(await states()).toEqual([["refused", "running"], ["refused"], ["refused"], ["refused"]]);
+    expect(cronk.claude.fires.map((f) => f.triggerId)).toEqual(["trig_cronker_haiku"]);
   });
 
   test("a token claude.ai rejects: couldn't start, with the reason in the Inbox", async () => {
