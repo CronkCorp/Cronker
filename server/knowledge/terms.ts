@@ -6,7 +6,7 @@ import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Place } from "./places.js";
 import { ComparedLine, compareLines, compareWords } from "./compare.js";
@@ -64,7 +64,7 @@ const present = (row: Row): Term => ({
 /** A Term in the Viewer's view; otherwise nothing, as if it didn't exist. */
 export async function findTerm(db: Db | Tx, viewer: Viewer, termId: string): Promise<Term | undefined> {
   if (!isUuid(termId)) return undefined;
-  const view = inView(viewer, "terms.workspace_id", "$2");
+  const view = inReach(viewer, { project: "terms.project_id", workspace: "terms.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(`select ${columns} from ${fromTerms} where terms.id = $1 and ${view.sql}`, [
     termId,
     view.value,
@@ -177,7 +177,7 @@ async function versionOf(db: Db | Tx, termId: string, number: number): Promise<T
 /** A Term's row, locked until the transaction ends, so writes to it queue up. */
 async function lockTerm(tx: Tx, viewer: Viewer, termId: string): Promise<(Glossary & { id: string; version: number }) | undefined> {
   if (!isUuid(termId)) return undefined;
-  const view = inView(viewer, "terms.workspace_id", "$2");
+  const view = inReach(viewer, { project: "terms.project_id", workspace: "terms.workspace_id" }, "$2");
   const { rows } = await tx.query<Glossary & { id: string; version: number }>(
     `select id, workspace_id as "workspaceId", project_id as "projectId", version from terms
      where terms.id = $1 and ${view.sql} for update`,

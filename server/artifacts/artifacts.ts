@@ -6,7 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
@@ -101,7 +101,7 @@ export function artifactNotFound(): ApiError {
 /** An Artifact in the Viewer's view, at its current Version; otherwise nothing, as if it didn't exist. */
 export async function findArtifact(db: Db | Tx, viewer: Viewer, artifactId: string): Promise<Artifact | undefined> {
   if (!isUuid(artifactId)) return undefined;
-  const view = inView(viewer, "artifacts.workspace_id", "$2");
+  const view = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(`select ${columns} from ${fromArtifacts} where artifacts.id = $1 and ${view.sql}`, [
     artifactId,
     view.value,
@@ -432,7 +432,7 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
 /** The Artifact at its current Version, its row locked until the transaction ends, so saves of it queue up. */
 async function lockArtifact(tx: Tx, viewer: Viewer, artifactId: string): Promise<Artifact | undefined> {
   if (!isUuid(artifactId)) return undefined;
-  const view = inView(viewer, "workspace_id", "$2");
+  const view = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
   const { rowCount } = await tx.query(`select 1 from artifacts where id = $1 and ${view.sql} for update`, [
     artifactId,
     view.value,

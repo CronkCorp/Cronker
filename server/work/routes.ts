@@ -73,7 +73,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const workspace = await requireWorkspace(request, request.params.workspaceId, { agents: true });
-        return projectsOf(db, workspace.id);
+        return projectsOf(db, await requireCaller(context, request), workspace.id);
       },
     );
 

@@ -7,7 +7,7 @@ import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
@@ -77,7 +77,7 @@ const present = (row: Row): Document => ({
 /** A Document in the Viewer's view; otherwise nothing, as if it didn't exist. */
 export async function findDocument(db: Db | Tx, viewer: Viewer, documentId: string): Promise<Document | undefined> {
   if (!isUuid(documentId)) return undefined;
-  const view = inView(viewer, "documents.workspace_id", "$2");
+  const view = inReach(viewer, { project: "documents.project_id", workspace: "documents.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(`select ${columns} from ${fromDocuments} where documents.id = $1 and ${view.sql}`, [
     documentId,
     view.value,
@@ -322,7 +322,7 @@ function documentChanged(live: Live, tx: Tx, document: Tree & { id: string; tick
  */
 async function lockDocument(tx: Tx, viewer: Viewer, documentId: string, { tree = false } = {}): Promise<Placed | undefined> {
   if (!isUuid(documentId)) return undefined;
-  const view = inView(viewer, "documents.workspace_id", "$2");
+  const view = inReach(viewer, { project: "documents.project_id", workspace: "documents.workspace_id" }, "$2");
   const select = `select id, workspace_id as "workspaceId", project_id as "projectId", parent_id as "parentId", position,
     ticket_id as "ticketId", version from documents where id = $1 and ${view.sql}`;
   if (tree) {
