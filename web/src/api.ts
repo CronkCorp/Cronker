@@ -270,7 +270,35 @@ export interface Trigger {
   /** The Project it overrides the Runner's own trigger on; null for all Projects. */
   projectId: string | null;
   triggerId: string;
+  /** Made by a Runner setup and waiting for the token the Owner pastes; Runs needing it can't start until then. */
+  waitingForToken: boolean;
+  /** The routine's page in claude.ai, where its token is generated. */
+  routineUrl: string;
   createdAt: string;
+}
+
+/** One routine a Runner setup has Claude Code create, for one model label the Project's board uses. */
+export interface RoutinePlan {
+  label: string;
+  modelId: string;
+  name: string;
+  repositories: string[];
+  prompt: string;
+  mcpUrl: string;
+  branchPrefix: string;
+}
+
+/** A Runner setup as it started: the command to paste into Claude Code, and what it creates. */
+export interface StartedSetup {
+  command: string;
+  expiresAt: string;
+  /** What the User gives up, such as Transcripts for a Project with several Repositories. */
+  warning: string | null;
+  plan: {
+    project: { id: string; name: string; key: string };
+    agent: { id: string; name: string };
+    routines: RoutinePlan[];
+  };
 }
 
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
@@ -563,6 +591,8 @@ export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedIte
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
   lostRunMinutes: number;
+  /** The exact model id each model label stands for, used by Runner setups. */
+  modelIds: { label: string; modelId: string }[];
 }
 
 export interface Inbox {
@@ -980,6 +1010,10 @@ export const api = {
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
   saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
+  startRunnerSetup: (runnerId: string, input: { projectId: string; agentId?: string }) =>
+    call<StartedSetup>("POST", `${runner(runnerId)}/setups`, input),
+  pasteTriggerToken: (runnerId: string, triggerId: string, token: string) =>
+    call<Runner>("PUT", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}/token`, { token }),
   removeTrigger: (runnerId: string, triggerId: string) =>
     call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),

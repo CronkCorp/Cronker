@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { transaction, type Db, type Tx } from "../db.js";
 import type { Clock } from "../clock.js";
+import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import { slugForNewWorkspace, WorkspaceSlug } from "./slugs.js";
@@ -77,6 +78,23 @@ export async function renameWorkspace(db: Db, workspaceId: string, name: string)
   return rows[0]!;
 }
 
+/** What one model label stands for: the exact model id a Runner setup gives routines for Steps wanting it. */
+export const ModelId = Type.Object({
+  label: Type.String({
+    minLength: 1,
+    maxLength: 50,
+    pattern: "^\\S(.*\\S)?$",
+    description: "The model label, as Steps name it, such as `haiku`; matched ignoring case.",
+  }),
+  modelId: Type.String({
+    minLength: 1,
+    maxLength: 100,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:@/-]*$",
+    description: "The exact model id, such as `claude-haiku-5-5`.",
+  }),
+});
+export type ModelId = Static<typeof ModelId>;
+
 /** A Workspace's settings beyond its name, set by its Admins. */
 export const WorkspaceSettings = Type.Object({
   lostRunMinutes: Type.Integer({
@@ -84,22 +102,43 @@ export const WorkspaceSettings = Type.Object({
     maximum: 10_080,
     description: "How long a Run may go without a call naming it or its Ticket before it is lost. 30 unless changed.",
   }),
+  modelIds: Type.Array(ModelId, {
+    maxItems: 50,
+    description:
+      "The model id each model label stands for, labels unique ignoring case. A Runner setup gives each routine the " +
+      "model id of its label. Ships with the latest Haiku, Sonnet and Opus for `haiku`, `sonnet` and `opus`.",
+  }),
 });
 export type WorkspaceSettings = Static<typeof WorkspaceSettings>;
 
+const settingsColumns = `lost_run_minutes as "lostRunMinutes", model_ids as "modelIds"`;
+
 export async function settingsOf(db: Db, workspaceId: string): Promise<WorkspaceSettings> {
-  const { rows } = await db.query<WorkspaceSettings>(
-    `select lost_run_minutes as "lostRunMinutes" from workspaces where id = $1`,
-    [workspaceId],
-  );
+  const { rows } = await db.query<WorkspaceSettings>(`select ${settingsColumns} from workspaces where id = $1`, [workspaceId]);
   return rows[0]!;
 }
 
+/** The model id a label stands for in the Workspace, matched ignoring case. */
+export function modelIdOf(settings: Pick<WorkspaceSettings, "modelIds">, label: string): string | undefined {
+  return settings.modelIds.find((m) => m.label.toLowerCase() === label.toLowerCase())?.modelId;
+}
+
 export async function changeSettings(db: Db, workspaceId: string, change: Partial<WorkspaceSettings>): Promise<WorkspaceSettings> {
+  const modelIds = change.modelIds?.map((m) => ({ label: m.label.trim(), modelId: m.modelId.trim() }));
+  if (modelIds) {
+    const seen = new Set<string>();
+    for (const { label } of modelIds) {
+      if (seen.has(label.toLowerCase())) {
+        throw new ApiError(400, "duplicate_model_label", `The model label ${label} is given more than one model id: each label stands for one, matched ignoring case.`,
+        );
+      }
+      seen.add(label.toLowerCase());
+    }
+  }
   const { rows } = await db.query<WorkspaceSettings>(
-    `update workspaces set lost_run_minutes = coalesce($2, lost_run_minutes) where id = $1
-     returning lost_run_minutes as "lostRunMinutes"`,
-    [workspaceId, change.lostRunMinutes ?? null],
+    `update workspaces set lost_run_minutes = coalesce($2, lost_run_minutes), model_ids = coalesce($3, model_ids)
+     where id = $1 returning ${settingsColumns}`,
+    [workspaceId, change.lostRunMinutes ?? null, modelIds ? JSON.stringify(modelIds) : null],
   );
   return rows[0]!;
 }

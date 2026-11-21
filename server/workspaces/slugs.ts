@@ -4,7 +4,7 @@ import { ApiError } from "../http/errors.js";
 
 /**
  * Words the web client's own pages use as the first part of an address, which no Workspace slug may be, so that
- * `/<slug>/…` never stands for one of them. `migrations/0044_workspace_slugs.sql` keeps the same list.
+ * `/<slug>/…` never stands for one of them. `migrations/0044_workspace_slugs.sql` keeps the same list, and `0045_runner_setups.sql` added `runner-setups`.
  */
 export const reservedSlugs = new Set([
   "workspaces",
@@ -25,6 +25,7 @@ export const reservedSlugs = new Set([
   "mcp",
   "oauth",
   "hooks",
+  "runner-setups",
 ]);
 
 export const WorkspaceSlug = Type.String({

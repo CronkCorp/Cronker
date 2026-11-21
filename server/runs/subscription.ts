@@ -24,7 +24,8 @@ const httpDate = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GM
 /** A sealed trigger as stored. */
 interface StoredTrigger {
   triggerId: string;
-  tokenSealed: string;
+  /** None while the trigger, made by a Runner setup, waits for the token its Owner pastes. */
+  tokenSealed: string | null;
 }
 
 /** The trigger for the model on the Project's Tickets: the Project's own, else the Runner's. */
@@ -64,6 +65,14 @@ export function subscriptionRunner(context: Context): Runner {
         });
       }
       const named = `the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}`;
+      if (trigger.tokenSealed === null) {
+        return refuse({
+          kind: "not_configured",
+          message:
+            `${run.runner.name}'s trigger ${trigger.triggerId} for ${run.model} on ${run.project.name} is waiting for its ` +
+            "token: its Owner generates one for the routine in claude.ai and pastes it into the trigger on the Runner's card.",
+        });
+      }
       let token: string;
       try {
         token = requireSecretBox(context.config).open(trigger.tokenSealed);
