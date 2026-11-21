@@ -10,6 +10,14 @@ A self-hosted platform where humans and AI agents share Tickets, Documents, Term
 A group of Users sharing Projects and the knowledge that spans them. An installation may hold several; a User sees only the Workspaces they belong to.
 _Avoid_: Organization, tenant, team, space
 
+**Workspace slug**:
+A Workspace's name in its web addresses, such as `acme` in `/acme/tickets/RP-12`: lower case letters and digits with dashes between words, unique across the installation, made from the Workspace's name or chosen when it is created, and never changed.
+_Avoid_: Workspace key, handle, subdomain
+
+**Readable form**:
+What a web address, the HTTP API and the MCP tools name a thing by in place of its id: a Workspace slug, a Project's or Ticket's key, a Decision's number or a Term's name within its Project or the Workspace, or the slug of a Document, Artifact or Transcript, the words of its title then its **short id**, the first 8 hex digits of its id. A readable form that could name more than one thing names none.
+_Avoid_: Alias, handle, permalink
+
 **Project**:
 The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's.
 _Avoid_: Board, space, repo
@@ -171,6 +179,10 @@ _Avoid_: Principal, author
 **Runner**:
 A way for Cronk to start Runs, set up by a User with their own credentials: their Claude subscription, the Claude API (Managed Agents), or later a sandbox provider. Each has its own limit on Runs at once; Tickets beyond it wait, highest Priority first.
 _Avoid_: Provider, backend, executor
+
+**Runner setup**:
+A one-time, short-lived handoff in which a User's own Claude Code creates a Project's claude.ai routines for their subscription Runner, one per model label its board uses, and reports their trigger ids back to Cronk. Each becomes the Project's trigger for its label, waiting for the token the User pastes. Cronk never holds a claude.ai credential.
+_Avoid_: Install, bootstrap
 
 **Run**:
 One agent execution Cronk starts for one Ticket, acting as an Agent through one of its Owner's Runners. It is **running** until the agent reports it **finished**, or it becomes **failed** (the Runner says it ended without finishing), **lost** (no call naming it or its Ticket for the Workspace's lost-Run threshold) or **stopped** (a User moved, undelegated or re-delegated its Ticket, or an Admin removed its Agent's Owner from the Workspace, after which Cronk refuses its calls); a Run its Runner wouldn't start is **refused**, and its Ticket *couldn't start*. A rate-limited Runner refuses nothing: the Ticket waits. A Ticket has at most one running Run. After a failed, lost or refused Run, only a User's **Retry** starts the same Step again, except that pasting the token into a trigger waiting for it starts the Tickets whose Runs couldn't start for want of it.

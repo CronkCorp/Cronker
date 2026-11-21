@@ -92,6 +92,8 @@ describe("Search", () => {
         title: "Labels vanish",
         projectId: project.id,
         ticketKey: "CRONK-1",
+        slug: null,
+        number: null,
         snippet: [
           { text: "Merging", match: true },
           { text: " a branch loses its labels.", match: false },
@@ -137,6 +139,8 @@ describe("Search", () => {
       title: "Findings",
       projectId: project.id,
       ticketKey: "CRONK-1",
+      slug: report.slug,
+      number: null,
       snippet: [
         { text: "The ", match: false },
         { text: "deployment", match: true },
@@ -149,6 +153,8 @@ describe("Search", () => {
       title: "Release",
       projectId: project.id,
       ticketKey: null,
+      slug: null,
+      number: null,
       snippet: [
         { text: "A ", match: false },
         { text: "deployed", match: true },
@@ -188,6 +194,8 @@ describe("Search", () => {
         title: "Dragging cards",
         projectId: project.id,
         ticketKey: null,
+        slug: byTitle.slug,
+        number: null,
         snippet: [
           { text: "Dragging", match: true },
           { text: " cards", match: false },
@@ -199,6 +207,8 @@ describe("Search", () => {
         title: "Colour tokens",
         projectId: null,
         ticketKey: null,
+        slug: byDescription.slug,
+        number: null,
         snippet: [
           { text: "Tokens to ", match: false },
           { text: "drag", match: true },
@@ -235,6 +245,8 @@ describe("Search", () => {
         title: "Transcript of the Triage Run",
         projectId: project.id,
         ticketKey: "CRONK-1",
+        slug: transcript.slug,
+        number: null,
         snippet: [
           { text: "The webhook fires before the ", match: false },
           { text: "deploy", match: true },
@@ -259,6 +271,8 @@ describe("Search", () => {
       title: `Transcript of a ${agent.name} session`,
       projectId: null,
       ticketKey: null,
+      slug: own.slug,
+      number: null,
       snippet: [
         { text: "Why does the ", match: false },
         { text: "webhook", match: true },

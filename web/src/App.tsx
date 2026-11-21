@@ -22,6 +22,8 @@ import { TermScreen, WorkspaceGlossary } from "./terms.js";
 import { InboxScreen } from "./inbox.js";
 import { ProjectScreen, WorkspaceHome } from "./projects.js";
 import { navigate, replace, usePath } from "./router.js";
+import { addresses } from "./addresses.js";
+import { finder, OldAddress, oldAddress, parseAddress, Resolve } from "./routes.js";
 import { ArtifactScreen, WorkspaceArtifacts } from "./artifacts.js";
 import { RunnersScreen } from "./runners.js";
 import { SearchScreen } from "./search.js";
@@ -282,42 +284,38 @@ function SignedIn({
   reload: () => void;
   onSignedOut: () => void;
 }) {
-  const workspacePath = /^\/workspaces\/([^/]+)(?:\/(members|settings|agents|inbox|documents|glossary|decisions|artifacts|search)(?:\/([^/]+))?)?\/?$/.exec(path);
-  const projectPath = /^\/projects\/([^/]+)(?:\/(list|settings|documents|glossary|decisions|artifacts))?\/?$/.exec(path);
-  const ticketPath = /^\/tickets\/([^/]+)\/?$/.exec(path);
-  const documentPath = /^\/documents\/([^/]+)\/?$/.exec(path);
-  const termPath = /^\/terms\/([^/]+)\/?$/.exec(path);
-  const decisionPath = /^\/decisions\/([^/]+)\/?$/.exec(path);
-  const artifactPath = /^\/artifacts\/([^/]+)\/?$/.exec(path);
-  const transcriptPath = /^\/transcripts\/([^/]+)\/?$/.exec(path);
-  const routedId = workspacePath && workspacePath[1] !== "new" ? decodeURIComponent(workspacePath[1]!) : null;
+  const parsed = parseAddress(path);
+  const old = oldAddress(path, workspaces);
+  const routed = !old && parsed ? workspaces.find((w) => w.slug === parsed.slug.toLowerCase()) : undefined;
 
-  // The Workspace on screen: the one in the path, else the last one shown (pages such as a
-  // Project's carry none in their path), else the first.
+  // The Workspace on screen: the one in the path, else the last one shown (pages such as Runners carry none in
+  // their path), else the first.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   useEffect(() => {
-    if (routedId) setSelectedId(routedId);
-  }, [routedId]);
-  const current = routedId
-    ? workspaces.find((w) => w.id === routedId)
-    : (workspaces.find((w) => w.id === selectedId) ?? workspaces[0]);
+    if (routed) setSelectedId(routed.id);
+  }, [routed]);
+  const current = routed ?? workspaces.find((w) => w.id === selectedId) ?? workspaces[0];
 
   useEffect(() => {
-    if (path === "/" && workspaces[0]) replace(`/workspaces/${workspaces[0].id}`);
+    if (path === "/" && workspaces[0]) replace(addresses.workspace(workspaces[0]));
   }, [path, workspaces]);
+  // A Workspace's slug in another letter case leads to the slug itself.
+  useEffect(() => {
+    if (routed && parsed && parsed.slug !== routed.slug) {
+      replace(`/${routed.slug}${path.slice(parsed.slug.length + 1)}${window.location.search}${window.location.hash}`);
+    }
+  }, [routed, parsed, path]);
 
-  const onOtherWorkspace = (workspaceId: string) => {
-    if (!workspaces.some((w) => w.id === workspaceId)) return false;
-    setSelectedId(workspaceId);
-    return true;
-  };
+  const nothing = <PlacelessEmptyState title="Nothing is here.">The page may have moved, or you may not see it.</PlacelessEmptyState>;
+  const route = routed ? parsed!.route : null;
+  const find = routed && route ? finder(routed, route) : null;
 
   let page: ReactNode;
   if (path === "/workspaces/new") {
     page = (
       <NewWorkspace
         onCreated={(created) => {
-          navigate(`/workspaces/${created.id}`);
+          navigate(addresses.workspace(created));
           reload();
         }}
       />
@@ -328,96 +326,87 @@ function SignedIn({
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {
     page = <RunnersScreen workspaces={workspaces} />;
-  } else if (current && projectPath) {
+  } else if (old) {
+    page = <OldAddress key={path} find={old} failed={nothing} />;
+  } else if (routed && route && find) {
+    const workspace = routed;
+    const screen = (id: string): ReactNode => {
+      switch (route.kind) {
+        case "project":
+          return <ProjectScreen key={`${workspace.id} ${id}`} workspace={workspace} projectId={id} view={route.view ?? "board"} />;
+        case "ticket":
+          return <TicketScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} ticketId={id} />;
+        case "decision":
+          return <DecisionScreen key={`${workspace.id} ${id}`} workspace={workspace} decisionId={id} />;
+        case "term":
+          return <TermScreen key={`${workspace.id} ${id}`} workspace={workspace} termId={id} />;
+        case "document":
+          return <DocumentScreen key={`${workspace.id} ${id}`} workspace={workspace} documentId={id} />;
+        case "artifact":
+          return <ArtifactScreen key={`${workspace.id} ${id}`} workspace={workspace} artifactId={id} />;
+        case "transcript":
+          return <TranscriptScreen key={`${workspace.id} ${id}`} workspace={workspace} transcriptId={id} />;
+        default:
+          return nothing;
+      }
+    };
     page = (
-      <ProjectScreen
-        key={`${current.id} ${projectPath[1]}`}
-        workspace={current}
-        projectId={projectPath[1]!}
-        view={(projectPath[2] as "list" | "settings" | "documents" | "glossary" | "decisions" | "artifacts" | undefined) ?? "board"}
-        onOtherWorkspace={onOtherWorkspace}
-      />
+      <Resolve key={`${workspace.id} ${route.kind}`} name={path} find={find} failed={nothing}>
+        {screen}
+      </Resolve>
     );
-  } else if (current && ticketPath) {
-    page = (
-      <TicketScreen
-        key={`${current.id} ${ticketPath[1]}`}
-        workspace={current}
-        user={user}
-        ticketId={ticketPath[1]!}
-        onOtherWorkspace={onOtherWorkspace}
-      />
-    );
-  } else if (current && documentPath) {
-    page = (
-      <DocumentScreen
-        key={`${current.id} ${documentPath[1]}`}
-        workspace={current}
-        documentId={documentPath[1]!}
-        onOtherWorkspace={onOtherWorkspace}
-      />
-    );
-  } else if (current && termPath) {
-    page = (
-      <TermScreen key={`${current.id} ${termPath[1]}`} workspace={current} termId={termPath[1]!} onOtherWorkspace={onOtherWorkspace} />
-    );
-  } else if (current && decisionPath) {
-    page = (
-      <DecisionScreen
-        key={`${current.id} ${decisionPath[1]}`}
-        workspace={current}
-        decisionId={decisionPath[1]!}
-        onOtherWorkspace={onOtherWorkspace}
-      />
-    );
-  } else if (current && artifactPath) {
-    page = (
-      <ArtifactScreen
-        key={`${current.id} ${artifactPath[1]}`}
-        workspace={current}
-        artifactId={artifactPath[1]!}
-        onOtherWorkspace={onOtherWorkspace}
-      />
-    );
-  } else if (current && transcriptPath) {
-    page = <TranscriptScreen key={`${current.id} ${transcriptPath[1]}`} workspace={current} transcriptId={transcriptPath[1]!} />;
-  } else if (current && workspacePath?.[2] === "glossary" && !workspacePath[3]) {
-    page = <WorkspaceGlossary key={current.id} workspace={current} />;
-  } else if (current && workspacePath?.[2] === "decisions" && !workspacePath[3]) {
-    page = <WorkspaceDecisions key={current.id} workspace={current} />;
-  } else if (current && workspacePath?.[2] === "artifacts" && !workspacePath[3]) {
-    page = <WorkspaceArtifacts key={current.id} workspace={current} />;
-  } else if (current && workspacePath?.[2] === "documents" && !workspacePath[3]) {
-    page = <WorkspaceDocuments key={current.id} workspace={current} />;
-  } else if (current && workspacePath?.[2] === "search" && !workspacePath[3]) {
-    page = <SearchScreen key={current.id} workspace={current} />;
-  } else if (current && workspacePath?.[2] === "inbox" && !workspacePath[3]) {
-    page = <InboxScreen key={current.id} workspace={current} user={user} />;
-  } else if (current && workspacePath?.[2] === "agents" && workspacePath[3]) {
-    page = <AgentScreen key={`${current.id} ${workspacePath[3]}`} workspace={current} agentId={workspacePath[3]} />;
-  } else if (current && workspacePath?.[2] === "agents") {
-    page = <Agents key={current.id} user={user} workspace={current} />;
-  } else if (current && workspacePath?.[2] === "settings" && !workspacePath[3]) {
-    page = <WorkspaceSettingsPage key={current.id} workspace={current} onChanged={reload} />;
-  } else if (current && workspacePath?.[2] === "members" && !workspacePath[3]) {
-    page = (
-      <Members
-        key={current.id}
-        user={user}
-        workspace={current}
-        onChanged={reload}
-        onLeft={() => {
-          navigate("/");
-          reload();
-        }}
-      />
-    );
-  } else if (current && (routedId || path === "/")) {
+  } else if (routed && route?.kind === "agent") {
+    page = <AgentScreen key={`${routed.id} ${route.agentId}`} workspace={routed} agentId={route.agentId} />;
+  } else if (routed && route?.kind === "workspace") {
+    const workspace = routed;
+    switch (route.page) {
+      case "glossary":
+        page = <WorkspaceGlossary key={workspace.id} workspace={workspace} />;
+        break;
+      case "decisions":
+        page = <WorkspaceDecisions key={workspace.id} workspace={workspace} />;
+        break;
+      case "artifacts":
+        page = <WorkspaceArtifacts key={workspace.id} workspace={workspace} />;
+        break;
+      case "documents":
+        page = <WorkspaceDocuments key={workspace.id} workspace={workspace} />;
+        break;
+      case "search":
+        page = <SearchScreen key={workspace.id} workspace={workspace} />;
+        break;
+      case "inbox":
+        page = <InboxScreen key={workspace.id} workspace={workspace} user={user} />;
+        break;
+      case "agents":
+        page = <Agents key={workspace.id} user={user} workspace={workspace} />;
+        break;
+      case "settings":
+        page = <WorkspaceSettingsPage key={workspace.id} workspace={workspace} onChanged={reload} />;
+        break;
+      case "members":
+        page = (
+          <Members
+            key={workspace.id}
+            user={user}
+            workspace={workspace}
+            onChanged={reload}
+            onLeft={() => {
+              navigate("/");
+              reload();
+            }}
+          />
+        );
+        break;
+      default:
+        page = <WorkspaceHome key={workspace.id} workspace={workspace} />;
+    }
+  } else if (current && path === "/") {
     page = <WorkspaceHome key={current.id} workspace={current} />;
   } else if (workspaces.length === 0 && path === "/") {
     page = <PlacelessEmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</PlacelessEmptyState>;
   } else {
-    page = <PlacelessEmptyState title="Nothing is here.">The page may have moved, or you may not see it.</PlacelessEmptyState>;
+    page = nothing;
   }
 
   return (
@@ -444,7 +433,8 @@ function PlacelessEmptyState({ title, children }: { title: string; children: Rea
 function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) => void }) {
   usePlace(null);
   const { error, busy, onSubmit } = useSubmit(async (form) => {
-    onCreated(await api.createWorkspace(field(form, "name")));
+    const slug = field(form, "slug").trim();
+    onCreated(await api.createWorkspace({ name: field(form, "name"), ...(slug ? { slug } : {}) }));
   });
   return (
     <div className="page page-settings">
@@ -454,6 +444,12 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
         <form onSubmit={onSubmit}>
           <Field label="Workspace name">
             <input name="name" required />
+          </Field>
+          <Field
+            label="Slug"
+            hint="Its name in addresses, such as /acme/tickets/RP-12: lower case letters, digits and dashes. Made from its name when left empty. It can't be changed later."
+          >
+            <input name="slug" pattern="[a-z0-9]+(-[a-z0-9]+)*" maxLength={40} autoComplete="off" spellCheck={false} />
           </Field>
           <FormError error={error} />
           <Actions>
@@ -558,6 +554,11 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
             ),
           },
           !!settings && {
+            id: "model-ids",
+            label: "Model ids",
+            children: <ModelIds workspace={workspace} settings={settings} onSaved={setSettings} />,
+          },
+          !!settings && {
             id: "lost-runs",
             label: "Lost Runs",
             children: (
@@ -580,6 +581,75 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
         ]}
       />
     </div>
+  );
+}
+
+/**
+ * The exact model id each model label stands for in the Workspace, which a Runner setup gives each routine. Labels
+ * match a Step's model ignoring case.
+ */
+function ModelIds({
+  workspace,
+  settings,
+  onSaved,
+}: {
+  workspace: WorkspaceSummary;
+  settings: WorkspaceSettings;
+  onSaved: (settings: WorkspaceSettings) => void;
+}) {
+  const [rows, setRows] = useState(() => settings.modelIds.map((m, key) => ({ ...m, key })));
+  const [next, setNext] = useState(settings.modelIds.length);
+  const [saved, setSaved] = useState(false);
+  const save = useSubmit(async () => {
+    setSaved(false);
+    const changed = await api.changeWorkspaceSettings(workspace.id, {
+      modelIds: rows.map(({ label, modelId }) => ({ label, modelId })),
+    });
+    onSaved(changed);
+    setSaved(true);
+  });
+  const edit = (key: number, change: Partial<{ label: string; modelId: string }>) =>
+    setRows((all) => all.map((row) => (row.key === key ? { ...row, ...change } : row)));
+  return (
+    <Panel
+      title="Model ids"
+      id="model-ids"
+      description="The exact model a Step's model label stands for. Set up with Claude Code gives each routine the model id of its label; routines already made keep theirs."
+    >
+      <form onSubmit={save.onSubmit} className="model-ids">
+        {rows.map((row) => (
+          <div key={row.key} className="form-row model-id-row" role="group" aria-label={`Model id of ${row.label || "a new label"}`}>
+            <Field label="Model label">
+              <input required className="mono" value={row.label} onChange={(event) => edit(row.key, { label: event.target.value })} />
+            </Field>
+            <Field label="Model id">
+              <input required className="mono" value={row.modelId} onChange={(event) => edit(row.key, { modelId: event.target.value })} />
+            </Field>
+            <Button variant="ghost" size="small" onClick={() => setRows((all) => all.filter((r) => r.key !== row.key))}>
+              Remove
+            </Button>
+          </div>
+        ))}
+        <div>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setRows((all) => [...all, { label: "", modelId: "", key: next }]);
+              setNext(next + 1);
+            }}
+          >
+            Add a model label
+          </Button>
+        </div>
+        <FormError error={save.error} />
+        <Actions>
+          <Button type="submit" variant="primary" disabled={save.busy}>
+            Save model ids
+          </Button>
+          <Saved shown={saved} />
+        </Actions>
+      </form>
+    </Panel>
   );
 }
 

@@ -21,9 +21,10 @@ const longestRetryAfterMs = 24 * 60 * 60 * 1000;
 /** An HTTP date, such as `Thu, 01 Jan 2026 10:00:00 GMT` (RFC 9110's preferred form). */
 const httpDate = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 
-/** A sealed trigger as stored; one waiting for its token has none. */
+/** A sealed trigger as stored. */
 interface StoredTrigger {
   triggerId: string;
+  /** None while the trigger, saved without it or made by a Runner setup, waits for the token its Owner pastes. */
   tokenSealed: string | null;
 }
 
@@ -42,7 +43,7 @@ async function triggerFor({ db }: Context, run: RunToStart): Promise<StoredTrigg
  * When to try again after a 429, from its `Retry-After`: seconds or an HTTP date, a minute when it is
  * neither, and a day at most.
  */
-function retryAt(now: Date, retryAfter: string | null): Date {
+export function retryAt(now: Date, retryAfter: string | null): Date {
   const value = retryAfter?.trim() ?? "";
   let waitMs = defaultRetryAfterMs;
   if (/^\d+$/.test(value)) waitMs = Number(value) * 1000;
@@ -63,15 +64,15 @@ export function subscriptionRunner(context: Context): Runner {
             `settings, for all Projects or for ${run.project.name}.`,
         });
       }
+      const named = `the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}`;
       if (trigger.tokenSealed === null) {
         return refuse({
           kind: "not_configured",
           message:
-            `The trigger ${trigger.triggerId} for ${run.model} on ${run.project.name} is waiting for its token: ` +
-            `${run.runner.name}'s Owner generates one for its routine in claude.ai and pastes it in the Runner's settings.`,
+            `${run.runner.name}'s trigger ${trigger.triggerId} for ${run.model} on ${run.project.name} is waiting for its ` +
+            "token: its Owner generates one for the routine in claude.ai and pastes it into the trigger on the Runner's card.",
         });
       }
-      const named = `the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}`;
       let token: string;
       try {
         token = requireSecretBox(context.config).open(trigger.tokenSealed);

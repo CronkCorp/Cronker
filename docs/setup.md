@@ -73,9 +73,23 @@ The scheduled tasks reach Cronk through a claude.ai connector, which signs in by
 
 On the Agent's page in Cronk, the connection is now listed among its tokens under claude.ai's name. Revoking it there disconnects claude.ai.
 
-## 6. Create one scheduled task per model
+## 6. Create one routine per model
 
-A scheduled task in Claude Code on the web fixes its model, Repository and connectors, so you need one per model your Steps use. The default board uses three model labels: `haiku` (Triage), `sonnet` (Investigate and Code review) and `opus` (Implement).
+A routine (a scheduled task in Claude Code on the web) fixes its model, Repository and connectors, so you need one per model your Steps use. The default board uses three model labels: `haiku` (Triage), `sonnet` (Investigate and Code review) and `opus` (Implement). Your own Claude Code can create them for a Project (below), or you create them by hand.
+
+### With Claude Code
+
+You need Claude Code on your machine, signed in with your claude.ai subscription, the `Cronk` connector added to claude.ai (step 5), and the Project's Repository added on its **Settings**, which needs the GitHub App (step 3).
+
+1. On **Runners**, set up a subscription Runner, for example `Claude Max`, and on the Agent's page set its **Runner** to it (step 7, items 1 and 4).
+2. On the Runner's card, choose **Set up with Claude Code**, pick the Project (and, with several Agents pointed at the Runner, the one whose Transcript hook token to make) and choose **Make the command**. Cronk shows the routines it plans, one per model label the Project's board uses, each with the exact model id the Workspace maps its label to. An Admin changes those on the Workspace's **Settings**, under **Model ids**; a label with none is refused, naming it. A Project with no Repository is refused; one with several gets a warning, as the Transcript hook doesn't run in sessions with more than one.
+3. Copy the command, `claude "$(curl -fsSL 'https://cronk.example.com/runner-setups/cronk_runner_setup_…')"`, and run it in a terminal. It works once, for an hour; if it has expired or was used, choose the button again. Claude Code asks which cloud environment the routines run in (keep one for Cronk), creates each routine with only the Project's Repository, only the Cronk connector, the prompt below, no schedule and a `claude/…` branch prefix, and reports their trigger ids back to Cronk. It never changes routines you already have.
+4. Claude Code then lists the routines with their claude.ai links, and shows a *Transcript hook* token of the Agent to add to that environment as `CRONK_TOKEN` (step 8, items 3 and 4), with the `settings.json` snippet to commit if the Repository hasn't got it yet (step 8, item 1). That token stops working if the setup expires without reporting back, and goes if you press the button again first for the same Runner and Project; once the setup reports back, it lasts until you revoke it on the Agent's page.
+5. Back on the Runner's card, each routine's trigger is listed for the Project, marked **waiting for token**. For each, open its routine in claude.ai from **Open routine in claude.ai**, generate an API token there, paste it under **Waiting for tokens** and choose **Save token**. Generating a new token revokes the routine's previous one, so do it once per routine. Until then, a Run needing that trigger couldn't start, with the reason in your Inbox; it starts once the token is saved.
+
+Running the setup again for a Project replaces that Project's triggers on the Runner with the new routines'; triggers for all Projects stay. The old routines stay in claude.ai for you to delete there, since Claude Code can't delete routines. Cronk never holds your claude.ai sign-in (ADR 0008).
+
+### By hand
 
 For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled task:
 
@@ -97,8 +111,10 @@ For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled
 
 ## 7. Enter the triggers in Cronk
 
+After a setup with Claude Code, only items 3 and 4 are left, if you haven't done them yet.
+
 1. On **Runners**, set up a subscription Runner, for example `Claude Max`.
-2. For each scheduled task, under the Runner's **Save a trigger**, enter the model label exactly as the Steps use it (`haiku`, `sonnet`, `opus`), leave **For** at All Projects (or pick one Project to give it its own task, for example on another Repository), paste the trigger id and token, and choose **Save trigger**. The token is stored encrypted and never shown again. Saved without a token (and not replacing the same trigger id, whose token it keeps), the trigger shows as *Waiting for token*, with a link to its routine in claude.ai and a **Token** box to paste it into later; its Runs can't start until then. Generating a new token in claude.ai revokes the previous one, so a trigger already working stops until its new token is pasted.
+2. For each scheduled task, under the Runner's **Save a trigger**, enter the model label exactly as the Steps use it (`haiku`, `sonnet`, `opus`), leave **For** at All Projects (or pick one Project to give it its own task, for example on another Repository), paste the trigger id and token, and choose **Save trigger**. The token is stored encrypted and never shown again. Saved without a token (and not replacing the same trigger id, whose token it keeps), the trigger is marked **waiting for token**, and its token is pasted later under **Waiting for tokens**, beside a link to its routine in claude.ai; its Runs can't start until then. Generating a new token in claude.ai revokes the previous one, so a trigger already working stops until its new token is pasted.
 3. **Runs at once** limits how many Runs the Runner has going together (2 by default; change it with **Save limit**); Tickets beyond it wait, highest Priority first.
 4. On the Agent's page, set **Runner** to the new Runner.
 
@@ -135,6 +151,19 @@ Claude Code on your own machine connects to Cronk with an Agent's token.
 Revoking the token on the Agent's page cuts it off from the next request.
 
 To keep Transcripts of what Claude Code on your laptop does, commit the step 8 snippet in the Repository (or put it in your own `~/.claude/settings.json`) and export `CRONK_TOKEN` with one of the Agent's full tokens in the shell Claude Code starts from. Its sessions match no Run, so each is kept as the Agent's own Transcript.
+
+## 10. Run on the Claude API instead (optional)
+
+A Managed Agents Runner runs your Agents' Runs as sessions in your own Anthropic workspace, spending its Claude API credits rather than your Claude subscription, and needs none of steps 5 to 8: Cronk sets everything up itself.
+
+1. In the [Claude Console](https://platform.claude.com), make an API key in the workspace the Runs should spend.
+2. On **Runners**, under **Set up a Runner**, give it a name such as `Claude API`, choose the kind **Managed Agents (Claude API)**, paste the key and choose **Set up a Managed Agents Runner**. Cronk checks the key with Anthropic at once: a rejected key is reported and nothing is set up. The key is stored encrypted (it needs `CRONK_SECRET_KEY`) and never shown again.
+3. Cronk creates one agent definition, `Cronk: Claude API`, with Cronk's MCP server and its default tools allowed without asking (an unattended Run can't answer a confirmation), and one cloud environment with unrestricted network access, in that workspace. The Runner's card names both; edit the environment in the Console if your Runs should reach less.
+4. On the Agent's page, set **Runner** to the new Runner.
+
+Each Run is then a session of that agent on its Step's model (`haiku`, `sonnet`, `opus` and `fable` stand for the current models of that name; a Step may also name a model id in full, such as `claude-opus-4-8`), with the Brief as its first message. The session reaches Cronk with a fresh token of the Agent, kept in a vault of the Run's own and revoked, with the vault deleted, as soon as the Run ends. Its Timeline's **Session** link opens the session in the Console (in the workspace `default`; in another workspace, swap its id into the address).
+
+Cronk reads the sessions of running Runs every three minutes. A session that went idle without the agent calling `finish` fails its Run with the stop reason Anthropic gave (such as `end_turn` or `retries_exhausted`), one asking for a confirmation fails it as *needs a confirmation*, and a terminated one fails it; each waits in your Inbox with **Retry**. A Run with no Cronk calls for the lost-Run threshold becomes lost, as with any Runner. Stopping a Run, by moving, undelegating or re-delegating its Ticket, interrupts its session; every ended Run's session is archived, never deleted, so its Console link keeps working. Its token is revoked the moment it ends; if Anthropic can't be reached then, Cronk deletes the vault and archives the session at its next poll. A rate limit from Anthropic pauses the Runner's queue until its retry time, while Tickets wait. Removing the Runner stops its running Runs and revokes their tokens.
 
 ## Upgrading
 

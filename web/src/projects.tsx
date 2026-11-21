@@ -1,3 +1,4 @@
+import { addresses, useAddresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
@@ -35,6 +36,7 @@ import { Dialog, DialogActions, DialogClose, HoverPopover, Menu, MenuLink } from
 
 /** The Workspace's Projects, and a form to create one. */
 export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
+  const to = useAddresses();
   usePlace(null);
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const project = await api.createProject(workspace.id, { name: field(form, "name"), key: field(form, "key") });
-    navigate(`/projects/${project.id}`);
+    navigate(to.project(project));
   });
 
   return (
@@ -66,7 +68,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
             <ul className="rows">
               {projects.map((project) => (
                 <li key={project.id}>
-                  <Link to={`/projects/${project.id}`} className="row">
+                  <Link to={to.project(project)} className="row">
                     <span className="row-title">{project.name}</span> <span className="ticket-key">{project.key}</span>
                   </Link>
                 </li>
@@ -109,7 +111,8 @@ export const priorityLabel = (priority: Priority) => priorities.find((p) => p.pr
 
 /** The Project's other pages, in the page head's "…" menu. */
 export function ProjectMenu({ project }: { project: ProjectSummary }) {
-  const base = `/projects/${project.id}`;
+  const to = useAddresses();
+  const base = to.project(project);
   return (
     <Menu label="More of this Project">
       <MenuLink to={`${base}/documents`}>Documents</MenuLink>
@@ -129,22 +132,18 @@ export function ProjectScreen({
   workspace,
   projectId,
   view,
-  onOtherWorkspace,
 }: {
   workspace: WorkspaceSummary;
   projectId: string;
   view: View;
-  /** Offered a Project of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
   const [filter, setFilter] = useState<TicketFilter>({});
   const [failure, setFailure] = useState<string | null>(null);
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
 
@@ -153,7 +152,7 @@ export function ProjectScreen({
       // A Project of another of the User's Workspaces isn't shown under this one's name.
       (found) => {
         if (found.workspaceId === workspace.id) setProject(found);
-        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Project.");
+        else setFailure("No such Project.");
       },
       (e: Error) => setFailure(e.message),
     );
@@ -190,7 +189,7 @@ export function ProjectScreen({
   if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
   if (view === "artifacts") return <ProjectArtifacts workspace={workspace} project={project} />;
 
-  const base = `/projects/${project.id}`;
+  const base = to.project(project);
   const home = workspaceCrumb(workspace);
   if (view === "settings") {
     return (
@@ -389,6 +388,7 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * it names them, each a link to its Ticket. An unblocked Ticket shows nothing.
  */
 function BlockedChip({ ticket }: { ticket: TicketSummary }) {
+  const to = useAddresses();
   const blockers = ticket.blockedBy;
   if (blockers.length === 0) return null;
   return (
@@ -412,7 +412,7 @@ function BlockedChip({ ticket }: { ticket: TicketSummary }) {
       <ul className="hover-popover-list">
         {blockers.map((blocker) => (
           <li key={blocker.id}>
-            <Link to={`/tickets/${blocker.id}`} className="ticket-link">
+            <Link to={to.ticket(blocker)} className="ticket-link">
               <Key>{blocker.key}</Key> {blocker.title}
             </Link>
           </li>
@@ -424,11 +424,70 @@ function BlockedChip({ ticket }: { ticket: TicketSummary }) {
 
 const ticketDrag = "application/x-cronk-ticket";
 
+/** Whether a drag carries a board card's Ticket. */
+const carriesTicket = (event: DragEvent<HTMLElement>) => event.dataTransfer.types.includes(ticketDrag);
+
+/** How near the board's left or right edge a dragged card scrolls it, and how far it scrolls each frame at the edge. */
+const edgeZone = 48;
+const edgeSpeed = 16;
+/** How long the board keeps scrolling after the last dragover: browsers repeat it while a held card stays still. */
+const edgeHold = 700;
+
+/**
+ * Scrolls the board sideways while a dragged card is held near its left or right edge, faster nearer the edge, so the
+ * card reaches columns that start off screen. Only Chromium scrolls a dragged-over element by itself; Firefox and
+ * Safari (WebKit) don't.
+ */
+function useEdgeScroll() {
+  const board = useRef<HTMLElement>(null);
+  const held = useRef({ speed: 0, at: 0 });
+  const frame = useRef<number | null>(null);
+
+  const stop = useCallback(() => {
+    held.current.speed = 0;
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+  }, []);
+  useEffect(() => stop, [stop]);
+
+  const step = useCallback(() => {
+    const { speed, at } = held.current;
+    if (!board.current || speed === 0 || performance.now() - at > edgeHold) {
+      frame.current = null;
+      return;
+    }
+    const before = board.current.scrollLeft;
+    board.current.scrollLeft += speed;
+    // At its end the board can't scroll further: stop until the next dragover asks again.
+    frame.current = board.current.scrollLeft === before ? null : requestAnimationFrame(step);
+  }, []);
+
+  const onDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!board.current || !carriesTicket(event)) return;
+    const { left, right } = board.current.getBoundingClientRect();
+    const fromLeft = event.clientX - left;
+    const fromRight = right - event.clientX;
+    // Whole pixels: browsers that round scrollLeft would never move on a fraction of one.
+    const toward = (distance: number) => (distance < edgeZone ? Math.ceil(edgeSpeed * (1 - distance / edgeZone)) : 0);
+    const speed = toward(fromRight) - toward(fromLeft);
+    held.current = { speed, at: performance.now() };
+    if (speed !== 0 && frame.current === null) frame.current = requestAnimationFrame(step);
+  };
+
+  /** A card dragged off the board stops it scrolling, rather than it running on until the hold lapses. */
+  const onDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stop();
+  };
+
+  return { ref: board, onDragOver, onDragLeave, stop };
+}
+
 /**
  * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
  * which holds links of its own and so sits beside the card's link rather than in it.
  */
 function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; members: Member[]; agents: Agent[]; arrived: boolean }) {
+  const to = useAddresses();
   return (
     <div
       className={`card${arrived ? " arrived" : ""}`}
@@ -438,7 +497,7 @@ function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; mem
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <Link to={`/tickets/${ticket.id}`} className="card-link" draggable={false}>
+      <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
         <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
         <span className="card-priority">
           <PriorityTag priority={ticket.priority} />
@@ -479,6 +538,7 @@ function Board({
   // Opened collapsed columns, until the User leaves the page; nothing is stored.
   const [opened, setOpened] = useState<Set<string>>(new Set());
   const arrived = useArrivals(tickets.map((t) => `${t.id} ${t.statusId}`));
+  const edge = useEdgeScroll();
 
   const drop = async (event: DragEvent<HTMLElement>, status: Status) => {
     event.preventDefault();
@@ -498,7 +558,15 @@ function Board({
   return (
     <>
       <FormError error={error} />
-      <section aria-label="Board" className="board">
+      <section
+        aria-label="Board"
+        className="board"
+        ref={edge.ref}
+        onDragOver={edge.onDragOver}
+        onDragLeave={edge.onDragLeave}
+        onDrop={edge.stop}
+        onDragEnd={edge.stop}
+      >
         {project.statuses.map((status) => {
           const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
           const isCollapsed = collapsed(status);
@@ -508,7 +576,7 @@ function Board({
               aria-label={status.name}
               className={`column${target === status.id ? " column-target" : ""}${isCollapsed ? " column-collapsed" : ""}`}
               onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes(ticketDrag)) return;
+                if (!carriesTicket(event)) return;
                 event.preventDefault();
                 setTarget(status.id);
               }}
@@ -582,6 +650,7 @@ function List({
   tickets: TicketSummary[];
   filtered: boolean;
 }) {
+  const to = useAddresses();
   return (
     <section aria-label="List" className="list">
       {tickets.length === 0 &&
@@ -603,7 +672,7 @@ function List({
               <ul className="rows panel panel-flush">
                 {inStatus.map((ticket) => (
                   <li key={ticket.id} className="ticket-item">
-                    <Link to={`/tickets/${ticket.id}`} className="row ticket-row">
+                    <Link to={to.ticket(ticket)} className="row ticket-row">
                       <StatusDot kind={status.kind} name={status.name} alone />
                       <span className="ticket-key">{ticket.key}</span> <span className="row-title">{ticket.title}</span>
                       <span className="row-meta">
@@ -865,10 +934,10 @@ export function ScopeSwitch({
     <Segmented
       label="Scope"
       items={[
-        { label: "Workspace", to: `/workspaces/${workspace.id}/${kind}`, current: project === null },
+        { label: "Workspace", to: addresses.knowledge(workspace, null, kind), current: project === null },
         ...projects.map((p) => ({
           label: <span className="mono">{p.key}</span>,
-          to: `/projects/${p.id}/${kind}`,
+          to: addresses.knowledge(workspace, p.key, kind),
           current: p.id === project?.id,
         })),
       ]}
@@ -880,6 +949,6 @@ export function ScopeSwitch({
 export function knowledgeCrumbs(workspace: Workspace, project: ProjectSummary | null, page: ReactNode) {
   const home = workspaceCrumb(workspace);
   return project
-    ? [home, { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }, { label: page }]
+    ? [home, { label: <span className="mono">{project.key}</span>, to: addresses.project(workspace, project.key) }, { label: page }]
     : [home, { label: page }];
 }

@@ -365,8 +365,8 @@ describe("Runs that couldn't start", () => {
       expect.objectContaining({
         state: "refused",
         endReason:
-          "The trigger trig_cronker_haiku for haiku on Cronker is waiting for its token: Claude Max's Owner generates " +
-          "one for its routine in claude.ai and pastes it in the Runner's settings.",
+          "Claude Max's trigger trig_cronker_haiku for haiku on Cronker is waiting for its token: its Owner generates " +
+          "one for the routine in claude.ai and pastes it into the trigger on the Runner's card.",
       }),
     ]);
   });

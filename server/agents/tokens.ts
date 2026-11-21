@@ -2,7 +2,7 @@ import type { FastifyRequest } from "fastify";
 import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
-import type { Db } from "../db.js";
+import type { Db, Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
@@ -49,25 +49,31 @@ type Row = Omit<AgentToken, "createdAt"> & { createdAt: Date };
 const columns = `id, name, access, created_at as "createdAt"`;
 const present = (row: Row): AgentToken => ({ ...row, createdAt: row.createdAt.toISOString() });
 
-export async function tokensOf(db: Db, agent: Agent): Promise<AgentToken[]> {
+/**
+ * The Agent's tokens still listed: every one but a token outside OAuth that has expired, such as the Transcript hook
+ * token of a Runner setup never used. An OAuth connection stays listed while its token awaits a refresh.
+ */
+export async function tokensOf(db: Db, clock: Clock, agent: Agent): Promise<AgentToken[]> {
   const { rows } = await db.query<Row>(
-    `select ${columns} from agent_tokens where agent_id = $1 order by created_at, id`,
-    [agent.id],
+    `select ${columns} from agent_tokens
+     where agent_id = $1 and (oauth_client_id is not null or expires_at is null or expires_at > $2)
+     order by created_at, id`,
+    [agent.id, clock.now()],
   );
   return rows.map(present);
 }
 
 export async function issueToken(
-  db: Db,
+  db: Db | Tx,
   clock: Clock,
   agent: Agent,
-  input: { name: string; access: TokenAccess },
+  input: { name: string; access: TokenAccess; expiresAt?: Date },
 ): Promise<IssuedToken> {
   const secret = issueSecret("agent");
   const { rows } = await db.query<Row>(
-    `insert into agent_tokens (agent_id, name, access, token_hash, created_at) values ($1, $2, $3, $4, $5)
+    `insert into agent_tokens (agent_id, name, access, token_hash, created_at, expires_at) values ($1, $2, $3, $4, $5, $6)
      returning ${columns}`,
-    [agent.id, input.name.trim(), input.access, hashSecret(secret), clock.now()],
+    [agent.id, input.name.trim(), input.access, hashSecret(secret), clock.now(), input.expiresAt ?? null],
   );
   return { token: present(rows[0]!), secret };
 }
@@ -121,7 +127,7 @@ export async function agentOfToken({ db, clock }: Context, header: string): Prom
   const { rows } = secret
     ? await db.query<AgentCaller>(
         `select 'agent' as kind, agents.id, agents.name, agent_tokens.access,
-           json_build_object('id', workspaces.id, 'name', workspaces.name) as workspace,
+           json_build_object('id', workspaces.id, 'name', workspaces.name, 'slug', workspaces.slug) as workspace,
            json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner
          from agent_tokens
          join agents on agents.id = agent_tokens.agent_id and agents.removed_at is null

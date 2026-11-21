@@ -11,6 +11,7 @@ import { TestClock } from "./clock.js";
 import { createTestDatabase } from "./database.js";
 import { startStandInClaude, type StandInClaude } from "./claude.js";
 import { startStandInGitHub, type StandInGitHub } from "./github.js";
+import { startStandInManagedAgents, type StandInManagedAgents } from "./managed-agents.js";
 import { FakeRunner } from "./runner.js";
 
 /**
@@ -38,11 +39,15 @@ export interface StartedCronk {
   github: StandInGitHub;
   /** The stand-in claude.ai fire endpoint the subscription Runner fires scheduled tasks at. */
   claude: StandInClaude;
+  /** The stand-in Managed Agents API the `managed_agents` Runner creates agents, vaults and sessions with. */
+  managedAgents: StandInManagedAgents;
   /** The fake Runner, installed as the Runner kind `fake`: what it was asked to start, and what to do next. */
   runner: FakeRunner;
   clock: TestClock;
   /** Runs the periodic check that makes Runs lost, as the server does every minute; move the clock first. */
   checkForLostRuns(): Promise<void>;
+  /** Reads the sessions of running Managed Agents Runs, ending those that stopped, as the server does every few minutes. */
+  pollManagedAgentsSessions(): Promise<void>;
   /** Resumes the queues of Runners whose rate limit has passed, as the server does every minute; move the clock first. */
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every five minutes. */
@@ -124,6 +129,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   const clock = options.clock ?? new TestClock();
   const github = await startStandInGitHub(clock);
   const claude = await startStandInClaude();
+  const managedAgents = await startStandInManagedAgents();
   const runner = new FakeRunner();
   const logs: LogLine[] = [];
   const logStream = new Writable({
@@ -157,6 +163,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
           secretKey,
           github: { url: new URL(github.url), apiUrl: new URL(github.apiUrl) },
           claudeApiUrl: new URL(claude.apiUrl),
+          managedAgentsApiUrl: new URL(managedAgents.apiUrl),
           attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
         },
         clock,
@@ -182,7 +189,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   try {
     cronk = await boot(options.migrateBefore);
   } catch (error) {
-    await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
+    await Promise.all([database.drop(), github.stop(), claude.stop(), managedAgents.stop(), removeAttachments()]);
     throw error;
   }
 
@@ -192,15 +199,17 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
     github,
     claude,
+    managedAgents,
     runner,
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),
+    pollManagedAgentsSessions: () => cronk.pollManagedAgentsSessions(),
     resumePausedRunners: () => cronk.resumePausedRunners(),
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     checkMergeability: () => cronk.checkMergeability(),
     logs,
     setupCode() {
-      const line = logs.find((l) => typeof l.setupCode === "string");
+      const line = logs.findLast((l) => typeof l.setupCode === "string");
       if (!line) throw new Error("no setup code in the server log");
       return line.setupCode as string;
     },
@@ -244,7 +253,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       // A test's afterEach may stop this Cronk again when the next test's start failed: the second stop does nothing.
       stopped ??= (async () => {
         if (!closed) await cronk.close();
-        await Promise.all([database.drop(), github.stop(), claude.stop(), removeAttachments()]);
+        await Promise.all([database.drop(), github.stop(), claude.stop(), managedAgents.stop(), removeAttachments()]);
       })();
       return stopped;
     },

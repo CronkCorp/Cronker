@@ -6,7 +6,8 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
-import { recheckWaiting, startWaitingRuns, waitingTickets, type WaitingTicket } from "./runs.js";
+import { setUpManagedAgents } from "./managed-agents.js";
+import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -17,12 +18,11 @@ export const Trigger = Type.Object({
   }),
   triggerId: Type.String({ description: "The scheduled task's trigger id in claude.ai, such as `trig_01ABC…`." }),
   waitingForToken: Type.Boolean({
-    description: "Whether it was saved without its token: Runs needing it can't start until the token is pasted.",
+    description:
+      "Saved without its token, or made by a Runner setup, and waiting for the token its Owner generates in claude.ai " +
+      "and pastes; Runs needing it can't start until then.",
   }),
-  routineUrl: Type.String({
-    format: "uri",
-    description: "Its routine in claude.ai, where its Owner generates a token for it (which revokes the previous one).",
-  }),
+  routineUrl: Type.String({ format: "uri", description: "The routine's page in claude.ai, where its token is generated." }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Trigger = Static<typeof Trigger>;
@@ -50,6 +50,16 @@ export const RunnerRecord = Type.Object({
       "For a `subscription` Runner, the trigger it fires per model label, the Runner's own first, then each Project's " +
       "overrides; empty for other kinds.",
   }),
+  managedAgents: Type.Union(
+    [
+      Type.Object({
+        agentId: Type.String({ description: "The agent definition Cronk created in the Owner's Anthropic workspace." }),
+        environmentId: Type.String({ description: "The cloud environment Cronk created there." }),
+      }),
+      Type.Null(),
+    ],
+    { description: "For a `managed_agents` Runner, what Cronk created with its API key; null for other kinds." },
+  ),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type RunnerRecord = Static<typeof RunnerRecord>;
@@ -65,21 +75,25 @@ const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId'
 const columns = `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
   paused_until as "pausedUntil", created_at as "createdAt",
+  case when kind = 'managed_agents' then json_build_object('agentId', managed_agent_id, 'environmentId', managed_environment_id)
+  end as "managedAgents",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
 const present = (row: Row): RunnerRecord => ({
   ...row,
   pausedUntil: row.pausedUntil?.toISOString() ?? null,
-  triggers: row.triggers.map((t) => ({
-    ...t,
-    routineUrl: routineUrl(t.triggerId),
-    createdAt: new Date(t.createdAt).toISOString(),
-  })),
+  triggers: row.triggers.map(presentTrigger),
   createdAt: row.createdAt.toISOString(),
 });
 
-/** A trigger's routine in claude.ai, by its trigger id. */
-const routineUrl = (triggerId: string) => `https://claude.ai/code/routines/${encodeURIComponent(triggerId)}`;
+/** A routine's page in claude.ai, where its Owner generates its token. */
+export const routineUrl = (triggerId: string): string => `https://claude.ai/code/routines/${encodeURIComponent(triggerId)}`;
+
+const presentTrigger = (t: TriggerRow): Trigger => ({
+  ...t,
+  routineUrl: routineUrl(t.triggerId),
+  createdAt: new Date(t.createdAt).toISOString(),
+});
 
 /** The User's own Runners, oldest first. */
 export async function runnersOf(db: Db, userId: string): Promise<RunnerRecord[]> {
@@ -88,10 +102,11 @@ export async function runnersOf(db: Db, userId: string): Promise<RunnerRecord[]>
 }
 
 export async function createRunner(
-  { db, clock, runners }: Context,
+  context: Context,
   userId: string,
-  input: { name: string; kind: string },
+  input: { name: string; kind: string; apiKey?: string },
 ): Promise<RunnerRecord> {
+  const { db, clock, runners } = context;
   if (!Object.hasOwn(runners, input.kind)) {
     const kinds = Object.keys(runners);
     throw new ApiError(
@@ -100,21 +115,30 @@ export async function createRunner(
       `This Cronk has no Runner of the kind ${input.kind}; ${kinds.length ? `it has ${kinds.join(", ")}` : "it has none yet"}.`,
     );
   }
+  let managed = null;
+  if (input.kind === "managed_agents") {
+    if (!input.apiKey?.trim()) {
+      throw new ApiError(400, "api_key_required", "A Managed Agents Runner is set up with an Anthropic API key: paste one from the Claude Console.");
+    }
+    managed = await setUpManagedAgents(context, { name: input.name, apiKey: input.apiKey });
+  }
   const { rows } = await db.query<Row>(
-    `insert into runners (owner_id, kind, name, created_at) values ($1, $2, $3, $4) returning id`,
-    [userId, input.kind, input.name.trim(), clock.now()],
+    `insert into runners (owner_id, kind, name, created_at, api_key_sealed, managed_agent_id, managed_environment_id)
+     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    [userId, input.kind, input.name.trim(), clock.now(), managed?.apiKeySealed ?? null, managed?.agentId ?? null, managed?.environmentId ?? null],
   );
   return (await findRunner(db, userId, rows[0]!.id))!;
 }
 
 /** One of the User's own Runners; otherwise nothing, as if it didn't exist. */
-async function findRunner(db: Db, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
+export async function findRunner(db: Db, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
   if (!isUuid(runnerId)) return undefined;
   const { rows } = await db.query<Row>(`select ${columns} from runners where id = $1 and owner_id = $2`, [runnerId, userId]);
   return rows[0] && present(rows[0]);
 }
 
-const noSuchRunner = () => new ApiError(404, "not_found", "You have no such Runner.");
+export const noSuchRunner = () => new ApiError(404, "not_found", "You have no such Runner.");
+export const noSuchProject = () => new ApiError(404, "project_not_found", "There is no such Project in your Workspaces.");
 
 /**
  * Saves the trigger a `subscription` Runner fires for a model, for all Projects or overriding that for one Project,
@@ -134,7 +158,7 @@ export async function saveTrigger(
   }
   const projectId = input.projectId ?? null;
   if (projectId !== null && !(await findProject(context.db, userViewer(userId), projectId))) {
-    throw new ApiError(404, "project_not_found", "There is no such Project in your Workspaces.");
+    throw noSuchProject();
   }
   const sealed = input.token === undefined ? null : requireSecretBox(context.config).seal(input.token.trim());
   const model = input.model.trim();
@@ -154,9 +178,34 @@ export async function saveTrigger(
 }
 
 /**
- * Pastes the token into one of a `subscription` Runner's triggers, such as one waiting for its token, replacing any it had.
- * It is sealed under `CRONK_SECRET_KEY` and never returned. Pasted into a trigger waiting for it, the Tickets whose Runs
- * couldn't start for want of it are rechecked; a token replacing a working one leaves them to Retry.
+ * Replaces a Project's triggers on a Runner with new ones, one per model label, each waiting for its token, as a
+ * Runner setup leaves them; the Runner's triggers for all Projects stay. Returns them in the order given.
+ */
+export async function replaceProjectTriggers(
+  tx: Tx,
+  runnerId: string,
+  projectId: string,
+  triggers: { model: string; triggerId: string }[],
+  now: Date,
+): Promise<Trigger[]> {
+  await tx.query("delete from runner_triggers where runner_id = $1 and project_id = $2", [runnerId, projectId]);
+  const saved: Trigger[] = [];
+  for (const { model, triggerId } of triggers) {
+    const { rows } = await tx.query<{ trigger: TriggerRow }>(
+      `insert into runner_triggers as t (runner_id, project_id, model, trigger_id, token_sealed, created_at)
+       values ($1, $2, $3, $4, null, $5) returning ${triggerJson} as trigger`,
+      [runnerId, projectId, model, triggerId, now],
+    );
+    saved.push(presentTrigger(rows[0]!.trigger));
+  }
+  return saved;
+}
+
+/**
+ * Pastes the token into one of a `subscription` Runner's triggers, such as one saved without it or made by a Runner setup,
+ * waiting for it, replacing any it had. It is sealed under `CRONK_SECRET_KEY` as saving a trigger seals it, and never
+ * returned. Pasted into a trigger waiting for it, the Tickets whose Runs couldn't start for want of it are rechecked; a
+ * token replacing a working one leaves them to Retry.
  */
 export async function pasteTriggerToken(
   context: Context,
@@ -225,11 +274,30 @@ export async function removeTrigger(context: Context, userId: string, runnerId: 
 /** Removes one of the User's own Runners with its triggers; Agents pointed at it are left with none. */
 export async function removeRunner(context: Context, userId: string, runnerId: string): Promise<void> {
   await transaction(context.db, async (tx) => {
+    if (!isUuid(runnerId)) throw noSuchRunner();
+    // The Tickets of its running Runs are locked before the Runner, in the order everything that ends a Run locks them.
+    const { rows: held } = await tx.query<{ id: string; workspaceId: string; projectId: string }>(
+      `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"
+       from tickets join runs on runs.ticket_id = tickets.id
+       join runners on runners.id = runs.runner_id and runners.owner_id = $2
+       where runs.runner_id = $1 and runs.state = 'running' order by tickets.id for update of tickets`,
+      [runnerId, userId],
+    );
     // Locked as starting a Run locks it, so no Run starts on it between the check and the delete.
-    const { rows } = isUuid(runnerId)
-      ? await tx.query<{ name: string }>("select name from runners where id = $1 and owner_id = $2 for update", [runnerId, userId])
-      : { rows: [] };
+    const { rows } = await tx.query<{ name: string; kind: string }>(
+      "select name, kind from runners where id = $1 and owner_id = $2 for update",
+      [runnerId, userId],
+    );
     if (!rows[0]) throw noSuchRunner();
+    const { name, kind } = rows[0];
+    if (context.runners[kind]?.stopsRunsWhenRemoved) {
+      // Its Runs stop, as when a User takes their Tickets away: their sessions are stopped and their credentials revoked.
+      const now = context.clock.now();
+      for (const ticket of held) {
+        await stopRunningRun(context, tx, ticket.id, `${name}, the Runner of its Agent, was removed.`, now);
+        context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+      }
+    }
     const { rows: counted } = await tx.query<{ running: number }>(
       "select count(*)::int as running from runs where runner_id = $1 and state = 'running'",
       [runnerId],
@@ -239,7 +307,7 @@ export async function removeRunner(context: Context, userId: string, runnerId: s
       throw new ApiError(
         409,
         "runner_running",
-        `${rows[0].name} has ${running === 1 ? "a Run" : `${running} Runs`} running. Wait for its running Runs to end, or stop them first.`,
+        `${name} has ${running === 1 ? "a Run" : `${running} Runs`} running. Wait for its running Runs to end, or stop them first.`,
       );
     }
     // Its Agents' Tickets waiting in its queue are rechecked once it is gone, as for an Agent with no Runner.

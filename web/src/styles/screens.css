@@ -681,6 +681,11 @@
 .comment-form {
   gap: var(--space-2);
 }
+/* The Ticket's Comment box, with the line naming its C shortcut close under it. */
+.ticket-comment {
+  display: grid;
+  gap: var(--space-3);
+}
 .report-card {
   border: 1px solid var(--agent);
   border-radius: var(--radius-panel);
@@ -1189,8 +1194,15 @@
   display: grid;
   gap: var(--space-2);
 }
+.model-ids {
+  display: grid;
+  gap: var(--space-2);
+}
+.model-id-row {
+  align-items: flex-end;
+}
 .runner-trigger-id {
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
@@ -1205,26 +1217,55 @@
     padding-inline: var(--space-1);
   }
 }
-/* A trigger waiting for its token and the row pasting it read as one: no rule between them. */
-.runner-trigger-waits > td {
-  border-bottom: 0;
-}
-.runner-trigger-paste {
+.runner-waiting,
+.runner-token-paste,
+.runner-setup-form,
+.runner-setup-started {
   display: grid;
   gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--warn-soft);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--radius-control);
 }
-.runner-trigger-paste p {
-  margin: 0;
+.runner-setup-started {
+  gap: var(--space-3);
+}
+.runner-token-paste .form-row {
+  align-items: flex-end;
+}
+.runner-token-paste a {
+  font-size: 13px;
+  padding-bottom: var(--space-2);
+}
+.runner-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
 }
 .runner-hook {
   display: grid;
   gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
+}
+.runner-managed {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.runner-managed-ids {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: 13px;
+}
+.runner-managed-ids dt {
+  color: var(--muted);
+}
+.runner-managed-ids dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 .runner-hook-steps {
   display: grid;

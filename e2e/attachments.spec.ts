@@ -1,7 +1,7 @@
 import type { Locator, Page } from "@playwright/test";
 import { setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, signInInBrowser, test } from "./fixtures.js";
+import { expect, placeCommentButton, signInInBrowser, test } from "./fixtures.js";
 
 /** Sets Cronk up with a Project and one Ticket, and opens the Ticket in the browser as Ada. */
 async function openTicket(page: Page, cronk: StartedCronk) {
@@ -55,7 +55,7 @@ test("files dropped or pasted anywhere on a Ticket attach to it, as thumbnails n
 
   // A paste into a text field that carries text too pastes the text and attaches nothing.
   await giveFiles(commentBox, "paste", [{ name: "copied.png", type: "image/png" }], "copied words");
-  await page.getByRole("button", { name: "Comment", exact: true }).focus();
+  await placeCommentButton(page).focus();
   await page.reload();
   await expect(attachments.getByRole("heading", { name: "Attachments · 2" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Files" })).not.toContainText("copied.png");

@@ -162,7 +162,7 @@ test("with the sidebar hidden, a board spans the window, and so does every other
   await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeHidden();
   expect((await page.getByRole("heading", { name: "Ada's Workspace", level: 1 }).boundingBox())!.x).toBeLessThan(100);
   await page.goBack();
-  await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${project.key}$`));
   expect(await width()).toBeGreaterThan(1500);
 });
 

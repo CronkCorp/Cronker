@@ -44,12 +44,15 @@ export interface Repository {
 export interface WorkspaceSummary {
   id: string;
   name: string;
+  /** Its name in web addresses, such as `acme` in `/acme/tickets/RP-12`; it never changes. */
+  slug: string;
   isAdmin: boolean;
 }
 
 export interface Workspace {
   id: string;
   name: string;
+  slug: string;
 }
 
 export interface Member {
@@ -267,11 +270,35 @@ export interface Trigger {
   /** The Project it overrides the Runner's own trigger on; null for all Projects. */
   projectId: string | null;
   triggerId: string;
-  /** Saved without its token: Runs needing it can't start until the token is pasted. */
+  /** Saved without its token, or made by a Runner setup, and waiting for the token the Owner pastes; Runs needing it can't start until then. */
   waitingForToken: boolean;
-  /** Its routine in claude.ai, where its token is generated. */
+  /** The routine's page in claude.ai, where its token is generated. */
   routineUrl: string;
   createdAt: string;
+}
+
+/** One routine a Runner setup has Claude Code create, for one model label the Project's board uses. */
+export interface RoutinePlan {
+  label: string;
+  modelId: string;
+  name: string;
+  repositories: string[];
+  prompt: string;
+  mcpUrl: string;
+  branchPrefix: string;
+}
+
+/** A Runner setup as it started: the command to paste into Claude Code, and what it creates. */
+export interface StartedSetup {
+  command: string;
+  expiresAt: string;
+  /** What the User gives up, such as Transcripts for a Project with several Repositories. */
+  warning: string | null;
+  plan: {
+    project: { id: string; name: string; key: string };
+    agent: { id: string; name: string };
+    routines: RoutinePlan[];
+  };
 }
 
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
@@ -285,6 +312,8 @@ export interface Runner {
   /** Until when a rate limit pauses its queue. */
   pausedUntil: string | null;
   triggers: Trigger[];
+  /** For a `managed_agents` Runner, the agent definition and cloud environment Cronk created with its API key. */
+  managedAgents: { agentId: string; environmentId: string } | null;
   createdAt: string;
 }
 
@@ -365,6 +394,8 @@ export interface Report {
   runId: string;
   agent: { id: string; name: string };
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
   body: string;
   createdAt: string;
 }
@@ -422,6 +453,8 @@ export interface Run {
   sessionUrl: string | null;
   /** Its Transcript, once one was uploaded for its session. */
   transcriptId: string | null;
+  /** Its Transcript's readable form, for its address. */
+  transcriptSlug: string | null;
   /** Whether a User deleted its Transcript. */
   transcriptDeleted: boolean;
   startedAt: string;
@@ -431,6 +464,9 @@ export interface Run {
 /** The record of an agent's session, as Cronk converted it into entries. */
 export interface Transcript {
   id: string;
+  workspaceId: string;
+  /** Its readable form, as its address takes it: its Agent's name, then its short id. */
+  slug: string;
   sessionId: string;
   agent: { id: string; name: string };
   runId: string | null;
@@ -464,6 +500,8 @@ export interface TranscriptEntry {
 export interface ReportRef {
   id: string;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
 }
 
 /** A Ticket in a Review Status, waiting for its Assignee's review. */
@@ -553,6 +591,8 @@ export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedIte
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
   lostRunMinutes: number;
+  /** The exact model id each model label stands for, used by Runner setups. */
+  modelIds: { label: string; modelId: string }[];
 }
 
 export interface Inbox {
@@ -599,6 +639,8 @@ export interface DocumentSummary {
   /** Null for a Report. */
   position: number | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
   version: Version;
 }
 
@@ -628,6 +670,8 @@ export interface Artifact {
   /** Null for the Workspace's. */
   projectId: string | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
   description: string;
   page: string;
   /** Where its page is served, sandboxed, on Cronk's own address. */
@@ -667,6 +711,8 @@ export interface LinkedArtifact {
   /** Null for an Artifact of the Workspace. */
   projectId: string | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
 }
 
 /** A Document linked to a Ticket, from its Project's page tree or the Workspace's. */
@@ -675,6 +721,8 @@ export interface LinkedDocument {
   /** Null for a Document of the Workspace's page tree. */
   projectId: string | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
 }
 
 /** A check on a Pull Request's latest commit: a check run, or a commit status by its context. */
@@ -820,7 +868,7 @@ export interface DecisionEdit {
 export interface ConnectRequest {
   client: { id: string; name: string | null };
   redirectUri: string;
-  agents: { id: string; name: string; workspace: Workspace }[];
+  agents: { id: string; name: string; workspace: { id: string; name: string } }[];
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -854,6 +902,10 @@ export interface SearchResult {
   projectId: string | null;
   /** A Ticket's own key, or the key of the Ticket a Report is on or a Transcript's Run was on. */
   ticketKey: string | null;
+  /** A Document's, Report's, Artifact's or Transcript's readable form, for its address. */
+  slug: string | null;
+  /** A Decision's number, within its Project or among the Workspace's own. */
+  number: number | null;
   /** Where it matched, the matching words marked. */
   snippet: { text: string; match: boolean }[];
 }
@@ -868,7 +920,7 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) =>
     call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
   workspace: (id: string) => call<Workspace>("GET", ws(id)),
-  createWorkspace: (name: string) => call<WorkspaceSummary>("POST", "/api/workspaces", { name }),
+  createWorkspace: (input: { name: string; slug?: string }) => call<WorkspaceSummary>("POST", "/api/workspaces", input),
   renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
   workspaceSettings: (id: string) => call<WorkspaceSettings>("GET", `${ws(id)}/settings`),
   changeWorkspaceSettings: (id: string, change: Partial<WorkspaceSettings>) =>
@@ -953,13 +1005,15 @@ export const api = {
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
   setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId }),
   runners: () => call<Runner[]>("GET", "/api/runners"),
-  createRunner: (input: { name: string; kind: string }) => call<Runner>("POST", "/api/runners", input),
+  createRunner: (input: { name: string; kind: string; apiKey?: string }) => call<Runner>("POST", "/api/runners", input),
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
   saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token?: string }) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
   pasteTriggerToken: (runnerId: string, triggerId: string, token: string) =>
     call<Runner>("PUT", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}/token`, { token }),
+  startRunnerSetup: (runnerId: string, input: { projectId: string; agentId?: string }) =>
+    call<StartedSetup>("POST", `${runner(runnerId)}/setups`, input),
   removeTrigger: (runnerId: string, triggerId: string) =>
     call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),

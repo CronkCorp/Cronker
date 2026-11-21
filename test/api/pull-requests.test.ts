@@ -1487,8 +1487,9 @@ describe("Send-back Comments written before they were marked", () => {
   test("Cronk's earlier Comments, each a send-back, are marked as one; other Comments are not", async () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
-    // Creating a Project, as today's API does, needs the Merge Step's columns.
+    // Setting up and creating a Project, as today's API does, needs Workspace slugs and the Merge Step's columns.
     await cronk.applyAhead("0033_merge_step.sql");
+    await cronk.applyAhead("0044_workspace_slugs.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
