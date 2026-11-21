@@ -224,6 +224,8 @@ test("set up a Managed Agents Runner with an API key, after a rejected one is re
   await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
   await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
   const runner = page.getByRole("region", { name: "Claude API" });
+  // The stand-in holds the agent and environment once the card shows, not as soon as the button is pressed.
+  await expect(runner.getByRole("group", { name: "Managed Agents" })).toBeVisible();
   const [agent] = cronk.managedAgents.agents;
   const [environment] = cronk.managedAgents.environments;
   await expect(runner.getByRole("group", { name: "Managed Agents" })).toContainText(agent!.id);
@@ -231,4 +233,85 @@ test("set up a Managed Agents Runner with an API key, after a rejected one is re
   await expect(runner).toContainText("managed_agents");
   await expect(runner).not.toContainText("Triggers");
   await expect(page.getByRole("button", { name: "Set up a subscription Runner" })).toBeVisible();
+});
+
+test("add a Managed Agents Runner's webhook: copy its URL, and save its signing secret, after a wrong one is refused", async ({
+  page,
+  cronk,
+}) => {
+  await setUp(cronk);
+  cronk.managedAgents.apiKey("sk-ant-api03-ada-secret");
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "Runners" }).click();
+  await page.getByLabel("Runner name").fill("Claude API");
+  await page.getByLabel("Kind").selectOption("managed_agents");
+  await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
+  await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
+  const webhook = page.getByRole("region", { name: "Claude API" }).getByRole("group", { name: "Webhook" });
+  const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  const [runner] = await (await cronk.request("GET", "/api/runners", { cookie })).json();
+
+  await expect(webhook.getByLabel("Webhook URL")).toHaveText(`${cronk.url}/api/runners/${runner.id}/managed-agents/webhook`);
+  await expect(webhook.getByRole("button", { name: "Copy URL" })).toBeVisible();
+  await expect(webhook).toContainText("No secret yet");
+
+  await webhook.getByLabel("Signing secret", { exact: true }).fill("sk-ant-api03-not-a-secret");
+  await webhook.getByRole("button", { name: "Save secret" }).click();
+  await expect(webhook.getByRole("alert")).toContainText("whsec_");
+
+  const secret = cronk.managedAgents.webhookSecret();
+  await webhook.getByLabel("Signing secret", { exact: true }).fill(secret);
+  await webhook.getByRole("button", { name: "Save secret" }).click();
+  await expect(webhook.getByRole("status")).toContainText("Saved");
+  await expect(webhook).toContainText("A secret is saved");
+  await expect(webhook.getByLabel("Signing secret", { exact: true })).toHaveValue("");
+  await page.reload();
+  await expect(page.getByRole("group", { name: "Webhook" }).getByRole("button", { name: "Replace secret" })).toBeVisible();
+  expect(await page.content()).not.toContain(secret.slice(6));
+
+  await page.getByRole("group", { name: "Webhook" }).getByRole("button", { name: "Forget it" }).click();
+  await page.getByRole("dialog", { name: "Forget the webhook signing secret?" }).getByRole("button", { name: "Forget" }).click();
+  await expect(page.getByRole("group", { name: "Webhook" })).toContainText("No secret yet");
+});
+
+test("save a trigger waiting for its token on the card, then paste the token and the Ticket that couldn't start starts", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  const runner = await call("POST", "/api/runners", { name: "Claude Max", kind: "subscription" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  await signInInBrowser(page, cronk);
+
+  await page.getByRole("link", { name: "Runners" }).click();
+  const card = page.getByRole("region", { name: "Claude Max" });
+  await card.getByLabel("Model").fill("haiku");
+  await card.getByRole("combobox", { name: "For" }).selectOption("Cronker only");
+  await card.getByLabel("Trigger id").fill("trig_01Haiku");
+  await card.getByRole("button", { name: "Save trigger" }).click();
+  const row = card.getByRole("row", { name: /haiku/ });
+  await expect(row).toContainText("waiting for token");
+  const paste = card.getByRole("group", { name: "Waiting for tokens" }).getByRole("form", { name: "Token for haiku on Cronker" });
+  await expect(paste.getByRole("link", { name: "Open routine in claude.ai" })).toHaveAttribute(
+    "href",
+    "https://claude.ai/code/routines/trig_01Haiku",
+  );
+
+  // Its Run can't start until the token is pasted.
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
+  expect((await call("GET", `/api/tickets/${ticket.id}/runs`))[0].endReason).toContain("waiting for its token");
+
+  cronk.claude.trigger("trig_01Haiku", "sk-ant-oat01-secret");
+  await paste.getByLabel("Token for haiku on Cronker").fill("sk-ant-oat01-secret");
+  await paste.getByRole("button", { name: "Save token" }).click();
+  await expect(row).not.toContainText("waiting for token");
+  await expect(paste).toHaveCount(0);
+  expect(await page.content()).not.toContain("sk-ant-oat01-secret");
+  await expect.poll(() => cronk.claude.fires.map((f) => f.triggerId)).toEqual(["trig_01Haiku"]);
 });

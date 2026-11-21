@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { minutes } from "../harness/clock.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -87,7 +88,12 @@ describe("setting up a Managed Agents Runner", () => {
       expect.objectContaining({
         name: "Claude API",
         kind: "managed_agents",
-        managedAgents: { agentId: agent!.id, environmentId: environment!.id },
+        managedAgents: {
+          agentId: agent!.id,
+          environmentId: environment!.id,
+          webhookUrl: `${cronk.url}/api/runners/${runner.id}/managed-agents/webhook`,
+          webhookSecretSaved: false,
+        },
       }),
     );
     expect(JSON.stringify(await ok("GET", "/api/runners", ada))).not.toContain(apiKey);
@@ -650,3 +656,336 @@ describe("the Run's Transcript", () => {
   }, 60_000);
 });
 
+describe("webhooks", () => {
+  /** Ada's Runner with the signing secret of its webhook endpoint saved, as she pastes it from the Console. */
+  async function withWebhookSecret() {
+    const setup = await adaWithManagedAgentsRunner();
+    const secret = cronk.managedAgents.webhookSecret();
+    const runner = await ok("PUT", `/api/runners/${setup.runner.id}/webhook-secret`, setup.ada, { secret });
+    const deliver = (type: string, sessionId: string, options: { id?: string; secret?: string } = {}) =>
+      cronk.managedAgents.deliver(runner.managedAgents.webhookUrl, {
+        secret: options.secret ?? secret,
+        type,
+        sessionId,
+        at: cronk.clock.now(),
+        id: options.id,
+      });
+    return { ...setup, runner, secret, deliver };
+  }
+
+  test("a signed session.status_idled delivery fails the Run with the stop reason at once, as polling would", async () => {
+    const { ada, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    const vaultId = (session.body.vault_ids as string[])[0]!;
+    cronk.managedAgents.idle(session.id, "retries_exhausted");
+
+    const answer = await deliver("session.status_idled", session.id);
+
+    expect(answer.status).toBeLessThan(300);
+    const failed = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(failed.state).toBe("failed");
+    expect(failed.endReason).toContain("retries_exhausted");
+    expect(failed.endReason).toContain("without calling finish");
+    expect(cronk.managedAgents.session(session.id).archived).toBe(true);
+    expect(cronk.managedAgents.vaults.find((v) => v.id === vaultId)!.deleted).toBe(true);
+  });
+
+  test("a signed session.status_terminated delivery fails the Run, which waits in the Inbox with Retry", async () => {
+    const { ada, ticket, startRun, inbox, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+
+    const answer = await deliver("session.status_terminated", session.id);
+
+    expect(await answer.json()).toEqual({ ended: true });
+    const failed = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(failed.state).toBe("failed");
+    expect(failed.endReason).toContain("terminated");
+    expect(JSON.stringify(await inbox())).toContain(ticket.id);
+  });
+
+  test("a delivery with a bad signature is refused and ignored: the Run keeps running", async () => {
+    const { ada, runner, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+    const reads = () => cronk.managedAgents.calls.filter((c) => c.path.startsWith(`/v1/sessions/${session.id}`)).length;
+    const before = reads();
+
+    const wrongSecret = await deliver("session.status_terminated", session.id, { secret: cronk.managedAgents.webhookSecret() });
+    const unsigned = await fetch(runner.managedAgents.webhookUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "event", id: "whe_forged", data: { type: "session.status_terminated", id: session.id } }),
+    });
+
+    expect(wrongSecret.status).toBe(401);
+    expect((await wrongSecret.json()).error.code).toBe("invalid_signature");
+    expect(unsigned.status).toBe(401);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    expect(reads()).toBe(before);
+  });
+
+  test("a delivery signed more than five minutes before Cronk's clock is refused, as a replay", async () => {
+    const { ada, runner, secret, startRun } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+
+    const stale = await cronk.managedAgents.deliver(runner.managedAgents.webhookUrl, {
+      secret,
+      type: "session.status_terminated",
+      sessionId: session.id,
+      at: new Date(cronk.clock.now().getTime() - 6 * 60_000),
+    });
+
+    expect(stale.status).toBe(401);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+
+  test("a signed delivery about an unknown session is ignored, as is one about another Runner's Run", async () => {
+    const { ada, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+    const unknown = await deliver("session.status_terminated", "sesn_01NOTCRONKS");
+    expect(await unknown.json()).toEqual({ ended: false });
+
+    // Another Runner with a key to the same Anthropic workspace, whose endpoint there gets every session's events too.
+    const other = await ok("POST", "/api/runners", ada, { name: "Other", kind: "managed_agents", apiKey });
+    const secret = cronk.managedAgents.webhookSecret();
+    const saved = await ok("PUT", `/api/runners/${other.id}/webhook-secret`, ada, { secret });
+    const elsewhere = await cronk.managedAgents.deliver(saved.managedAgents.webhookUrl, {
+      secret,
+      type: "session.status_terminated",
+      sessionId: session.id,
+      at: cronk.clock.now(),
+    });
+
+    expect(await elsewhere.json()).toEqual({ ended: false });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+
+  test("a delivery whose session is running again by the time Cronk reads it leaves the Run running", async () => {
+    const { ada, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+
+    const answer = await deliver("session.status_idled", session.id);
+
+    expect(await answer.json()).toEqual({ ended: false });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+
+  test("other kinds of event are acknowledged and ignored", async () => {
+    const { ada, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+
+    const answer = await deliver("session.status_run_started", session.id);
+
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ ended: false });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+
+  test("a delivery whose session Anthropic can't read now fails, so Anthropic's retry ends the Run", async () => {
+    const { ada, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+    cronk.managedAgents.failNext("GET", `/v1/sessions/${session.id}`, 503);
+
+    const first = await deliver("session.status_terminated", session.id, { id: "whe_01RETRIED" });
+
+    expect(first.status).toBeGreaterThanOrEqual(500);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+
+    const retry = await deliver("session.status_terminated", session.id, { id: "whe_01RETRIED" });
+
+    expect(await retry.json()).toEqual({ ended: true });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("failed");
+  });
+
+  test("a repeated delivery changes nothing, and reads no session", async () => {
+    const { ada, ticket, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.idle(session.id, "end_turn");
+    const first = await deliver("session.status_idled", session.id, { id: "whe_01REPEATED" });
+    expect(await first.json()).toEqual({ ended: true });
+    const after = await ok("GET", `/api/runs/${run.id}`, ada);
+    const calls = cronk.managedAgents.calls.length;
+
+    const again = await deliver("session.status_idled", session.id, { id: "whe_01REPEATED" });
+
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual({ ended: false });
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toEqual(after);
+    expect(await runsOf(ticket.id, ada)).toHaveLength(1);
+    expect(cronk.managedAgents.calls.length).toBe(calls);
+  });
+
+  test("without a saved secret, deliveries are refused and Runs still end by polling", async () => {
+    const { ada, runner, startRun } = await adaWithManagedAgentsRunner();
+    expect(runner.managedAgents.webhookSecretSaved).toBe(false);
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+
+    const refused = await cronk.managedAgents.deliver(runner.managedAgents.webhookUrl, {
+      secret: cronk.managedAgents.webhookSecret(),
+      type: "session.status_terminated",
+      sessionId: session.id,
+      at: cronk.clock.now(),
+    });
+    expect(refused.status).toBe(401);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+
+    await cronk.pollManagedAgentsSessions();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("failed");
+  });
+
+  test("forgetting the secret refuses deliveries again, leaving Runs to polling", async () => {
+    const { ada, runner, startRun, deliver } = await withWebhookSecret();
+    const forgotten = await ok("DELETE", `/api/runners/${runner.id}/webhook-secret`, ada);
+    expect(forgotten.managedAgents.webhookSecretSaved).toBe(false);
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+
+    expect((await deliver("session.status_terminated", session.id)).status).toBe(401);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+});
+
+describe("saving a webhook signing secret", () => {
+  test("shows the webhook URL to add in the Console, and keeps the secret, never returning it", async () => {
+    const { ada, runner } = await adaWithManagedAgentsRunner();
+    expect(runner.managedAgents.webhookUrl).toBe(`${cronk.url}/api/runners/${runner.id}/managed-agents/webhook`);
+    const secret = cronk.managedAgents.webhookSecret();
+
+    const saved = await ok("PUT", `/api/runners/${runner.id}/webhook-secret`, ada, { secret: `  ${secret}\n` });
+
+    expect(saved.managedAgents).toEqual(expect.objectContaining({ webhookSecretSaved: true, webhookUrl: runner.managedAgents.webhookUrl }));
+    expect(JSON.stringify(saved)).not.toContain(secret.slice(6));
+    expect(JSON.stringify(await ok("GET", "/api/runners", ada))).not.toContain(secret.slice(6));
+  });
+
+  test("refuses a secret that isn't a whsec_ one, and Runners of other kinds", async () => {
+    const { ada, runner } = await adaWithManagedAgentsRunner();
+    const subscription = await ok("POST", "/api/runners", ada, { name: "Claude Max", kind: "subscription" });
+
+    const wrong = await call("PUT", `/api/runners/${runner.id}/webhook-secret`, ada, { secret: "sk-ant-api03-not-a-secret" });
+    const otherKind = await call("PUT", `/api/runners/${subscription.id}/webhook-secret`, ada, {
+      secret: cronk.managedAgents.webhookSecret(),
+    });
+
+    expect(wrong.status).toBe(400);
+    expect(wrong.json.error.code).toBe("invalid_webhook_secret");
+    expect(otherKind.status).toBe(409);
+    expect(otherKind.json.error.code).toBe("runner_has_no_webhook");
+    expect(subscription.managedAgents).toBeNull();
+  });
+
+  test("is only for the Runner's Owner", async () => {
+    const { workspace, ada, runner } = await adaWithManagedAgentsRunner();
+    const bea = { cookie: (await addMember(cronk, ada.cookie, workspace.id, "bea@example.com")).cookie };
+
+    const refused = await call("PUT", `/api/runners/${runner.id}/webhook-secret`, bea, { secret: cronk.managedAgents.webhookSecret() });
+    const notForgotten = await call("DELETE", `/api/runners/${runner.id}/webhook-secret`, bea);
+
+    expect(refused.status).toBe(404);
+    expect(notForgotten.status).toBe(404);
+  });
+});
+
+describe("a Run's Repositories", () => {
+  /** The Project lists cronkcorp/cronker and cronkcorp/website, both covered by the GitHub App's installation on cronkcorp. */
+  async function withRepositories() {
+    const setup = await adaWithManagedAgentsRunner();
+    await createGitHubApp(cronk, setup.ada.cookie);
+    const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker", "website"]);
+    for (const repository of installation.repositories) {
+      await ok("POST", `/api/projects/${setup.project.id}/repositories`, setup.ada, { id: repository.id });
+    }
+    return { ...setup, installation };
+  }
+
+  /** The installation tokens GitHub issued that are still good, by the test's clock. */
+  const goodTokens = () =>
+    cronk.github.tokensIssued.filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime()).map((t) => t.token);
+
+  test("are each mounted on the session as a resource, with an installation token", async () => {
+    const { startRun, installation } = await withRepositories();
+
+    const { session } = await startRun();
+
+    const resources = session.body.resources as { type: string; url: string; authorization_token: string }[];
+    expect(resources.map(({ type, url }) => ({ type, url }))).toEqual([
+      { type: "github_repository", url: `${cronk.github.url}/cronkcorp/cronker` },
+      { type: "github_repository", url: `${cronk.github.url}/cronkcorp/website` },
+    ]);
+    for (const { authorization_token: token } of resources) {
+      const issued = cronk.github.tokensIssued.find((t) => t.token === token);
+      expect(issued?.installationId).toBe(installation.id);
+      expect(goodTokens()).toContain(token);
+    }
+  });
+
+  test("are none for a Project listing none, which needs no GitHub App", async () => {
+    const { startRun } = await adaWithManagedAgentsRunner();
+
+    const { run, session } = await startRun();
+
+    expect(run.state).toBe("running");
+    expect(session.body.resources ?? []).toEqual([]);
+    expect(cronk.github.apiCalls).toEqual([]);
+  });
+
+  test("get fresh installation tokens on the session before theirs expire, while the Run runs", async () => {
+    const { startRun } = await withRepositories();
+    const { session } = await startRun();
+    const tokens = () => cronk.managedAgents.session(session.id).resources.map((r) => r.authorizationToken);
+    const first = tokens();
+
+    cronk.clock.advance(minutes(30));
+    await cronk.rotateRepositoryTokens();
+    expect(tokens()).toEqual(first);
+
+    cronk.clock.advance(minutes(21));
+    await cronk.rotateRepositoryTokens();
+    const second = tokens();
+    expect(second).toHaveLength(2);
+    for (const token of second) expect(first).not.toContain(token);
+
+    // The first tokens expire an hour after they were issued; the session's are still good, and keep being renewed.
+    cronk.clock.advance(minutes(10));
+    for (const token of second) expect(goodTokens()).toContain(token);
+    cronk.clock.advance(minutes(40));
+    await cronk.rotateRepositoryTokens();
+    cronk.clock.advance(minutes(10));
+    for (const token of tokens()) expect(goodTokens()).toContain(token);
+  });
+
+  test("that the GitHub App no longer covers keep the Run from starting, saying which", async () => {
+    const { ada, startRun, installation } = await withRepositories();
+    installation.repositories.splice(0, 1);
+    // What GitHub said the installation covers is kept for five minutes.
+    cronk.clock.advance(minutes(6));
+
+    const { run } = await startRun();
+
+    const refused = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(refused.state).toBe("refused");
+    expect(refused.endReason).toContain("cronkcorp/cronker");
+    expect(cronk.managedAgents.sessions).toEqual([]);
+    expect(cronk.managedAgents.vaults).toEqual([]);
+  });
+
+  test("get no fresh tokens once the Run ended", async () => {
+    const { ada, ticket, status, startRun } = await withRepositories();
+    const { session } = await startRun();
+    const first = cronk.managedAgents.session(session.id).resources.map((r) => r.authorizationToken);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Backlog") });
+
+    cronk.clock.advance(minutes(55));
+    await cronk.rotateRepositoryTokens();
+
+    expect(cronk.managedAgents.session(session.id).resources.map((r) => r.authorizationToken)).toEqual(first);
+    expect(cronk.managedAgents.calls.filter((c) => c.path.includes("/resources/"))).toEqual([]);
+  });
+});

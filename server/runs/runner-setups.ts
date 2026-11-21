@@ -101,7 +101,7 @@ export async function startSetup(
   input: { projectId: string; agentId?: string },
 ): Promise<StartedSetup> {
   const { db, clock, config } = context;
-  const runner = await findRunner(db, userId, runnerId);
+  const runner = await findRunner(context, userId, runnerId);
   if (!runner) throw noSuchRunner();
   if (runner.kind !== "subscription") {
     throw new ApiError(409, "runner_has_no_triggers", `${runner.name} is a Runner of the kind ${runner.kind}, which fires no routines.`);

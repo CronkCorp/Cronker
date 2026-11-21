@@ -176,12 +176,14 @@ function RunnerSettings({
   });
   const save = useSubmit(async (form, element) => {
     const projectId = field(form, "projectId");
+    const token = field(form, "token");
     onChanged(
       await api.saveTrigger(runner.id, {
         model: field(form, "model"),
         projectId: projectId || null,
         triggerId: field(form, "triggerId"),
-        token: field(form, "token"),
+        // Without a token, the trigger waits for one.
+        token: token.trim() ? token : undefined,
       }),
     );
     element.reset();
@@ -338,10 +340,14 @@ function RunnerSettings({
                 <input name="triggerId" required autoComplete="off" placeholder="trig_01ABC…" className="mono" />
               </Field>
               <Field label="Trigger token">
-                <input name="token" type="password" required autoComplete="off" />
+                <input name="token" type="password" autoComplete="off" placeholder="Optional" />
               </Field>
             </div>
-            <p className="field-hint">The token is stored encrypted and never shown again. Saving a model again replaces its trigger.</p>
+            <p className="field-hint">
+              The token is stored encrypted and never shown again. Without one, a new trigger waits for its token, which
+              you paste here later. Saving a model again replaces its trigger, keeping its token if the trigger id is the
+              same.
+            </p>
             <FormError error={save.error} />
             <Actions>
               <Button type="submit" variant="primary" disabled={save.busy}>
@@ -375,7 +381,7 @@ function RunnerSettings({
             Each Run is a session of this agent in your Anthropic workspace, on its Step's model, with the Brief as its
             first message and a fresh token for Cronk in a vault of its own, revoked when the Run ends. Ended sessions
             are archived, never deleted, so each Run's Console link keeps working. Cronk reads running sessions every few
-            minutes to learn of those that stopped without finishing.
+            minutes to learn of those that stopped without finishing; a webhook tells it at once.
           </p>
           <dl className="runner-managed-ids">
             <dt>Agent</dt>
@@ -387,9 +393,90 @@ function RunnerSettings({
               <code>{runner.managedAgents.environmentId}</code>
             </dd>
           </dl>
+          <ManagedAgentsWebhook runner={runner} webhook={runner.managedAgents} onChanged={onChanged} />
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The webhook a Managed Agents Runner's Owner adds in the Anthropic Console, so a session that stops ends its Run at
+ * once instead of at the next poll: its URL to copy, and its signing secret to paste, stored encrypted and never shown.
+ */
+function ManagedAgentsWebhook({
+  runner,
+  webhook,
+  onChanged,
+}: {
+  runner: Runner;
+  webhook: NonNullable<Runner["managedAgents"]>;
+  onChanged: (runner: Runner) => void;
+}) {
+  const [saved, setSaved] = useState(false);
+  const save = useSubmit(async (form, element) => {
+    setSaved(false);
+    onChanged(await api.saveWebhookSecret(runner.id, field(form, "secret")));
+    element.reset();
+    setSaved(true);
+  });
+  const [forgetting, setForgetting] = useState(false);
+  return (
+    <div className="runner-webhook" role="group" aria-label="Webhook">
+      <h4>Webhook</h4>
+      <ol className="runner-hook-steps">
+        <li>
+          <div className="runner-hook-snippet">
+            <span>
+              In the Claude Console, under <strong>Manage → Webhooks</strong>, add an endpoint with this URL, subscribed to{" "}
+              <code>session.status_idled</code> and <code>session.status_terminated</code>:
+            </span>
+            <div className="runner-webhook-url">
+              <code aria-label="Webhook URL">{webhook.webhookUrl}</code>
+              <CopyButton text={webhook.webhookUrl} label="Copy URL" />
+            </div>
+          </div>
+        </li>
+        <li>Paste the endpoint's signing secret, which the Console shows once, below.</li>
+      </ol>
+      <form onSubmit={save.onSubmit} aria-label="Webhook signing secret" className="runner-webhook-form">
+        <div className="form-row">
+          <Field label="Signing secret">
+            <input name="secret" type="password" required autoComplete="off" placeholder="whsec_…" className="mono" />
+          </Field>
+          <Button type="submit" disabled={save.busy}>
+            {webhook.webhookSecretSaved ? "Replace secret" : "Save secret"}
+          </Button>
+          <Saved shown={saved} />
+        </div>
+        <p className="field-hint">
+          {webhook.webhookSecretSaved ? (
+            <>
+              A secret is saved: signed deliveries end Runs at once, and polling stays as the backstop.{" "}
+              <Button variant="ghost" size="small" onClick={() => setForgetting(true)}>
+                Forget it
+              </Button>
+            </>
+          ) : (
+            "No secret yet: Runs end by polling alone, within a few minutes. The secret is stored encrypted and never shown again."
+          )}
+        </p>
+        <FormError error={save.error} />
+      </form>
+      <ConfirmDialog
+        open={forgetting}
+        onOpenChange={setForgetting}
+        title="Forget the webhook signing secret?"
+        confirm="Forget"
+        onConfirm={async () => {
+          setSaved(false);
+          onChanged(await api.forgetWebhookSecret(runner.id));
+        }}
+      >
+        Cronk then refuses the webhook's deliveries, and Runs end by polling alone, within a few minutes. Remove the
+        endpoint in the Claude Console too, or the Console disables it once its deliveries keep failing.
+      </ConfirmDialog>
+    </div>
   );
 }
 

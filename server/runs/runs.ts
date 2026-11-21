@@ -300,12 +300,21 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   if (!runner) return "started";
   runnerChanged(context, tx, { runnerId: ticket.runnerId!, ownerId: ticket.runnerOwnerId! });
 
+  const { rows: repositories } = await tx.query<{ id: string; fullName: string }>(
+    `select repositories.id, repositories.full_name as "fullName"
+     from project_repositories join repositories on repositories.id = project_repositories.repository_id
+     where project_repositories.project_id = $1
+     order by lower(repositories.full_name), repositories.id`,
+    [ticket.projectId],
+  );
   const start: RunToStart = {
     runId,
     brief: brief.text,
     model: status.step.model,
     ticket: { id: ticketId, key: ticket.key },
     project: { id: ticket.projectId, key: ticket.projectKey, name: ticket.projectName },
+    // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
+    repositories: repositories.map((r) => ({ id: Number(r.id), fullName: r.fullName })),
     agent: { id: ticket.delegateId, name: ticket.agentName! },
     runner: { id: ticket.runnerId!, ownerId: ticket.runnerOwnerId!, name: ticket.runnerName! },
   };
@@ -454,8 +463,9 @@ export async function waitingTickets(tx: Tx, where: string, params: unknown[]): 
 }
 
 /**
- * Once the transaction commits, rechecks each of the waiting Tickets, which starts it, keeps it waiting or ends
- * its wait, and then gives their Runners' free slots out in queue order.
+ * Once the transaction commits, rechecks each of the Tickets, which starts it, keeps it waiting or ends its wait, and
+ * then gives their Runners' free slots out in queue order. They are waiting Tickets, or Tickets whose Run couldn't start
+ * for want of a trigger's token that was just pasted.
  */
 export function recheckWaiting(context: Context, tx: Tx, tickets: WaitingTicket[]): void {
   if (tickets.length === 0) return;

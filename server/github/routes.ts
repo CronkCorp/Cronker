@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
+import { deliveryRoute } from "../http/deliveries.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
@@ -203,38 +204,29 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => pullRequestsOf(db, await requireCaller(context, request), request.params.ticketId),
     );
 
-    // The webhook endpoint reads its body as bytes, since the signature covers exactly those.
-    await app.register(async (hooks) => {
-      hooks.removeAllContentTypeParsers();
-      hooks.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: webhookBodyLimit }, (_request, body, done) => done(null, body));
-      hooks.post(
-        webhooksPath,
-        {
-          bodyLimit: webhookBodyLimit,
-          schema: {
-            tags: ["GitHub"],
-            summary: "Where GitHub sends the App's webhook deliveries",
-            description:
-              "For GitHub only. A delivery must carry `X-Hub-Signature-256`, the HMAC-SHA256 of its body under the App's webhook secret, or it is refused with `invalid_signature` before anything else is looked at. Each delivery is applied once, by its `X-GitHub-Delivery` id: `applied` says whether this call applied it, and is false for one applied before.",
-            response: { 200: Type.Object({ applied: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody },
-          },
+    await deliveryRoute(
+      app,
+      webhooksPath,
+      {
+        bodyLimit: webhookBodyLimit,
+        schema: {
+          tags: ["GitHub"],
+          summary: "Where GitHub sends the App's webhook deliveries",
+          description:
+            "For GitHub only. A delivery must carry `X-Hub-Signature-256`, the HMAC-SHA256 of its body under the App's webhook secret, or it is refused with `invalid_signature` before anything else is looked at. Each delivery is applied once, by its `X-GitHub-Delivery` id: `applied` says whether this call applied it, and is false for one applied before.",
+          response: { 200: Type.Object({ applied: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody },
         },
-        async (request) => {
-          const header = (name: string): string | undefined => {
-            const value = request.headers[name];
-            return Array.isArray(value) ? value[0] : value;
-          };
-          const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
-          const applied = await receiveDelivery(context, body, {
-            signature: header("x-hub-signature-256"),
-            event: header("x-github-event"),
-            id: header("x-github-delivery"),
-            contentType: header("content-type"),
-          });
-          return { applied };
-        },
-      );
-    });
+      },
+      async ({ body, header }) => {
+        const applied = await receiveDelivery(context, body, {
+          signature: header("x-hub-signature-256"),
+          event: header("x-github-event"),
+          id: header("x-github-delivery"),
+          contentType: header("content-type"),
+        });
+        return { applied };
+      },
+    );
 
     app.get(
       createdPath,
