@@ -288,6 +288,79 @@ describe("the served instructions", () => {
     expect(asHook.status).toBe(200);
   });
 
+  test("give each routine its plan, each Repository as a source and as an outcome, and only the Cronk connector", async () => {
+    const { ada, project, runner, website } = await adaWithProject();
+    await ok("POST", `/api/projects/${project.id}/repositories`, { cookie: ada.cookie }, { id: website.id });
+    const { instructions } = await started(ada, runner.id, project.id);
+
+    const text = await (await instructions()).text();
+
+    const bodies = [...text.matchAll(/### (\w+): [\w-]+\n\n```json\n([\s\S]*?)\n```/g)].map(([, label, json]) => [
+      label,
+      JSON.parse(json!),
+    ]);
+    expect(bodies.map(([label]) => label)).toEqual(["haiku", "sonnet", "opus"]);
+    const [label, haiku] = bodies[0]!;
+    expect(label).toBe("haiku");
+    expect(haiku).toEqual({
+      name: "Cronk · Cronker · haiku",
+      cron_expression: "",
+      enabled: true,
+      job_config: {
+        ccr: {
+          environment_id: "<ENVIRONMENT_ID>",
+          events: [
+            {
+              data: {
+                message: { role: "user", content: standardPrompt },
+                parent_tool_use_id: null,
+                session_id: "",
+                type: "user",
+                uuid: "<A FRESH UUID>",
+              },
+            },
+          ],
+          session_context: {
+            model: "claude-haiku-5-5",
+            allowed_tools: ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+            sources: [
+              { git_repository: { url: "https://github.com/cronkcorp/cronker" } },
+              { git_repository: { url: "https://github.com/cronkcorp/website" } },
+            ],
+            outcomes: [
+              { git_repository: { git_info: { repo: "cronkcorp/cronker", branches: ["claude/cronk-cronk-haiku"] } } },
+              { git_repository: { git_info: { repo: "cronkcorp/website", branches: ["claude/cronk-cronk-haiku"] } } },
+            ],
+          },
+        },
+      },
+      mcp_connections: [
+        { connector_uuid: "<CRONK_CONNECTOR_UUID>", name: "Cronk", url: `${cronk.url}/mcp`, permitted_tools: [] },
+      ],
+    });
+    expect(bodies[2]![1].job_config.ccr.session_context.model).toBe("claude-opus-5-5");
+    expect(text).toContain("Tell the User this too: Cronker lists several Repositories");
+  });
+
+  test("are the only place the Transcript hook token appears", async () => {
+    const { ada, project, runner, agent } = await adaWithProject();
+    const setup = await call("POST", `/api/runners/${runner.id}/setups`, ada, { projectId: project.id });
+    const address = /curl -fsSL '([^']+)'/.exec(setup.json.command)![1]!;
+
+    const text = await (await fetch(address)).text();
+
+    const hookToken = /CRONK_TOKEN=(cronk_agent_[A-Za-z0-9_-]+)/.exec(text)![1]!;
+    const elsewhere = [
+      setup.text,
+      (await call("GET", "/api/runners", ada)).text,
+      (await call("GET", `/api/agents/${agent.id}/tokens`, ada)).text,
+      (await call("GET", `/api/agents/${agent.id}`, ada)).text,
+    ];
+    for (const answer of elsewhere) expect(answer).not.toContain(hookToken);
+    expect(text).toContain("To add the Transcript hook token below to the variables of the environment they chose");
+    expect(text).toContain(`or add \`${new URL(cronk.url).host}\` to its **Limited** allowlist`);
+  });
+
   test("have Claude Code name the environment, which every routine needs, from those claude.ai lists", async () => {
     const { ada, project, runner } = await adaWithProject();
     const { instructions } = await started(ada, runner.id, project.id);
@@ -304,15 +377,19 @@ describe("the served instructions", () => {
     }
   });
 
-  test("are refused once the setup is used, saying to press the button again", async () => {
+  test("are refused once the setup is used or has expired, saying to press the button again", async () => {
     const { ada, project, runner } = await adaWithProject();
-    const { instructions, report } = await started(ada, runner.id, project.id);
-    await report(allLabels({ haiku: "trig_h", sonnet: "trig_s", opus: "trig_o" }));
+    const used = await started(ada, runner.id, project.id);
+    await used.report(allLabels({ haiku: "trig_h", sonnet: "trig_s", opus: "trig_o" }));
+    const expired = await started(ada, runner.id, project.id);
+    cronk.clock.advance(60 * 60 * 1000);
 
-    const response = await instructions();
-
-    expect(response.status).toBe(410);
-    expect(await response.text()).toContain("press Set up with Claude Code again");
+    for (const response of [await used.instructions(), await expired.instructions()]) {
+      expect(response.status).toBe(410);
+      const text = await response.text();
+      expect(text).toContain("press Set up with Claude Code again");
+      expect(text).not.toContain("CRONK_TOKEN");
+    }
   });
 });
 
