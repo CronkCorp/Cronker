@@ -42,10 +42,12 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Creates a Ticket with the Project's next key, in the Project's first Backlog Status. A Sub-Ticket, given " +
             "its `parentId`, starts with its parent's Assignee and Delegation. Agents create Tickets too: during its " +
-            "running Run an Agent may split its Run's Ticket into Sub-Tickets (`no_running_run` for any other " +
-            "parent). Any other Ticket an Agent files is a Discovered Ticket: undelegated, assigned to the Assignee of " +
-            "the Ticket of the Run it names in `runId` (or, naming none, to the Agent's Owner), and waiting in their " +
-            "Inbox until a User delegates, moves or dismisses it.",
+            "running Run an Agent may split its Run's Ticket into Sub-Tickets. Any other Ticket an Agent files is a " +
+            "Discovered Ticket: undelegated, assigned to the Assignee of the Ticket of the Run it names in `runId` " +
+            "(or, naming none, to the Agent's Owner), and waiting in their Inbox until a User delegates, moves or " +
+            "dismisses it. Until then the Agent may also split it, in or outside a Run: its Sub-Tickets are " +
+            "Discovered Tickets of the same Agent and source, waiting with their parent rather than in the Inbox, " +
+            "and settled along with it. An Agent gets `no_running_run` for any other parent.",
           params: Type.Object({ projectId: Type.String() }),
           body: Type.Object({
             title: Title,

@@ -608,6 +608,23 @@ describe("MCP with an Agent token", () => {
     expect(noProject).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project", advice: expect.stringContaining("CRONK") }) });
   });
 
+  test("outside a Run an Agent files a ticket set: a Discovered Ticket split into Sub-Tickets, one blocking another", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const plan = await call(client, "file_ticket", { project: "CRONK", title: "The plan" });
+    const first = await call(client, "create_sub_ticket", { ticket: "CRONK-3", title: "First slice" });
+    const second = await call(client, "create_sub_ticket", { ticket: "CRONK-3", title: "Second slice" });
+    const blocked = await call(client, "add_block", { ticket: "CRONK-4", blocks: "CRONK-5" });
+
+    expect([plan.isError, first.isError, second.isError, blocked.isError]).toEqual([false, false, false, false]);
+    expect(second.json).toEqual(
+      expect.objectContaining({ key: "CRONK-5", parentId: plan.json.id, discovered: expect.objectContaining({ waiting: true }) }),
+    );
+    const refused = await call(client, "create_sub_ticket", { ticket: "CRONK-1", title: "Not mine" });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run", rule: expect.any(String) }) });
+  });
+
   test("an Agent creates, edits, moves and reads Documents in a Project's page tree and the Workspace's", async () => {
     const { cookie, agent, secret } = await workspaceWithTicket();
     const client = await connect(secret);
