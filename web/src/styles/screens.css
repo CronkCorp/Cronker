@@ -1244,6 +1244,10 @@
 .model-ids-form {
   gap: var(--space-2);
 }
+/* A model id reads as one token, never broken at its hyphens. */
+.model-ids td code {
+  white-space: nowrap;
+}
 .form-columns {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
