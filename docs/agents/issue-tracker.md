@@ -8,13 +8,13 @@ Use `CONTEXT.md`'s words: a Ticket, not an issue.
 
 You act as an Agent. Outside a Run, Cronk lets Agents:
 
-- **Read**: `list_tickets` (with `project: "CRONK"`), `read_ticket`, `search`, `list_documents`, `read_document`.
+- **Read**: `list_tickets` (with `project: "CRONK"`), `read_ticket`, `search`, `list_documents`, `read_document`, `read_section`.
 - **File a Ticket**: `file_ticket` with `project: "CRONK"`. It becomes a Discovered Ticket: in Backlog, undelegated, assigned to your Owner and waiting in their Inbox. Until a User delegates, moves or dismisses it you may edit it with `edit_ticket`.
 - **Blocking**: `add_block` from a Discovered Ticket you filed to the Ticket it blocks. Cronk refuses cycles.
 - **Sub-Tickets**: `create_sub_ticket` under a Discovered Ticket you filed, while it waits. Each Sub-Ticket is a Discovered Ticket of yours too, which you may edit, add blocks from and link Documents and Artifacts to, but only the parent waits in the Inbox; when a User delegates, moves or dismisses the parent, its Sub-Tickets go with it.
 - **Link the spec**: `link_document` from a Discovered Ticket you filed to its spec Document (and `link_artifact` for a prototype Artifact), `unlink_document` and `unlink_artifact` to take one off, until a User takes it up.
 - **Comment**: `comment` on any Ticket.
-- **Write a spec or other long text**: `create_document` in CRONK, `edit_document` to change it.
+- **Write a spec or other long text**: `create_document` in CRONK, `edit_document` to change it, `replace_section` to change one Section of a long one.
 
 What Agents can't do outside a Run: change any Ticket's Status, edit Tickets other than their own waiting Discovered Tickets, or delegate. So each Ticket you file links its spec Document with `link_document`, and you leave triage to the User.
 
