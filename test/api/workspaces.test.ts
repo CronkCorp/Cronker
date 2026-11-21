@@ -20,14 +20,46 @@ describe("creating a Workspace", () => {
 
     expect(response.status).toBe(201);
     const created = await response.json();
-    expect(created).toEqual({ id: expect.any(String), name: "Friends", isAdmin: true });
+    expect(created).toEqual({ id: expect.any(String), name: "Friends", slug: "friends", isAdmin: true });
     const me = await (await cronk.request("GET", "/api/me", { cookie })).json();
     expect(me.workspaces).toEqual([
-      { id: first.id, name: "Ada's Workspace", isAdmin: true },
-      { id: created.id, name: "Friends", isAdmin: true },
+      { id: first.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: true },
+      { id: created.id, name: "Friends", slug: "friends", isAdmin: true },
     ]);
     const shown = await cronk.request("GET", `/api/workspaces/${created.id}`, { cookie });
-    expect(await shown.json()).toEqual({ id: created.id, name: "Friends" });
+    expect(await shown.json()).toEqual({ id: created.id, name: "Friends", slug: "friends" });
+  });
+
+  test("a new Workspace gets a slug from its name, unique across the installation, or the one its creator chose", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const create = async (body: object) => cronk.request("POST", "/api/workspaces", { cookie, body });
+
+    expect(await (await create({ name: "Café Crème & Co." })).json()).toMatchObject({ slug: "cafe-creme-co" });
+    expect(await (await create({ name: "cafe creme co" })).json()).toMatchObject({ slug: "cafe-creme-co-2" });
+    expect(await (await create({ name: "Runners" })).json()).toMatchObject({ slug: "runners-2" });
+    const chosen = await (await create({ name: "Friends", slug: "pals" })).json();
+    expect(chosen).toEqual({ id: expect.any(String), name: "Friends", slug: "pals", isAdmin: true });
+
+    const taken = await create({ name: "Others", slug: "pals" });
+    expect(taken.status).toBe(409);
+    expect((await taken.json()).error.code).toBe("workspace_slug_taken");
+    expect((await create({ name: "Others", slug: "tickets" })).status).toBe(409);
+    expect((await create({ name: "Others", slug: "Not A Slug" })).status).toBe(400);
+  });
+
+  test("a Workspace's slug stays as it is when the Workspace is renamed", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}`, { cookie })).json()).toEqual({
+      id: workspace.id,
+      name: "Ada's Workspace",
+      slug: "adas-workspace",
+    });
+
+    const renamed = await cronk.request("PATCH", `/api/workspaces/${workspace.id}`, { cookie, body: { name: "Lab" } });
+
+    expect(await renamed.json()).toEqual({ id: workspace.id, name: "Lab", slug: "adas-workspace" });
   });
 
   test("a Workspace needs a name, and a User signed in", async () => {
@@ -79,7 +111,7 @@ describe("adding Users by email", () => {
 
     const beaCookie = await signIn(cronk, "bea@example.com", "bea's long password");
     const me = await (await cronk.request("GET", "/api/me", { cookie: beaCookie })).json();
-    expect(me.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", isAdmin: false }]);
+    expect(me.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: false }]);
 
     const members = await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie: beaCookie });
     expect(await members.json()).toEqual([
@@ -192,7 +224,7 @@ describe("Admins", () => {
     expect(made.status).toBe(200);
     expect(await made.json()).toEqual({ user: bea.user, isAdmin: true });
     const asBea = await (await cronk.request("GET", "/api/me", { cookie: bea.cookie })).json();
-    expect(asBea.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", isAdmin: true }]);
+    expect(asBea.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: true }]);
 
     const unmade = await cronk.request("PATCH", path, { cookie, body: { isAdmin: false } });
     expect(await unmade.json()).toEqual({ user: bea.user, isAdmin: false });
@@ -245,7 +277,7 @@ describe("removing members", () => {
       expect(response.status).toBe(404);
     }
     const me = await (await cronk.request("GET", "/api/me", { cookie: bea.cookie })).json();
-    expect(me.workspaces).toEqual([{ id: other.id, name: "Friends", isAdmin: false }]);
+    expect(me.workspaces).toEqual([{ id: other.id, name: "Friends", slug: "friends", isAdmin: false }]);
     const members = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
     expect(members.map((m: { user: { email: string } }) => m.user.email)).toEqual(["ada@example.com"]);
 
@@ -376,9 +408,9 @@ describe("renaming", () => {
     const renamed = await cronk.request("PATCH", `/api/workspaces/${workspace.id}`, { cookie, body: { name: " Home " } });
 
     expect(renamed.status).toBe(200);
-    expect(await renamed.json()).toEqual({ id: workspace.id, name: "Home" });
+    expect(await renamed.json()).toEqual({ id: workspace.id, name: "Home", slug: "adas-workspace" });
     const me = await (await cronk.request("GET", "/api/me", { cookie })).json();
-    expect(me.workspaces).toEqual([{ id: workspace.id, name: "Home", isAdmin: true }]);
+    expect(me.workspaces).toEqual([{ id: workspace.id, name: "Home", slug: "adas-workspace", isAdmin: true }]);
     expect((await cronk.request("PATCH", `/api/workspaces/${workspace.id}`, { cookie, body: { name: "" } })).status).toBe(400);
   });
 });
@@ -410,7 +442,7 @@ describe("who may do what", () => {
       { user: ada, isAdmin: true },
       { user: bea.user, isAdmin: false },
     ]);
-    expect(await (await cronk.request("GET", base, { cookie })).json()).toEqual({ id: workspace.id, name: "Ada's Workspace" });
+    expect(await (await cronk.request("GET", base, { cookie })).json()).toEqual({ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace" });
     const pending = await (await cronk.request("GET", `${base}/pending-adds`, { cookie })).json();
     expect(pending.map((p: { user: { id: string } }) => p.user.id)).toEqual([cy.user.id]);
   });
@@ -525,5 +557,40 @@ describe("passwords", () => {
       const used = await cronk.request("POST", "/api/links/use", { body: { token, password: "taken over at last" } });
       expect(used.status).toBe(404);
     }
+  });
+});
+
+describe("Workspaces from before slugs", () => {
+  test("each gets a slug from its name, oldest first, de-duplicated with a suffix", async () => {
+    cronk = await startCronk({ migrateBefore: "0043_workspace_slugs.sql" });
+    const staged: Record<string, string> = {};
+    for (const [n, name] of ["Lab", "LAB!", "Runners", "???", "Ünïcode Straße"].entries()) {
+      const id = crypto.randomUUID();
+      // Workspaces as an earlier Cronk wrote them, without a slug, created a minute apart.
+      await cronk.stage("insert into workspaces (id, name, created_at) values ($1, $2, $3)", [
+        id,
+        name,
+        new Date(Date.UTC(2025, 0, 1, 9, n)),
+      ]);
+      staged[name] = id;
+    }
+
+    await cronk.upgrade();
+    const { user } = await setUp(cronk);
+    for (const id of Object.values(staged)) {
+      await cronk.stage("insert into memberships (workspace_id, user_id, created_at) values ($1, $2, now())", [id, user.id]);
+    }
+    const cookie = await signIn(cronk);
+    const me = await (await cronk.request("GET", "/api/me", { cookie })).json();
+
+    const slugs = Object.fromEntries(me.workspaces.map((w: { name: string; slug: string }) => [w.name, w.slug]));
+    expect(slugs).toEqual({
+      Lab: "lab",
+      "LAB!": "lab-2",
+      Runners: "runners-2",
+      "???": "workspace",
+      "Ünïcode Straße": "unicode-stra-e",
+      "Ada's Workspace": "adas-workspace",
+    });
   });
 });
