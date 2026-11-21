@@ -182,12 +182,20 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Runs"],
           summary: "Set up a Runner of your own",
-          description: "Refused with `unknown_runner_kind` for a kind of Runner this Cronk doesn't have.",
+          description:
+            "Refused with `unknown_runner_kind` for a kind of Runner this Cronk doesn't have. A `managed_agents` Runner " +
+            "takes an Anthropic API key, stored encrypted and never returned: Cronk creates an agent definition (its MCP " +
+            "server, tools allowed without asking) and a cloud environment with it in the key's Anthropic workspace, " +
+            "and is refused with `api_key_rejected` when Anthropic rejects the key, with `api_key_required` without one, " +
+            "and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
           body: Type.Object({
             name: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" }),
             kind: Type.String({ minLength: 1, maxLength: 50 }),
+            apiKey: Type.Optional(
+              Type.String({ maxLength: 1000, description: "For a `managed_agents` Runner: the Anthropic API key its Runs spend." }),
+            ),
           }),
-          response: { 201: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody },
+          response: { 201: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 502: ErrorBody },
         },
       },
       async (request, reply) => {
@@ -225,7 +233,8 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Removes it with its triggers. Agents pointed at it are left with no Runner, so their delegated Tickets get " +
             "Runs refused until their Owner points them at another; its past Runs keep their history without it. " +
-            "Refused with `runner_running` while one of its Runs is running.",
+            "A `managed_agents` Runner's running Runs stop, their sessions interrupted and archived and their tokens " +
+            "revoked; other kinds are refused with `runner_running` while one of their Runs is running.",
           params: Type.Object({ runnerId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },

@@ -1,5 +1,5 @@
 import { addresses, useAddresses } from "./addresses.js";
-import { useCallback, useEffect, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
   nameOf,
@@ -424,6 +424,64 @@ function BlockedChip({ ticket }: { ticket: TicketSummary }) {
 
 const ticketDrag = "application/x-cronk-ticket";
 
+/** Whether a drag carries a board card's Ticket. */
+const carriesTicket = (event: DragEvent<HTMLElement>) => event.dataTransfer.types.includes(ticketDrag);
+
+/** How near the board's left or right edge a dragged card scrolls it, and how far it scrolls each frame at the edge. */
+const edgeZone = 48;
+const edgeSpeed = 16;
+/** How long the board keeps scrolling after the last dragover: browsers repeat it while a held card stays still. */
+const edgeHold = 700;
+
+/**
+ * Scrolls the board sideways while a dragged card is held near its left or right edge, faster nearer the edge, so the
+ * card reaches columns that start off screen. Only Chromium scrolls a dragged-over element by itself; Firefox and
+ * Safari (WebKit) don't.
+ */
+function useEdgeScroll() {
+  const board = useRef<HTMLElement>(null);
+  const held = useRef({ speed: 0, at: 0 });
+  const frame = useRef<number | null>(null);
+
+  const stop = useCallback(() => {
+    held.current.speed = 0;
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+  }, []);
+  useEffect(() => stop, [stop]);
+
+  const step = useCallback(() => {
+    const { speed, at } = held.current;
+    if (!board.current || speed === 0 || performance.now() - at > edgeHold) {
+      frame.current = null;
+      return;
+    }
+    const before = board.current.scrollLeft;
+    board.current.scrollLeft += speed;
+    // At its end the board can't scroll further: stop until the next dragover asks again.
+    frame.current = board.current.scrollLeft === before ? null : requestAnimationFrame(step);
+  }, []);
+
+  const onDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!board.current || !carriesTicket(event)) return;
+    const { left, right } = board.current.getBoundingClientRect();
+    const fromLeft = event.clientX - left;
+    const fromRight = right - event.clientX;
+    // Whole pixels: browsers that round scrollLeft would never move on a fraction of one.
+    const toward = (distance: number) => (distance < edgeZone ? Math.ceil(edgeSpeed * (1 - distance / edgeZone)) : 0);
+    const speed = toward(fromRight) - toward(fromLeft);
+    held.current = { speed, at: performance.now() };
+    if (speed !== 0 && frame.current === null) frame.current = requestAnimationFrame(step);
+  };
+
+  /** A card dragged off the board stops it scrolling, rather than it running on until the hold lapses. */
+  const onDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stop();
+  };
+
+  return { ref: board, onDragOver, onDragLeave, stop };
+}
+
 /**
  * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
  * which holds links of its own and so sits beside the card's link rather than in it.
@@ -480,6 +538,7 @@ function Board({
   // Opened collapsed columns, until the User leaves the page; nothing is stored.
   const [opened, setOpened] = useState<Set<string>>(new Set());
   const arrived = useArrivals(tickets.map((t) => `${t.id} ${t.statusId}`));
+  const edge = useEdgeScroll();
 
   const drop = async (event: DragEvent<HTMLElement>, status: Status) => {
     event.preventDefault();
@@ -499,7 +558,15 @@ function Board({
   return (
     <>
       <FormError error={error} />
-      <section aria-label="Board" className="board">
+      <section
+        aria-label="Board"
+        className="board"
+        ref={edge.ref}
+        onDragOver={edge.onDragOver}
+        onDragLeave={edge.onDragLeave}
+        onDrop={edge.stop}
+        onDragEnd={edge.stop}
+      >
         {project.statuses.map((status) => {
           const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
           const isCollapsed = collapsed(status);
@@ -509,7 +576,7 @@ function Board({
               aria-label={status.name}
               className={`column${target === status.id ? " column-target" : ""}${isCollapsed ? " column-collapsed" : ""}`}
               onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes(ticketDrag)) return;
+                if (!carriesTicket(event)) return;
                 event.preventDefault();
                 setTarget(status.id);
               }}

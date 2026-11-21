@@ -4,7 +4,7 @@ import { ApiError } from "../http/errors.js";
 
 /**
  * Words the web client's own pages use as the first part of an address, which no Workspace slug may be, so that
- * `/<slug>/…` never stands for one of them. `migrations/0043_workspace_slugs.sql` keeps the same list.
+ * `/<slug>/…` never stands for one of them. `migrations/0044_workspace_slugs.sql` keeps the same list.
  */
 export const reservedSlugs = new Set([
   "workspaces",

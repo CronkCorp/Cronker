@@ -15,6 +15,8 @@ export interface Config {
   github: { url: URL; apiUrl: URL };
   /** Where the Claude API is, whose scheduled-task fire endpoint the subscription Runner calls (`https://api.anthropic.com`). */
   claudeApiUrl: URL;
+  /** Where the Claude API's Managed Agents endpoints are, which the `managed_agents` Runner calls (`https://api.anthropic.com`). */
+  managedAgentsApiUrl: URL;
   /** Where Attachments are kept, and how large each may be. */
   attachments: { directory: string; limitBytes: number };
 }
@@ -87,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { webRoot?: string 
       apiUrl: httpUrl(env, "CRONK_GITHUB_API_URL", "https://api.github.com"),
     },
     claudeApiUrl: httpUrl(env, "CRONK_CLAUDE_API_URL", "https://api.anthropic.com"),
+    managedAgentsApiUrl: httpUrl(env, "CRONK_MANAGED_AGENTS_API_URL", "https://api.anthropic.com"),
     attachments: {
       directory: resolve(env.CRONK_ATTACHMENTS_DIR?.trim() || "data/attachments"),
       limitBytes: Math.floor(limitMb * megabyte),

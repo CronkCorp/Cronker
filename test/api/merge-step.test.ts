@@ -241,7 +241,7 @@ describe("Merge on the default board", () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0033_merge_step.sql" });
     // Setting up, as today's API does, gives the Workspace a slug.
-    await cronk.applyAhead("0043_workspace_slugs.sql");
+    await cronk.applyAhead("0044_workspace_slugs.sql");
     const { workspace } = await setUp(cronk);
     const ada = { cookie: await signIn(cronk) };
     // As a Cronk before the Merge Step wrote a Project with its default board and its Code review Step.

@@ -565,7 +565,7 @@ describe("passwords", () => {
 
 describe("Workspaces from before slugs", () => {
   test("each gets a slug from its name, oldest first, de-duplicated with a suffix", async () => {
-    cronk = await startCronk({ migrateBefore: "0043_workspace_slugs.sql" });
+    cronk = await startCronk({ migrateBefore: "0044_workspace_slugs.sql" });
     const staged: Record<string, string> = {};
     for (const [n, name] of ["Lab", "LAB!", "Runners", "???", "Ünïcode Straße"].entries()) {
       const id = crypto.randomUUID();
