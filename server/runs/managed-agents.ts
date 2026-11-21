@@ -126,24 +126,37 @@ interface RepositoryToMount {
   expiresAt: Date;
 }
 
-const withSlash = (url: URL) => (url.href.endsWith("/") ? url : new URL(`${url.href}/`));
+/** The address a session clones the Repository from, under GitHub's web address. */
+function repositoryUrl(context: Context, fullName: string): string {
+  const base = context.config.github.url.href;
+  return new URL(fullName, base.endsWith("/") ? base : `${base}/`).toString();
+}
 
 /**
- * Fresh installation tokens for the Repositories, one per installation covering them. Fresh, rather than the tokens
- * Cronk holds for its own calls, so each lasts the hour GitHub gives it; Cronk sets a new one before it expires. Throws
- * when GitHub can't be asked or the App covers one of them no longer.
+ * Gives fresh installation tokens for Repositories, one per installation covering them however many it is asked for.
+ * Fresh, rather than the tokens Cronk holds for its own calls, so each lasts the hour GitHub gives it; Cronk sets a new
+ * one on the session before it expires. Throws when GitHub can't be asked or the App covers a Repository no longer.
  */
-async function repositoriesToMount(context: Context, repositories: { id: number; fullName: string }[]): Promise<RepositoryToMount[]> {
-  if (repositories.length === 0) return [];
-  const jwt = await appToken(context);
+function freshTokens(context: Context): (repository: { id: number; fullName: string }) => Promise<{ token: string; expiresAt: Date }> {
   const tokens = new Map<number, Promise<{ token: string; expiresAt: Date }>>();
-  const mounted: RepositoryToMount[] = [];
-  for (const repository of repositories) {
+  return async (repository) => {
     const installationId = await installationCovering(context, repository.id);
-    if (installationId === undefined) throw new Error(`the GitHub App isn't installed on ${repository.fullName} any more.`);
-    if (!tokens.has(installationId)) tokens.set(installationId, installationToken(context.config, jwt, installationId));
-    mounted.push({ ...repository, ...(await tokens.get(installationId)!) });
-  }
+    if (installationId === undefined) throw new Error(`The GitHub App isn't installed on ${repository.fullName} any more.`);
+    if (!tokens.has(installationId)) {
+      const fetching = appToken(context).then((jwt) => installationToken(context.config, jwt, installationId));
+      // A failed fetch is reported to each Repository that awaits it; none is left unhandled.
+      fetching.catch(() => {});
+      tokens.set(installationId, fetching);
+    }
+    return tokens.get(installationId)!;
+  };
+}
+
+/** The Repositories with fresh installation tokens for a session to mount. */
+async function repositoriesToMount(context: Context, repositories: { id: number; fullName: string }[]): Promise<RepositoryToMount[]> {
+  const tokenFor = freshTokens(context);
+  const mounted: RepositoryToMount[] = [];
+  for (const repository of repositories) mounted.push({ ...repository, ...(await tokenFor(repository)) });
   return mounted;
 }
 
@@ -217,7 +230,7 @@ export function managedAgentsRunner(context: Context): Runner {
     } catch (error) {
       return refuse({
         kind: "unavailable",
-        message: `Cronk couldn't get GitHub tokens for the Repositories of ${run.project.name}: ${(error as Error).message}`,
+        message: `Cronk couldn't get GitHub tokens for the Repositories of ${run.project.name}. ${(error as Error).message}`,
       });
     }
     const token = await mintToken(run, stored.apiKeySealed!);
@@ -275,7 +288,7 @@ export function managedAgentsRunner(context: Context): Runner {
         vault_ids: [vaultId],
         resources: repositories.map((r) => ({
           type: "github_repository",
-          url: new URL(r.fullName, withSlash(context.config.github.url)).toString(),
+          url: repositoryUrl(context, r.fullName),
           authorization_token: r.token,
         })),
         title: `${run.ticket.key} in ${run.project.name}`,
@@ -286,10 +299,12 @@ export function managedAgentsRunner(context: Context): Runner {
     );
     if ("started" in session) return session;
     const sessionId = session.id;
-    // Anthropic lists the session's resources in the order they were given, each with the id a fresh token is set by.
-    const resources = Array.isArray(session.body.resources) ? (session.body.resources as { id?: unknown }[]) : [];
+    // Anthropic answers with the session's resources, each with the id a fresh token is set by: found by its URL, or
+    // else by its place, as Anthropic lists them in the order they were given.
+    const resources = Array.isArray(session.body.resources) ? (session.body.resources as { id?: unknown; url?: unknown }[]) : [];
     for (const [index, repository] of repositories.entries()) {
-      const resourceId = resources[index]?.id;
+      const url = repositoryUrl(context, repository.fullName);
+      const resourceId = (resources.find((r) => r.url === url) ?? resources[index])?.id;
       if (typeof resourceId !== "string") continue;
       await db.query(
         `insert into managed_agent_run_resources (run_id, resource_id, repository_id, token_expires_at) values ($1, $2, $3, $4)
@@ -457,32 +472,35 @@ const rotationMarginMs = 10 * 60 * 1000;
  */
 export async function rotateRepositoryTokens(context: Context): Promise<void> {
   const { db, clock } = context;
-  const { rows } = await db.query<{ runId: string; sessionId: string; apiKeySealed: string; resourceId: string; repositoryId: string }>(
+  const { rows } = await db.query<{
+    runId: string;
+    sessionId: string;
+    apiKeySealed: string;
+    resourceId: string;
+    repositoryId: string;
+    fullName: string | null;
+  }>(
     `select r.run_id as "runId", m.session_id as "sessionId", m.api_key_sealed as "apiKeySealed",
-       r.resource_id as "resourceId", r.repository_id as "repositoryId"
+       r.resource_id as "resourceId", r.repository_id as "repositoryId", repositories.full_name as "fullName"
      from managed_agent_run_resources r
      join managed_agent_runs m on m.run_id = r.run_id
      join runs on runs.id = r.run_id
+     left join repositories on repositories.id = r.repository_id
      where runs.state = 'running' and m.session_id is not null and r.token_expires_at <= $1
      order by r.run_id, r.resource_id`,
     [new Date(clock.now().getTime() + rotationMarginMs)],
   );
   if (rows.length === 0) return;
+  // One Run's failure doesn't hold up the others; the first is thrown at the end for the server to log.
   const failures: unknown[] = [];
-  const tokens = new Map<number, Promise<{ token: string; expiresAt: Date }>>();
-  const freshToken = async (repositoryId: number) => {
-    const installationId = await installationCovering(context, repositoryId);
-    if (installationId === undefined) throw new Error(`The GitHub App isn't installed on Repository ${repositoryId} any more.`);
-    if (!tokens.has(installationId)) {
-      const fetching = appToken(context).then((jwt) => installationToken(context.config, jwt, installationId));
-      fetching.catch(() => {});
-      tokens.set(installationId, fetching);
-    }
-    return tokens.get(installationId)!;
-  };
+  const tokenFor = freshTokens(context);
   for (const row of rows) {
     try {
-      const { token, expiresAt } = await freshToken(Number(row.repositoryId));
+      const repositoryId = Number(row.repositoryId);
+      const { token, expiresAt } = await tokenFor({ id: repositoryId, fullName: row.fullName ?? `the Repository ${repositoryId}` });
+      // The Run may have ended while this pass waited on GitHub or Anthropic: an ended Run gets no fresh token.
+      const { rows: still } = await db.query("select from runs where id = $1 and state = 'running'", [row.runId]);
+      if (still.length === 0) continue;
       const apiKey = requireSecretBox(context.config).open(row.apiKeySealed);
       const path = `v1/sessions/${encodeURIComponent(row.sessionId)}/resources/${encodeURIComponent(row.resourceId)}`;
       const answer = await anthropic(context, apiKey, "POST", path, { authorization_token: token });
