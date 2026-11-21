@@ -890,17 +890,19 @@ export async function discoveringAgent(tx: Tx, agent: AgentCaller, ticket: Ticke
 }
 
 /**
- * The Agent linking or unlinking a Document or Artifact (`thing`) on the Ticket: during its own running Run on it, or
- * on a waiting Discovered Ticket it filed. Refused otherwise, with the rule.
+ * Who links or unlinks a Document or Artifact (`linked`) on the Ticket: a User, or an Agent during its own running Run
+ * on it or on a waiting Discovered Ticket it filed. Refused otherwise, with the rule.
  */
-export async function linkingAgent(
+export async function linkingActor(
   tx: Tx,
-  agent: AgentCaller,
+  caller: Caller,
   ticket: TicketRow,
-  thing: "Document" | "Artifact",
+  linked: "Document" | "Artifact",
 ): Promise<ChangeActor> {
+  if (caller.kind === "user") return caller.id;
+  const agent = caller;
   if (holdsDiscoveredTicket(agent, ticket)) return discoveringAgent(tx, agent, ticket);
-  const runId = await agentRunOn(tx, agent, ticket);
+  const runId = await findRunningRunOn(tx, agent, ticket);
   if (runId) return { kind: "agent", id: agent.id, runId };
   throw new ApiError(
     403,
@@ -908,9 +910,9 @@ export async function linkingAgent(
     `${agent.name} has no running Run on ${ticket.key}, and didn't file it as a Discovered Ticket that still waits for a User.`,
     {
       rule:
-        `An Agent links ${thing}s to a Ticket, and unlinks them, during its own running Run on it, or on a Discovered ` +
+        `An Agent links ${linked}s to a Ticket, and unlinks them, during its own running Run on it, or on a Discovered ` +
         "Ticket it filed until a User delegates, moves or dismisses it.",
-      advice: `Name the ${thing} in a Comment on ${ticket.key} instead; linking it is for its Users, or a Run of its own.`,
+      advice: `Name the ${linked} in a Comment on ${ticket.key} instead; linking it is for its Users, or a Run of its own.`,
     },
   );
 }
@@ -939,7 +941,7 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
 
 /** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
 export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
-  const runId = await agentRunOn(tx, agent, ticket);
+  const runId = await findRunningRunOn(tx, agent, ticket);
   if (runId) return runId;
   throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
     rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
@@ -948,7 +950,7 @@ export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow):
 }
 
 /** The Agent's running Run on the Ticket, or null for none. */
-async function agentRunOn(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string | null> {
+async function findRunningRunOn(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string | null> {
   const { rows } = await tx.query<{ id: string }>(
     "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
     [ticket.id, agent.id],

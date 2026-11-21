@@ -257,7 +257,10 @@ describe("Linked Documents", () => {
     });
 
     test("outside a Run, an Agent may not link or unlink on a Ticket it didn't file, or one a User has taken up", async () => {
-      const { workspace, ada, ticket, found, design, asAgent } = await discovered();
+      const { workspace, ada, project, ticket, found, design, asAgent } = await discovered();
+      const moved = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found that too" });
+      const ready = project.statuses.find((s: { name: string }) => s.name === "Ready").id;
+      await ok("PATCH", `/api/tickets/${moved.id}`, ada, { statusId: ready });
       const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
       const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "full" });
       const asOther = { headers: { authorization: `Bearer ${secret}` } };
@@ -267,8 +270,9 @@ describe("Linked Documents", () => {
       const byAnotherAgent = await call("DELETE", `/api/tickets/${found.id}/documents/${design.id}`, asOther);
       await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
       const afterDismissed = await call("DELETE", `/api/tickets/${found.id}/documents/${design.id}`, asAgent);
+      const afterMoved = await call("POST", `/api/tickets/${moved.id}/documents`, asAgent, { documentId: design.id });
 
-      for (const refused of [onAUsersTicket, byAnotherAgent, afterDismissed]) {
+      for (const refused of [onAUsersTicket, byAnotherAgent, afterDismissed, afterMoved]) {
         expect(refused.status).toBe(403);
         expect(refused.json.error).toEqual(
           expect.objectContaining({
@@ -280,6 +284,7 @@ describe("Linked Documents", () => {
       }
       expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([]);
       expect(await ok("GET", `/api/tickets/${found.id}/documents`, ada)).toEqual([expect.objectContaining({ id: design.id })]);
+      expect(await ok("GET", `/api/tickets/${moved.id}/documents`, ada)).toEqual([]);
     });
 
     test("an Agent links only Documents of its Discovered Ticket's Project or of the Workspace", async () => {

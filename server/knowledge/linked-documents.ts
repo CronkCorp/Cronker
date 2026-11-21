@@ -7,7 +7,7 @@ import type { Caller } from "../identity/callers.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
-import { findTicketRow, linkingAgent, ticketNotFound, type TicketRow } from "../work/tickets.js";
+import { findTicketRow, linkingActor, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findDocument } from "./documents.js";
 
 /**
@@ -58,7 +58,7 @@ export async function linkDocument(
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const actor = await linkingActor(tx, caller, ticket);
+    const actor = await linkingActor(tx, caller, ticket, "Document");
     // Held until the link is made, so a delete of the Document either went first, and it is unknown, or waits.
     if (isUuid(documentId)) await tx.query("select 1 from documents where id = $1 for key share", [documentId]);
     // A Document of another Workspace answers as unknown, even to a User who belongs to both.
@@ -92,7 +92,7 @@ export async function unlinkDocument(context: Context, caller: Caller, ticketId:
   await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const actor = await linkingActor(tx, caller, ticket);
+    const actor = await linkingActor(tx, caller, ticket, "Document");
     const { rows } = isUuid(documentId)
       ? await tx.query<LinkedDocument>(
           `select ${columns} from ${fromLinks}
@@ -107,14 +107,6 @@ export async function unlinkDocument(context: Context, caller: Caller, ticketId:
   });
 }
 
-/**
- * Who links or unlinks: a User, or an Agent during its own running Run on the Ticket or on a waiting Discovered
- * Ticket it filed, refused otherwise.
- */
-async function linkingActor(tx: Tx, caller: Caller, ticket: TicketRow): Promise<ChangeActor> {
-  if (caller.kind === "user") return caller.id;
-  return linkingAgent(tx, caller, ticket, "Document");
-}
 
 /**
  * Records a Document linked (`to`) or unlinked (`from`) on the Ticket's timeline, named as it is titled now, and
