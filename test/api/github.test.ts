@@ -221,7 +221,7 @@ describe("adding Users by GitHub login", () => {
     const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
     expect(me).toEqual({
       user: { id: user.id, email: "bea@example.com", githubLogin: "bea" },
-      workspaces: [{ id: workspace.id, name: "Ada's Workspace", isAdmin: false }],
+      workspaces: [{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: false }],
     });
     const after = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
     expect(after).toContainEqual({ user: me.user, isAdmin: false });
@@ -333,7 +333,7 @@ describe("pending adds by GitHub login", () => {
     await cronk.request("DELETE", `/api/workspaces/${workspace.id}/pending-adds/${user.id}`, { cookie });
 
     const me = await (await cronk.request("GET", "/api/me", { cookie: (await signInWithGitHub(cronk, bea)).cookie })).json();
-    expect(me.workspaces).toEqual([{ id: other.id, name: "Other", isAdmin: false }]);
+    expect(me.workspaces).toEqual([{ id: other.id, name: "Other", slug: "other", isAdmin: false }]);
   });
 });
 
@@ -419,7 +419,7 @@ describe("a password and GitHub sign-in together", () => {
 
     const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
     expect(me.user).toMatchObject({ email: "bea@example.com", githubLogin: "bea" });
-    expect(me.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", isAdmin: false }]);
+    expect(me.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: false }]);
   });
 });
 

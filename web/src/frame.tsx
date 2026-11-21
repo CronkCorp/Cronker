@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { api, nameOf, type ProjectSummary, type User, type WorkspaceSummary } from "./api.js";
+import { AddressContext, addresses, useAddresses } from "./addresses.js";
 import { InboxLink } from "./inbox.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { useLatest, useLiveEvents } from "./live.js";
@@ -60,23 +61,28 @@ export function Frame({
     setPlace((shown) => (shown.area === next.area && shown.projectId === next.projectId ? shown : next));
   }, []);
   const sidebar = useSidebarHiding();
+  const projects = useProjects(current?.id ?? null);
+  const book = useMemo(() => ({ workspace: current ?? null, projects }), [current, projects]);
   return (
-    <PlaceContext.Provider value={set}>
-      <div className={`frame${sidebar.hidden ? " frame-sidebar-hidden" : ""}`}>
-        <Sidebar
-          user={user}
-          workspaces={workspaces}
-          current={current}
-          place={place}
-          onSignOut={onSignOut}
-          hideToggle={<SidebarToggle sidebarHidden={false} buttonRef={sidebar.hideButton} onToggle={sidebar.toggle} />}
-        />
-        <main className="main">
-          {sidebar.hidden && <SidebarToggle sidebarHidden buttonRef={sidebar.showButton} onToggle={sidebar.toggle} />}
-          <div className="main-inner">{children}</div>
-        </main>
-      </div>
-    </PlaceContext.Provider>
+    <AddressContext.Provider value={book}>
+      <PlaceContext.Provider value={set}>
+        <div className={`frame${sidebar.hidden ? " frame-sidebar-hidden" : ""}`}>
+          <Sidebar
+            user={user}
+            workspaces={workspaces}
+            current={current}
+            projects={projects}
+            place={place}
+            onSignOut={onSignOut}
+            hideToggle={<SidebarToggle sidebarHidden={false} buttonRef={sidebar.hideButton} onToggle={sidebar.toggle} />}
+          />
+          <main className="main">
+            {sidebar.hidden && <SidebarToggle sidebarHidden buttonRef={sidebar.showButton} onToggle={sidebar.toggle} />}
+            <div className="main-inner">{children}</div>
+          </main>
+        </div>
+      </PlaceContext.Provider>
+    </AddressContext.Provider>
   );
 }
 
@@ -153,6 +159,7 @@ function Sidebar({
   user,
   workspaces,
   current,
+  projects,
   place,
   onSignOut,
   hideToggle,
@@ -160,6 +167,7 @@ function Sidebar({
   user: User;
   workspaces: WorkspaceSummary[];
   current: WorkspaceSummary | undefined;
+  projects: ProjectSummary[] | null;
   place: Place;
   onSignOut: () => Promise<void>;
   hideToggle: ReactNode;
@@ -167,13 +175,12 @@ function Sidebar({
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState(storedTheme);
-  const projects = useProjects(current?.id ?? null);
+  const to = useAddresses();
   const project = projects?.find((p) => p.id === place.projectId) ?? null;
   // On a phone, following a link out of the menu closes it.
   const closing = () => setMenuOpen(false);
   const area = place.area;
-  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") =>
-    project ? `/projects/${project.id}/${kind}` : `/workspaces/${current?.id}/${kind}`;
+  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") => to.knowledge(project, kind);
 
   return (
     <nav aria-label="Sidebar" className={`sidebar${menuOpen ? " sidebar-open" : ""}`}>
@@ -184,7 +191,7 @@ function Sidebar({
         </div>
         {current && (
           <>
-            <SearchBox key={`search ${current.id}`} workspaceId={current.id} />
+            <SearchBox key={`search ${current.id}`} />
             <InboxLink key={current.id} workspaceId={current.id} current={area === "inbox"} />
             <SideLink to={knowledge("documents")} current={area === "documents"}>
               Documents
@@ -216,7 +223,7 @@ function Sidebar({
             <h2 className="sidebar-group-label">Projects</h2>
             {projects?.length === 0 && <p className="sidebar-note">None yet.</p>}
             {projects?.map((p) => (
-              <SideLink key={p.id} to={`/projects/${p.id}`} current={area === "project" && place.projectId === p.id}>
+              <SideLink key={p.id} to={to.project(p)} current={area === "project" && place.projectId === p.id}>
                 <span className="sidebar-key">{p.key}</span> {p.name}
               </SideLink>
             ))}
@@ -225,7 +232,7 @@ function Sidebar({
         <div className="sidebar-group">
           <h2 className="sidebar-group-label">Workspace</h2>
           {current && (
-            <SideLink to={`/workspaces/${current.id}/agents`} current={area === "agents"}>
+            <SideLink to={to.workspace("agents")} current={area === "agents"}>
               Agents
             </SideLink>
           )}
@@ -234,13 +241,13 @@ function Sidebar({
           </SideLink>
           {current?.isAdmin && (
             <>
-              <SideLink to={`/workspaces/${current.id}/members`} current={area === "members"}>
+              <SideLink to={to.workspace("members")} current={area === "members"}>
                 Members
               </SideLink>
               <SideLink to="/github" current={area === "github"}>
                 GitHub
               </SideLink>
-              <SideLink to={`/workspaces/${current.id}/settings`} current={area === "settings"}>
+              <SideLink to={to.workspace("settings")} current={area === "settings"}>
                 Settings
               </SideLink>
             </>
@@ -323,7 +330,7 @@ function WorkspaceSwitcher({ workspaces, current }: { workspaces: WorkspaceSumma
     >
       {workspaces.length > 0 && <MenuLabel>Workspaces</MenuLabel>}
       {workspaces.map((w) => (
-        <MenuLink key={w.id} to={`/workspaces/${w.id}`} current={w.id === current?.id}>
+        <MenuLink key={w.id} to={addresses.workspace(w)} current={w.id === current?.id}>
           {w.name}
         </MenuLink>
       ))}

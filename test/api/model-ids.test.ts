@@ -10,11 +10,11 @@ afterEach(async () => {
   await cronk?.stop();
 });
 
-/** The model ids Cronk ships for the default labels: the latest model of each family. */
+/** The model ids Cronk ships for the default labels, in their order: the latest model of each family. */
 const defaults = [
   { label: "haiku", modelId: "claude-haiku-5-5" },
-  { label: "opus", modelId: "claude-opus-5-5" },
   { label: "sonnet", modelId: "claude-sonnet-5-5" },
+  { label: "opus", modelId: "claude-opus-5-5" },
 ];
 
 const modelIds = (workspaceId: string) => `/api/workspaces/${workspaceId}/model-ids`;
@@ -42,7 +42,7 @@ describe("reading the model ids", () => {
 
   test("Workspaces that existed before model ids start with the same defaults", async () => {
     await cronk.stop();
-    cronk = await startCronk({ migrateBefore: "0043_model_ids.sql" });
+    cronk = await startCronk({ migrateBefore: "0045_runner_setups.sql" });
     const { workspace } = await setUp(cronk);
     const ada = await signIn(cronk);
     const created = await cronk.request("POST", "/api/workspaces", { cookie: ada, body: { name: "Friends" } });
@@ -73,7 +73,7 @@ describe("Admins changing the model ids", () => {
     const ada = await signIn(cronk);
     const bea = await addMember(cronk, ada, workspace.id, "bea@example.com");
 
-    const added = await cronk.request("PUT", `${modelIds(workspace.id)}/fable`, { cookie: ada, body: { modelId: " claude-fable-5-2 " } });
+    const added = await cronk.request("PUT", `${modelIds(workspace.id)}/fable`, { cookie: ada, body: { modelId: "claude-fable-5-2" } });
     expect(added.status).toBe(200);
     expect(await added.json()).toEqual({ label: "fable", modelId: "claude-fable-5-2" });
     const changed = await cronk.request("PUT", `${modelIds(workspace.id)}/opus`, { cookie: ada, body: { modelId: "claude-opus-5" } });
@@ -81,11 +81,11 @@ describe("Admins changing the model ids", () => {
     const removed = await cronk.request("DELETE", `${modelIds(workspace.id)}/haiku`, { cookie: ada });
     expect(removed.status).toBe(204);
 
-    // Bea, who isn't Admin, reads what Ada changed.
+    // Bea, who isn't Admin, reads what Ada changed: a changed label keeps its place, an added one comes last.
     expect(await (await cronk.request("GET", modelIds(workspace.id), { cookie: bea.cookie })).json()).toEqual([
-      { label: "fable", modelId: "claude-fable-5-2" },
-      { label: "opus", modelId: "claude-opus-5" },
       { label: "sonnet", modelId: "claude-sonnet-5-5" },
+      { label: "opus", modelId: "claude-opus-5" },
+      { label: "fable", modelId: "claude-fable-5-2" },
     ]);
   });
 
@@ -101,6 +101,22 @@ describe("Admins changing the model ids", () => {
       { label: "haiku", modelId: "claude-haiku-5-5" },
       { label: "Opus", modelId: "claude-opus-5" },
     ]);
+  });
+
+  test("the routes change the same model ids as the Workspace's settings, which a Runner setup reads", async () => {
+    const { workspace } = await setUp(cronk);
+    const ada = await signIn(cronk);
+    const settings = `/api/workspaces/${workspace.id}/settings`;
+
+    await cronk.request("PUT", `${modelIds(workspace.id)}/fable`, { cookie: ada, body: { modelId: "claude-fable-5-2" } });
+    expect((await (await cronk.request("GET", settings, { cookie: ada })).json()).modelIds).toEqual([
+      ...defaults,
+      { label: "fable", modelId: "claude-fable-5-2" },
+    ]);
+
+    const replaced = [{ label: "opus", modelId: "claude-opus-5" }];
+    await cronk.request("PATCH", settings, { cookie: ada, body: { modelIds: replaced } });
+    expect(await (await cronk.request("GET", modelIds(workspace.id), { cookie: ada })).json()).toEqual(replaced);
   });
 
   test("removing a label the Workspace doesn't have is not found, and a blank label or model id is refused", async () => {

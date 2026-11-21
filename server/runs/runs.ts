@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { FastifyBaseLogger } from "fastify";
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
@@ -14,6 +16,7 @@ import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Tic
 import { moveByCronk } from "../pipeline/cronk-moves.js";
 import { sendBackOnEnteringReview } from "../pipeline/conflicts.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
+import { Cost } from "./costs.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
@@ -58,8 +61,16 @@ export const Run = Type.Object({
     description: "Why it failed, was lost or was stopped, or why its Runner refused to start it.",
   }),
   sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow the Run, such as its claude.ai session." }),
+  cost: Type.Union([Cost, Type.Null()], {
+    description:
+      "What it cost, once it ended, where its Runner reports it: a Managed Agents session's cost at list prices. " +
+      "Null while it runs and for Runners that report none, such as a subscription.",
+  }),
   transcriptId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Transcript, once one was uploaded for the session its Runner returned when starting it.",
+  }),
+  transcriptSlug: Type.Union([Type.String(), Type.Null()], {
+    description: "Its Transcript's readable form, as the Transcript's address and the API take it; null without one.",
   }),
   transcriptDeleted: Type.Boolean({ description: "Whether a User deleted its Transcript." }),
   startedAt: Type.String({ format: "date-time" }),
@@ -84,8 +95,12 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
+  case when runs.cost_amount is not null
+    then json_build_object('amount', runs.cost_amount, 'currency', runs.cost_currency) end as cost,
   (select transcripts.id from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)
     as "transcriptId",
+  (select ${slugColumn("transcript", "transcripts.id", "agents.name")} from transcripts
+    where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1) as "transcriptSlug",
   exists (select from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is not null)
     as "transcriptDeleted",
   runs.started_at as "startedAt", runs.ended_at as "endedAt", runs.last_call_at as "lastCallAt",
@@ -293,12 +308,21 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   if (!runner) return "started";
   runnerChanged(context, tx, { runnerId: ticket.runnerId!, ownerId: ticket.runnerOwnerId! });
 
+  const { rows: repositories } = await tx.query<{ id: string; fullName: string }>(
+    `select repositories.id, repositories.full_name as "fullName"
+     from project_repositories join repositories on repositories.id = project_repositories.repository_id
+     where project_repositories.project_id = $1
+     order by lower(repositories.full_name), repositories.id`,
+    [ticket.projectId],
+  );
   const start: RunToStart = {
     runId,
     brief: brief.text,
     model: status.step.model,
     ticket: { id: ticketId, key: ticket.key },
     project: { id: ticket.projectId, key: ticket.projectKey, name: ticket.projectName },
+    // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
+    repositories: repositories.map((r) => ({ id: Number(r.id), fullName: r.fullName })),
     agent: { id: ticket.delegateId, name: ticket.agentName! },
     runner: { id: ticket.runnerId!, ownerId: ticket.runnerOwnerId!, name: ticket.runnerName! },
   };
@@ -447,8 +471,9 @@ export async function waitingTickets(tx: Tx, where: string, params: unknown[]): 
 }
 
 /**
- * Once the transaction commits, rechecks each of the waiting Tickets, which starts it, keeps it waiting or ends
- * its wait, and then gives their Runners' free slots out in queue order.
+ * Once the transaction commits, rechecks each of the Tickets, which starts it, keeps it waiting or ends its wait, and
+ * then gives their Runners' free slots out in queue order. They are waiting Tickets, or Tickets whose Run couldn't start
+ * for want of a trigger's token that was just pasted.
  */
 export function recheckWaiting(context: Context, tx: Tx, tickets: WaitingTicket[]): void {
   if (tickets.length === 0) return;
@@ -515,7 +540,7 @@ export async function stopRunningRun(context: Context, tx: Tx, ticketId: string,
       `update runs set state = 'stopped', end_reason = $2, ended_at = $3 where id = $1 returning ${endedRunColumns}`,
       [id, reason, now],
     );
-    for (const run of rows) askRunnerToStop(context, tx, run);
+    for (const run of rows) tellRunner(context, tx, run, "stop");
   }
 }
 
@@ -533,17 +558,30 @@ const endedRunColumns = `runs.id as "runId", runs.workspace_id as "workspaceId",
   runs.session_id as "sessionId", runs.session_url as "sessionUrl",
   (select kind from runners where runners.id = runs.runner_id) as "runnerKind"`;
 
-/** Once the transaction commits, asks the Runner of a Run Cronk ended to stop its session too, where it can. */
-function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
+/**
+ * Once the transaction commits, tells the Runner of a Run that ended without Cronk stopping it (finished, merged, or
+ * reported ended) that it ended, so it lets go of what the Run held. Call it after ending the Run.
+ */
+async function tellRunnerEnded(context: Context, tx: Tx, runId: string): Promise<void> {
+  const { rows } = await tx.query<EndedRun>(`select ${endedRunColumns} from runs where runs.id = $1`, [runId]);
+  for (const run of rows) tellRunner(context, tx, run, "ended");
+}
+
+/**
+ * Once the transaction commits, tells the Run's Runner that Cronk ended the Run itself and asks it to `stop` its
+ * session too, or that the Run `ended` otherwise, where the Runner listens.
+ */
+function tellRunner(context: Context, tx: Tx, run: EndedRun, what: "stop" | "ended"): void {
   const runner = run.runnerKind ? context.runners[run.runnerKind] : undefined;
-  if (!runner?.stop) return;
+  const tell = runner?.[what]?.bind(runner);
+  if (!tell) return;
   const reference = {
     ...(run.sessionId === null ? {} : { sessionId: run.sessionId }),
     ...(run.sessionUrl === null ? {} : { url: run.sessionUrl }),
   };
   afterCommit(tx, async () => {
     // Best effort: the Run has ended in Cronk whatever its Runner says.
-    await runner.stop!({ runId: run.runId, reference }).catch(() => {});
+    await tell({ runId: run.runId, reference }).catch(() => {});
   });
 }
 
@@ -613,6 +651,7 @@ export async function lockOwnRunningRun(
 export async function endRunFinished(context: Context, tx: Tx, runId: string, outcome: string, now: Date): Promise<void> {
   await freeSlot(context, tx, runId);
   await tx.query("update runs set state = 'finished', outcome = $2, ended_at = $3 where id = $1", [runId, outcome, now]);
+  await tellRunnerEnded(context, tx, runId);
 }
 
 /** A Run as the API shows it, read in the caller's view. */
@@ -674,6 +713,7 @@ export async function finishRun(
           `update runs set state = 'finished', outcome = $2, question = $3, question_by = $4, ended_at = $5 where id = $1`,
           [run.id, applied!.name, question, questionBy, now],
         );
+        await tellRunnerEnded(context, tx, run.id);
         if (input.report !== undefined) {
           await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
         }
@@ -765,7 +805,7 @@ export async function checkForLostRuns(context: Context): Promise<void> {
       for (const run of rows) {
         context.live.publish(tx, run.workspaceId, { type: "ticket.changed", projectId: run.projectId, ticketId: run.ticketId });
         // A lost Run's session may yet be alive: stopping it keeps a Retry from running beside it.
-        askRunnerToStop(context, tx, run);
+        tellRunner(context, tx, run, "stop");
       }
     });
   }
@@ -815,8 +855,48 @@ export function runReports(context: Context): RunReports {
         if (run) {
           const { workspaceId, projectId, ticketId } = run;
           context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
+          await tellRunnerEnded(context, tx, runId);
+        }
+      });
+    },
+    async cost(runId, cost) {
+      await transaction(context.db, async (tx) => {
+        const { rows } = await tx.query<{
+          workspaceId: string;
+          projectId: string;
+          ticketId: string;
+          runnerId: string | null;
+          ownerId: string | null;
+        }>(
+          `update runs set cost_amount = $2, cost_currency = $3
+           from tickets where runs.id = $1 and runs.state <> 'running' and tickets.id = runs.ticket_id
+             and (runs.cost_amount, runs.cost_currency) is distinct from ($2, $3)
+           returning runs.workspace_id as "workspaceId", tickets.project_id as "projectId", runs.ticket_id as "ticketId",
+             runs.runner_id as "runnerId", (select owner_id from runners where runners.id = runs.runner_id) as "ownerId"`,
+          [runId, cost.amount, cost.currency],
+        );
+        for (const { workspaceId, projectId, ticketId, runnerId, ownerId } of rows) {
+          context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
+          // Its Runner's total for the month changed too.
+          if (runnerId && ownerId) runnerChanged(context, tx, { runnerId, ownerId });
         }
       });
     },
   };
+}
+
+/**
+ * Has the Runner of a running Run add what its session did since it last looked to the Run's Transcript, where its
+ * Runner fetches Transcripts itself. Says whether it asked. Opening the Transcript still shows what Cronk holds when
+ * the Runner's service can't be reached.
+ */
+export async function followRunTranscript(context: Context, runId: string, log: FastifyBaseLogger): Promise<boolean> {
+  const { rows } = await context.db.query<{ kind: string }>(
+    "select runners.kind from runs join runners on runners.id = runs.runner_id where runs.id = $1 and runs.state = 'running'",
+    [runId],
+  );
+  const runner = rows[0] ? context.runners[rows[0].kind] : undefined;
+  if (!runner?.followTranscript) return false;
+  await runner.followTranscript({ runId }).catch((error: unknown) => log.warn({ err: error, runId }, "Couldn't follow the Run's Transcript"));
+  return true;
 }

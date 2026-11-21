@@ -5,15 +5,17 @@ import {
   type AgentToken,
   type ProjectSummary,
   type Runner,
+  type StartedSetup,
   type TranscriptHook,
   type Trigger,
   type WorkspaceSummary,
 } from "./api.js";
+import { costsText } from "./costs.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
 import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
-import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
+import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
 /**
@@ -56,9 +58,15 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
     setRunners((all) => all?.map((r) => (r.id === updated.id ? updated : r)) ?? null);
   const drop = (removed: Runner) => setRunners((all) => all?.filter((r) => r.id !== removed.id) ?? null);
 
+  const [kind, setKind] = useState<"subscription" | "managed_agents">("subscription");
   const create = useSubmit(async (form, element) => {
-    await api.createRunner({ name: field(form, "name"), kind: "subscription" });
+    await api.createRunner(
+      kind === "managed_agents"
+        ? { name: field(form, "name"), kind, apiKey: field(form, "apiKey") }
+        : { name: field(form, "name"), kind },
+    );
     element.reset();
+    setKind("subscription");
     refresh();
   });
 
@@ -70,6 +78,8 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
         Claude Code on the web scheduled tasks: in claude.ai, create one task per model (for example triage on Haiku,
         implement on Opus) with an API trigger, and its prompt telling Claude to follow the instructions in the fire
         payload. Then save each task's trigger id and token here, and point your Agents at the Runner.
+        A Managed Agents Runner spends your Claude API credits instead: paste an Anthropic API key, and Cronk creates
+        the agent and cloud environment its Runs use in your Anthropic workspace.
       </p>
       <FormError error={error} />
       {runners === null ? (
@@ -92,13 +102,29 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
       )}
       <Panel title="Set up a Runner" id="new-runner">
         <form onSubmit={create.onSubmit}>
-          <Field label="Runner name">
-            <input name="name" required autoComplete="off" placeholder="Claude Max" />
-          </Field>
+          <div className="form-row">
+            <Field label="Runner name">
+              <input name="name" required autoComplete="off" placeholder={kind === "managed_agents" ? "Claude API" : "Claude Max"} />
+            </Field>
+            <Field label="Kind">
+              <select name="kind" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+                <option value="subscription">Subscription (Claude Code on the web)</option>
+                <option value="managed_agents">Managed Agents (Claude API)</option>
+              </select>
+            </Field>
+          </div>
+          {kind === "managed_agents" && (
+            <Field
+              label="Anthropic API key"
+              hint="Stored encrypted and never shown again. Cronk checks it with Anthropic as it sets the Runner up."
+            >
+              <input name="apiKey" type="password" required autoComplete="off" className="mono" placeholder="sk-ant-api03-…" />
+            </Field>
+          )}
           <FormError error={create.error} />
           <Actions>
             <Button type="submit" variant="primary" disabled={create.busy}>
-              Set up a subscription Runner
+              {kind === "managed_agents" ? "Set up a Managed Agents Runner" : "Set up a subscription Runner"}
             </Button>
           </Actions>
         </form>
@@ -126,6 +152,7 @@ function RunnerSettings({
   onRemoved: (runner: Runner) => void;
 }) {
   const [removingTrigger, setRemovingTrigger] = useState<Trigger | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
   const [removing, setRemoving] = useState(false);
   // The Agents pointed at it, loaded as removing it asks first, so the dialog names them as they stand.
   const [agents, setAgents] = useState<Agent[] | null>(null);
@@ -148,14 +175,25 @@ function RunnerSettings({
     onChanged(await api.setRunnerLimit(runner.id, Number(field(form, "limit"))));
     setLimitSaved(true);
   });
+  const [budgetSaved, setBudgetSaved] = useState(false);
+  const budget = useSubmit(async (form) => {
+    setBudgetSaved(false);
+    // Typed in dollars, sent in cents; an empty field is no budget.
+    const dollars = field(form, "budgetPerRun").trim();
+    const amount = dollars === "" ? null : Math.round(Number(dollars) * 100);
+    onChanged(await api.setBudgetPerRun(runner.id, amount === null ? null : { amount, currency: "USD" }));
+    setBudgetSaved(true);
+  });
   const save = useSubmit(async (form, element) => {
     const projectId = field(form, "projectId");
+    const token = field(form, "token");
     onChanged(
       await api.saveTrigger(runner.id, {
         model: field(form, "model"),
         projectId: projectId || null,
         triggerId: field(form, "triggerId"),
-        token: field(form, "token"),
+        // Without a token, the trigger waits for one.
+        token: token.trim() ? token : undefined,
       }),
     );
     element.reset();
@@ -174,6 +212,12 @@ function RunnerSettings({
         <span className="runner-usage">
           <strong>{runner.running}</strong> of <strong>{runner.limit}</strong> <span className="muted">running</span>
         </span>
+        {(runner.kind === "managed_agents" || runner.costThisMonth.length > 0) && (
+          <span className="runner-cost" title="What its Runs that ended this calendar month (UTC) cost, at Anthropic's list prices">
+            <strong>{runner.costThisMonth.length > 0 ? costsText(runner.costThisMonth) : "$0.00"}</strong>{" "}
+            <span className="muted">this month</span>
+          </span>
+        )}
         <Menu label={`More for ${runner.name}`}>
           <MenuItem tone="danger" onSelect={() => setRemoving(true)}>
             Remove…
@@ -192,6 +236,7 @@ function RunnerSettings({
       >
         {agentsError ?? (agents === null ? "Finding the Agents that use it…" : agentsLeft(agents))}{" "}
         {triggersGoing(runner.triggers)}
+        {runner.kind === "managed_agents" && runner.running > 0 && " Its running Runs stop, and their sessions are archived."}
       </ConfirmDialog>
       {pausedUntil && (
         <Banner tone="warn" label="Paused">
@@ -241,7 +286,10 @@ function RunnerSettings({
                     </td>
                     <td>{projectName(trigger.projectId)}</td>
                     <td>
-                      <code>{trigger.triggerId}</code>
+                      <div className="runner-trigger-id">
+                        <code>{trigger.triggerId}</code>
+                        {trigger.waitingForToken && <Chip tone="warn">waiting for token</Chip>}
+                      </div>
                     </td>
                     <td className="cell-actions">
                       <div>
@@ -255,6 +303,38 @@ function RunnerSettings({
               </tbody>
             </table>
           )}
+          {runner.triggers.some((t) => t.waitingForToken) && (
+            <div role="group" aria-label="Waiting for tokens" className="runner-waiting">
+              <p className="muted small">
+                For each trigger waiting for its token, open its routine in claude.ai, generate an API token there and
+                paste it here. Generating a new token revokes the routine's previous one, so do it once per routine.
+              </p>
+              {runner.triggers
+                .filter((t) => t.waitingForToken)
+                .map((trigger) => (
+                  <TokenPaste
+                    key={trigger.id}
+                    runner={runner}
+                    trigger={trigger}
+                    project={projectName(trigger.projectId)}
+                    onChanged={onChanged}
+                  />
+                ))}
+            </div>
+          )}
+          <div className="runner-setup">
+            <span className="muted small">
+              Or have your own Claude Code create a Project's routines, one per model label its board uses.
+            </span>
+            <Button onClick={() => setSettingUp(true)}>Set up with Claude Code</Button>
+          </div>
+          <RunnerSetupDialog
+            open={settingUp}
+            onOpenChange={setSettingUp}
+            runner={runner}
+            projects={projects}
+            agents={agentsOnIt}
+          />
           <form onSubmit={save.onSubmit} aria-label="Save a trigger" className="runner-trigger-form">
             <div className="form-row">
               <Field label="Model">
@@ -276,10 +356,14 @@ function RunnerSettings({
                 <input name="triggerId" required autoComplete="off" placeholder="trig_01ABC…" className="mono" />
               </Field>
               <Field label="Trigger token">
-                <input name="token" type="password" required autoComplete="off" />
+                <input name="token" type="password" autoComplete="off" placeholder="Optional" />
               </Field>
             </div>
-            <p className="field-hint">The token is stored encrypted and never shown again. Saving a model again replaces its trigger.</p>
+            <p className="field-hint">
+              The token is stored encrypted and never shown again. Without one, a new trigger waits for its token, which
+              you paste here later. Saving a model again replaces its trigger, keeping its token if the trigger id is the
+              same.
+            </p>
             <FormError error={save.error} />
             <Actions>
               <Button type="submit" variant="primary" disabled={save.busy}>
@@ -306,7 +390,130 @@ function RunnerSettings({
         </div>
       )}
       {runner.kind === "subscription" && hook && <TranscriptHookSetup hook={hook} agents={agentsOnIt} />}
+      {runner.managedAgents && (
+        <div className="runner-managed" role="group" aria-label="Managed Agents">
+          <h3>Managed Agents</h3>
+          <p className="muted small">
+            Each Run is a session of this agent in your Anthropic workspace, on its Step's model, with the Brief as its
+            first message and a fresh token for Cronk in a vault of its own, revoked when the Run ends. Ended sessions
+            are archived, never deleted, so each Run's Console link keeps working. Cronk reads running sessions every few
+            minutes to learn of those that stopped without finishing; a webhook tells it at once.
+          </p>
+          <dl className="runner-managed-ids">
+            <dt>Agent</dt>
+            <dd>
+              <code>{runner.managedAgents.agentId}</code>
+            </dd>
+            <dt>Environment</dt>
+            <dd>
+              <code>{runner.managedAgents.environmentId}</code>
+            </dd>
+          </dl>
+          <form onSubmit={budget.onSubmit} className="form-row runner-budget">
+            <Field label="Budget per Run (USD)">
+              <input
+                name="budgetPerRun"
+                type="number"
+                min={0.01}
+                step={0.01}
+                placeholder="No budget"
+                defaultValue={runner.budgetPerRun ? (runner.budgetPerRun.amount / 100).toFixed(2) : ""}
+              />
+            </Field>
+            <Button type="submit" disabled={budget.busy}>
+              Save budget
+            </Button>
+            <Saved shown={budgetSaved} />
+            <FormError error={budget.error} />
+          </form>
+          <p className="muted small">
+            Each session gets it as its budget, at Anthropic's list prices. A Run whose session reaches it fails with{" "}
+            <em>budget reached</em> and waits in your Inbox with Retry. Leave it empty for no budget.
+          </p>
+          <ManagedAgentsWebhook runner={runner} webhook={runner.managedAgents} onChanged={onChanged} />
+        </div>
+      )}
     </section>
+  );
+}
+
+/**
+ * The webhook a Managed Agents Runner's Owner adds in the Anthropic Console, so a session that stops ends its Run at
+ * once instead of at the next poll: its URL to copy, and its signing secret to paste, stored encrypted and never shown.
+ */
+function ManagedAgentsWebhook({
+  runner,
+  webhook,
+  onChanged,
+}: {
+  runner: Runner;
+  webhook: NonNullable<Runner["managedAgents"]>;
+  onChanged: (runner: Runner) => void;
+}) {
+  const [saved, setSaved] = useState(false);
+  const save = useSubmit(async (form, element) => {
+    setSaved(false);
+    onChanged(await api.saveWebhookSecret(runner.id, field(form, "secret")));
+    element.reset();
+    setSaved(true);
+  });
+  const [forgetting, setForgetting] = useState(false);
+  return (
+    <div className="runner-webhook" role="group" aria-label="Webhook">
+      <h4>Webhook</h4>
+      <ol className="runner-hook-steps">
+        <li>
+          <div className="runner-hook-snippet">
+            <span>
+              In the Claude Console, under <strong>Manage → Webhooks</strong>, add an endpoint with this URL, subscribed to{" "}
+              <code>session.status_idled</code> and <code>session.status_terminated</code>:
+            </span>
+            <div className="runner-webhook-url">
+              <code aria-label="Webhook URL">{webhook.webhookUrl}</code>
+              <CopyButton text={webhook.webhookUrl} label="Copy URL" />
+            </div>
+          </div>
+        </li>
+        <li>Paste the endpoint's signing secret, which the Console shows once, below.</li>
+      </ol>
+      <form onSubmit={save.onSubmit} aria-label="Webhook signing secret" className="runner-webhook-form">
+        <div className="form-row">
+          <Field label="Signing secret">
+            <input name="secret" type="password" required autoComplete="off" placeholder="whsec_…" className="mono" />
+          </Field>
+          <Button type="submit" disabled={save.busy}>
+            {webhook.webhookSecretSaved ? "Replace secret" : "Save secret"}
+          </Button>
+          <Saved shown={saved} />
+        </div>
+        <p className="field-hint">
+          {webhook.webhookSecretSaved ? (
+            <>
+              A secret is saved: signed deliveries end Runs at once, and polling stays as the backstop.{" "}
+              <Button variant="ghost" size="small" onClick={() => setForgetting(true)}>
+                Forget it
+              </Button>
+            </>
+          ) : (
+            "No secret yet: Runs end by polling alone, within a few minutes. The secret is stored encrypted and never shown again."
+          )}
+        </p>
+        <FormError error={save.error} />
+      </form>
+      <ConfirmDialog
+        open={forgetting}
+        onOpenChange={setForgetting}
+        title="Forget the webhook signing secret?"
+        confirm="Forget"
+        onConfirm={async () => {
+          setSaved(false);
+          onChanged(await api.forgetWebhookSecret(runner.id));
+        }}
+      >
+        Cronk then refuses the webhook's deliveries, and Runs end by polling alone, within a few minutes. Remove the
+        endpoint in the Claude Console too, or the Console disables it once its deliveries keep failing.
+      </ConfirmDialog>
+    </div>
   );
 }
 
@@ -379,6 +586,177 @@ function HookToken({ agent, variable }: { agent: Agent; variable: string }) {
         </ShownOnce>
       )}
     </form>
+  );
+}
+
+/** Pastes the token of a trigger waiting for it, beside a link to its routine in claude.ai. */
+function TokenPaste({
+  runner,
+  trigger,
+  project,
+  onChanged,
+}: {
+  runner: Runner;
+  trigger: Trigger;
+  project: string;
+  onChanged: (runner: Runner) => void;
+}) {
+  const paste = useSubmit(async (form) => {
+    onChanged(await api.pasteTriggerToken(runner.id, trigger.id, field(form, "token")));
+  });
+  const name = `${trigger.model} on ${project}`;
+  return (
+    <form onSubmit={paste.onSubmit} aria-label={`Token for ${name}`} className="runner-token-paste">
+      <div className="form-row">
+        <Field label={`Token for ${name}`}>
+          <input name="token" type="password" required autoComplete="off" />
+        </Field>
+        <Button type="submit" disabled={paste.busy}>
+          Save token
+        </Button>
+        <a href={trigger.routineUrl} target="_blank" rel="noreferrer">
+          Open routine in claude.ai
+        </a>
+      </div>
+      <FormError error={paste.error} />
+    </form>
+  );
+}
+
+/**
+ * Starts a Runner setup for a Project: the User picks the Project, and the Agent whose Transcript hook token it makes
+ * when several are pointed at the Runner there, then copies the command into their own Claude Code.
+ */
+function RunnerSetupDialog({
+  open,
+  onOpenChange,
+  runner,
+  projects,
+  agents,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  runner: Runner;
+  projects: ProjectSummary[];
+  /** The Agents pointed at the Runner, in every Workspace. */
+  agents: Agent[];
+}) {
+  const [projectId, setProjectId] = useState("");
+  const [started, setStarted] = useState<StartedSetup | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setStarted(null);
+      setProjectId("");
+    }
+  }, [open]);
+  const project = projects.find((p) => p.id === projectId);
+  const choices = project ? agents.filter((a) => a.workspaceId === project.workspaceId) : [];
+  const start = useSubmit(async (form) => {
+    const agentId = field(form, "agentId");
+    setStarted(await api.startRunnerSetup(runner.id, { projectId: field(form, "projectId"), ...(agentId ? { agentId } : {}) }));
+  });
+  const expiresAt = started ? new Date(started.expiresAt) : null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Set up with Claude Code"
+      description={
+        started
+          ? undefined
+          : `Your own Claude Code creates a claude.ai routine on ${runner.name} for each model label the Project's board uses, with only its Repository and the Cronk connector, and reports their trigger ids back.`
+      }
+      wide
+    >
+      {started && expiresAt ? (
+        <div className="runner-setup-started">
+          {started.warning && (
+            <Banner tone="warn" label="Several Repositories">
+              <p>{started.warning}</p>
+            </Banner>
+          )}
+          <Field
+            label="Command"
+            hint={`Paste it into a terminal with Claude Code signed in to your claude.ai account. It works once, until ${clockTime(expiresAt)}.`}
+          >
+            <textarea readOnly rows={3} value={started.command} className="mono" onFocus={(event) => event.currentTarget.select()} />
+          </Field>
+          <div>
+            <CopyButton text={started.command} label="Copy command" />
+          </div>
+          <table aria-label="Routines">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Model id</th>
+                <th>Routine</th>
+              </tr>
+            </thead>
+            <tbody>
+              {started.plan.routines.map((routine) => (
+                <tr key={routine.label}>
+                  <td>
+                    <ModelLabel model={routine.label} />
+                  </td>
+                  <td>
+                    <code>{routine.modelId}</code>
+                  </td>
+                  <td>{routine.name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted small">
+            Claude Code asks which cloud environment to use, and shows you the Transcript hook token of{" "}
+            {started.plan.agent.name} to add to it as <code>CRONK_TOKEN</code>. Once it reports back, the routines'
+            triggers show on this card, each waiting for the token you generate in claude.ai.
+          </p>
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="primary">Done</Button>
+            </DialogClose>
+          </DialogActions>
+        </div>
+      ) : (
+        <form onSubmit={start.onSubmit} className="runner-setup-form">
+          <Field label="Project">
+            <select name="projectId" required value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+              <option value="" disabled>
+                Choose a Project
+              </option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {choices.length > 1 && (
+            <Field label="Transcript hook token of" hint="The Agent whose token the routines' cloud environment uploads Transcripts with.">
+              <select name="agentId" required defaultValue="">
+                <option value="" disabled>
+                  Choose an Agent
+                </option>
+                {choices.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <FormError error={start.error} />
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="ghost">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" variant="primary" disabled={start.busy}>
+              Make the command
+            </Button>
+          </DialogActions>
+        </form>
+      )}
+    </Dialog>
   );
 }
 

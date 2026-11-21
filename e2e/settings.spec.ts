@@ -126,25 +126,6 @@ test("adding and removing a Repository says Saved.", async ({ page, cronk }) => 
   await expect(repositories.getByRole("status")).toHaveText("Saved.");
 });
 
-test("an Admin sets, changes and removes model ids in the Workspace's settings", async ({ page, cronk }) => {
-  const { workspace } = await signedIn(page, cronk);
-  await page.goto(`${cronk.url}/workspaces/${workspace.id}/settings`);
-
-  const modelIds = page.getByRole("region", { name: "Model ids" });
-  const rows = modelIds.getByRole("row");
-  await expect(rows).toHaveText([/Model label\s*Model id/, /haiku\s*claude-haiku-5-5/, /opus\s*claude-opus-5-5/, /sonnet\s*claude-sonnet-5-5/]);
-
-  await modelIds.getByLabel("Model label", { exact: true }).fill("Opus");
-  await modelIds.getByLabel("Model id", { exact: true }).fill("claude-opus-5");
-  await modelIds.getByRole("button", { name: "Set model id" }).click();
-  await expect(modelIds.getByRole("status")).toHaveText("Saved.");
-  await expect(rows).toHaveText([/Model label\s*Model id/, /haiku\s*claude-haiku-5-5/, /Opus\s*claude-opus-5\s*Remove/, /sonnet\s*claude-sonnet-5-5/]);
-  await expect(modelIds.getByLabel("Model label", { exact: true })).toHaveValue("");
-
-  await modelIds.getByRole("button", { name: "Remove the haiku model label" }).click();
-  await expect(rows).toHaveText([/Model label\s*Model id/, /Opus\s*claude-opus-5\s*Remove/, /sonnet\s*claude-sonnet-5-5/]);
-});
-
 test("Workspace settings, Members and the GitHub page share the settings layout", async ({ page, cronk }) => {
   const { workspace } = await signedIn(page, cronk);
   const cookie = await signIn(cronk);
@@ -153,7 +134,7 @@ test("Workspace settings, Members and the GitHub page share the settings layout"
   await addMember(cronk, cookie, workspace.id, "cy@example.com");
 
   await page.goto(`${cronk.url}/workspaces/${workspace.id}/settings`);
-  await expect(sections(page).getByRole("link")).toHaveText(["Name", "Lost Runs", "Model ids"]);
+  await expect(sections(page).getByRole("link")).toHaveText(["Name", "Model ids", "Lost Runs"]);
   await page.getByLabel("Lost-Run threshold (minutes)").fill("45");
   await page.getByRole("button", { name: "Save threshold" }).click();
   await expect(page.getByRole("region", { name: "Lost Runs" }).getByRole("status")).toHaveText("Saved.");
@@ -178,4 +159,23 @@ test("Workspace settings, Members and the GitHub page share the settings layout"
   await sections(page).getByRole("link", { name: "Installations" }).click();
   await expect(sections(page).getByRole("link", { name: "Installations" })).toHaveAttribute("aria-current", "true");
   await expect(sections(page).getByRole("link", { name: "The App", exact: true })).not.toHaveAttribute("aria-current", "true");
+});
+
+test("an Admin changes the model id a label stands for, and adds a label", async ({ page, cronk }) => {
+  const { workspace } = await signedIn(page, cronk);
+
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/settings`);
+  const modelIds = page.getByRole("region", { name: "Model ids" });
+  await expect(modelIds.getByRole("group", { name: "Model id of opus" }).getByLabel("Model id")).toHaveValue("claude-opus-5-5");
+  await modelIds.getByRole("group", { name: "Model id of opus" }).getByLabel("Model id").fill("claude-opus-6");
+  await modelIds.getByRole("button", { name: "Add a model label" }).click();
+  const added = modelIds.getByRole("group", { name: "Model id of a new label" });
+  await added.getByLabel("Model label").fill("fast");
+  await modelIds.getByRole("group", { name: "Model id of fast" }).getByLabel("Model id").fill("claude-haiku-5-5");
+  await modelIds.getByRole("button", { name: "Save model ids" }).click();
+  await expect(modelIds.getByRole("status")).toHaveText("Saved.");
+
+  await page.reload();
+  await expect(modelIds.getByRole("group", { name: "Model id of opus" }).getByLabel("Model id")).toHaveValue("claude-opus-6");
+  await expect(modelIds.getByRole("group", { name: "Model id of fast" }).getByLabel("Model id")).toHaveValue("claude-haiku-5-5");
 });

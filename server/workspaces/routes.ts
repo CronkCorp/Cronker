@@ -30,9 +30,11 @@ import {
   Workspace,
   WorkspaceName,
   WorkspaceSettings,
+  ModelId,
 } from "./workspaces.js";
 import { Link } from "../identity/links.js";
-import { ModelId, ModelIdValue, modelIdsOf, ModelLabel, removeModelId, saveModelId } from "./model-ids.js";
+import { WorkspaceSlug } from "./slugs.js";
+import { modelIdsOf, ModelLabel, removeModelId, saveModelId } from "./model-ids.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -43,14 +45,17 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Workspaces"],
           summary: "Create a Workspace",
-          description: "Any signed-in User may create a Workspace, and becomes its Admin.",
-          body: Type.Object({ name: WorkspaceName }),
-          response: { 201: Membership, 401: ErrorBody },
+          description:
+            "Any signed-in User may create a Workspace, and becomes its Admin. Its slug, the Workspace's name in web " +
+            "addresses, is the one given (`workspace_slug_taken` when another Workspace has it), or else one made " +
+            "from its name; it never changes.",
+          body: Type.Object({ name: WorkspaceName, slug: Type.Optional(WorkspaceSlug) }),
+          response: { 201: Membership, 400: ErrorBody, 401: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await createWorkspace(db, clock, user.id, request.body.name));
+        return reply.code(201).send(await createWorkspace(db, clock, user.id, request.body));
       },
     );
 
@@ -135,7 +140,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "The Workspace's model ids, for its Users and Agents",
           description:
             "The exact model id each model label stands for, so a Runner setup knows which model each routine gets. " +
-            "Labels are matched ignoring case. Ordered by label.",
+            "Labels are matched ignoring case. The same list, in the same order, as the Workspace's settings' `modelIds`.",
           params: Type.Object({ workspaceId: Type.String() }),
           response: { 200: Type.Array(ModelId), 401: ErrorBody, 404: ErrorBody },
         },
@@ -159,7 +164,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Adds the label, or changes the one matching it ignoring case, which then takes this spelling.",
           params: ModelIdParams,
-          body: Type.Object({ modelId: ModelIdValue }),
+          body: Type.Object({ modelId: ModelId.properties.modelId }),
           response: { 200: ModelId, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

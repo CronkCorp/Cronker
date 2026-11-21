@@ -115,7 +115,10 @@ test("a board whose Statuses don't fit scrolls sideways itself, its columns stil
   expect(await page.evaluate(() => window.scrollX)).toBe(0);
 });
 
-test("dragging a card to the board's edge scrolls it, so the card reaches a column that starts off screen", async ({ page, cronk }) => {
+test("dragging a card to the board's right or left edge scrolls it, so the card reaches a column that starts off screen", { tag: "@every-browser" }, async ({
+  page,
+  cronk,
+}) => {
   const { call, project, open } = await crowdedBoard(page, cronk);
   await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
   const { board, lane } = await open();
@@ -145,6 +148,23 @@ test("dragging a card to the board's edge scrolls it, so the card reaches a colu
   await expect(lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeVisible();
   await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeHidden();
   expect(await page.evaluate(() => window.scrollX)).toBe(0);
+
+  // And back: held at the board's left edge, it scrolls back until Backlog is in view.
+  const moved = (await lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ }).boundingBox())!;
+  await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(edge.x + edge.width / 2, y, { steps: 5 });
+  await expect(async () => {
+    await page.mouse.move(edge.x + 8, y);
+    await page.mouse.move(edge.x + 4, y);
+    expect((await lane("Backlog").boundingBox())!.x).toBeGreaterThanOrEqual(edge.x);
+  }).toPass({ timeout: 10_000 });
+  const backlog = (await lane("Backlog").boundingBox())!;
+  await page.mouse.move(backlog.x + backlog.width / 2, backlog.y + 80, { steps: 5 });
+  await page.mouse.up();
+
+  await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeVisible();
+  await expect(lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeHidden();
 });
 
 test("every board column, open or collapsed, is as tall as the tallest, and stays so as cards come and go live", async ({
@@ -226,4 +246,78 @@ test("a dragged card dropped on the empty lower part of a short column moves int
 
   await expect(lane("Backlog").getByRole("link", { name: /Busy ticket 1$/ })).toBeVisible();
   await expect(lane("Ready").getByRole("link", { name: /Busy ticket 1$/ })).toBeHidden();
+});
+
+/** Drags a card with the mouse, as a User does, and drops it at the middle of a column, below its head. */
+async function dragCard(page: Page, card: Locator, column: Locator) {
+  const from = (await card.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  const to = (await column.boundingBox())!;
+  await page.mouse.move(to.x + to.width / 2, to.y + 160, { steps: 8 });
+  await page.mouse.up();
+}
+
+test("a card dragged onto another column moves its Ticket there, onto its own column does nothing, and a refused move says why above the board", { tag: "@every-browser" }, async ({
+  page,
+  cronk,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const shipIt = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
+
+  // A Ticket a Run completed: Unverified in Done, it leaves only by Accept or Reopen.
+  const shipped = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Shipped" });
+  const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  await call("PATCH", `/api/tickets/${shipped.id}`, { delegateId: agent.id, autonomousDelegation: true, statusId: status("Code review") });
+  const [run] = await call("GET", `/api/tickets/${shipped.id}/runs`);
+  const finished = await cronk.request("POST", `/api/runs/${run.id}/finish`, {
+    headers: { authorization: `Bearer ${secret}` },
+    body: { outcome: "complete" },
+  });
+  expect(finished.status).toBe(200);
+  expect((await call("GET", `/api/tickets/${shipped.id}`)).verification).toBe("unverified");
+
+  const moves: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "PATCH" && request.url().includes("/api/tickets/")) moves.push(request.url());
+  });
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const lane = (name: string) => board.getByRole("region", { name, exact: true });
+  const shipItCard = (name: string) => lane(name).getByRole("link", { name: /CRONK-1 Ship it/ });
+  await expect(shipItCard("Backlog")).toBeVisible();
+
+  // Onto another column: the card shows up there without a reload, and the Ticket has moved.
+  await dragCard(page, shipItCard("Backlog"), lane("Ready"));
+  await expect(shipItCard("Ready")).toBeVisible();
+  await expect(shipItCard("Backlog")).toBeHidden();
+  expect((await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status("Ready"));
+  expect(moves).toHaveLength(1);
+
+  // Onto its own column: nothing is asked of Cronk and the card stays.
+  await dragCard(page, shipItCard("Ready"), lane("Ready"));
+  await expect(shipItCard("Ready")).toBeVisible();
+  expect(moves).toHaveLength(1);
+  await expect(page.getByRole("alert")).toBeHidden();
+
+  // A refused move: the reason shows above the board, and the card stays where it was.
+  await board.evaluate((e) => (e.scrollLeft = e.scrollWidth));
+  await lane("Done").getByRole("button", { name: "Done, 1 Ticket" }).click();
+  await board.evaluate((e) => (e.scrollLeft = e.scrollWidth));
+  const shippedCard = (name: string) => lane(name).getByRole("link", { name: /CRONK-2 Shipped/ });
+  await dragCard(page, shippedCard("Done"), lane("In Review"));
+  const refusal = page.getByRole("alert");
+  await expect(refusal).toHaveText("CRONK-2 was completed by a Run and is Unverified: it leaves Done only by Accept or Reopen.");
+  expect((await refusal.boundingBox())!.y, "the reason shows above the board").toBeLessThan((await board.boundingBox())!.y);
+  await expect(shippedCard("Done")).toBeVisible();
+  await expect(shippedCard("In Review")).toBeHidden();
 });

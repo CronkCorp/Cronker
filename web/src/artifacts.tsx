@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useAddresses, useCanonicalAddress } from "./addresses.js";
+import { useCallback, useEffect, useState } from "react";
 import { api, type Artifact, type ArtifactComparison, type ArtifactSummary, type ComparedFile, type Place, type ProjectSummary, type VersionWithBody, type Workspace } from "./api.js";
 import { sized } from "./attachments.js";
 import { VersionMeta, Versions } from "./documents.js";
@@ -23,10 +24,10 @@ import { Chip, type Tone } from "./ui/labels.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
-const listPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/artifacts` : `/workspaces/${place.id}/artifacts`);
 
 /** A Project's Artifacts, or the Workspace's own, last changed first. */
 function ArtifactList({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
+  const to = useAddresses();
   const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -73,7 +74,7 @@ function ArtifactList({ workspace, project }: { workspace: Workspace; project: P
                 {artifacts.map((artifact) => (
                   <tr key={artifact.id} className={arrived.has(artifact.id) ? "arrived" : undefined}>
                     <td>
-                      <Link to={`/artifacts/${artifact.id}`}>{artifact.title}</Link>
+                      <Link to={to.artifact(artifact)}>{artifact.title}</Link>
                       {artifact.description && <p className="artifact-list-description">{artifact.description}</p>}
                     </td>
                     <td>
@@ -111,27 +112,23 @@ export function ProjectArtifacts({ workspace, project }: { workspace: Workspace;
 export function ArtifactScreen({
   workspace,
   artifactId,
-  onOtherWorkspace,
 }: {
   workspace: Workspace;
   artifactId: string;
-  /** Offered an Artifact of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   usePlace("artifacts", artifact?.projectId ?? null);
 
   useEffect(() => {
     api.artifact(artifactId).then(
       (found) => {
         if (found.workspaceId === workspace.id) setArtifact(found);
-        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Artifact.");
+        else setFailure("No such Artifact.");
       },
       (e: Error) => setFailure(e.message),
     );
@@ -147,12 +144,14 @@ export function ArtifactScreen({
     if (projectId) api.project(projectId).then(setProject, () => setProject(null));
   }, [projectId]);
 
+  useCanonicalAddress(artifact && !gone ? to.artifact(artifact) : null);
+
   if (failure) return <FormError error={failure} />;
   if (!artifact) return <p className="muted">Loading…</p>;
-  const list = listPage(artifact.projectId ? { kind: "project", id: artifact.projectId } : { kind: "workspace", id: artifact.workspaceId });
+  const list = to.place(artifact.projectId ? { kind: "project", id: artifact.projectId } : { kind: "workspace", id: artifact.workspaceId }, "artifacts");
   const crumbs = [
     workspaceCrumb(workspace),
-    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }] : []),
+    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.project(project) }] : []),
     { label: "Artifacts", to: list },
   ];
   return (

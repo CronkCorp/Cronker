@@ -307,11 +307,11 @@ describe("lost Runs", () => {
     const { workspace, ada, run } = await runningRun();
     const settings = `/api/workspaces/${workspace.id}/settings`;
     const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
-    expect(await ok("GET", settings, { cookie: bea.cookie })).toEqual({ lostRunMinutes: 30 });
+    expect(await ok("GET", settings, { cookie: bea.cookie })).toEqual(expect.objectContaining({ lostRunMinutes: 30 }));
 
     expect((await call("PATCH", settings, { cookie: bea.cookie }, { lostRunMinutes: 10 })).status).toBe(403);
     expect((await call("PATCH", settings, ada, { lostRunMinutes: 0 })).status).toBe(400);
-    expect(await ok("PATCH", settings, ada, { lostRunMinutes: 10 })).toEqual({ lostRunMinutes: 10 });
+    expect(await ok("PATCH", settings, ada, { lostRunMinutes: 10 })).toEqual(expect.objectContaining({ lostRunMinutes: 10 }));
 
     cronk.clock.advance(minutes(10));
     await cronk.checkForLostRuns();
