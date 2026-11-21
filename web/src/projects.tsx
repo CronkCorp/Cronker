@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { addresses, useAddresses } from "./addresses.js";
+import { useCallback, useEffect, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
   nameOf,
@@ -35,6 +36,7 @@ import { Dialog, DialogActions, DialogClose, HoverPopover, Menu, MenuLink } from
 
 /** The Workspace's Projects, and a form to create one. */
 export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
+  const to = useAddresses();
   usePlace(null);
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const project = await api.createProject(workspace.id, { name: field(form, "name"), key: field(form, "key") });
-    navigate(`/projects/${project.id}`);
+    navigate(to.project(project));
   });
 
   return (
@@ -66,7 +68,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
             <ul className="rows">
               {projects.map((project) => (
                 <li key={project.id}>
-                  <Link to={`/projects/${project.id}`} className="row">
+                  <Link to={to.project(project)} className="row">
                     <span className="row-title">{project.name}</span> <span className="ticket-key">{project.key}</span>
                   </Link>
                 </li>
@@ -109,7 +111,8 @@ export const priorityLabel = (priority: Priority) => priorities.find((p) => p.pr
 
 /** The Project's other pages, in the page head's "…" menu. */
 export function ProjectMenu({ project }: { project: ProjectSummary }) {
-  const base = `/projects/${project.id}`;
+  const to = useAddresses();
+  const base = to.project(project);
   return (
     <Menu label="More of this Project">
       <MenuLink to={`${base}/documents`}>Documents</MenuLink>
@@ -129,22 +132,18 @@ export function ProjectScreen({
   workspace,
   projectId,
   view,
-  onOtherWorkspace,
 }: {
   workspace: WorkspaceSummary;
   projectId: string;
   view: View;
-  /** Offered a Project of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
   const [filter, setFilter] = useState<TicketFilter>({});
   const [failure, setFailure] = useState<string | null>(null);
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
 
@@ -153,7 +152,7 @@ export function ProjectScreen({
       // A Project of another of the User's Workspaces isn't shown under this one's name.
       (found) => {
         if (found.workspaceId === workspace.id) setProject(found);
-        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Project.");
+        else setFailure("No such Project.");
       },
       (e: Error) => setFailure(e.message),
     );
@@ -190,7 +189,7 @@ export function ProjectScreen({
   if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
   if (view === "artifacts") return <ProjectArtifacts workspace={workspace} project={project} />;
 
-  const base = `/projects/${project.id}`;
+  const base = to.project(project);
   const home = workspaceCrumb(workspace);
   if (view === "settings") {
     return (
@@ -389,6 +388,7 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * it names them, each a link to its Ticket. An unblocked Ticket shows nothing.
  */
 function BlockedChip({ ticket }: { ticket: TicketSummary }) {
+  const to = useAddresses();
   const blockers = ticket.blockedBy;
   if (blockers.length === 0) return null;
   return (
@@ -412,7 +412,7 @@ function BlockedChip({ ticket }: { ticket: TicketSummary }) {
       <ul className="hover-popover-list">
         {blockers.map((blocker) => (
           <li key={blocker.id}>
-            <Link to={`/tickets/${blocker.id}`} className="ticket-link">
+            <Link to={to.ticket(blocker)} className="ticket-link">
               <Key>{blocker.key}</Key> {blocker.title}
             </Link>
           </li>
@@ -429,6 +429,7 @@ const ticketDrag = "application/x-cronk-ticket";
  * which holds links of its own and so sits beside the card's link rather than in it.
  */
 function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; members: Member[]; agents: Agent[]; arrived: boolean }) {
+  const to = useAddresses();
   return (
     <div
       className={`card${arrived ? " arrived" : ""}`}
@@ -438,7 +439,7 @@ function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; mem
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <Link to={`/tickets/${ticket.id}`} className="card-link" draggable={false}>
+      <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
         <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
         <span className="card-priority">
           <PriorityTag priority={ticket.priority} />
@@ -582,6 +583,7 @@ function List({
   tickets: TicketSummary[];
   filtered: boolean;
 }) {
+  const to = useAddresses();
   return (
     <section aria-label="List" className="list">
       {tickets.length === 0 &&
@@ -603,7 +605,7 @@ function List({
               <ul className="rows panel panel-flush">
                 {inStatus.map((ticket) => (
                   <li key={ticket.id} className="ticket-item">
-                    <Link to={`/tickets/${ticket.id}`} className="row ticket-row">
+                    <Link to={to.ticket(ticket)} className="row ticket-row">
                       <StatusDot kind={status.kind} name={status.name} alone />
                       <span className="ticket-key">{ticket.key}</span> <span className="row-title">{ticket.title}</span>
                       <span className="row-meta">
@@ -865,10 +867,10 @@ export function ScopeSwitch({
     <Segmented
       label="Scope"
       items={[
-        { label: "Workspace", to: `/workspaces/${workspace.id}/${kind}`, current: project === null },
+        { label: "Workspace", to: addresses.knowledge(workspace, null, kind), current: project === null },
         ...projects.map((p) => ({
           label: <span className="mono">{p.key}</span>,
-          to: `/projects/${p.id}/${kind}`,
+          to: addresses.knowledge(workspace, p.key, kind),
           current: p.id === project?.id,
         })),
       ]}
@@ -880,6 +882,6 @@ export function ScopeSwitch({
 export function knowledgeCrumbs(workspace: Workspace, project: ProjectSummary | null, page: ReactNode) {
   const home = workspaceCrumb(workspace);
   return project
-    ? [home, { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }, { label: page }]
+    ? [home, { label: <span className="mono">{project.key}</span>, to: addresses.project(workspace, project.key) }, { label: page }]
     : [home, { label: page }];
 }

@@ -1,3 +1,4 @@
+import { useAddresses } from "./addresses.js";
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
@@ -105,12 +106,13 @@ function AgentCard({
   tickets: TicketSummary[];
   onChanged: () => void;
 }) {
+  const to = useAddresses();
   const mine = agent.owner.id === user.id;
   const [renaming, setRenaming] = useState(false);
   const [removing, setRemoving] = useState(false);
   const delegated = tickets.filter((t) => t.delegateId === agent.id);
   const running = delegated.filter((t) => t.lastRun?.state === "running");
-  const page = `/workspaces/${workspace.id}/agents/${agent.id}`;
+  const page = to.agent(agent.id);
   return (
     <section className="panel agent-card" aria-label={agent.name}>
       <header className="agent-card-head">
@@ -142,7 +144,7 @@ function AgentCard({
         <ul className="agent-runs" aria-label="Running Runs">
           {running.map((ticket) => (
             <li key={ticket.id}>
-              <Link to={`/tickets/${ticket.id}`}>
+              <Link to={to.ticket(ticket)}>
                 <Key>{ticket.key}</Key> <span className="agent-run-title">{ticket.title}</span>
               </Link>
               <RunState state="running" />
@@ -195,6 +197,7 @@ function RenameAgent({ agent, onClose, onRenamed }: { agent: Agent; onClose: () 
 
 /** One of the User's own Agents: its Runner, and its tokens behind Manage tokens; Rename and Remove in its "…" menu. */
 export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummary; agentId: string }) {
+  const to = useAddresses();
   usePlace("agents");
   const [agent, setAgent] = useState<Agent | null>(null);
   const [runners, setRunners] = useState<Runner[]>([]);
@@ -224,7 +227,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
       <PageHead
         crumbs={[
           workspaceCrumb(workspace),
-          { label: "Agents", to: `/workspaces/${workspace.id}/agents` },
+          { label: "Agents", to: to.workspace("agents") },
         ]}
         title={
           <span className="actor actor-agent">
@@ -275,7 +278,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
           confirm="Remove"
           onConfirm={async () => {
             await api.removeAgent(agentId);
-            navigate(`/workspaces/${workspace.id}/agents`);
+            navigate(to.workspace("agents"));
           }}
         >
           Its tokens stop working, and each Ticket delegated to it is undelegated, stopping its running Runs.
@@ -290,6 +293,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
  * uploaded first: each by its session, with the Tickets its Cronk tool calls named.
  */
 function AgentTranscripts({ agent }: { agent: Agent }) {
+  const to = useAddresses();
   const [transcripts, setTranscripts] = useState<Transcript[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -310,7 +314,7 @@ function AgentTranscripts({ agent }: { agent: Agent }) {
         <ul className="agent-transcripts" aria-label="Transcripts">
           {transcripts.map((transcript) => (
             <li key={transcript.id}>
-              <Link to={`/transcripts/${transcript.id}`} className="mono agent-transcript-session">
+              <Link to={to.transcript(transcript)} className="mono agent-transcript-session">
                 {transcript.sessionId}
               </Link>
               <span className="agent-transcript-tickets">
@@ -318,7 +322,7 @@ function AgentTranscripts({ agent }: { agent: Agent }) {
                   <span className="muted small">No Tickets named</span>
                 ) : (
                   transcript.tickets.map((ticket) => (
-                    <Link key={ticket.id} to={`/tickets/${ticket.id}`} title={ticket.title}>
+                    <Link key={ticket.id} to={to.ticket(ticket)} title={ticket.title}>
                       <Key>{ticket.key}</Key>
                     </Link>
                   ))

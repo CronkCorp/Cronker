@@ -55,7 +55,7 @@ test("delegate a Ticket and watch its Runs move it on the board", async ({ page,
   await expect(page.getByRole("region", { name: "Versions" })).toContainText("claude-max");
   await expect(page.getByRole("navigation", { name: "Breadcrumbs" }).getByRole("link", { name: "CRONK-1" })).toHaveAttribute(
     "href",
-    `/tickets/${ticket.id}`,
+    "/adas-workspace/tickets/CRONK-1",
   );
 
   await page.goto(`${cronk.url}/projects/${project.id}`);
