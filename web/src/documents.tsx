@@ -1,3 +1,4 @@
+import { useAddresses, useCanonicalAddress } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import {
   api,
@@ -37,7 +38,6 @@ function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSu
 }
 
 /** Where a page tree is shown: a Project's Documents page, or the Workspace's. */
-const treePage = (tree: Tree) => (tree.kind === "project" ? `/projects/${tree.id}/documents` : `/workspaces/${tree.id}/documents`);
 
 /** Who saved a Version and when, as a line of meta. */
 export function VersionMeta({ version }: { version: { number: number; actor: ActorInfo; savedAt: string } }) {
@@ -91,6 +91,7 @@ export function DocumentBody({
 
 /** A page tree's Documents, nested, under a page head with the scope switch and New Document. */
 function PageTree({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
+  const to = useAddresses();
   const tree: Tree = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
   usePlace("documents", project?.id ?? null);
   const [documents, setDocuments] = useState<DocumentSummary[] | null>(null);
@@ -109,14 +110,14 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createDocument(tree, { title: field(form, "title") });
-    navigate(`/documents/${created.id}`);
+    navigate(to.document(created));
   });
 
   const children = documents ? childrenOf(documents) : new Map<string | null, DocumentSummary[]>();
   const branch = (parentId: string | null, depth: number): ReactNode =>
     (children.get(parentId) ?? []).map((document) => (
       <li key={document.id}>
-        <Link to={`/documents/${document.id}`} className={`row tree-row${arrived.has(document.id) ? " arrived" : ""}`} style={{ "--depth": depth } as CSSProperties}>
+        <Link to={to.document(document)} className={`row tree-row${arrived.has(document.id) ? " arrived" : ""}`} style={{ "--depth": depth } as CSSProperties}>
           <span className="row-title">{document.title}</span>
           <span className="row-meta">
             <span className="muted small">Version {document.version.number}</span>
@@ -189,13 +190,11 @@ export function ProjectDocuments({ workspace, project }: { workspace: Workspace;
 export function DocumentScreen({
   workspace,
   documentId,
-  onOtherWorkspace,
 }: {
   workspace: Workspace;
   documentId: string;
-  /** Offered a Document of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [document, setDocument] = useState<Document | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [ticket, setTicket] = useState<Ticket | null>(null);
@@ -206,15 +205,13 @@ export function DocumentScreen({
   const [versionsShown, setVersionsShown] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   usePlace("documents", document?.projectId ?? null);
 
   const load = useCallback(() => {
     api.document(documentId).then(
       (found) => {
         if (found.workspaceId === workspace.id) setDocument(found);
-        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Document.");
+        else setFailure("No such Document.");
       },
       (e: Error) => setFailure(e.message),
     );
@@ -257,14 +254,16 @@ export function DocumentScreen({
     setVersionsShown((n) => n + 1);
   };
 
+  useCanonicalAddress(document && !gone ? to.document(document) : null);
+
   if (failure) return <FormError error={failure} />;
   if (!document) return <p className="muted">Loading…</p>;
   const tree: Tree = document.projectId ? { kind: "project", id: document.projectId } : { kind: "workspace", id: document.workspaceId };
   // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
-  const home = document.ticketId ? `/tickets/${document.ticketId}` : treePage(tree);
+  const home = document.ticketId ? (ticket ? to.ticket(ticket) : `/tickets/${document.ticketId}`) : to.place(tree, "documents");
   const crumbs = [
     workspaceCrumb(workspace),
-    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` }] : []),
+    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.project(project) }] : []),
     document.ticketId
       ? { label: <span className="mono">{ticket?.key ?? "Its Ticket"}</span>, to: home }
       : { label: "Documents", to: home },

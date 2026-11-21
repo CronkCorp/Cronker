@@ -135,7 +135,7 @@ describe("Agent tokens", () => {
     expect(me.status).toBe(200);
     expect(await me.json()).toEqual({
       agent: expect.objectContaining({ id: agent.id, name: "claude-max" }),
-      workspace: { id: workspace.id, name: "Ada's Workspace" },
+      workspace: { id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace" },
       access: "read",
     });
   });

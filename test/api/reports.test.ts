@@ -47,11 +47,12 @@ async function stagedTicket(project: { id: string; workspaceId: string; statuses
  */
 async function runningRun(options: StartCronkOptions = {}) {
   cronk = await startCronk(options);
-  // Creating a Project and starting its Runs, as today's API does, needs the Merge Step's columns.
+  // Setting up, creating a Project and starting its Runs, as today's API does, needs Workspace slugs and the Merge
+  // Step's columns; setting up a Runner needs the columns of a Managed Agents Runner's setup.
   if (options.migrateBefore !== undefined) {
     await cronk.applyAhead("0033_merge_step.sql");
-    // Setting up a Runner, as today's API does, needs the columns of a Managed Agents Runner's setup.
     await cronk.applyAhead("0043_managed_agents_runner.sql");
+    await cronk.applyAhead("0044_workspace_slugs.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
@@ -100,6 +101,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         runId: run.id,
         agent: byAgent,
         title: "Findings",
+        slug: `findings-${findings.slice(0, 8)}`,
         body: "The bug is in **parsing**.",
         createdAt: "2026-01-01T09:30:00.000Z",
       },
@@ -109,6 +111,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         runId: run.id,
         agent: byAgent,
         title: "Plan",
+        slug: `plan-${plan.slice(0, 8)}`,
         body: "Fix the parser.",
         createdAt: "2026-01-01T09:30:00.000Z",
       },
@@ -140,6 +143,7 @@ describe("Reports as Documents", () => {
       parentId: null,
       position: null,
       title: "Findings",
+      slug: `findings-${report.id.slice(0, 8)}`,
       body: "The bug is in **parsing**.",
       version: { number: 1, title: "Findings", actor: byAgent, savedAt: "2026-01-01T09:00:00.000Z" },
     });
@@ -160,6 +164,7 @@ describe("Reports as Documents", () => {
         runId: run.id,
         agent: { id: agent.id, name: "claude-max" },
         title: "Findings",
+        slug: `findings-${report.id.slice(0, 8)}`,
         body: "Parsing, in `lex()`.",
         createdAt: "2026-01-01T09:00:00.000Z",
       },

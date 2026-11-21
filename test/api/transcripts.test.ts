@@ -100,7 +100,7 @@ async function adaWithAgent() {
 
 describe("uploading a transcript", () => {
   test("an Agent's upload is converted into entries readable through the API", async () => {
-    const { ada, agent, asAgent } = await adaWithAgent();
+    const { ada, agent, asAgent, workspace } = await adaWithAgent();
 
     const transcript = await uploaded(
       "session_01ABC",
@@ -119,6 +119,8 @@ describe("uploading a transcript", () => {
 
     expect(transcript).toEqual({
       id: expect.any(String),
+      workspaceId: workspace.id,
+      slug: `claude-max-${transcript.id.slice(0, 8)}`,
       sessionId: "session_01ABC",
       agent: { id: agent.id, name: "claude-max" },
       runId: null,
@@ -349,7 +351,7 @@ describe("a Run's Transcript", () => {
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
     const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
-    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/session_1", transcriptId: null });
+    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/session_1", transcriptId: null, transcriptSlug: null });
 
     const transcript = await uploaded(
       "session_1",
@@ -364,6 +366,7 @@ describe("a Run's Transcript", () => {
     expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({
       sessionUrl: "https://claude.ai/code/session_1",
       transcriptId: transcript.id,
+      transcriptSlug: `claude-max-${transcript.id.slice(0, 8)}`,
     });
     expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: transcript.id }]);
   });

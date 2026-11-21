@@ -387,7 +387,10 @@ export function buildMcpServer(api: Api): McpServer {
       }),
   );
 
-  const documentArgument = z.string().min(1).describe("The Document's id.");
+  const documentArgument = z
+    .string()
+    .min(1)
+    .describe("The Document's slug, such as `onboarding-3f9a1b2c` (its words may be stale), or its id.");
 
   /**
    * The path of a Project's knowledge, by the Project's key, or of the Workspace's when none is given; the
@@ -472,7 +475,7 @@ export function buildMcpServer(api: Api): McpServer {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
         title: z.string().min(1),
         body: z.string().optional().describe("Markdown."),
-        parent: z.string().optional().describe("The id of a Document of the same page tree to sit under."),
+        parent: z.string().optional().describe("The slug or id of a Document of the same page tree to sit under."),
         position: z.number().int().min(0).optional().describe("A place among its siblings, counting from 0."),
       },
     },
@@ -498,14 +501,17 @@ export function buildMcpServer(api: Api): McpServer {
           .string()
           .nullable()
           .optional()
-          .describe("The id of a Document of the same page tree to sit under, or null for the top."),
+          .describe("The slug or id of a Document of the same page tree to sit under, or null for the top."),
         position: z.number().int().min(0).optional().describe("A place among its siblings, counting from 0."),
       },
     },
     ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
   );
 
-  const termArgument = z.string().min(1).describe("The Term's id.");
+  const termArgument = z
+    .string()
+    .min(1)
+    .describe("The Term's name, ignoring case, after its Project's key for a Project's (`CRONK/Ticket`); or its id.");
   const termPath = (term: string) => `/api/terms/${encodeURIComponent(term)}`;
   const avoidArgument = z.array(z.string().min(1)).describe("Words to avoid in the Term's place.");
 
@@ -656,7 +662,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Attachment as `attachment:<id>`, such as `![Screenshot](attachment:<id>)` in a Document or Comment.",
       inputSchema: {
         ticket: ticketArgument.optional(),
-        document: z.string().min(1).optional().describe("A Document's id."),
+        document: z.string().min(1).optional().describe("A Document's slug or id."),
         comment: z.string().min(1).optional().describe("The id of a Comment you wrote."),
         name: z.string().min(1).describe("The file's name, such as `screenshot.png`."),
         mediaType: z.string().optional().describe("Its media type, such as `image/png`; `application/octet-stream` when left out."),
@@ -693,7 +699,10 @@ export function buildMcpServer(api: Api): McpServer {
       }),
   );
 
-  const artifactArgument = z.string().min(1).describe("The Artifact's id.");
+  const artifactArgument = z
+    .string()
+    .min(1)
+    .describe("The Artifact's slug, such as `board-prototype-3f9a1b2c` (its words may be stale), or its id.");
   const artifactPath = (artifact: string) => `/api/artifacts/${encodeURIComponent(artifact)}`;
   const artifactPathArgument = z.string().min(1).describe("A path relative to the Version, such as `index.html` or `scripts/app.js`.");
   const artifactFiles = z.array(
@@ -824,7 +833,10 @@ export function buildMcpServer(api: Api): McpServer {
     ({ artifact, ...save }) => answer(() => send("PATCH", artifactPath(artifact), save)),
   );
 
-  const decisionArgument = z.string().min(1).describe("The Decision's id.");
+  const decisionArgument = z
+    .string()
+    .min(1)
+    .describe("The Decision's number, after its Project's key for a Project's (`CRONK/3`, or `3` for the Workspace's own); or its id.");
   const decisionPath = (decision: string) => `/api/decisions/${encodeURIComponent(decision)}`;
 
   server.registerTool(

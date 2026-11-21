@@ -57,6 +57,7 @@ describe("Documents", () => {
       parentId: null,
       position: 0,
       title: "Architecture",
+      slug: `architecture-${created.json.id.slice(0, 8)}`,
       body: "# How it fits together",
       version: {
         number: 1,

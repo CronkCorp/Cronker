@@ -317,7 +317,7 @@ describe("MCP with an Agent token", () => {
 
     const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
 
-    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design" }]);
+    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design", slug: document.slug }]);
   });
 
   test("an Agent lists Tickets, narrowed by Project and Status", async () => {
@@ -501,7 +501,7 @@ describe("MCP with an Agent token", () => {
     const client = await connect(secret);
 
     const linked = await call(client, "link_document", { ticket: "CRONK-1", document: design.id });
-    expect(linked).toEqual({ isError: false, json: { id: design.id, projectId: project.id, title: "Sign-in design" } });
+    expect(linked).toEqual({ isError: false, json: { id: design.id, projectId: project.id, title: "Sign-in design", slug: design.slug } });
     const refused = await call(client, "link_document", { ticket: "CRONK-2", document: design.id });
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
 
@@ -530,15 +530,15 @@ describe("MCP with an Agent token", () => {
     const unlinked = await call(client, "unlink_artifact", { ticket: "CRONK-1", artifact: sketch.id });
 
     expect(created.isError).toBe(false);
-    expect(linked).toEqual({ isError: false, json: { id: sketch.id, projectId: project.id, title: "Sketch" } });
+    expect(linked).toEqual({ isError: false, json: { id: sketch.id, projectId: project.id, title: "Sketch", slug: sketch.slug } });
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
     expect(read.linkedArtifacts).toEqual([
-      { id: created.json.id, projectId: project.id, title: "Board prototype" },
-      { id: sketch.id, projectId: project.id, title: "Sketch" },
+      { id: created.json.id, projectId: project.id, title: "Board prototype", slug: created.json.slug },
+      { id: sketch.id, projectId: project.id, title: "Sketch", slug: sketch.slug },
     ]);
     expect(unlinked).toEqual({
       isError: false,
-      json: [{ id: created.json.id, projectId: project.id, title: "Board prototype" }],
+      json: [{ id: created.json.id, projectId: project.id, title: "Board prototype", slug: created.json.slug }],
     });
   });
 
@@ -835,6 +835,23 @@ describe("MCP with an Agent token", () => {
       ],
     });
     expect(workspace.json).toEqual({ files: [{ path: "GLOSSARY.md", content: "# Glossary\n\n**Ticket**:\nA unit of work.\n" }] });
+  });
+
+  test("an Agent names Documents, Terms, Decisions and Artifacts by their readable forms as well as their ids", async () => {
+    const { cookie, secret } = await workspaceWithTicket();
+    const document = await post(cookie, "/api/projects/CRONK/documents", { title: "Onboarding", body: "Hello" });
+    const term = await post(cookie, "/api/projects/CRONK/terms", { name: "Workspace slug", definition: "Its name in addresses." });
+    const decision = await post(cookie, "/api/projects/CRONK/decisions", { title: "Slugs in addresses" });
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const artifact = await post(cookie, "/api/projects/CRONK/artifacts", { title: "Board", files });
+    const client = await connect(secret);
+
+    expect((await call(client, "read_document", { document: `onboarding-${document.id.slice(0, 8)}` })).json.id).toBe(document.id);
+    expect((await call(client, "read_term", { term: "CRONK/workspace slug" })).json.id).toBe(term.id);
+    expect((await call(client, "read_decision", { decision: "CRONK/1" })).json.id).toBe(decision.id);
+    expect((await call(client, "read_artifact", { artifact: artifact.slug })).json.id).toBe(artifact.id);
+    expect((await call(client, "read_document", { document: document.id })).json.slug).toBe(document.slug);
+    expect((await call(client, "read_decision", { decision: "CRONK/2" })).isError).toBe(true);
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

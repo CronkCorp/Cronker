@@ -121,7 +121,7 @@ export async function agentOfToken({ db, clock }: Context, header: string): Prom
   const { rows } = secret
     ? await db.query<AgentCaller>(
         `select 'agent' as kind, agents.id, agents.name, agent_tokens.access,
-           json_build_object('id', workspaces.id, 'name', workspaces.name) as workspace,
+           json_build_object('id', workspaces.id, 'name', workspaces.name, 'slug', workspaces.slug) as workspace,
            json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner
          from agent_tokens
          join agents on agents.id = agent_tokens.agent_id and agents.removed_at is null

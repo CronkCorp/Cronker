@@ -209,7 +209,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     checkMergeability: () => cronk.checkMergeability(),
     logs,
     setupCode() {
-      const line = logs.find((l) => typeof l.setupCode === "string");
+      const line = logs.findLast((l) => typeof l.setupCode === "string");
       if (!line) throw new Error("no setup code in the server log");
       return line.setupCode as string;
     },

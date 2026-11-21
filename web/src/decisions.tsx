@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useAddresses } from "./addresses.js";
+import { useCallback, useEffect, useState } from "react";
 import {
   api,
   ApiError,
@@ -27,10 +28,10 @@ import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } fro
 const numbered = (number: number) => String(number).padStart(4, "0");
 
 /** Where a Project's or the Workspace's Decisions are listed. */
-const listPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/decisions` : `/workspaces/${place.id}/decisions`);
 
 /** A Project's Decisions, or the Workspace's own: a register with status filters, and New Decision. */
 function Register({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
+  const to = useAddresses();
   const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
   const [decisions, setDecisions] = useState<DecisionSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -49,7 +50,7 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createDecision(place, { title: field(form, "title") });
-    navigate(`/decisions/${created.id}`);
+    navigate(to.decision(created));
   });
 
   const count = (status: DecisionStatus) => decisions?.filter((d) => d.status === status).length ?? 0;
@@ -117,11 +118,11 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
                       <tr key={decision.id} className={arrived.has(decision.id) ? "arrived" : undefined}>
                         <td className="mono muted">{numbered(decision.number)}</td>
                         <td>
-                          <Link to={`/decisions/${decision.id}`}>{decision.title}</Link>
+                          <Link to={to.decision(decision)}>{decision.title}</Link>
                           {replacement && (
                             <>
                               {" "}
-                              <Link to={`/decisions/${replacement.id}`} className="superseded-by" title={`Superseded by ${replacement.title}`}>
+                              <Link to={to.decision(replacement)} className="superseded-by" title={`Superseded by ${replacement.title}`}>
                                 → {numbered(replacement.number)}
                               </Link>
                             </>
@@ -184,13 +185,11 @@ export function ProjectDecisions({ workspace, project }: { workspace: Workspace;
 export function DecisionScreen({
   workspace,
   decisionId,
-  onOtherWorkspace,
 }: {
   workspace: Workspace;
   decisionId: string;
-  /** Offered a Decision of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [decision, setDecision] = useState<Decision | null>(null);
   const [others, setOthers] = useState<DecisionSummary[]>([]);
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -198,15 +197,13 @@ export function DecisionScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [versionsShown, setVersionsShown] = useState(0);
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   usePlace("decisions", decision?.projectId ?? null);
 
   const load = useCallback(() => {
     api.decision(decisionId).then(
       (found) => {
         if (found.workspaceId === workspace.id) setDecision(found);
-        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Decision.");
+        else setFailure("No such Decision.");
       },
       (e: Error) => setFailure(e.message),
     );
@@ -262,7 +259,7 @@ export function DecisionScreen({
   return (
     <div className="page">
       <PageHead
-        crumbs={knowledgeCrumbs(workspace, project, <Link to={listPage(place)}>Decisions</Link>)}
+        crumbs={knowledgeCrumbs(workspace, project, <Link to={to.place(place, "decisions")}>Decisions</Link>)}
         title={decision.title}
         large
         eyebrow={
@@ -342,7 +339,7 @@ export function DecisionScreen({
         <Banner tone="warn" label="Superseded">
           <p>
             Superseded by{" "}
-            <Link to={`/decisions/${decision.supersededById}`}>
+            <Link to={replacement ? to.decision(replacement) : `/decisions/${decision.supersededById}`}>
               {replacement ? `${numbered(replacement.number)} ${replacement.title}` : "the Decision replacing it"}
             </Link>
             .
@@ -355,7 +352,7 @@ export function DecisionScreen({
             Supersedes{" "}
             {replaced.map((d, index) => (
               <span key={d.id}>
-                <Link to={`/decisions/${d.id}`}>
+                <Link to={to.decision(d)}>
                   {numbered(d.number)} {d.title}
                 </Link>
                 {index < replaced.length - 1 && ", "}

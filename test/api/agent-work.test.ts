@@ -174,6 +174,7 @@ describe("Reports", () => {
       runId: run.id,
       agent: { id: agent.id, name: "claude-max" },
       title: "Findings",
+      slug: expect.stringMatching(/^findings-[0-9a-f]{8}$/),
       body: "The bug is in **parsing**.",
       createdAt: "2026-01-01T09:00:00.000Z",
     };
@@ -181,7 +182,7 @@ describe("Reports", () => {
     const reports = await ok("GET", `/api/tickets/${ticket.id}/reports`, ada);
     expect(reports).toEqual([
       findings,
-      { ...findings, title: "Plan", body: "Fix the parser.", createdAt: "2026-01-01T09:01:00.000Z" },
+      { ...findings, title: "Plan", slug: expect.stringMatching(/^plan-[0-9a-f]{8}$/), body: "Fix the parser.", createdAt: "2026-01-01T09:01:00.000Z" },
     ]);
     // Agents read them too, as later Runs on the Ticket do.
     expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, asAgent)).toEqual(reports);
@@ -218,6 +219,7 @@ describe("Reports", () => {
         runId: run.id,
         agent: { id: agent.id, name: "claude-max" },
         title: "Triage report",
+        slug: expect.stringMatching(/^triage-report-[0-9a-f]{8}$/),
         body: "Clear enough to start.",
         createdAt: "2026-01-01T09:00:00.000Z",
       },

@@ -4,6 +4,7 @@ import type { Context } from "../context.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
 import type { Place } from "../knowledge/places.js";
@@ -43,6 +44,7 @@ export const Artifact = Type.Object({
     description: "The Project it is kept in, or null for the Workspace.",
   }),
   title: Type.String(),
+  slug: Type.String({ description: slugDescription }),
   description: Type.String(),
   page: Type.String({ description: "The path of the file that is its page." }),
   url: Type.String({
@@ -73,7 +75,7 @@ type Row = Omit<Artifact, "url" | "files" | "version"> & {
 };
 
 const columns = `artifacts.id, artifacts.workspace_id as "workspaceId", artifacts.project_id as "projectId",
-  versions.title, versions.description, versions.page, versions.serve_key as "serveKey",
+  versions.title, ${slugColumn("artifact", "artifacts.id", "versions.title")} as slug, versions.description, versions.page, versions.serve_key as "serveKey",
   json_build_object('number', versions.number, 'actor', ${actorColumn("users", "agents")}, 'savedAt', versions.saved_at)
     as version,
   (select json_agg(json_build_object('path', files.path, 'mediaType', files.media_type, 'size', files.size)

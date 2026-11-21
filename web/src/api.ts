@@ -44,12 +44,15 @@ export interface Repository {
 export interface WorkspaceSummary {
   id: string;
   name: string;
+  /** Its name in web addresses, such as `acme` in `/acme/tickets/RP-12`; it never changes. */
+  slug: string;
   isAdmin: boolean;
 }
 
 export interface Workspace {
   id: string;
   name: string;
+  slug: string;
 }
 
 export interface Member {
@@ -363,6 +366,8 @@ export interface Report {
   runId: string;
   agent: { id: string; name: string };
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
   body: string;
   createdAt: string;
 }
@@ -420,6 +425,8 @@ export interface Run {
   sessionUrl: string | null;
   /** Its Transcript, once one was uploaded for its session. */
   transcriptId: string | null;
+  /** Its Transcript's readable form, for its address. */
+  transcriptSlug: string | null;
   /** Whether a User deleted its Transcript. */
   transcriptDeleted: boolean;
   startedAt: string;
@@ -429,6 +436,9 @@ export interface Run {
 /** The record of an agent's session, as Cronk converted it into entries. */
 export interface Transcript {
   id: string;
+  workspaceId: string;
+  /** Its readable form, as its address takes it: its Agent's name, then its short id. */
+  slug: string;
   sessionId: string;
   agent: { id: string; name: string };
   runId: string | null;
@@ -462,6 +472,8 @@ export interface TranscriptEntry {
 export interface ReportRef {
   id: string;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
 }
 
 /** A Ticket in a Review Status, waiting for its Assignee's review. */
@@ -597,6 +609,8 @@ export interface DocumentSummary {
   /** Null for a Report. */
   position: number | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
   version: Version;
 }
 
@@ -626,6 +640,8 @@ export interface Artifact {
   /** Null for the Workspace's. */
   projectId: string | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
   description: string;
   page: string;
   /** Where its page is served, sandboxed, on Cronk's own address. */
@@ -665,6 +681,8 @@ export interface LinkedArtifact {
   /** Null for an Artifact of the Workspace. */
   projectId: string | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
 }
 
 /** A Document linked to a Ticket, from its Project's page tree or the Workspace's. */
@@ -673,6 +691,8 @@ export interface LinkedDocument {
   /** Null for a Document of the Workspace's page tree. */
   projectId: string | null;
   title: string;
+  /** Its readable form, as its address takes it: the words of its title, then its short id. */
+  slug: string;
 }
 
 /** A check on a Pull Request's latest commit: a check run, or a commit status by its context. */
@@ -818,7 +838,7 @@ export interface DecisionEdit {
 export interface ConnectRequest {
   client: { id: string; name: string | null };
   redirectUri: string;
-  agents: { id: string; name: string; workspace: Workspace }[];
+  agents: { id: string; name: string; workspace: { id: string; name: string } }[];
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -852,6 +872,10 @@ export interface SearchResult {
   projectId: string | null;
   /** A Ticket's own key, or the key of the Ticket a Report is on or a Transcript's Run was on. */
   ticketKey: string | null;
+  /** A Document's, Report's, Artifact's or Transcript's readable form, for its address. */
+  slug: string | null;
+  /** A Decision's number, within its Project or among the Workspace's own. */
+  number: number | null;
   /** Where it matched, the matching words marked. */
   snippet: { text: string; match: boolean }[];
 }
@@ -866,7 +890,7 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) =>
     call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
   workspace: (id: string) => call<Workspace>("GET", ws(id)),
-  createWorkspace: (name: string) => call<WorkspaceSummary>("POST", "/api/workspaces", { name }),
+  createWorkspace: (input: { name: string; slug?: string }) => call<WorkspaceSummary>("POST", "/api/workspaces", input),
   renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
   workspaceSettings: (id: string) => call<WorkspaceSettings>("GET", `${ws(id)}/settings`),
   changeWorkspaceSettings: (id: string, change: Partial<WorkspaceSettings>) =>

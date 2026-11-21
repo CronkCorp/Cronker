@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useAddresses, useCanonicalAddress } from "./addresses.js";
+import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type Place, type ProjectSummary, type Term, type TermComparison, type TermVersion, type Workspace } from "./api.js";
 import { DocumentBody, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
@@ -14,7 +15,6 @@ import { Chip } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a glossary is shown: a Project's Terms page, or the Workspace's. */
-const glossaryPage = (place: Place) => (place.kind === "project" ? `/projects/${place.id}/glossary` : `/workspaces/${place.id}/glossary`);
 
 /** Words to avoid as typed: separated by commas, each trimmed, blanks dropped. */
 const wordsToAvoid = (text: string) =>
@@ -60,6 +60,7 @@ function Glossary({
   /** For the Workspace's page: each Project's own Terms, by Project. */
   replacedIn: { project: ProjectSummary; terms: Term[] }[];
 }) {
+  const to = useAddresses();
   const [filter, setFilter] = useState("");
   const [creating, setCreating] = useState(false);
   const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
@@ -114,7 +115,7 @@ function Glossary({
               <article key={term.id} className={`term${arrived.has(term.id) ? " arrived" : ""}`} aria-labelledby={`term-${term.id}`}>
                 <header className="term-head">
                   <h2 id={`term-${term.id}`}>
-                    <Link to={`/terms/${term.id}`}>{term.name}</Link>
+                    <Link to={to.term(term)}>{term.name}</Link>
                   </h2>
                   {overrides && <Chip tone="info">Overrides the Workspace Term</Chip>}
                   {replaced.map((p) => (
@@ -139,13 +140,14 @@ function Glossary({
 
 /** A dialog creating a Term in the Project or the Workspace, then showing it. */
 function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const to = useAddresses();
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createTerm(place, {
       name: field(form, "name"),
       definition: field(form, "definition"),
       avoid: wordsToAvoid(field(form, "avoid")),
     });
-    navigate(`/terms/${created.id}`);
+    navigate(to.term(created));
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={place.kind === "project" ? "New Project Term" : "New Workspace Term"}>
@@ -231,28 +233,24 @@ export function WorkspaceGlossary({ workspace }: { workspace: Workspace }) {
 export function TermScreen({
   workspace,
   termId,
-  onOtherWorkspace,
 }: {
   workspace: Workspace;
   termId: string;
-  /** Offered a Term of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [term, setTerm] = useState<Term | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   usePlace("terms", term?.projectId ?? null);
 
   const load = useCallback(() => {
     api.term(termId).then(
       (found) => {
         if (found.workspaceId === workspace.id) setTerm(found);
-        else if (!otherWorkspace.current?.(found.workspaceId)) setFailure("No such Term.");
+        else setFailure("No such Term.");
       },
       (e: Error) => setFailure(e.message),
     );
@@ -267,11 +265,12 @@ export function TermScreen({
   useEffect(() => {
     if (projectId) api.project(projectId).then(setProject, () => setProject(null));
   }, [projectId]);
+  useCanonicalAddress(term && !gone ? to.term(term) : null);
 
   if (failure) return <FormError error={failure} />;
   if (!term) return <p className="muted">Loading…</p>;
   const place: Place = term.projectId ? { kind: "project", id: term.projectId } : { kind: "workspace", id: term.workspaceId };
-  const crumbs = knowledgeCrumbs(workspace, project, <Link to={glossaryPage(place)}>Terms</Link>);
+  const crumbs = knowledgeCrumbs(workspace, project, <Link to={to.place(place, "glossary")}>Terms</Link>);
   return (
     <div className="page">
       <PageHead
@@ -303,7 +302,7 @@ export function TermScreen({
         }
       />
       {gone && (
-        <DeletedElsewhere back={{ to: glossaryPage(place), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
+        <DeletedElsewhere back={{ to: to.place(place, "glossary"), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
       )}
       {editing ? (
         <Editor
@@ -330,7 +329,7 @@ export function TermScreen({
         confirm="Delete"
         onConfirm={async () => {
           await deleteHere(() => api.deleteTerm(term.id));
-          navigate(glossaryPage(place));
+          navigate(to.place(place, "glossary"));
         }}
       >
         It goes with all its Versions{term.projectId ? ", and the Workspace's Term of the same name, if any, applies again" : ""}.

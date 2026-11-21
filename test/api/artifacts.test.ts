@@ -71,6 +71,7 @@ describe("Artifacts", () => {
       workspaceId: workspace.id,
       projectId: project.id,
       title: "Board prototype",
+      slug: `board-prototype-${created.json.id.slice(0, 8)}`,
       description: "A board with drag and drop.",
       page: "index.html",
       url: expect.stringMatching(/^\/sandbox\/[A-Za-z0-9_-]{20,}\/index\.html$/),

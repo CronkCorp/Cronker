@@ -4,6 +4,7 @@ import type { Context } from "../context.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
@@ -61,6 +62,9 @@ export const Run = Type.Object({
   transcriptId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Transcript, once one was uploaded for the session its Runner returned when starting it.",
   }),
+  transcriptSlug: Type.Union([Type.String(), Type.Null()], {
+    description: "Its Transcript's readable form, as the Transcript's address and the API take it; null without one.",
+  }),
   transcriptDeleted: Type.Boolean({ description: "Whether a User deleted its Transcript." }),
   startedAt: Type.String({ format: "date-time" }),
   endedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
@@ -86,6 +90,8 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
   (select transcripts.id from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)
     as "transcriptId",
+  (select ${slugColumn("transcript", "transcripts.id", "agents.name")} from transcripts
+    where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1) as "transcriptSlug",
   exists (select from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is not null)
     as "transcriptDeleted",
   runs.started_at as "startedAt", runs.ended_at as "endedAt", runs.last_call_at as "lastCallAt",
