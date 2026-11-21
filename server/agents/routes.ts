@@ -123,7 +123,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return tokensOf(db, await requireOwnAgent(db, user.id, request.params.agentId));
+        return tokensOf(db, context.clock, await requireOwnAgent(db, user.id, request.params.agentId));
       },
     );
 

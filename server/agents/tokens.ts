@@ -49,10 +49,16 @@ type Row = Omit<AgentToken, "createdAt"> & { createdAt: Date };
 const columns = `id, name, access, created_at as "createdAt"`;
 const present = (row: Row): AgentToken => ({ ...row, createdAt: row.createdAt.toISOString() });
 
-export async function tokensOf(db: Db, agent: Agent): Promise<AgentToken[]> {
+/**
+ * The Agent's tokens still listed: every one but a token outside OAuth that has expired, such as the Transcript hook
+ * token of a Runner setup never used. An OAuth connection stays listed while its token awaits a refresh.
+ */
+export async function tokensOf(db: Db, clock: Clock, agent: Agent): Promise<AgentToken[]> {
   const { rows } = await db.query<Row>(
-    `select ${columns} from agent_tokens where agent_id = $1 order by created_at, id`,
-    [agent.id],
+    `select ${columns} from agent_tokens
+     where agent_id = $1 and (oauth_client_id is not null or expires_at is null or expires_at > $2)
+     order by created_at, id`,
+    [agent.id, clock.now()],
   );
   return rows.map(present);
 }

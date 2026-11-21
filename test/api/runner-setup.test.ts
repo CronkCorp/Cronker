@@ -465,5 +465,8 @@ describe("the Transcript hook token a setup hands over", () => {
     cronk.clock.advance(60 * 60 * 1000);
     expect((await asToken(expiring)).status).toBe(401);
     expect((await asToken(kept)).status).toBe(200);
+    expect((await ok("GET", `/api/agents/${agent.id}/tokens`, ada)).map((t: { name: string }) => t.name)).toEqual([
+      "Transcript hook · Cronker",
+    ]);
   });
 });
