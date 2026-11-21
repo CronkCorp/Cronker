@@ -99,8 +99,8 @@ export type EntryPage = Static<typeof EntryPage>;
 /** An entry as a converter produces it, before scrubbing and the caps. */
 export type ConvertedEntry = Omit<TranscriptEntry, "position" | "cut">;
 
-/** A tool result longer than this is cut to it. */
-const toolResultLimitBytes = 20 * 1024;
+/** A tool result longer than this is cut to it, as is the text of a last entry too large for a capped Transcript's end. */
+const cutLimitBytes = 20 * 1024;
 /** A Transcript larger than this keeps only its start and its end, each up to half of it. */
 const transcriptLimitBytes = 50 * megabyte;
 
@@ -341,7 +341,7 @@ async function capKeptEntries(tx: Tx, transcriptId: string, gap: Gap | null): Pr
     [transcriptId],
   );
   if (last[0] && last[0].bytes > half && last[0].text !== null) {
-    const text = cutTo20Kb(last[0].text);
+    const text = cutToLimit(last[0].text);
     await tx.query(
       `update transcript_entries set text = $3, cut = true, bytes = bytes - $4 where transcript_id = $1 and position = $2`,
       [transcriptId, last[0].position, text, Buffer.byteLength(last[0].text) - Buffer.byteLength(text)],
@@ -442,7 +442,7 @@ function scrub<Entry extends ConvertedEntry>(entry: Entry): Entry {
 /** The entry with its tool result cut to its first 20 KB, never splitting a character, and marked if it was. */
 function cutToolResult<Entry extends ConvertedEntry>(entry: Entry, index: number): Entry & TranscriptEntry {
   const positioned = { ...entry, position: index + 1, cut: false };
-  const toolResult = entry.toolResult === null ? null : cutTo20Kb(entry.toolResult);
+  const toolResult = entry.toolResult === null ? null : cutToLimit(entry.toolResult);
   if (toolResult === null || toolResult === entry.toolResult) return positioned;
   return { ...positioned, toolResult, cut: true };
 }
@@ -452,16 +452,16 @@ function cutToolResult<Entry extends ConvertedEntry>(entry: Entry, index: number
  * Transcript past 50 MB keeps of its last entry when that alone is too large for the end.
  */
 function cutText(entry: TranscriptEntry): TranscriptEntry {
-  const text = entry.text === null ? null : cutTo20Kb(entry.text);
+  const text = entry.text === null ? null : cutToLimit(entry.text);
   if (text === null || text === entry.text) return entry;
   return { ...entry, text, cut: true };
 }
 
-/** The text's first 20 KB, never splitting a character; the text itself when it is no longer. */
-function cutTo20Kb(text: string): string {
+/** The text's first 20 KB (the cut limit), never splitting a character; the text itself when it is no longer. */
+function cutToLimit(text: string): string {
   const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= toolResultLimitBytes) return text;
-  let end = toolResultLimitBytes;
+  if (bytes.length <= cutLimitBytes) return text;
+  let end = cutLimitBytes;
   // Back off a character's continuation bytes (10xxxxxx) so the cut falls between characters.
   while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
   return bytes.subarray(0, end).toString("utf8");
