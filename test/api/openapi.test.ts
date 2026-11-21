@@ -44,6 +44,7 @@ test("OpenAPI documentation is generated from the routes and served", async () =
     "/api/github/app/manifest",
     "/api/github/callback",
     "/api/github/installations",
+    "/api/github/link",
     "/api/github/sign-in",
     "/api/github/webhooks",
     "/api/links/lookup",
