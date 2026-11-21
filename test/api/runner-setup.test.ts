@@ -414,8 +414,12 @@ describe("a trigger waiting for its token", () => {
     expect(pasted.text).not.toContain("sk-ant-oat01-pasted");
     expect(JSON.stringify(await ok("GET", "/api/runners", ada))).not.toContain("sk-ant-oat01-pasted");
 
-    await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
+    // Pasting the token into a waiting trigger rechecks the Ticket that couldn't start, without Retry.
     expect(cronk.claude.fires.map((f) => [f.triggerId, f.token])).toEqual([["trig_h", "sk-ant-oat01-pasted"]]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).map((r: { state: string }) => r.state)).toEqual([
+      "refused",
+      "running",
+    ]);
   });
 
   test("takes a token only from the Runner's Owner", async () => {

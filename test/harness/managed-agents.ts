@@ -3,19 +3,31 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 
 /**
  * A stand-in for the Claude API's Managed Agents endpoints the `managed_agents` Runner calls: agents, environments,
- * vaults and their credentials, sessions with their events, interrupts and archives. The real service is never called.
+ * vaults and their credentials, sessions with their events, resources, interrupts and archives. The real service is
+ * never called.
  *
  * Only API keys it is given with `apiKey(key)` are accepted (`x-api-key`); any other answers 401. As the real
  * service does, a vault holds one active credential per MCP server URL (a second answers 409), and a session made
- * with `initial_events` starts running. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, and
+ * with `initial_events` starts running. Each of a session's `github_repository` resources gets an id, and its
+ * `authorization_token` can be replaced on the running session, as the real service allows. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, and
  * stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
  *
  * It also sends webhook deliveries as Anthropic does from an endpoint registered in the Console: `deliver(url, …)`
  * posts a thin event about a session, signed with the endpoint's `whsec_` secret (`webhookSecret()` makes one).
  */
 
+/** A `github_repository` resource of a session. */
+export interface StandInResource {
+  id: string;
+  type: string;
+  url: string;
+  /** The token the session holds for it now: the create request's, or the latest update's. */
+  authorizationToken: string;
+}
+
 export interface StandInSession {
   id: string;
+  resources: StandInResource[];
   /** The create request's body, as sent. */
   body: Record<string, unknown>;
   status: "idle" | "running" | "rescheduling" | "terminated";
@@ -113,6 +125,8 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     archived_at: s.archived ? new Date().toISOString() : null,
     environment_id: s.body.environment_id,
     vault_ids: s.body.vault_ids ?? [],
+    // The token is never echoed, as Anthropic never echoes it.
+    resources: s.resources.map((r) => ({ type: r.type, id: r.id, url: r.url })),
   });
 
   const server: Server = createServer(async (request, response) => {
@@ -208,8 +222,18 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       if (!agents.some((a) => a.id === agent?.id)) return error(404, "not_found_error", "No such agent.");
       if (!environments.some((e) => e.id === body?.environment_id)) return error(404, "not_found_error", "No such environment.");
       const initial = (body?.initial_events ?? []) as Record<string, unknown>[];
+      const resources = (body?.resources ?? []) as Record<string, unknown>[];
+      if (resources.some((r) => r.type !== "github_repository" || typeof r.url !== "string" || typeof r.authorization_token !== "string")) {
+        return error(400, "invalid_request_error", "A github_repository resource needs a url and an authorization_token.");
+      }
       const session: StandInSession = {
         id: nextId("sesn"),
+        resources: resources.map((r) => ({
+          id: nextId("sesrsc"),
+          type: "github_repository",
+          url: r.url as string,
+          authorizationToken: r.authorization_token as string,
+        })),
         body: body ?? {},
         status: initial.length > 0 ? "running" : "idle",
         events: [],
@@ -247,6 +271,14 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
         }
       }
       return json(200, { data: [] });
+    }
+    if ((match = route(/^\/v1\/sessions\/([^/]+)\/resources\/([^/]+)$/, "POST"))) {
+      const session = sessionOf(match[1]!);
+      const resource = session?.resources.find((r) => r.id === match![2]);
+      if (!session || !resource) return error(404, "not_found_error", "No such resource.");
+      if (typeof body?.authorization_token !== "string") return error(400, "invalid_request_error", "authorization_token is required.");
+      resource.authorizationToken = body.authorization_token;
+      return json(200, { type: resource.type, id: resource.id, url: resource.url });
     }
     if ((match = route(/^\/v1\/sessions\/([^/]+)\/archive$/, "POST"))) {
       const session = sessionOf(match[1]!);

@@ -176,12 +176,14 @@ function RunnerSettings({
   });
   const save = useSubmit(async (form, element) => {
     const projectId = field(form, "projectId");
+    const token = field(form, "token");
     onChanged(
       await api.saveTrigger(runner.id, {
         model: field(form, "model"),
         projectId: projectId || null,
         triggerId: field(form, "triggerId"),
-        token: field(form, "token"),
+        // Without a token, the trigger waits for one.
+        token: token.trim() ? token : undefined,
       }),
     );
     element.reset();
@@ -338,10 +340,14 @@ function RunnerSettings({
                 <input name="triggerId" required autoComplete="off" placeholder="trig_01ABC…" className="mono" />
               </Field>
               <Field label="Trigger token">
-                <input name="token" type="password" required autoComplete="off" />
+                <input name="token" type="password" autoComplete="off" placeholder="Optional" />
               </Field>
             </div>
-            <p className="field-hint">The token is stored encrypted and never shown again. Saving a model again replaces its trigger.</p>
+            <p className="field-hint">
+              The token is stored encrypted and never shown again. Without one, a new trigger waits for its token, which
+              you paste here later. Saving a model again replaces its trigger, keeping its token if the trigger id is the
+              same.
+            </p>
             <FormError error={save.error} />
             <Actions>
               <Button type="submit" variant="primary" disabled={save.busy}>
