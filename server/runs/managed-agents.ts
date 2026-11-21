@@ -4,7 +4,8 @@ import { ApiError } from "../http/errors.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import { transaction } from "../db.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
-import type { Cost, Runner, RunnerRefusal, RunReports, RunToStart, StartResult } from "./runner.js";
+import type { Cost } from "./costs.js";
+import type { Runner, RunnerRefusal, RunReports, RunToStart, StartResult } from "./runner.js";
 import { retryAt } from "./subscription.js";
 
 /**
@@ -296,12 +297,19 @@ export function managedAgentsRunner(context: Context, reports: RunReports): Runn
   };
 }
 
-/** What a session cost so far at list prices, as its `usage.list_cost` reports it; nothing if it reports none. */
-function costOf(session: Record<string, unknown>): Cost | null {
-  const listCost = (session.usage as { list_cost?: { amount?: unknown; currency?: unknown } } | undefined)?.list_cost;
-  const amount = typeof listCost?.amount === "string" && /^\d{1,15}$/.test(listCost.amount) ? Number(listCost.amount) : null;
-  return amount !== null && typeof listCost?.currency === "string" ? { amount, currency: listCost.currency } : null;
+/**
+ * A cost as Anthropic writes one, such as a session's `usage.list_cost` or its budget's `max_list_cost`: an integer
+ * string of minor units with its currency. Nothing if it isn't one.
+ */
+function parseCost(written: unknown): Cost | null {
+  const { amount, currency } = (written ?? {}) as { amount?: unknown; currency?: unknown };
+  if (typeof amount !== "string" || !/^\d{1,15}$/.test(amount) || typeof currency !== "string") return null;
+  return { amount: Number(amount), currency };
 }
+
+/** What a session cost so far at list prices, as its `usage.list_cost` reports it; nothing if it reports none. */
+const costOf = (session: Record<string, unknown>): Cost | null =>
+  parseCost((session.usage as { list_cost?: unknown } | undefined)?.list_cost);
 
 /** A cost as a person reads it, such as `$5.00`, or `500 EUR` (minor units) for a currency other than US dollars. */
 const shownCost = ({ amount, currency }: Cost) => (currency === "USD" ? `$${(amount / 100).toFixed(2)}` : `${amount} ${currency} (minor units)`);
@@ -399,8 +407,7 @@ async function whySessionStopped(context: Context, apiKey: string, sessionId: st
     return "Its session needs a confirmation, which Cronk can't give: the session asked to confirm a tool call.";
   }
   if (stopReason === "budget_reached") {
-    const budget = (session.body.budget as { max_list_cost?: Record<string, unknown> } | null | undefined)?.max_list_cost;
-    const cap = budget && costOf({ usage: { list_cost: budget } });
+    const cap = parseCost((session.body.budget as { max_list_cost?: unknown } | null | undefined)?.max_list_cost);
     return `Budget reached: its session stopped at the budget per Run${cap ? ` of ${shownCost(cap)}` : ""}, without the agent calling finish.`;
   }
   return `Its session went idle without calling finish (stop reason: ${stopReason}).`;

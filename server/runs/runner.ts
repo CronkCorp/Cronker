@@ -1,3 +1,5 @@
+import type { Cost } from "./costs.js";
+
 /**
  * The Runner interface: the one narrow seam between Cronk and whatever runs agents (ADR 0001).
  * Cronk asks a Runner to start a Run with its Brief and model; a Runner that can see a Run end
@@ -40,12 +42,6 @@ export interface RunToStop {
 }
 
 export type StartResult = { started: true; reference: RunReference } | { started: false; refusal: RunnerRefusal };
-
-/** What something cost: an amount in the currency's minor units, such as US cents. */
-export interface Cost {
-  amount: number;
-  currency: string;
-}
 
 /** What a Runner tells Cronk about its Runs after starting them. */
 export interface RunReports {

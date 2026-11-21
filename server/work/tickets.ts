@@ -225,7 +225,7 @@ export async function findTicketRow(
 
 export async function findTicket(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
   const row = await findTicketRow(db, viewer, ticketId);
-  return row && withMentions(db, row);
+  return row && fullTicket(db, row);
 }
 
 /** A Ticket of a Workspace in the Viewer's view, by its key, ignoring case. */
@@ -239,7 +239,8 @@ export async function findTicketByKey(
   return mention && mention.text === key ? findTicket(db, viewer, mention.ticketId) : undefined;
 }
 
-async function withMentions(db: Db | Tx, row: Row): Promise<Ticket> {
+/** The Ticket as the API shows one alone: its summary, the Ticket keys its description mentions, and its Runs' cost. */
+async function fullTicket(db: Db | Tx, row: Row): Promise<Ticket> {
   const { rows } = await db.query<{ cost: Cost[] }>(`select ${costTotalsSql("runs.ticket_id = $1")} as cost`, [row.id]);
   return { ...ticketSummary(row), mentions: await mentionsIn(db, row.workspaceId, row.description), cost: rows[0]!.cost };
 }
@@ -388,7 +389,7 @@ export async function createTicket(
     }
     await startRunIfNeeded(context, tx, ticket.id, now);
     // Read it again: a Run it started, or its wait for one, shows on it.
-    return withMentions(tx, (await findTicketRow(tx, creator, ticket.id))!);
+    return fullTicket(tx, (await findTicketRow(tx, creator, ticket.id))!);
   });
 }
 
@@ -615,7 +616,7 @@ export async function editTicket(
     }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
-    if (changes.length === 0) return withMentions(tx, ticket);
+    if (changes.length === 0) return fullTicket(tx, ticket);
 
     const now = clock.now();
     // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
@@ -705,7 +706,7 @@ export async function editTicket(
     // The cards of what it blocks name it by its title.
     else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
-    return withMentions(tx, (await findTicketRow(tx, editor, ticket.id))!);
+    return fullTicket(tx, (await findTicketRow(tx, editor, ticket.id))!);
   });
 }
 
@@ -870,7 +871,7 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
     await tx.query("update tickets set discovery_waits = false where id = $1", [ticket.id]);
     await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-    return withMentions(tx, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
+    return fullTicket(tx, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
 }
 

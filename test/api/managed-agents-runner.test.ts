@@ -374,6 +374,18 @@ describe("cost", () => {
     }
   });
 
+  test("a stopped Run records what its session cost once its interrupt made it idle", async () => {
+    const { ada, ticket, status, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    cronk.managedAgents.charge(session.id, 42);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Backlog") });
+
+    const stopped = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(stopped.state).toBe("stopped");
+    expect(stopped.cost).toEqual({ amount: 42, currency: "USD" });
+  });
+
   test("the Ticket totals what its Runs cost", async () => {
     const { ada, ticket, startRun } = await adaWithManagedAgentsRunner();
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([]);

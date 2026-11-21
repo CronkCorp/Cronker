@@ -95,8 +95,8 @@ const columns = (now: string) => `id, name, kind, run_limit as limit,
   end as "managedAgents",
   case when budget_per_run is not null then json_build_object('amount', budget_per_run, 'currency', 'USD') end
     as "budgetPerRun",
-  ${costTotalsSql(`runs.runner_id = runners.id and runs.ended_at >= date_trunc('month', ${now}::timestamptz, 'UTC')
-    and runs.ended_at < date_trunc('month', ${now}::timestamptz, 'UTC') + interval '1 month'`)} as "costThisMonth",
+  ${costTotalsSql(`runs.runner_id = runners.id and runs.ended_at >= date_trunc('month', ${now}::timestamptz, 'UTC')`)}
+    as "costThisMonth",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
 const present = (row: Row): RunnerRecord => ({
