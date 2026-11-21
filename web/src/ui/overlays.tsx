@@ -131,7 +131,7 @@ type MenuParts = Pick<
 >;
 const contextMenuParts: MenuParts = RadixContextMenu;
 /** Which menu the MenuItem family is inside: a Menu's dropdown unless a ContextMenu says otherwise. */
-const Parts = createContext<MenuParts>(RadixMenu);
+const MenuPartsContext = createContext<MenuParts>(RadixMenu);
 
 /** A menu of actions behind a button, such as "…" for destructive ones. */
 export function Menu({
@@ -187,8 +187,14 @@ export function ContextMenu({
         {children}
       </RadixContextMenu.Trigger>
       <RadixContextMenu.Portal>
-        <RadixContextMenu.Content className="menu" aria-label={label} collisionPadding={8}>
-          <Parts.Provider value={contextMenuParts}>{content}</Parts.Provider>
+        <RadixContextMenu.Content
+          className="menu"
+          aria-label={label}
+          collisionPadding={8}
+          // Some browsers send their own contextmenu on the keyup of the key that opened this one, once focus is in it.
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <MenuPartsContext.Provider value={contextMenuParts}>{content}</MenuPartsContext.Provider>
         </RadixContextMenu.Content>
       </RadixContextMenu.Portal>
     </RadixContextMenu.Root>
@@ -219,7 +225,7 @@ export function MenuItem({
   disabled?: boolean;
   tone?: "danger";
 }) {
-  const { Item } = useContext(Parts);
+  const { Item } = useContext(MenuPartsContext);
   return (
     <Item className={`menu-item${tone ? ` menu-item-${tone}` : ""}`} disabled={disabled} onSelect={onSelect}>
       {children}
@@ -229,7 +235,7 @@ export function MenuItem({
 
 /** A page a Menu leads to. It navigates on Radix's select, which also closes the menu. */
 export function MenuLink({ to, children, current }: { to: string; children: ReactNode; current?: boolean }) {
-  const { Item } = useContext(Parts);
+  const { Item } = useContext(MenuPartsContext);
   return (
     <Item className="menu-item" aria-current={current ? "page" : undefined} onSelect={() => navigate(to)}>
       {children}
@@ -238,13 +244,13 @@ export function MenuLink({ to, children, current }: { to: string; children: Reac
 }
 
 export function MenuLabel({ children }: { children: ReactNode }) {
-  const { Label } = useContext(Parts);
+  const { Label } = useContext(MenuPartsContext);
   return <Label className="menu-label">{children}</Label>;
 }
 
 /** A menu inside a Menu or ContextMenu behind one of its items, such as Move to; ArrowRight opens it, ArrowLeft goes back. */
 export function MenuSub({ label, children }: { label: string; children: ReactNode }) {
-  const { Sub, SubTrigger, SubContent, Portal } = useContext(Parts);
+  const { Sub, SubTrigger, SubContent, Portal } = useContext(MenuPartsContext);
   return (
     <Sub>
       <SubTrigger className="menu-item menu-sub-trigger">
@@ -264,7 +270,7 @@ export function MenuSub({ label, children }: { label: string; children: ReactNod
 
 /** The tick on a checked item; its checked state is announced by the item itself. */
 function MenuCheck() {
-  const { ItemIndicator } = useContext(Parts);
+  const { ItemIndicator } = useContext(MenuPartsContext);
   return (
     <span className="menu-check" aria-hidden="true">
       <ItemIndicator asChild>
@@ -289,7 +295,7 @@ export function MenuRadioGroup<T extends string>({
   onChange: (value: T) => void;
   children: ReactNode;
 }) {
-  const { RadioGroup } = useContext(Parts);
+  const { RadioGroup } = useContext(MenuPartsContext);
   return (
     <RadioGroup aria-label={label} value={value} onValueChange={(next) => onChange(next as T)}>
       {children}
@@ -298,9 +304,9 @@ export function MenuRadioGroup<T extends string>({
 }
 
 export function MenuRadioItem({ value, children }: { value: string; children: ReactNode }) {
-  const { RadioItem } = useContext(Parts);
+  const { RadioItem } = useContext(MenuPartsContext);
   return (
-    <RadioItem className="menu-item menu-item-checkable" value={value}>
+    <RadioItem className="menu-item" value={value}>
       <MenuCheck />
       {children}
     </RadioItem>
@@ -317,9 +323,9 @@ export function MenuCheckboxItem({
   onChange: (checked: boolean) => void;
   children: ReactNode;
 }) {
-  const { CheckboxItem } = useContext(Parts);
+  const { CheckboxItem } = useContext(MenuPartsContext);
   return (
-    <CheckboxItem className="menu-item menu-item-checkable" checked={checked} onCheckedChange={(next) => onChange(next === true)}>
+    <CheckboxItem className="menu-item" checked={checked} onCheckedChange={(next) => onChange(next === true)}>
       <MenuCheck />
       {children}
     </CheckboxItem>
@@ -341,7 +347,7 @@ export function MenuChoice<T extends string>({
   options: { value: T; label: ReactNode }[];
   onChange: (value: T) => void;
 }) {
-  const { RadioGroup, RadioItem } = useContext(Parts);
+  const { RadioGroup, RadioItem } = useContext(MenuPartsContext);
   return (
     <RadioGroup
       className="segmented menu-choice"
@@ -364,7 +370,7 @@ export function MenuChoice<T extends string>({
 }
 
 export function MenuSeparator() {
-  const { Separator } = useContext(Parts);
+  const { Separator } = useContext(MenuPartsContext);
   return <Separator className="menu-separator" />;
 }
 

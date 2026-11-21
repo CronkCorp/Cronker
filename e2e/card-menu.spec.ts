@@ -133,6 +133,13 @@ test("right-clicking a card opens its menu instead of the browser's, and Delegat
   expect(await prevented, "the browser's own context menu is held back").toBe(true);
   const menu = page.getByRole("menu", { name: "CRONK-1 Ship it" });
   await expect(menu).toBeVisible();
+  // Nor over the menu itself, as when a browser sends its own on the keyup of the key that opened it.
+  const overMenu = await menu.evaluate((element) => {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    element.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(overMenu, "the browser's own context menu is held back over the open menu").toBe(true);
   // Autonomous Delegation is offered only while the Ticket is delegated.
   await expect(menu.getByRole("menuitemcheckbox", { name: "Autonomous Delegation" })).toHaveCount(0);
 
