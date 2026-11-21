@@ -104,6 +104,19 @@ describe("setting up a Managed Agents Runner", () => {
     expect(await ok("GET", "/api/runners", ada)).toEqual([]);
   });
 
+  test("that fails once the agent is made leaves no agent behind: it is archived", async () => {
+    await setUp(cronk);
+    const ada = { cookie: await signIn(cronk) };
+    cronk.managedAgents.apiKey(apiKey);
+    cronk.managedAgents.failNext("POST", "/v1/environments", 500);
+
+    const refused = await call("POST", "/api/runners", ada, { name: "Claude API", kind: "managed_agents", apiKey });
+
+    expect(refused.status).toBe(502);
+    expect(cronk.managedAgents.agents.map((a) => a.archived)).toEqual([true]);
+    expect(await ok("GET", "/api/runners", ada)).toEqual([]);
+  });
+
   test("without a key is refused", async () => {
     await setUp(cronk);
     const ada = { cookie: await signIn(cronk) };
@@ -193,6 +206,38 @@ describe("ending a Run", () => {
     expect(cronk.managedAgents.session(session.id)).toEqual(expect.objectContaining({ archived: true, deleted: false }));
     expect(cronk.managedAgents.vaults.find((v) => v.id === vaultId)!.deleted).toBe(true);
     expect((await call("GET", `/api/runs/${run.id}`, asAgent)).status).toBe(401);
+  });
+
+  test("what Anthropic couldn't take when the Run ended is let go of by the next poll; the token is revoked at once", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const vaultId = (session.body.vault_ids as string[])[0]!;
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault(vaultId)}` } };
+    cronk.managedAgents.failNext("DELETE", `/v1/vaults/${vaultId}`, 503);
+    cronk.managedAgents.failNext("POST", `/v1/sessions/${session.id}/archive`, 503);
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    expect((await call("GET", `/api/runs/${run.id}`, asAgent)).status).toBe(401);
+    expect(cronk.managedAgents.vaults.find((v) => v.id === vaultId)!.deleted).toBe(false);
+    expect(cronk.managedAgents.session(session.id).archived).toBe(false);
+
+    await cronk.pollManagedAgentsSessions();
+
+    expect(cronk.managedAgents.vaults.find((v) => v.id === vaultId)!.deleted).toBe(true);
+    expect(cronk.managedAgents.session(session.id)).toEqual(expect.objectContaining({ archived: true, deleted: false }));
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("finished");
+  });
+
+  test("a 429 after its vault was made lets go of the vault and the token, and the Ticket waits", async () => {
+    const { ada, ticket, agent, status } = await adaWithManagedAgentsRunner();
+    cronk.managedAgents.failNext("POST", "/v1/sessions", 429);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+    expect(cronk.managedAgents.vaults.map((v) => v.deleted)).toEqual([true]);
+    expect(await ok("GET", `/api/agents/${agent.id}/tokens`, ada)).toEqual([]);
   });
 
   test("stopping a Run sends its session user.interrupt, then archives it, and revokes its token", async () => {

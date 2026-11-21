@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
  * Only API keys it is given with `apiKey(key)` are accepted (`x-api-key`); any other answers 401. As the real
  * service does, a vault holds one active credential per MCP server URL (a second answers 409), and a session made
  * with `initial_events` starts running. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, and
- * stages a rate limit with `rateLimitNext(retryAfter)`.
+ * stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
  */
 
 export interface StandInSession {
@@ -47,7 +47,7 @@ export interface StandInManagedAgents {
   /** Every request it answered, in order. */
   calls: ManagedAgentsCall[];
   /** Agents created, each create request's body by its id. */
-  agents: { id: string; apiKey: string; body: Record<string, unknown> }[];
+  agents: { id: string; apiKey: string; body: Record<string, unknown>; archived: boolean }[];
   environments: { id: string; apiKey: string; body: Record<string, unknown> }[];
   vaults: StandInVault[];
   sessions: StandInSession[];
@@ -55,6 +55,8 @@ export interface StandInManagedAgents {
   apiKey(key: string): void;
   /** Answers the next request with 429, sending `Retry-After` as given (seconds or an HTTP date) unless undefined. */
   rateLimitNext(retryAfter: string | undefined): void;
+  /** Answers the next request to this method and path (such as `POST /v1/environments`) with this status, as an outage would. */
+  failNext(method: string, path: string, status: number): void;
   /** The session with this id. */
   session(id: string): StandInSession;
   /** The session went idle, recording a `session.status_idle` event with the stop reason, such as `end_turn`. */
@@ -67,6 +69,7 @@ export interface StandInManagedAgents {
 export async function startStandInManagedAgents(): Promise<StandInManagedAgents> {
   const apiKeys = new Set<string>();
   const rateLimits: (string | undefined)[] = [];
+  const failures: { method: string; path: string; status: number }[] = [];
   const calls: ManagedAgentsCall[] = [];
   const agents: StandInManagedAgents["agents"] = [];
   const environments: StandInManagedAgents["environments"] = [];
@@ -112,6 +115,11 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const retryAfter = rateLimits.shift();
       return error(429, "rate_limit_error", "Rate limited.", retryAfter === undefined ? {} : { "retry-after": retryAfter });
     }
+    const failing = failures.findIndex((f) => f.method === method && f.path === url.pathname);
+    if (failing >= 0) {
+      const [failure] = failures.splice(failing, 1);
+      return error(failure!.status, "api_error", "Something went wrong.");
+    }
     if (!apiKeys.has(apiKey)) return error(401, "authentication_error", "invalid x-api-key");
     if (request.headers["anthropic-beta"] !== "managed-agents-2026-04-01") {
       return error(400, "invalid_request_error", "This endpoint needs the managed-agents-2026-04-01 beta.");
@@ -121,9 +129,15 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     let match: RegExpExecArray | null;
 
     if (route(/^\/v1\/agents$/, "POST")) {
-      const agent = { id: nextId("agent"), apiKey, body: body ?? {} };
+      const agent = { id: nextId("agent"), apiKey, body: body ?? {}, archived: false };
       agents.push(agent);
       return json(200, { type: "agent", id: agent.id, version: 1, ...agent.body });
+    }
+    if ((match = route(/^\/v1\/agents\/([^/]+)\/archive$/, "POST"))) {
+      const agent = agents.find((a) => a.id === match![1]);
+      if (!agent) return error(404, "not_found_error", "No such agent.");
+      agent.archived = true;
+      return json(200, { type: "agent", id: agent.id, archived_at: new Date().toISOString() });
     }
     if (route(/^\/v1\/environments$/, "POST")) {
       const environment = { id: nextId("env"), apiKey, body: body ?? {} };
@@ -245,6 +259,9 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     },
     rateLimitNext(retryAfter) {
       rateLimits.push(retryAfter);
+    },
+    failNext(method, path, status) {
+      failures.push({ method, path, status });
     },
     session,
     idle(id, stopReason) {
