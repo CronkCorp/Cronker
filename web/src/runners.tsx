@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   api,
   type Agent,
@@ -12,7 +12,7 @@ import {
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
-import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
+import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, ExternalLink, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
@@ -150,12 +150,14 @@ function RunnerSettings({
   });
   const save = useSubmit(async (form, element) => {
     const projectId = field(form, "projectId");
+    const token = field(form, "token");
     onChanged(
       await api.saveTrigger(runner.id, {
         model: field(form, "model"),
         projectId: projectId || null,
         triggerId: field(form, "triggerId"),
-        token: field(form, "token"),
+        // Without a token, the trigger waits for one.
+        token: token.trim() ? token : undefined,
       }),
     );
     element.reset();
@@ -235,22 +237,34 @@ function RunnerSettings({
               </thead>
               <tbody>
                 {runner.triggers.map((trigger) => (
-                  <tr key={trigger.id}>
-                    <td>
-                      <ModelLabel model={trigger.model} />
-                    </td>
-                    <td>{projectName(trigger.projectId)}</td>
-                    <td>
-                      <code>{trigger.triggerId}</code>
-                    </td>
-                    <td className="cell-actions">
-                      <div>
-                        <Button variant="ghost" size="small" onClick={() => setRemovingTrigger(trigger)}>
-                          Remove
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
+                  <Fragment key={trigger.id}>
+                    <tr className={trigger.waitingForToken ? "runner-trigger-waits" : undefined}>
+                      <td>
+                        <ModelLabel model={trigger.model} />
+                      </td>
+                      <td>{projectName(trigger.projectId)}</td>
+                      <td>
+                        <span className="runner-trigger-id">
+                          <code>{trigger.triggerId}</code>
+                          {trigger.waitingForToken && <Chip tone="warn">Waiting for token</Chip>}
+                        </span>
+                      </td>
+                      <td className="cell-actions">
+                        <div>
+                          <Button variant="ghost" size="small" onClick={() => setRemovingTrigger(trigger)}>
+                            Remove
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                    {trigger.waitingForToken && (
+                      <tr className="runner-trigger-paste-row">
+                        <td colSpan={4}>
+                          <PasteToken runnerId={runner.id} trigger={trigger} onChanged={onChanged} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -276,10 +290,13 @@ function RunnerSettings({
                 <input name="triggerId" required autoComplete="off" placeholder="trig_01ABC…" className="mono" />
               </Field>
               <Field label="Trigger token">
-                <input name="token" type="password" required autoComplete="off" />
+                <input name="token" type="password" autoComplete="off" placeholder="Optional" />
               </Field>
             </div>
-            <p className="field-hint">The token is stored encrypted and never shown again. Saving a model again replaces its trigger.</p>
+            <p className="field-hint">
+              The token is stored encrypted and never shown again. Without one, the trigger waits for its token, which you
+              paste here later. Saving a model again replaces its trigger.
+            </p>
             <FormError error={save.error} />
             <Actions>
               <Button type="submit" variant="primary" disabled={save.busy}>
@@ -307,6 +324,37 @@ function RunnerSettings({
       )}
       {runner.kind === "subscription" && hook && <TranscriptHookSetup hook={hook} agents={agentsOnIt} />}
     </section>
+  );
+}
+
+/**
+ * Pastes the token of a trigger waiting for one, generated for its routine in claude.ai. Generating a token there
+ * revokes the previous one, so the form says so.
+ */
+function PasteToken({ runnerId, trigger, onChanged }: { runnerId: string; trigger: Trigger; onChanged: (runner: Runner) => void }) {
+  const paste = useSubmit(async (form) => {
+    onChanged(await api.pasteTriggerToken(runnerId, trigger.id, field(form, "token")));
+  });
+  return (
+    <form onSubmit={paste.onSubmit} className="runner-trigger-paste" aria-label={`Paste the token of ${trigger.triggerId}`}>
+      <p className="small">
+        Generate a token for its routine in claude.ai, then paste it here:{" "}
+        <ExternalLink url={trigger.routineUrl}>open {trigger.triggerId} in claude.ai</ExternalLink>.
+      </p>
+      <div className="form-row">
+        <Field label="Token">
+          <input name="token" type="password" required autoComplete="off" />
+        </Field>
+        <Button type="submit" variant="primary" disabled={paste.busy}>
+          Save token
+        </Button>
+      </div>
+      <p className="field-hint">
+        Generating a new token in claude.ai revokes the previous one: a trigger already working stops until its new token is
+        pasted here. The token is stored encrypted and never shown again.
+      </p>
+      <FormError error={paste.error} />
+    </form>
   );
 }
 

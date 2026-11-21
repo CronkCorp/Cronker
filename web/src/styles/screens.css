@@ -1189,6 +1189,27 @@
   display: grid;
   gap: var(--space-2);
 }
+.runner-trigger-id {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* A trigger waiting for its token and the row pasting it read as one: no rule between them. */
+.runner-trigger-waits > td {
+  border-bottom: 0;
+}
+.runner-trigger-paste {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--warn-soft);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-control);
+}
+.runner-trigger-paste p {
+  margin: 0;
+}
 .runner-hook {
   display: grid;
   gap: var(--space-3);

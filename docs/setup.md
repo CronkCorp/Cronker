@@ -98,13 +98,13 @@ For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled
 ## 7. Enter the triggers in Cronk
 
 1. On **Runners**, set up a subscription Runner, for example `Claude Max`.
-2. For each scheduled task, under the Runner's **Save a trigger**, enter the model label exactly as the Steps use it (`haiku`, `sonnet`, `opus`), leave **For** at All Projects (or pick one Project to give it its own task, for example on another Repository), paste the trigger id and token, and choose **Save trigger**. The token is stored encrypted and never shown again.
+2. For each scheduled task, under the Runner's **Save a trigger**, enter the model label exactly as the Steps use it (`haiku`, `sonnet`, `opus`), leave **For** at All Projects (or pick one Project to give it its own task, for example on another Repository), paste the trigger id and token, and choose **Save trigger**. The token is stored encrypted and never shown again. Saved without a token, the trigger shows as *Waiting for token*, with a link to its routine in claude.ai and a **Token** box to paste it into later; its Runs can't start until then. Generating a new token in claude.ai revokes the previous one, so a trigger already working stops until its new token is pasted.
 3. **Runs at once** limits how many Runs the Runner has going together (2 by default; change it with **Save limit**); Tickets beyond it wait, highest Priority first.
 4. On the Agent's page, set **Runner** to the new Runner.
 
 Check it: create a Ticket, open it, choose **Delegate to an Agent**, and set its Status to Triage. Its Timeline shows `claude-max ran the Triage Step on haiku: running`, with a **Session** link to the claude.ai session. That session reads the Ticket through the connector and calls `finish`; the Ticket then moves to Ready on the board, or, if the Run asked a Question, back to Backlog with the Question in your **Inbox**.
 
-When a Run can't start, the Ticket waits in your Inbox as *couldn't start*, with the reason, such as a model with no trigger. A rate limit from claude.ai pauses the Runner until claude.ai says to try again. Cronk can't tell when a claude.ai session ends, so a Run that stops calling Cronk (or, with the Transcript hook from step 8, whose session stops working) becomes lost after the Workspace's lost-Run threshold (30 minutes by default, set by an Admin on the Workspace's members page) and waits in your Inbox with **Retry**.
+When a Run can't start, the Ticket waits in your Inbox as *couldn't start*, with the reason, such as a model with no trigger or a trigger waiting for its token. Saving that trigger, or pasting its token, starts the Tickets that couldn't start for want of it. A rate limit from claude.ai pauses the Runner until claude.ai says to try again. Cronk can't tell when a claude.ai session ends, so a Run that stops calling Cronk (or, with the Transcript hook from step 8, whose session stops working) becomes lost after the Workspace's lost-Run threshold (30 minutes by default, set by an Admin on the Workspace's members page) and waits in your Inbox with **Retry**.
 
 ## 8. Install the Transcript hook
 
