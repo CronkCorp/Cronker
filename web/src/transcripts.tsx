@@ -289,6 +289,9 @@ function Message({ entry, agentName, arrived }: { entry: TranscriptEntry; agentN
           <Markdown text={entry.text} mentions={[]} />
         </div>
       )}
+      {entry.text !== null && entry.cut && (
+        <p className="small muted">Cut at 20 KB: only the start of this message was kept.</p>
+      )}
       {entry.toolResult !== null && <ToolResult entry={entry} />}
     </li>
   );

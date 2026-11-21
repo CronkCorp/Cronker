@@ -264,6 +264,37 @@ describe("the caps", () => {
     expect(entries[25].text.startsWith("36m")).toBe(true);
   }, 60_000);
 
+  test("a Transcript over 50 MB whose last message alone is over 25 MB keeps that message as its end, cut to 20 KB", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const megabyte = 1024 * 1024;
+    // Sixty messages of 1 MB, then one of 30 MB, cut to 20 KB: the first 25 messages are the start, and the cut one
+    // with the 24 before it the end.
+    const lines = [
+      ...Array.from({ length: 60 }, (_, index) => assistantSays(`${index + 1}`.padEnd(megabyte, "m"), index)),
+      assistantSays(`last${"l".repeat(30 * megabyte)}`, 60),
+    ];
+
+    const transcript = await uploaded("session_huge_last", lines, asAgent);
+
+    expect(transcript).toMatchObject({ entryCount: 50, gap: { after: 25, entries: 11, bytes: 11 * megabyte } });
+    const entries = await entriesOf(transcript.id, ada);
+    expect(entries[25]).toMatchObject({ position: 37, cut: false });
+    expect(entries.at(-1)).toMatchObject({ position: 61, text: `last${"l".repeat(20 * 1024 - 4)}`, cut: true });
+  }, 60_000);
+
+  test("a Transcript over 50 MB only by its last message keeps everything else whole once that message is cut", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const lines = [assistantSays("m".repeat(30 * 1024 * 1024), 1), assistantSays("l".repeat(30 * 1024 * 1024), 2)];
+
+    const transcript = await uploaded("session_cut_last", lines, asAgent);
+
+    expect(transcript).toMatchObject({ entryCount: 2, gap: null });
+    const [first, last] = await entriesOf(transcript.id, ada);
+    expect(first).toMatchObject({ cut: false });
+    expect(first.text).toHaveLength(30 * 1024 * 1024);
+    expect(last).toMatchObject({ text: "l".repeat(20 * 1024), cut: true });
+  }, 60_000);
+
   test("a Transcript of 50 MB exactly is kept whole", async () => {
     const { asAgent } = await adaWithAgent();
     const lines = Array.from({ length: 50 }, (_, index) => assistantSays("m".repeat(1024 * 1024), index));

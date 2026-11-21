@@ -512,7 +512,7 @@ export interface TranscriptEntry {
   toolName: string | null;
   toolInput: unknown;
   toolResult: string | null;
-  /** Whether the tool result was cut at 20 KB. */
+  /** Whether it was cut at 20 KB: its tool result, or the text of a Transcript past 50 MB's last entry over 25 MB alone. */
   cut: boolean;
   at: string | null;
 }

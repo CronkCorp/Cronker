@@ -205,7 +205,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Live:** an upload of the session while the page is open shows its new entries in place, with the arrival ring, so a running Run can be watched turn by turn. A Transcript deleted elsewhere stays shown under the "Deleted elsewhere" banner, without its menu.
 - **Entries**, in order, at most 880px wide: a message shows who said it (the Agent's avatar and violet name, or an `INPUT` or `SYSTEM` kind label for what the session was sent) and its time over its text in full, rendered as Markdown in a bubble, the Agent's with an `--agent` border.
 - **Tool calls** are one line each: a caret, the tool's name in bold mono and a one-line summary of its input in muted mono (its description, command, file path or the like), cut off with an ellipsis. Clicking the line opens its Input (pretty-printed JSON) and Result under it, each in a `pre` scrolling past 480px; clicking again closes it. A result cut at 20 KB carries a `warn` **Cut** chip on its line and says so under the result.
-- **A Transcript past 50 MB** shows a dashed box where its gap is, saying how many entries and megabytes were left out between its start and its end.
+- **A Transcript past 50 MB** shows a dashed box where its gap is, saying how many entries and megabytes were left out between its start and its end. Its last message, when over 25 MB alone, is kept as its end cut at 20 KB, and says so under its bubble.
 - Entries load a page at a time, with **Show more** at the end while there are more.
 
 ### Document

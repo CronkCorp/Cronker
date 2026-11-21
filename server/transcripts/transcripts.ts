@@ -29,7 +29,11 @@ export const TranscriptEntry = Type.Object({
   toolName: Type.Union([Type.String(), Type.Null()], { description: "The tool called, for a tool call." }),
   toolInput: Type.Unknown({ description: "What the tool was called with, as the agent gave it; null for a message." }),
   toolResult: Type.Union([Type.String(), Type.Null()], { description: "What the tool answered, if it did." }),
-  cut: Type.Boolean({ description: "Whether the tool result was cut at 20 KB; only its start is kept." }),
+  cut: Type.Boolean({
+    description:
+      "Whether it was cut at 20 KB, keeping only the start: its tool result, or, for the last entry of a Transcript " +
+      "past 50 MB that was over 25 MB alone, its text.",
+  }),
   at: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
 });
 export type TranscriptEntry = Static<typeof TranscriptEntry>;
@@ -317,16 +321,33 @@ export async function appendTranscript(context: Context, tx: Tx, session: RunSes
 
 /**
  * Keeps a Transcript's stored entries within 50 MB as an upload's are: past it, its start (up to half, or what a
- * gap already left before it) and as much of its end as fits in the other half, widening the gap between. Results
- * added to calls in its start since make the end's share smaller, so the whole stays within 50 MB. Returns the gap.
+ * gap already left before it) and as much of its end as fits in the other half, widening the gap between; a last
+ * entry too large for the end alone first has its text cut to 20 KB. Results added to calls in its start since make
+ * the end's share smaller, so the whole stays within 50 MB. Returns the gap.
  */
 async function capKeptEntries(tx: Tx, transcriptId: string, gap: Gap | null): Promise<Gap | null> {
-  const { rows } = await tx.query<{ total: number }>(
-    "select coalesce(sum(bytes), 0)::float8 as total from transcript_entries where transcript_id = $1",
+  const total = async () => {
+    const { rows } = await tx.query<{ total: number }>(
+      "select coalesce(sum(bytes), 0)::float8 as total from transcript_entries where transcript_id = $1",
+      [transcriptId],
+    );
+    return rows[0]!.total;
+  };
+  if ((await total()) <= transcriptLimitBytes) return gap;
+  const half = transcriptLimitBytes / 2;
+  const { rows: last } = await tx.query<{ position: number; text: string | null; bytes: number }>(
+    `select position, text, bytes::float8 as bytes from transcript_entries where transcript_id = $1
+     order by position desc limit 1`,
     [transcriptId],
   );
-  if (rows[0]!.total <= transcriptLimitBytes) return gap;
-  const half = transcriptLimitBytes / 2;
+  if (last[0] && last[0].bytes > half && last[0].text !== null) {
+    const text = cutTo20Kb(last[0].text);
+    await tx.query(
+      `update transcript_entries set text = $3, cut = true, bytes = bytes - $4 where transcript_id = $1 and position = $2`,
+      [transcriptId, last[0].position, text, Buffer.byteLength(last[0].text) - Buffer.byteLength(text)],
+    );
+    if ((await total()) <= transcriptLimitBytes) return gap;
+  }
   let headLast = gap?.after;
   if (headLast === undefined) {
     const head = await tx.query<{ last: number }>(
@@ -421,13 +442,29 @@ function scrub<Entry extends ConvertedEntry>(entry: Entry): Entry {
 /** The entry with its tool result cut to its first 20 KB, never splitting a character, and marked if it was. */
 function cutToolResult<Entry extends ConvertedEntry>(entry: Entry, index: number): Entry & TranscriptEntry {
   const positioned = { ...entry, position: index + 1, cut: false };
-  if (entry.toolResult === null) return positioned;
-  const bytes = Buffer.from(entry.toolResult, "utf8");
-  if (bytes.length <= toolResultLimitBytes) return positioned;
+  const toolResult = entry.toolResult === null ? null : cutTo20Kb(entry.toolResult);
+  if (toolResult === null || toolResult === entry.toolResult) return positioned;
+  return { ...positioned, toolResult, cut: true };
+}
+
+/**
+ * The entry with its text cut to its first 20 KB, as a tool result is, and marked if it was: what the end of a
+ * Transcript past 50 MB keeps of its last entry when that alone is too large for the end.
+ */
+function cutText(entry: TranscriptEntry): TranscriptEntry {
+  const text = entry.text === null ? null : cutTo20Kb(entry.text);
+  if (text === null || text === entry.text) return entry;
+  return { ...entry, text, cut: true };
+}
+
+/** The text's first 20 KB, never splitting a character; the text itself when it is no longer. */
+function cutTo20Kb(text: string): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= toolResultLimitBytes) return text;
   let end = toolResultLimitBytes;
   // Back off a character's continuation bytes (10xxxxxx) so the cut falls between characters.
   while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
-  return { ...positioned, toolResult: bytes.subarray(0, end).toString("utf8"), cut: true };
+  return bytes.subarray(0, end).toString("utf8");
 }
 
 /** A tool call's input as stored, in JSON; none for a message. */
@@ -452,13 +489,16 @@ interface Gap {
 
 /**
  * The entries a Transcript keeps: all of them up to 50 MB; past that, as many from its start and from its end as
- * fit in half of it each, with the gap left between them.
+ * fit in half of it each, with the gap left between them. A last entry too large for the end alone first has its
+ * text cut to 20 KB, so the end still shows how the Transcript ended.
  */
-function keepStartAndEnd(entries: TranscriptEntry[]): { kept: TranscriptEntry[]; gap: Gap | null } {
-  const sizes = entries.map(sizeOf);
-  const total = sizes.reduce((sum, size) => sum + size, 0);
-  if (total <= transcriptLimitBytes) return { kept: entries, gap: null };
+function keepStartAndEnd(converted: TranscriptEntry[]): { kept: TranscriptEntry[]; gap: Gap | null } {
+  const sum = (sizes: number[]) => sizes.reduce((total, size) => total + size, 0);
+  if (sum(converted.map(sizeOf)) <= transcriptLimitBytes) return { kept: converted, gap: null };
   const half = transcriptLimitBytes / 2;
+  const entries = sizeOf(converted.at(-1)!) > half ? [...converted.slice(0, -1), cutText(converted.at(-1)!)] : converted;
+  const sizes = entries.map(sizeOf);
+  if (sum(sizes) <= transcriptLimitBytes) return { kept: entries, gap: null };
   // The start keeps entries [0, headCount), the end entries [tailFrom, length); the gap is what lies between.
   let headCount = 0;
   for (let bytes = 0; headCount < entries.length && bytes + sizes[headCount]! <= half; headCount += 1) bytes += sizes[headCount]!;
@@ -467,7 +507,7 @@ function keepStartAndEnd(entries: TranscriptEntry[]): { kept: TranscriptEntry[];
   const leftOut = sizes.slice(headCount, tailFrom);
   return {
     kept: [...entries.slice(0, headCount), ...entries.slice(tailFrom)],
-    gap: { after: headCount, entries: leftOut.length, bytes: leftOut.reduce((sum, size) => sum + size, 0) },
+    gap: { after: headCount, entries: leftOut.length, bytes: sum(leftOut) },
   };
 }
 
