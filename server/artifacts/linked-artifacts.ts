@@ -1,3 +1,4 @@
+import { slugColumn, slugDescription } from "../http/readable.js";
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
@@ -20,10 +21,12 @@ export const LinkedArtifact = Type.Object({
     description: "The Project it is kept in, or null for the Workspace.",
   }),
   title: Type.String({ description: "Its current Version's title." }),
+  slug: Type.String({ description: slugDescription }),
 });
 export type LinkedArtifact = Static<typeof LinkedArtifact>;
 
-const columns = `artifacts.id, artifacts.project_id as "projectId", versions.title`;
+const columns = `artifacts.id, artifacts.project_id as "projectId", versions.title,
+  ${slugColumn("artifact", "artifacts.id", "versions.title")} as slug`;
 const fromLinks = `linked_artifacts
   join artifacts on artifacts.id = linked_artifacts.artifact_id
   join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version`;
@@ -68,7 +71,7 @@ export async function insertLink(
   tx: Tx,
   ticket: TicketRow,
   actor: ChangeActor,
-  artifact: { id: string; projectId: string | null; title: string },
+  artifact: { id: string; projectId: string | null; title: string; slug: string },
 ): Promise<LinkedArtifact> {
   if (artifact.projectId !== null && artifact.projectId !== ticket.projectId) {
     throw new ApiError(400, "artifact_outside_project", `${artifact.title} is in another Project.`, {
@@ -82,7 +85,7 @@ export async function insertLink(
     [ticket.id, artifact.id, ticket.workspaceId, context.clock.now()],
   );
   if (!rowCount) throw new ApiError(409, "artifact_already_linked", `${ticket.key} already links ${artifact.title}.`);
-  const linked: LinkedArtifact = { id: artifact.id, projectId: artifact.projectId, title: artifact.title };
+  const linked: LinkedArtifact = { id: artifact.id, projectId: artifact.projectId, title: artifact.title, slug: artifact.slug };
   await recordLinkChange(context, tx, ticket, actor, { from: null, to: { id: linked.id, title: linked.title } });
   return linked;
 }

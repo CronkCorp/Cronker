@@ -235,3 +235,22 @@ function bySlug(db: Db, viewer: Viewer, kind: keyof typeof tables, slug: string)
     params,
   );
 }
+
+/**
+ * SQL for the slug of a Document, Artifact or Transcript, its readable form: the words of its title, then its short
+ * id, the first 8 hex digits of its id, or its whole id while another of its kind anywhere in the installation starts
+ * with the same 8.
+ */
+export function slugColumn(kind: keyof typeof tables, id: string, title: string): string {
+  const table = tables[kind];
+  const start = `left(${id}::text, 8)`;
+  const shortId = `case when (select count(*) from ${table} others where others.id between
+      (${start} || '-0000-0000-0000-000000000000')::uuid and (${start} || '-ffff-ffff-ffff-ffffffffffff')::uuid) = 1
+    then ${start} else ${id}::text end`;
+  return `concat_ws('-', nullif(slug_of(${title}), ''), ${shortId})`;
+}
+
+/** A slug in a response, which addresses are built from. */
+export const slugDescription =
+  "Its readable form, as its web address and the API take it in place of its id: the words of its title, then its " +
+  "short id. The words are only for reading; the short id finds it.";

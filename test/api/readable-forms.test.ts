@@ -132,3 +132,78 @@ describe("Terms", () => {
     expect((await call("GET", "/api/terms/Nothing", ada)).status).toBe(404);
   });
 });
+
+/** The short id at a slug's end, which names it: the first 8 hex digits of its id. */
+const shortIdOf = (id: string) => id.slice(0, 8);
+
+describe("Documents, Artifacts and Transcripts", () => {
+  test("a Document's slug, the words of its title and its short id, works wherever its id does, its words or not", async () => {
+    const { ada, asAgent } = await workspaceWithTicket();
+    const document = await ok("POST", "/api/projects/RP/documents", ada, { title: "Onboarding: Day One!", body: "Hello" });
+    const slug = `onboarding-day-one-${shortIdOf(document.id)}`;
+    expect(document.slug).toBe(slug);
+    const child = await ok("POST", "/api/projects/RP/documents", ada, { title: "Ünder it", parentId: slug });
+    expect(child.parentId).toBe(document.id);
+    expect(child.slug).toBe(`under-it-${shortIdOf(child.id)}`);
+
+    expect((await ok("GET", `/api/documents/${slug}`, asAgent)).id).toBe(document.id);
+    expect((await ok("GET", `/api/documents/${shortIdOf(document.id)}`, ada)).id).toBe(document.id);
+    expect((await ok("GET", `/api/documents/an-old-title-${shortIdOf(document.id)}`, ada)).id).toBe(document.id);
+    const renamed = await ok("PATCH", `/api/documents/${slug}`, ada, { baseVersion: 1, title: "First day" });
+    expect(renamed.slug).toBe(`first-day-${shortIdOf(document.id)}`);
+    await ok("POST", "/api/tickets/RP-1/documents", ada, { documentId: renamed.slug });
+    expect(await ok("GET", "/api/tickets/RP-1/documents", ada)).toEqual([expect.objectContaining({ id: document.id, slug: renamed.slug })]);
+    expect((await call("GET", `/api/documents/onboarding-${document.id.slice(0, 7)}`, ada)).status).toBe(404);
+  });
+
+  test("an Artifact's slug works wherever its id does", async () => {
+    const { ada } = await workspaceWithTicket();
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const artifact = await ok("POST", "/api/projects/RP/artifacts", ada, { title: "Board prototype", files });
+    const slug = `board-prototype-${shortIdOf(artifact.id)}`;
+    expect(artifact.slug).toBe(slug);
+
+    expect((await ok("GET", `/api/artifacts/${slug}`, ada)).id).toBe(artifact.id);
+    expect((await ok("GET", `/api/artifacts/prototype-${shortIdOf(artifact.id)}/versions`, ada))).toHaveLength(1);
+    await ok("POST", "/api/tickets/RP-1/artifacts", ada, { artifactId: slug });
+    expect(await ok("GET", "/api/tickets/RP-1/artifacts", ada)).toEqual([expect.objectContaining({ id: artifact.id, slug })]);
+  });
+
+  test("a Transcript's slug, from its Agent's name, works wherever its id does", async () => {
+    const { ada, asAgent, workspace } = await workspaceWithTicket();
+    const line = { type: "user", sessionId: "s", uuid: "u-1", timestamp: "2026-01-01T09:00:00.000Z", message: { role: "user", content: "Hi" } };
+    const uploaded = await fetch(`${cronk.url}/api/transcripts/sessions/session-1`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-ndjson", ...asAgent.headers },
+      body: JSON.stringify(line) + "\n",
+    });
+    const transcript = await uploaded.json();
+    const slug = `claude-max-${shortIdOf(transcript.id)}`;
+    expect(transcript.slug).toBe(slug);
+    expect(transcript.workspaceId).toBe(workspace.id);
+
+    expect((await ok("GET", `/api/transcripts/${slug}`, ada)).id).toBe(transcript.id);
+    expect((await ok("GET", `/api/transcripts/${shortIdOf(transcript.id)}/entries`, ada)).entries).toHaveLength(1);
+  });
+});
+
+describe("Search results", () => {
+  test("carry what each one's address is built from", async () => {
+    const { ada } = await workspaceWithTicket();
+    await ok("PATCH", "/api/tickets/RP-1", ada, { description: "About zebras" });
+    const document = await ok("POST", "/api/projects/RP/documents", ada, { title: "Zebras", body: "Stripes" });
+    const decision = await ok("POST", "/api/projects/RP/decisions", ada, { title: "Zebras stay", body: "Stripes" });
+    await ok("POST", "/api/workspaces/adas-workspace/terms", ada, { name: "Zebra", definition: "Striped." });
+
+    const results = await ok("GET", "/api/workspaces/adas-workspace/search?q=zebras", ada);
+
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "ticket", ticketKey: "RP-1", slug: null, number: null }),
+        expect.objectContaining({ kind: "document", id: document.id, slug: document.slug, number: null }),
+        expect.objectContaining({ kind: "decision", id: decision.id, slug: null, number: 1 }),
+        expect.objectContaining({ kind: "term", title: "Zebra", slug: null, number: null }),
+      ]),
+    );
+  });
+});
