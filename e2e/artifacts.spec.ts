@@ -114,7 +114,8 @@ test("Artifacts are listed per Project and for the Workspace, linked and unlinke
   await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
   const list = page.getByRole("region", { name: "Artifacts" });
   await expect(list.getByRole("link")).toHaveText(["Colour tokens"]);
-  await page.getByRole("navigation", { name: "Scope" }).getByRole("link", { name: "CRONK" }).click();
+  await page.getByRole("button", { name: "Scope: Workspace" }).click();
+  await page.getByRole("menuitemradio", { name: "CRONK" }).click();
   // Newest change first.
   await expect(list.getByRole("link")).toHaveText(["Board prototype", "Inbox sketch"]);
   await expect(list.getByText("Cards to drag.")).toBeVisible();
