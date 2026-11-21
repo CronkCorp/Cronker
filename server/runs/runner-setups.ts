@@ -350,7 +350,7 @@ Offer the User's environments by name, never asking them to find an id:
 - You may also \`list\` the User's routines with \`RemoteTrigger\` and name the environments they use.
 - If the User wants a new environment for Cronk, ask them to create it in Claude Code on the web
   (https://claude.ai/code), then list the environments again to find its id.
-- Only if neither lists the environment the User wants, ask them for its id.
+- Only if none of these finds the environment the User wants, ask them for its id.
 
 Use the chosen environment's id (\`env_…\`) as \`<ENVIRONMENT_ID>\` below.
 
