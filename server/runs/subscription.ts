@@ -21,10 +21,10 @@ const longestRetryAfterMs = 24 * 60 * 60 * 1000;
 /** An HTTP date, such as `Thu, 01 Jan 2026 10:00:00 GMT` (RFC 9110's preferred form). */
 const httpDate = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
 
-/** A sealed trigger as stored. */
+/** A sealed trigger as stored; one waiting for its token has none. */
 interface StoredTrigger {
   triggerId: string;
-  tokenSealed: string;
+  tokenSealed: string | null;
 }
 
 /** The trigger for the model on the Project's Tickets: the Project's own, else the Runner's. */
@@ -61,6 +61,14 @@ export function subscriptionRunner(context: Context): Runner {
           message:
             `${run.runner.name} has no trigger for the model ${run.model}: its Owner adds one in the Runner's ` +
             `settings, for all Projects or for ${run.project.name}.`,
+        });
+      }
+      if (trigger.tokenSealed === null) {
+        return refuse({
+          kind: "not_configured",
+          message:
+            `The trigger ${trigger.triggerId} for ${run.model} on ${run.project.name} is waiting for its token: ` +
+            `${run.runner.name}'s Owner generates one for its routine in claude.ai and pastes it in the Runner's settings.`,
         });
       }
       const named = `the trigger ${trigger.triggerId} for ${run.model} on ${run.runner.name}`;

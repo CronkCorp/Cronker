@@ -6,7 +6,16 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
-import { createRunner, removeRunner, removeTrigger, RunnerRecord, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
+import {
+  createRunner,
+  pasteTriggerToken,
+  removeRunner,
+  removeTrigger,
+  RunnerRecord,
+  runnersOf,
+  saveTrigger,
+  setRunnerLimit,
+} from "./runners.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
 import { mergePullRequest } from "./merging.js";
 import { Ticket } from "../work/tickets.js";
@@ -247,14 +256,22 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "The claude.ai scheduled task your `subscription` Runner fires for Steps wanting the model, with its API " +
             "trigger's id and token. With a `projectId`, it overrides the Runner's own trigger for the model on that " +
             "Project's Tickets. Replaces the trigger saved for the same model and Project. The token is stored " +
-            "encrypted and never returned. Refused with `runner_has_no_triggers` for other kinds of Runner, and with " +
-            "`no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+            "encrypted and never returned. Without a token, the trigger waits for one (`waitingForToken`): Runs " +
+            "needing it can't start until it is pasted. Refused with `runner_has_no_triggers` for other kinds of " +
+            "Runner, and with `no_secret_key`, when it has a token, while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
           body: Type.Object({
             model: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, such as `haiku`." }),
             projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
             triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
-            token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }),
+            token: Type.Optional(
+              Type.String({
+                minLength: 1,
+                maxLength: 1000,
+                pattern: "\\S",
+                description: "The trigger's token; leave it out to save the trigger waiting for it.",
+              }),
+            ),
           }),
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
@@ -262,6 +279,28 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return saveTrigger(context, user.id, request.params.runnerId, request.body);
+      },
+    );
+
+    app.put(
+      "/api/runners/:runnerId/triggers/:triggerId/token",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Paste the token of a trigger of your subscription Runner",
+          description:
+            "Gives a trigger waiting for its token (`waitingForToken`) the token generated for its routine in claude.ai, " +
+            "or replaces the one it has: generating a new token in claude.ai revokes the previous one. The token is " +
+            "stored encrypted and never returned. Tickets whose Runs couldn't start for want of it are rechecked, so " +
+            "they start or wait for a slot. Refused with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+          params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
+          body: Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) }),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return pasteTriggerToken(context, user.id, request.params.runnerId, request.params.triggerId, request.body.token);
       },
     );
 
