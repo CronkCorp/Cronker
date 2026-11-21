@@ -3,6 +3,7 @@ import { authenticateAgent, offersBearer, type AgentCaller } from "../agents/tok
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { reviveLostRun, type NamedInCall } from "./runs.js";
 
 /**
  * Refuses every call an Agent makes naming one of its Runs that a User stopped, whichever route it reaches,
@@ -15,6 +16,37 @@ export function refuseStoppedRunCalls(app: FastifyInstance, context: Context): v
     const agent = await agentOf(context, request);
     if (agent) await refuseStoppedRun(context, agent, params.runId);
   });
+}
+
+/**
+ * Brings back a lost Run before the call naming it or its Ticket is handled, so a session Cronk took for
+ * gone, such as one long at work without calling, can still finish (`reviveLostRun` says when).
+ */
+export function reviveLostRunCalls(app: FastifyInstance, context: Context): void {
+  app.addHook("preHandler", async (request) => {
+    const named = namedInCall(request);
+    if (!named.runId && !named.ticketId && !named.ticketKey) return;
+    const agent = await agentOf(context, request);
+    if (agent) await reviveLostRun(context, agent, named);
+  });
+}
+
+/** What a request names: a Run, a Ticket or a session in its path, or, filing a Ticket, the Run or parent in its body. */
+export function namedInCall(request: FastifyRequest): NamedInCall {
+  const params = (request.params ?? {}) as Record<string, string | undefined>;
+  const named: NamedInCall = {
+    runId: params.runId,
+    ticketId: params.ticketId,
+    ticketKey: params.key,
+    sessionId: params.sessionId,
+  };
+  // Filing a Ticket names a Run in its body: the Run it is filed from, or a Sub-Ticket's parent, its Run's Ticket.
+  if (request.method === "POST" && request.routeOptions.url === "/api/projects/:projectId/tickets") {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    if (typeof body.runId === "string") named.runId = body.runId;
+    if (typeof body.parentId === "string") named.ticketId = body.parentId;
+  }
+  return named;
 }
 
 /** The Agent making the request, if it is one with a token Cronk accepts; the route itself refuses any other. */
