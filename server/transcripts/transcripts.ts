@@ -235,7 +235,7 @@ export interface AppendedEntries {
 }
 
 /** The Run and session a Transcript filled a part at a time records, and the Agent it belongs to. */
-export interface AppendedSession {
+export interface RunSession {
   workspaceId: string;
   agentId: string;
   runId: string;
@@ -248,33 +248,28 @@ export interface AppendedSession {
  * 50 MB it keeps its start and its end, widening the gap as the end moves on. Makes the Transcript, empty, if the
  * session has none yet; one a User deleted stays deleted. Says whether the Transcript changed.
  */
-export async function appendTranscript(context: Context, tx: Tx, session: AppendedSession, appended: AppendedEntries): Promise<boolean> {
+export async function appendTranscript(context: Context, tx: Tx, session: RunSession, appended: AppendedEntries): Promise<boolean> {
+  const now = context.clock.now();
+  // Made here unless the session has one: one made meanwhile by another transaction is waited for and appended to.
+  const made = await tx.query(
+    `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, run_id) values ($1, $2, $3, $4, $5)
+     on conflict (agent_id, session_id) do nothing`,
+    [session.workspaceId, session.agentId, session.sessionId, now, session.runId],
+  );
+  const created = made.rowCount === 1;
   const held = await tx.query<{ id: string; deleted: boolean; gapAfter: number | null; gapEntries: number | null; gapBytes: string | null }>(
     `select id, deleted_at is not null as deleted, gap_after as "gapAfter", gap_entries as "gapEntries", gap_bytes as "gapBytes"
      from transcripts where agent_id = $1 and session_id = $2 for update`,
     [session.agentId, session.sessionId],
   );
-  if (held.rows[0]?.deleted) return false;
-  const now = context.clock.now();
-  let id = held.rows[0]?.id;
-  if (!id) {
-    const { rows } = await tx.query<{ id: string }>(
-      `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, run_id) values ($1, $2, $3, $4, $5)
-       on conflict (agent_id, session_id) do nothing returning id`,
-      [session.workspaceId, session.agentId, session.sessionId, now, session.runId],
-    );
-    // Made meanwhile by another fetch, which this one leaves to finish.
-    if (!rows[0]) return false;
-    id = rows[0].id;
-  } else if (appended.entries.length === 0 && appended.results.length === 0) {
-    return false;
-  }
-  const created = !held.rows[0];
-  const gap = held.rows[0]?.gapAfter == null ? null : {
-    after: held.rows[0].gapAfter,
-    entries: held.rows[0].gapEntries!,
-    bytes: Number(held.rows[0].gapBytes),
-  };
+  const transcript = held.rows[0]!;
+  if (transcript.deleted) return false;
+  const id = transcript.id;
+  if (!created && appended.entries.length === 0 && appended.results.length === 0) return false;
+  const gap =
+    transcript.gapAfter === null
+      ? null
+      : { after: transcript.gapAfter, entries: transcript.gapEntries!, bytes: Number(transcript.gapBytes) };
 
   // Positions go on from the last entry seen, kept or left out.
   const { rows: last } = await tx.query<{ last: number }>(
@@ -322,8 +317,8 @@ export async function appendTranscript(context: Context, tx: Tx, session: Append
 
 /**
  * Keeps a Transcript's stored entries within 50 MB as an upload's are: past it, its start (up to half, or what a
- * gap already left before it) and as much of its end as fits in the other half, widening the gap between. Returns
- * the gap.
+ * gap already left before it) and as much of its end as fits in the other half, widening the gap between. Results
+ * added to calls in its start since make the end's share smaller, so the whole stays within 50 MB. Returns the gap.
  */
 async function capKeptEntries(tx: Tx, transcriptId: string, gap: Gap | null): Promise<Gap | null> {
   const { rows } = await tx.query<{ total: number }>(
@@ -341,13 +336,18 @@ async function capKeptEntries(tx: Tx, transcriptId: string, gap: Gap | null): Pr
     );
     headLast = head.rows[0]!.last;
   }
+  const { rows: head } = await tx.query<{ bytes: number }>(
+    "select coalesce(sum(bytes), 0)::float8 as bytes from transcript_entries where transcript_id = $1 and position <= $2",
+    [transcriptId, headLast],
+  );
+  const endShare = Math.max(0, Math.min(half, transcriptLimitBytes - head[0]!.bytes));
   const { rows: left } = await tx.query<{ entries: number; bytes: number }>(
     `with tail as (select position, sum(bytes) over (order by position desc) as from_end
        from transcript_entries where transcript_id = $1 and position > $2),
      dropped as (delete from transcript_entries using tail where transcript_entries.transcript_id = $1
        and transcript_entries.position = tail.position and tail.from_end > $3 returning transcript_entries.bytes)
      select count(*)::int as entries, coalesce(sum(bytes), 0)::float8 as bytes from dropped`,
-    [transcriptId, headLast, half],
+    [transcriptId, headLast, endShare],
   );
   return { after: headLast, entries: (gap?.entries ?? 0) + left[0]!.entries, bytes: (gap?.bytes ?? 0) + left[0]!.bytes };
 }

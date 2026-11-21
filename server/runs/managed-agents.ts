@@ -388,7 +388,7 @@ async function fetchEvents(context: Context, runId: string): Promise<void> {
   const events: unknown[] = [];
   let page = held.eventsPage;
   let skip = held.eventsTaken;
-  let reached = { page: held.eventsPage, taken: held.eventsTaken };
+  let stoppedAt = { page: held.eventsPage, taken: held.eventsTaken };
   for (;;) {
     const query = new URLSearchParams({ limit: String(eventsPageSize), ...(page === null ? {} : { page }) });
     const answer = await anthropic(context, apiKey, "GET", `${path}?${query}`);
@@ -396,7 +396,7 @@ async function fetchEvents(context: Context, runId: string): Promise<void> {
     if (answer.status !== 200) throw new Error(`Anthropic answered ${errorOf(answer)} when Cronk fetched the events of ${held.sessionId}.`);
     const data = Array.isArray(answer.body.data) ? (answer.body.data as unknown[]) : [];
     events.push(...data.slice(skip));
-    if (data.length > skip) reached = { page, taken: data.length };
+    if (data.length > skip) stoppedAt = { page, taken: data.length };
     skip = 0;
     const next = answer.body.next_page;
     if (typeof next !== "string" || !next) break;
@@ -407,7 +407,7 @@ async function fetchEvents(context: Context, runId: string): Promise<void> {
     const { rowCount } = await tx.query(
       `update managed_agent_runs set events_page = $2, events_taken = $3
        where run_id = $1 and events_page is not distinct from $4 and events_taken = $5`,
-      [runId, reached.page, reached.taken, held.eventsPage, held.eventsTaken],
+      [runId, stoppedAt.page, stoppedAt.taken, held.eventsPage, held.eventsTaken],
     );
     if (!rowCount) return;
     const session = { workspaceId: held.workspaceId, agentId: held.agentId, runId, sessionId: held.sessionId! };

@@ -620,5 +620,33 @@ describe("the Run's Transcript", () => {
     expect(ended).toMatchObject({ state: "failed", transcriptId: null, transcriptDeleted: true });
     expect((await call("GET", `/api/transcripts/${transcriptId}`, ada)).status).toBe(404);
   });
+
+  test("past 50 MB stays within it when a later result lands on a call in its kept start", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const megabyte = 1024 * 1024;
+    const brief = (session.body.initial_events as { content: { text: string }[] }[])[0]!.content[0]!.text;
+    const says = (bytes: number) => ({ type: "agent.message", content: [{ type: "text", text: "m".repeat(bytes) }] });
+    // The Brief, a call (`bash` and `{}`: 6 bytes) and a message fill the first 25 MB exactly; 26 messages of 1 MB follow.
+    cronk.managedAgents.emit(
+      session.id,
+      { id: "sevt_early", type: "agent.tool_use", name: "bash", input: {} },
+      says(25 * megabyte - Buffer.byteLength(brief) - 6),
+      ...Array.from({ length: 26 }, () => says(megabyte)),
+    );
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 28,
+      gap: { after: 3, entries: 1, bytes: megabyte },
+    });
+
+    // The call's result makes the start 100 bytes larger, so the end gives up its first message to stay within 50 MB.
+    cronk.managedAgents.emit(session.id, { type: "agent.tool_result", tool_use_id: "sevt_early", content: "r".repeat(100) });
+
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 27,
+      gap: { after: 3, entries: 2, bytes: 2 * megabyte },
+    });
+  }, 60_000);
 });
 
