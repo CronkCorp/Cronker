@@ -130,7 +130,7 @@ describe("uploading a transcript", () => {
       uploadedAt: "2026-01-01T09:00:00.000Z",
     });
     expect(await ok("GET", `/api/transcripts/${transcript.id}`, ada)).toEqual(transcript);
-    const none = { text: null, toolName: null, toolInput: null, toolResult: null, cut: false };
+    const none = { text: null, toolName: null, toolInput: null, toolResult: null, cut: false, cutParts: [] };
     expect(await entriesOf(transcript.id, ada)).toEqual([
       { ...none, position: 1, role: "user", text: "Make it so.", at: at(1) },
       { ...none, position: 2, role: "assistant", text: "Reading the Ticket first.", at: at(2) },
@@ -247,6 +247,39 @@ describe("the caps", () => {
     expect(secretAtCut).toMatchObject({ toolResult: `${"b".repeat(20 * 1024 - 10)}[scrubbed]`, cut: false });
   });
 
+  test("a tool input over 20 KB as JSON is cut to its JSON's first 20 KB, never splitting a character, and says which part was cut", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    // `{"content":"` then ASCII up to 20 KB less one byte, then a two-byte character straddling the cut.
+    const start = '{"content":"';
+    const ascii = "a".repeat(20 * 1024 - start.length - 1);
+
+    const transcript = await uploaded(
+      "session_long_input",
+      [
+        toolCall("toolu_1", "Write", { content: `${ascii}é and more` }, 1),
+        toolResult("toolu_1", "Written.", 2),
+        toolCall("toolu_2", "Write", { content: "b".repeat(30 * 1024) }, 3),
+        toolResult("toolu_2", "c".repeat(30 * 1024), 4),
+        toolCall("toolu_3", "Read", { file_path: "big.txt" }, 5),
+        toolResult("toolu_3", "d".repeat(30 * 1024), 6),
+        toolCall("toolu_4", "Write", { content: "e".repeat(20 * 1024 - start.length - 2) }, 7),
+      ],
+      asAgent,
+    );
+
+    const [split, both, result, exact] = await entriesOf(transcript.id, ada);
+    expect(split).toMatchObject({ toolInput: `${start}${ascii}`, toolResult: "Written.", cut: true, cutParts: ["toolInput"] });
+    expect(both).toMatchObject({
+      toolInput: `${start}${"b".repeat(20 * 1024 - start.length)}`,
+      toolResult: "c".repeat(20 * 1024),
+      cut: true,
+      cutParts: ["toolInput", "toolResult"],
+    });
+    expect(result).toMatchObject({ toolInput: { file_path: "big.txt" }, cut: true, cutParts: ["toolResult"] });
+    // Its JSON, closing quote and brace included, is 20 KB exactly.
+    expect(exact).toMatchObject({ toolInput: { content: "e".repeat(20 * 1024 - start.length - 2) }, cut: false, cutParts: [] });
+  });
+
   test("a Transcript over 50 MB keeps its start and its end, with the gap between marked", async () => {
     const { ada, asAgent } = await adaWithAgent();
     // Sixty messages of 1 MB each: the first and last 25 MB are kept, the 10 MB between left out.
@@ -279,7 +312,32 @@ describe("the caps", () => {
     expect(transcript).toMatchObject({ entryCount: 50, gap: { after: 25, entries: 11, bytes: 11 * megabyte } });
     const entries = await entriesOf(transcript.id, ada);
     expect(entries[25]).toMatchObject({ position: 37, cut: false });
-    expect(entries.at(-1)).toMatchObject({ position: 61, text: `last${"l".repeat(20 * 1024 - 4)}`, cut: true });
+    expect(entries.at(-1)).toMatchObject({ position: 61, text: `last${"l".repeat(20 * 1024 - 4)}`, cut: true, cutParts: ["text"] });
+  }, 60_000);
+
+  test("a Transcript over 50 MB whose last entry is a tool call with an input over 25 MB keeps that call as its end, its input cut to 20 KB", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const megabyte = 1024 * 1024;
+    // Sixty messages of 1 MB, then a Write of a 30 MB file, its input cut to the first 20 KB of its JSON: the first 25
+    // messages are the start, and the call with the 24 messages before it the end.
+    const lines = [
+      ...Array.from({ length: 60 }, (_, index) => assistantSays(`${index + 1}`.padEnd(megabyte, "m"), index)),
+      toolCall("toolu_last", "Write", { file_path: "big.txt", content: "w".repeat(30 * megabyte) }, 60),
+    ];
+
+    const transcript = await uploaded("session_huge_input", lines, asAgent);
+
+    expect(transcript).toMatchObject({ entryCount: 50, gap: { after: 25, entries: 11, bytes: 11 * megabyte } });
+    const entries = await entriesOf(transcript.id, ada);
+    expect(entries[25]).toMatchObject({ position: 37, cut: false, cutParts: [] });
+    const start = '{"file_path":"big.txt","content":"';
+    expect(entries.at(-1)).toMatchObject({
+      position: 61,
+      toolName: "Write",
+      toolInput: `${start}${"w".repeat(20 * 1024 - start.length)}`,
+      cut: true,
+      cutParts: ["toolInput"],
+    });
   }, 60_000);
 
   test("a Transcript over 50 MB only by its last message keeps everything else whole once that message is cut", async () => {

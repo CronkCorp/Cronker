@@ -22,17 +22,27 @@ import { scrubText, scrubValue } from "./scrubbing.js";
 
 export const TranscriptRole = Type.Union([Type.Literal("user"), Type.Literal("assistant"), Type.Literal("system")]);
 
+/** A part of an entry that may be cut at 20 KB. */
+export const CutPart = Type.Union([Type.Literal("text"), Type.Literal("toolInput"), Type.Literal("toolResult")]);
+export type CutPart = Static<typeof CutPart>;
+
 export const TranscriptEntry = Type.Object({
   position: Type.Integer({ minimum: 1, description: "Its place in the conversation, from 1." }),
   role: TranscriptRole,
   text: Type.Union([Type.String(), Type.Null()], { description: "A message's text; null for a tool call." }),
   toolName: Type.Union([Type.String(), Type.Null()], { description: "The tool called, for a tool call." }),
-  toolInput: Type.Unknown({ description: "What the tool was called with, as the agent gave it; null for a message." }),
-  toolResult: Type.Union([Type.String(), Type.Null()], { description: "What the tool answered, if it did." }),
-  cut: Type.Boolean({
+  toolInput: Type.Unknown({
     description:
-      "Whether it was cut at 20 KB, keeping only the start: its tool result, or, for the last entry of a Transcript " +
-      "past 50 MB that was over 25 MB alone, its text.",
+      "What the tool was called with, as the agent gave it; null for a message. One whose JSON was over 20 KB is cut: " +
+      "a string of its JSON's first 20 KB, with `toolInput` in `cutParts`.",
+  }),
+  toolResult: Type.Union([Type.String(), Type.Null()], { description: "What the tool answered, if it did." }),
+  cut: Type.Boolean({ description: "Whether any part of it was cut at 20 KB, keeping only the start; `cutParts` says which." }),
+  cutParts: Type.Array(CutPart, {
+    description:
+      "Which parts were cut at 20 KB, keeping only the start: a tool call's input (`toolInput`, as its JSON) and its " +
+      "result (`toolResult`), or, for the last entry of a Transcript past 50 MB that was over 25 MB alone, a " +
+      "message's text (`text`). Empty when nothing was.",
   }),
   at: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
 });
@@ -97,9 +107,18 @@ export const EntryPage = Type.Object({
 export type EntryPage = Static<typeof EntryPage>;
 
 /** An entry as a converter produces it, before scrubbing and the caps. */
-export type ConvertedEntry = Omit<TranscriptEntry, "position" | "cut">;
+export type ConvertedEntry = Omit<TranscriptEntry, "position" | "cut" | "cutParts">;
 
-/** A tool result longer than this is cut to it, as is the text of a last entry too large for a capped Transcript's end. */
+/**
+ * An entry as stored: placed, scrubbed and with its tool input and result cut to 20 KB. `cut` says whether its tool
+ * result, or a message's text, was cut; `toolInputCut` whether its tool input was.
+ */
+type StoredEntry = ConvertedEntry & { position: number; cut: boolean; toolInputCut: boolean };
+
+/**
+ * A tool call's input (as JSON) or result longer than this is cut to it, as is the text of a last entry too large for a
+ * capped Transcript's end.
+ */
 const cutLimitBytes = 20 * 1024;
 /** A Transcript larger than this keeps only its start and its end, each up to half of it. */
 const transcriptLimitBytes = 50 * megabyte;
@@ -143,7 +162,7 @@ export async function uploadTranscript(
   converted: ConvertedEntry[],
 ): Promise<{ transcript: Transcript; created: boolean }> {
   const now = context.clock.now();
-  const { kept: entries, gap } = keepStartAndEnd(converted.map(scrub).map(cutToolResult));
+  const { kept: entries, gap } = keepStartAndEnd(converted.map(scrub).map(cutToolParts));
   return transaction(context.db, async (tx) => {
     // The Run whose Runner returned this session when starting it, as one of this Agent's Runs.
     const run = await tx.query<{ id: string }>(
@@ -204,14 +223,14 @@ export async function uploadTranscript(
 }
 
 /** Inserts entries, a batch at a time, each with its size and the id its source gave its tool call, if any. */
-async function insertEntries(tx: Tx, transcriptId: string, entries: (TranscriptEntry & { callId?: string | null })[]): Promise<void> {
+async function insertEntries(tx: Tx, transcriptId: string, entries: (StoredEntry & { callId?: string | null })[]): Promise<void> {
   for (let start = 0; start < entries.length; start += insertBatch) {
     const batch = entries.slice(start, start + insertBatch);
     await tx.query(
       `insert into transcript_entries (transcript_id, position, role, text, tool_name, tool_input, tool_result, cut, at,
-         bytes, call_id)
+         bytes, call_id, tool_input_cut)
        select $1, * from unnest($2::int[], $3::transcript_role[], $4::text[], $5::text[], $6::jsonb[], $7::text[],
-         $8::boolean[], $9::timestamptz[], $10::bigint[], $11::text[])`,
+         $8::boolean[], $9::timestamptz[], $10::bigint[], $11::text[], $12::boolean[])`,
       [
         transcriptId,
         batch.map((entry) => entry.position),
@@ -224,6 +243,7 @@ async function insertEntries(tx: Tx, transcriptId: string, entries: (TranscriptE
         batch.map((entry) => entry.at),
         batch.map(sizeOf),
         batch.map((entry) => entry.callId ?? null),
+        batch.map((entry) => entry.toolInputCut),
       ],
     );
   }
@@ -282,13 +302,13 @@ export async function appendTranscript(context: Context, tx: Tx, session: RunSes
   );
   const after = Math.max(last[0]!.last, gap ? gap.after + gap.entries : 0);
   const entries = appended.entries.map(scrub).map((entry, index) => {
-    const cut = cutToolResult(entry, index);
+    const cut = cutToolParts(entry, index);
     return { ...cut, position: after + cut.position };
   });
   await insertEntries(tx, id, entries);
   const results = appended.results.map(({ callId, toolResult }) => ({
     callId,
-    ...cutToolResult(scrub({ role: "assistant", text: null, toolName: null, toolInput: null, toolResult, at: null }), 0),
+    ...cutToolParts(scrub({ role: "assistant", text: null, toolName: null, toolInput: null, toolResult, at: null }), 0),
   }));
   if (results.length > 0) {
     await tx.query(
@@ -439,19 +459,31 @@ function scrub<Entry extends ConvertedEntry>(entry: Entry): Entry {
   };
 }
 
-/** The entry with its tool result cut to its first 20 KB, never splitting a character, and marked if it was. */
-function cutToolResult<Entry extends ConvertedEntry>(entry: Entry, index: number): Entry & TranscriptEntry {
-  const positioned = { ...entry, position: index + 1, cut: false };
+/**
+ * The entry, placed, with its tool call's input and result each cut to its first 20 KB, never splitting a character,
+ * and marked if they were. An input is cut as its JSON, which a cut leaves invalid, so it is kept as a JSON string of
+ * that JSON's start.
+ */
+function cutToolParts<Entry extends ConvertedEntry>(entry: Entry, index: number): Entry & StoredEntry {
   const toolResult = entry.toolResult === null ? null : cutToLimit(entry.toolResult);
-  if (toolResult === null || toolResult === entry.toolResult) return positioned;
-  return { ...positioned, toolResult, cut: true };
+  const inputJson = entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null);
+  const cutInput = inputJson === null ? null : cutToLimit(inputJson);
+  const toolInputCut = cutInput !== inputJson;
+  return {
+    ...entry,
+    position: index + 1,
+    toolInput: toolInputCut ? cutInput : entry.toolInput,
+    toolResult,
+    cut: toolResult !== entry.toolResult,
+    toolInputCut,
+  };
 }
 
 /**
  * The entry with its text cut to its first 20 KB, as a tool result is, and marked if it was: what the end of a
  * Transcript past 50 MB keeps of its last entry when that alone is too large for the end.
  */
-function cutText(entry: TranscriptEntry): TranscriptEntry {
+function cutText(entry: StoredEntry): StoredEntry {
   const text = entry.text === null ? null : cutToLimit(entry.text);
   if (text === null || text === entry.text) return entry;
   return { ...entry, text, cut: true };
@@ -468,11 +500,11 @@ function cutToLimit(text: string): string {
 }
 
 /** A tool call's input as stored, in JSON; none for a message. */
-const toolInputJson = (entry: TranscriptEntry): string | null =>
+const toolInputJson = (entry: StoredEntry): string | null =>
   entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null);
 
 /** How much an entry takes up: its text, tool name, tool input and tool result, in bytes. */
-function sizeOf(entry: TranscriptEntry): number {
+function sizeOf(entry: StoredEntry): number {
   return (
     Buffer.byteLength(entry.text ?? "") +
     Buffer.byteLength(entry.toolName ?? "") +
@@ -492,7 +524,7 @@ interface Gap {
  * fit in half of it each, with the gap left between them. A last entry too large for the end alone first has its
  * text cut to 20 KB, so the end still shows how the Transcript ended.
  */
-function keepStartAndEnd(converted: TranscriptEntry[]): { kept: TranscriptEntry[]; gap: Gap | null } {
+function keepStartAndEnd(converted: StoredEntry[]): { kept: StoredEntry[]; gap: Gap | null } {
   const sum = (sizes: number[]) => sizes.reduce((total, size) => total + size, 0);
   if (sum(converted.map(sizeOf)) <= transcriptLimitBytes) return { kept: converted, gap: null };
   const half = transcriptLimitBytes / 2;
@@ -564,13 +596,22 @@ export async function entriesOf(
   { after = 0, limit = 200 }: { after?: number; limit?: number },
 ): Promise<EntryPage> {
   const transcript = await findTranscript(context, viewer, transcriptId);
-  const { rows } = await context.db.query<Omit<TranscriptEntry, "at"> & { at: Date | null }>(
-    `select position, role, text, tool_name as "toolName", tool_input as "toolInput", tool_result as "toolResult", cut, at
+  const { rows } = await context.db.query<Omit<StoredEntry, "at"> & { at: Date | null }>(
+    `select position, role, text, tool_name as "toolName", tool_input as "toolInput", tool_result as "toolResult", cut,
+       tool_input_cut as "toolInputCut", at
      from transcript_entries where transcript_id = $1 and position > $2 order by position limit $3`,
     [transcript.id, after, limit + 1],
   );
   const more = rows.length > limit;
-  const entries = rows.slice(0, limit).map(({ at, ...entry }) => ({ ...entry, at: at?.toISOString() ?? null }));
+  const entries = rows.slice(0, limit).map(({ at, cut, toolInputCut, ...entry }) => {
+    // `cut` stored says whether its text or its tool result was cut: an entry has one or the other.
+    const cutParts: CutPart[] = [
+      ...(cut && entry.text !== null ? (["text"] as const) : []),
+      ...(toolInputCut ? (["toolInput"] as const) : []),
+      ...(cut && entry.text === null ? (["toolResult"] as const) : []),
+    ];
+    return { ...entry, cut: cutParts.length > 0, cutParts, at: at?.toISOString() ?? null };
+  });
   return { entries, next: more ? entries.at(-1)!.position : null };
 }
 
