@@ -603,7 +603,7 @@ describe("the Run's Transcript", () => {
     const brief = (session.body.initial_events as { content: { text: string }[] }[])[0]!.content[0]!.text;
     expect(entries).toEqual([
       expect.objectContaining({ position: 1, role: "user", text: brief, toolName: null }),
-      { position: 2, role: "assistant", text: "Reading the Ticket first.", toolName: null, toolInput: null, toolResult: null, cut: false, at: "2026-01-01T09:00:05.000Z" },
+      { position: 2, role: "assistant", text: "Reading the Ticket first.", toolName: null, toolInput: null, toolResult: null, cut: false, cutParts: [], at: "2026-01-01T09:00:05.000Z" },
       {
         position: 3,
         role: "assistant",
@@ -612,6 +612,7 @@ describe("the Run's Transcript", () => {
         toolInput: { ticket: "CRONK-1" },
         toolResult: "CRONK-1 Make it so",
         cut: false,
+        cutParts: [],
         at: "2026-01-01T09:00:06.000Z",
       },
       expect.objectContaining({ position: 4, toolName: "bash", toolInput: { command: "ls" }, toolResult: "README.md" }),
@@ -757,6 +758,43 @@ describe("the Run's Transcript", () => {
     expect(transcript).toMatchObject({ entryCount: 51, gap: { after: 25, entries: 11, bytes: 11 * megabyte } });
     expect(entries.slice(25, 27).map((e: { position: number }) => e.position)).toEqual([37, 38]);
     expect(entries.at(-1)).toMatchObject({ position: 62, text: "l".repeat(20 * 1024), cut: true });
+  }, 60_000);
+
+  test("past 50 MB keeps its last tool call as its end, its input cut to 20 KB, when that input alone is over 25 MB", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const megabyte = 1024 * 1024;
+    const messages = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ type: "agent.message", content: [{ type: "text", text: `${from + i}`.padEnd(megabyte, "m") }] }));
+    cronk.managedAgents.emit(session.id, ...messages(1, 60));
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 50,
+      gap: { after: 25, entries: 11, bytes: 11 * megabyte },
+    });
+
+    // A last call writing a 30 MB file, its input cut to the first 20 KB of its JSON: the end keeps it after the 25
+    // messages it kept, which still fit in what the start (the Brief and 24 MB) leaves of 50 MB.
+    cronk.managedAgents.emit(session.id, {
+      id: "sevt_write",
+      type: "agent.tool_use",
+      name: "write",
+      input: { file_path: "big.txt", content: "w".repeat(30 * megabyte) },
+    });
+    cronk.managedAgents.terminate(session.id);
+    await cronk.pollManagedAgentsSessions();
+
+    const { transcript, entries } = await transcriptOf(run.id, ada);
+    expect(transcript).toMatchObject({ entryCount: 51, gap: { after: 25, entries: 11, bytes: 11 * megabyte } });
+    expect(entries.slice(25, 27).map((e: { position: number }) => e.position)).toEqual([37, 38]);
+    const start = '{"file_path":"big.txt","content":"';
+    expect(entries.at(-1)).toMatchObject({
+      position: 62,
+      toolName: "write",
+      toolInput: `${start}${"w".repeat(20 * 1024 - start.length)}`,
+      cut: true,
+      cutParts: ["toolInput"],
+    });
   }, 60_000);
 
   test("events Anthropic couldn't give when the Run ended are fetched by the next poll", async () => {
