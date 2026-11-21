@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn, slugDescription } from "../http/readable.js";
 import { ownerName, type AgentCaller } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
@@ -35,6 +36,12 @@ export type TranscriptEntry = Static<typeof TranscriptEntry>;
 
 export const Transcript = Type.Object({
   id: Type.String({ format: "uuid" }),
+  slug: Type.String({
+    description:
+      "Its readable form, as its web address and the API take it in place of its id: its Agent's name, then its " +
+      "short id. The name is only for reading; the short id finds it.",
+  }),
+  workspaceId: Type.String({ format: "uuid" }),
   sessionId: Type.String({ description: "The session it records, as its uploader named it." }),
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
@@ -97,7 +104,8 @@ const transcriptLimitBytes = 50 * megabyte;
 const insertBatch = 500;
 
 type Row = Omit<Transcript, "uploadedAt"> & { uploadedAt: Date };
-const columns = `transcripts.id, transcripts.session_id as "sessionId",
+const columns = `transcripts.id, ${slugColumn("transcript", "transcripts.id", "agents.name")} as slug,
+  transcripts.workspace_id as "workspaceId", transcripts.session_id as "sessionId",
   json_build_object('id', agents.id, 'name', agents.name) as agent, transcripts.run_id as "runId",
   coalesce((select json_agg(json_build_object('id', tickets.id, 'key', projects.key || '-' || tickets.number,
       'title', tickets.title) order by transcript_tickets.position)

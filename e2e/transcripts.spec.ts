@@ -81,7 +81,7 @@ test("a Run's Transcript opens from the timeline, follows new uploads, expands a
   await page.getByRole("menuitem", { name: "Delete Transcript" }).click();
   await page.getByRole("dialog", { name: "Delete the Transcript of the Triage Run?" }).getByRole("button", { name: "Delete" }).click();
 
-  await expect(page).toHaveURL(`${cronk.url}/tickets/${ticket.id}`);
+  await expect(page).toHaveURL(`${cronk.url}/adas-workspace/tickets/CRONK-1`);
   await expect(timeline).toContainText("Transcript deleted");
   await expect(timeline.getByRole("link", { name: "Transcript" })).toHaveCount(0);
   await expect(timeline).toContainText("deleted the Transcript of the Triage Run");

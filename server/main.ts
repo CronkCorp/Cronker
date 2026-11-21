@@ -32,6 +32,20 @@ const everyMinute = setInterval(() => {
   cronk.resumePausedRunners().catch((error: unknown) => cronk.app.log.error(error));
 }, 60_000);
 
+// Every three minutes: the sessions of running Managed Agents Runs are read, and Runs whose sessions stopped without
+// `finish` fail. One pass at a time, since a pass waits on Anthropic.
+let pollingSessions = false;
+const everyThreeMinutes = setInterval(() => {
+  if (pollingSessions) return;
+  pollingSessions = true;
+  cronk
+    .pollManagedAgentsSessions()
+    .catch((error: unknown) => cronk.app.log.error(error))
+    .finally(() => {
+      pollingSessions = false;
+    });
+}, 3 * 60_000);
+
 // Every five seconds: GitHub is asked whether the Pull Requests waiting on a mergeability check conflict. One pass at a
 // time, since a pass waits on GitHub.
 let checkingMergeability = false;
@@ -50,6 +64,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     clearInterval(everyFiveSeconds);
     clearInterval(everyMinute);
+    clearInterval(everyThreeMinutes);
     clearInterval(everyFiveMinutes);
     void cronk.close().then(() => process.exit(0));
   });

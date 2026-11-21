@@ -6,7 +6,8 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
-import { recheckWaiting, startWaitingRuns, waitingTickets } from "./runs.js";
+import { setUpManagedAgents } from "./managed-agents.js";
+import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets } from "./runs.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -43,6 +44,16 @@ export const RunnerRecord = Type.Object({
       "For a `subscription` Runner, the trigger it fires per model label, the Runner's own first, then each Project's " +
       "overrides; empty for other kinds.",
   }),
+  managedAgents: Type.Union(
+    [
+      Type.Object({
+        agentId: Type.String({ description: "The agent definition Cronk created in the Owner's Anthropic workspace." }),
+        environmentId: Type.String({ description: "The cloud environment Cronk created there." }),
+      }),
+      Type.Null(),
+    ],
+    { description: "For a `managed_agents` Runner, what Cronk created with its API key; null for other kinds." },
+  ),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type RunnerRecord = Static<typeof RunnerRecord>;
@@ -58,6 +69,8 @@ const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId'
 const columns = `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
   paused_until as "pausedUntil", created_at as "createdAt",
+  case when kind = 'managed_agents' then json_build_object('agentId', managed_agent_id, 'environmentId', managed_environment_id)
+  end as "managedAgents",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
 const present = (row: Row): RunnerRecord => ({
@@ -74,10 +87,11 @@ export async function runnersOf(db: Db, userId: string): Promise<RunnerRecord[]>
 }
 
 export async function createRunner(
-  { db, clock, runners }: Context,
+  context: Context,
   userId: string,
-  input: { name: string; kind: string },
+  input: { name: string; kind: string; apiKey?: string },
 ): Promise<RunnerRecord> {
+  const { db, clock, runners } = context;
   if (!Object.hasOwn(runners, input.kind)) {
     const kinds = Object.keys(runners);
     throw new ApiError(
@@ -86,9 +100,17 @@ export async function createRunner(
       `This Cronk has no Runner of the kind ${input.kind}; ${kinds.length ? `it has ${kinds.join(", ")}` : "it has none yet"}.`,
     );
   }
+  let managed = null;
+  if (input.kind === "managed_agents") {
+    if (!input.apiKey?.trim()) {
+      throw new ApiError(400, "api_key_required", "A Managed Agents Runner is set up with an Anthropic API key: paste one from the Claude Console.");
+    }
+    managed = await setUpManagedAgents(context, { name: input.name, apiKey: input.apiKey });
+  }
   const { rows } = await db.query<Row>(
-    `insert into runners (owner_id, kind, name, created_at) values ($1, $2, $3, $4) returning id`,
-    [userId, input.kind, input.name.trim(), clock.now()],
+    `insert into runners (owner_id, kind, name, created_at, api_key_sealed, managed_agent_id, managed_environment_id)
+     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    [userId, input.kind, input.name.trim(), clock.now(), managed?.apiKeySealed ?? null, managed?.agentId ?? null, managed?.environmentId ?? null],
   );
   return (await findRunner(db, userId, rows[0]!.id))!;
 }
@@ -149,11 +171,30 @@ export async function removeTrigger(context: Context, userId: string, runnerId: 
 /** Removes one of the User's own Runners with its triggers; Agents pointed at it are left with none. */
 export async function removeRunner(context: Context, userId: string, runnerId: string): Promise<void> {
   await transaction(context.db, async (tx) => {
+    if (!isUuid(runnerId)) throw noSuchRunner();
+    // The Tickets of its running Runs are locked before the Runner, in the order everything that ends a Run locks them.
+    const { rows: held } = await tx.query<{ id: string; workspaceId: string; projectId: string }>(
+      `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"
+       from tickets join runs on runs.ticket_id = tickets.id
+       join runners on runners.id = runs.runner_id and runners.owner_id = $2
+       where runs.runner_id = $1 and runs.state = 'running' order by tickets.id for update of tickets`,
+      [runnerId, userId],
+    );
     // Locked as starting a Run locks it, so no Run starts on it between the check and the delete.
-    const { rows } = isUuid(runnerId)
-      ? await tx.query<{ name: string }>("select name from runners where id = $1 and owner_id = $2 for update", [runnerId, userId])
-      : { rows: [] };
+    const { rows } = await tx.query<{ name: string; kind: string }>(
+      "select name, kind from runners where id = $1 and owner_id = $2 for update",
+      [runnerId, userId],
+    );
     if (!rows[0]) throw noSuchRunner();
+    const { name, kind } = rows[0];
+    if (context.runners[kind]?.stopsRunsWhenRemoved) {
+      // Its Runs stop, as when a User takes their Tickets away: their sessions are stopped and their credentials revoked.
+      const now = context.clock.now();
+      for (const ticket of held) {
+        await stopRunningRun(context, tx, ticket.id, `${name}, the Runner of its Agent, was removed.`, now);
+        context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+      }
+    }
     const { rows: counted } = await tx.query<{ running: number }>(
       "select count(*)::int as running from runs where runner_id = $1 and state = 'running'",
       [runnerId],
@@ -163,7 +204,7 @@ export async function removeRunner(context: Context, userId: string, runnerId: s
       throw new ApiError(
         409,
         "runner_running",
-        `${rows[0].name} has ${running === 1 ? "a Run" : `${running} Runs`} running. Wait for its running Runs to end, or stop them first.`,
+        `${name} has ${running === 1 ? "a Run" : `${running} Runs`} running. Wait for its running Runs to end, or stop them first.`,
       );
     }
     // Its Agents' Tickets waiting in its queue are rechecked once it is gone, as for an Agent with no Runner.

@@ -48,6 +48,7 @@ Without Docker, run `npm run command -- reset-link ada@example.com` with the ser
 | `CRONK_GITHUB_URL` | no | GitHub's web address (default `https://github.com`), for GitHub Enterprise Server. |
 | `CRONK_GITHUB_API_URL` | no | GitHub's API address (default `https://api.github.com`), such as `https://github.example.com/api/v3`. |
 | `CRONK_CLAUDE_API_URL` | no | The Claude API's address (default `https://api.anthropic.com`), whose scheduled-task fire endpoint the subscription Runner calls. |
+| `CRONK_MANAGED_AGENTS_API_URL` | no | The address of the Claude API's Managed Agents endpoints (default `https://api.anthropic.com`), which the Managed Agents Runner calls. |
 | `CRONK_ATTACHMENTS_DIR` | no | The directory Attachments are kept in, one file each, named by id (default `data/attachments` under the working directory; `/app/data/attachments`, a volume, under Compose). A backup is the database plus this directory. |
 | `CRONK_ATTACHMENT_LIMIT_MB` | no | The largest file that may be attached, in megabytes (default `25`). Larger files are refused, naming the limit. |
 

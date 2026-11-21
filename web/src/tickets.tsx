@@ -1,3 +1,4 @@
+import { useAddresses, type Addresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
 import {
   api,
@@ -52,15 +53,13 @@ export function TicketScreen({
   workspace,
   user,
   ticketId,
-  onOtherWorkspace,
 }: {
   workspace: Workspace;
   /** The signed-in User, who delegates only to their own Agents. */
   user: User;
   ticketId: string;
-  /** Offered a Ticket of another Workspace; returns whether the screen switches to that Workspace. */
-  onOtherWorkspace?: (workspaceId: string) => boolean;
 }) {
+  const to = useAddresses();
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -83,8 +82,6 @@ export function TicketScreen({
   const [dropping, setDropping] = useState(false);
   // Whether the timeline's first load is in, after which new entries are marked as they arrive.
   const [loaded, setLoaded] = useState(false);
-  const otherWorkspace = useRef(onOtherWorkspace);
-  otherWorkspace.current = onOtherWorkspace;
   // The Comment box stays at the end of the timeline; the Comment button and C take the User there.
   const commentBox = useRef<HTMLTextAreaElement>(null);
   const toCommentBox = () => commentBox.current && scrollToAndFocus(commentBox.current);
@@ -166,7 +163,7 @@ export function TicketScreen({
       const ticketProject = await api.project(found.projectId);
       // A Ticket of another of the User's Workspaces isn't shown under this one's name.
       if (ticketProject.workspaceId !== workspace.id) {
-        if (!otherWorkspace.current?.(ticketProject.workspaceId)) setFailure("No such Ticket.");
+        setFailure("No such Ticket.");
         return;
       }
       setProject(ticketProject);
@@ -282,7 +279,7 @@ export function TicketScreen({
       <PageHead
         crumbs={[
           workspaceCrumb(workspace),
-          { label: <span className="mono">{project.key}</span>, to: `/projects/${project.id}` },
+          { label: <span className="mono">{project.key}</span>, to: to.project(project) },
           { label: <span className="mono">{ticket.key}</span> },
         ]}
         title={
@@ -816,8 +813,9 @@ const relationGroups: { kind: RelationKind; label: string }[] = [
 const relationLabel = (kind: RelationKind) => relationGroups.find((g) => g.kind === kind)!.label;
 
 function TicketLink({ ticket }: { ticket: TicketRef }) {
+  const to = useAddresses();
   return (
-    <Link to={`/tickets/${ticket.id}`} className="ticket-link">
+    <Link to={to.ticket(ticket)} className="ticket-link">
       <span className="ticket-key">{ticket.key}</span> {ticket.title}
     </Link>
   );
@@ -955,7 +953,7 @@ interface Linkable {
   /** What linking one is called, such as "Link a Document". */
   linkLabel: string;
   /** Where one is shown. */
-  page: (id: string) => string;
+  page: (to: Addresses, linked: { slug: string }) => string;
   /** Those of the Ticket's Project and of the Workspace that could be linked. */
   offered: (projectId: string, workspaceId: string) => Promise<{ project: { id: string; title: string }[]; workspace: { id: string; title: string }[] }>;
   link: (ticketId: string, id: string) => Promise<unknown>;
@@ -965,7 +963,7 @@ interface Linkable {
 const linkedDocuments: Linkable = {
   noun: "Document",
   linkLabel: "Link a Document",
-  page: (id) => `/documents/${id}`,
+  page: (to, linked) => to.document(linked),
   offered: async (projectId, workspaceId) => {
     const [project, workspace] = await Promise.all([
       api.documents({ kind: "project", id: projectId }),
@@ -980,7 +978,7 @@ const linkedDocuments: Linkable = {
 const linkedArtifacts: Linkable = {
   noun: "Artifact",
   linkLabel: "Link an Artifact",
-  page: (id) => `/artifacts/${id}`,
+  page: (to, linked) => to.artifact(linked),
   offered: async (projectId, workspaceId) => {
     const [project, workspace] = await Promise.all([
       api.artifacts({ kind: "project", id: projectId }),
@@ -1006,9 +1004,10 @@ function Linked({
   kind: Linkable;
   ticket: Ticket;
   workspaceId: string;
-  linked: { id: string; projectId: string | null; title: string }[];
+  linked: { id: string; projectId: string | null; title: string; slug: string }[];
   onChanged: () => void;
 }) {
+  const to = useAddresses();
   const [choices, setChoices] = useState<Awaited<ReturnType<Linkable["offered"]>> | null>(null);
   const [choicesError, setChoicesError] = useState<string | null>(null);
   // What may be linked isn't live, so it is read again on opening the list and after each link.
@@ -1050,7 +1049,7 @@ function Linked({
         <ul aria-label={title} className="side-list">
           {linked.map((item) => (
             <li key={item.id}>
-              <Link to={kind.page(item.id)}>{item.title}</Link>
+              <Link to={kind.page(to, item)}>{item.title}</Link>
               {item.projectId === null && <span className="muted small"> Workspace</span>}{" "}
               <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => kind.unlink(ticket.id, item.id))}>
                 Unlink
@@ -1419,6 +1418,7 @@ function Timeline({
   /** Something attached to a Comment changed. */
   onChanged: () => void;
 }) {
+  const to = useAddresses();
   const explained = explanations(changes, project);
   const shownInAnother = new Set([...explained.values()].flat().map((c) => c.id));
   const entries: Entry[] = [
@@ -1500,9 +1500,9 @@ function Timeline({
             <div className="report-card">
               <header className="report-card-head">
                 <h3>
-                  <Link to={`/documents/${report.id}`}>{report.title}</Link>
+                  <Link to={to.document(report)}>{report.title}</Link>
                 </h3>
-                <Link to={`/documents/${report.id}`} className="small">
+                <Link to={to.document(report)} className="small">
                   Open Report
                 </Link>
               </header>
@@ -1643,6 +1643,7 @@ function CommentThread({
  * calls first named the Ticket: its Agent, how many entries it keeps, and a link to it.
  */
 function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscript; arrived: boolean }) {
+  const to = useAddresses();
   const agent = { kind: "agent" as const, name: transcript.agent.name };
   return (
     <li className={`entry entry-run${arrived ? " arrived" : ""}`}>
@@ -1652,7 +1653,7 @@ function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscrip
       <p className="entry-line">
         <KindLabel kind="Transcript" /> <Actor actor={agent} avatar={false} /> named it in a session outside a Run ·{" "}
         {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"} <RelativeTime at={transcript.namedAt} clock />{" "}
-        <Link to={`/transcripts/${transcript.id}`} className="small">
+        <Link to={to.transcript(transcript)} className="small">
           Transcript
         </Link>
       </p>
@@ -1662,6 +1663,7 @@ function NamingTranscript({ transcript, arrived }: { transcript: TicketTranscrip
 
 /** A Run on the timeline as one line: its state, Step, Agent and model, the Outcome it chose, and its Transcript and session. */
 function RunEntry({ run, project, arrived }: { run: Run; project: Project; arrived: boolean }) {
+  const to = useAddresses();
   const step = project.statuses.find((s) => s.id === run.step.statusId)?.step;
   const target = step?.outcomes.find((o) => o.name === run.outcome)?.statusId;
   const targetName = project.statuses.find((s) => s.id === target)?.name;
@@ -1692,7 +1694,7 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
         {run.transcriptId && (
           <>
             {" "}
-            <Link to={`/transcripts/${run.transcriptId}`} className="small">
+            <Link to={run.transcriptSlug ? to.transcript({ slug: run.transcriptSlug }) : `/transcripts/${run.transcriptId}`} className="small">
               Transcript
             </Link>
           </>

@@ -32,6 +32,7 @@ import {
   WorkspaceSettings,
 } from "./workspaces.js";
 import { Link } from "../identity/links.js";
+import { WorkspaceSlug } from "./slugs.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -42,14 +43,17 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Workspaces"],
           summary: "Create a Workspace",
-          description: "Any signed-in User may create a Workspace, and becomes its Admin.",
-          body: Type.Object({ name: WorkspaceName }),
-          response: { 201: Membership, 401: ErrorBody },
+          description:
+            "Any signed-in User may create a Workspace, and becomes its Admin. Its slug, the Workspace's name in web " +
+            "addresses, is the one given (`workspace_slug_taken` when another Workspace has it), or else one made " +
+            "from its name; it never changes.",
+          body: Type.Object({ name: WorkspaceName, slug: Type.Optional(WorkspaceSlug) }),
+          response: { 201: Membership, 400: ErrorBody, 401: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await createWorkspace(db, clock, user.id, request.body.name));
+        return reply.code(201).send(await createWorkspace(db, clock, user.id, request.body));
       },
     );
 

@@ -53,10 +53,10 @@ describe("Linked Artifacts", () => {
     const linked = await call("POST", `/api/tickets/${ticket.id}/artifacts`, ada, { artifactId: board.id });
     await ok("POST", `/api/tickets/${ticket.id}/artifacts`, ada, { artifactId: tokens.id });
 
-    expect(linked).toEqual({ status: 201, json: { id: board.id, projectId: project.id, title: "Board prototype" } });
+    expect(linked).toEqual({ status: 201, json: { id: board.id, projectId: project.id, title: "Board prototype", slug: board.slug } });
     expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([
-      { id: board.id, projectId: project.id, title: "Board prototype" },
-      { id: tokens.id, projectId: null, title: "Colour tokens" },
+      { id: board.id, projectId: project.id, title: "Board prototype", slug: board.slug },
+      { id: tokens.id, projectId: null, title: "Colour tokens", slug: tokens.slug },
     ]);
   });
 
@@ -104,7 +104,7 @@ describe("Linked Artifacts", () => {
     expect(unlinked.status).toBe(204);
     expect(again.status).toBe(404);
     expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([
-      { id: tokens.id, projectId: null, title: "Colour tokens" },
+      { id: tokens.id, projectId: null, title: "Colour tokens", slug: tokens.slug },
     ]);
     expect((await ok("GET", `/api/projects/${project.id}/artifacts`, ada)).map((a: { id: string }) => a.id)).toEqual([board.id]);
   });
@@ -208,9 +208,9 @@ describe("Linked Artifacts", () => {
       const inWorkspace = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, asAgent, { title: "Spacing", files, runId: run.id });
 
       expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([
-        { id: board.id, projectId: project.id, title: "Board prototype" },
-        { id: inProject.id, projectId: project.id, title: "Drop targets" },
-        { id: inWorkspace.id, projectId: null, title: "Spacing" },
+        { id: board.id, projectId: project.id, title: "Board prototype", slug: board.slug },
+        { id: inProject.id, projectId: project.id, title: "Drop targets", slug: inProject.slug },
+        { id: inWorkspace.id, projectId: null, title: "Spacing", slug: inWorkspace.slug },
       ]);
       const changes = (await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada)).filter(
         (c: { field: string; actor: { kind: string } }) => c.field === "linkedArtifact" && c.actor.kind === "agent",
