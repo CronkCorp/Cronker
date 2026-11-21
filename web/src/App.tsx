@@ -333,7 +333,7 @@ function SignedIn({
     const screen = (id: string): ReactNode => {
       switch (route.kind) {
         case "project":
-          return <ProjectScreen key={`${workspace.id} ${id}`} workspace={workspace} projectId={id} view={route.view ?? "board"} />;
+          return <ProjectScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} projectId={id} view={route.view ?? "board"} />;
         case "ticket":
           return <TicketScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} ticketId={id} />;
         case "decision":

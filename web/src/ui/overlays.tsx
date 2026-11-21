@@ -1,12 +1,13 @@
+import * as RadixContextMenu from "@radix-ui/react-context-menu";
 import * as RadixDialog from "@radix-ui/react-dialog";
 import * as RadixMenu from "@radix-ui/react-dropdown-menu";
 import * as RadixPopover from "@radix-ui/react-popover";
-import { useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { navigate } from "../router.js";
 import { Button, FormError } from "./controls.js";
 
 /**
- * Radix UI's headless popover, dropdown menu and dialog, each wrapped once and styled by our classes. Screens use
+ * Radix UI's headless popover, dropdown menu, context menu and dialog, each wrapped once and styled by our classes. Screens use
  * these, never Radix directly.
  */
 
@@ -123,6 +124,15 @@ export function HoverPopover({
   );
 }
 
+/** The parts of a Radix menu the MenuItem family is drawn with, which differ between a Menu and a ContextMenu. */
+type MenuParts = Pick<
+  typeof RadixMenu,
+  "Item" | "Label" | "Separator" | "RadioGroup" | "RadioItem" | "CheckboxItem" | "ItemIndicator" | "Sub" | "SubTrigger" | "SubContent" | "Portal"
+>;
+const contextMenuParts: MenuParts = RadixContextMenu;
+/** Which menu the MenuItem family is inside: a Menu's dropdown unless a ContextMenu says otherwise. */
+const Parts = createContext<MenuParts>(RadixMenu);
+
 /** A menu of actions behind a button, such as "…" for destructive ones. */
 export function Menu({
   label,
@@ -154,7 +164,50 @@ export function Menu({
   );
 }
 
-/** An action in a Menu. */
+/**
+ * A menu of actions on a thing, such as a board card, opened by right-clicking it, by long-pressing it on a touch
+ * screen, or from the keyboard with the ContextMenu key or Shift+F10 while it or something in it has focus. Escape
+ * closes it and gives focus back. Its items are the MenuItem family's, as in a Menu.
+ */
+export function ContextMenu({
+  label,
+  content,
+  children,
+}: {
+  /** The menu's accessible name, such as the Ticket's key and title. */
+  label: string;
+  /** The menu's items. */
+  content: ReactNode;
+  /** The thing it is on: one element, which takes its handlers. */
+  children: ReactElement;
+}) {
+  return (
+    <RadixContextMenu.Root modal={false}>
+      <RadixContextMenu.Trigger asChild onKeyDown={openFromKeyboard}>
+        {children}
+      </RadixContextMenu.Trigger>
+      <RadixContextMenu.Portal>
+        <RadixContextMenu.Content className="menu" aria-label={label} collisionPadding={8}>
+          <Parts.Provider value={contextMenuParts}>{content}</Parts.Provider>
+        </RadixContextMenu.Content>
+      </RadixContextMenu.Portal>
+    </RadixContextMenu.Root>
+  );
+}
+
+/**
+ * Opens a ContextMenu from the keyboard, under what has focus. Not every browser turns the ContextMenu key or
+ * Shift+F10 into a contextmenu event, so it is sent here, once, in place of the browser's.
+ */
+function openFromKeyboard(event: KeyboardEvent<HTMLElement>) {
+  if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+  event.preventDefault();
+  const focused = event.target instanceof HTMLElement ? event.target : event.currentTarget;
+  const { left, bottom } = focused.getBoundingClientRect();
+  focused.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: left, clientY: bottom }));
+}
+
+/** An action in a Menu or ContextMenu. */
 export function MenuItem({
   children,
   onSelect,
@@ -166,24 +219,111 @@ export function MenuItem({
   disabled?: boolean;
   tone?: "danger";
 }) {
+  const { Item } = useContext(Parts);
   return (
-    <RadixMenu.Item className={`menu-item${tone ? ` menu-item-${tone}` : ""}`} disabled={disabled} onSelect={onSelect}>
+    <Item className={`menu-item${tone ? ` menu-item-${tone}` : ""}`} disabled={disabled} onSelect={onSelect}>
       {children}
-    </RadixMenu.Item>
+    </Item>
   );
 }
 
 /** A page a Menu leads to. It navigates on Radix's select, which also closes the menu. */
 export function MenuLink({ to, children, current }: { to: string; children: ReactNode; current?: boolean }) {
+  const { Item } = useContext(Parts);
   return (
-    <RadixMenu.Item className="menu-item" aria-current={current ? "page" : undefined} onSelect={() => navigate(to)}>
+    <Item className="menu-item" aria-current={current ? "page" : undefined} onSelect={() => navigate(to)}>
       {children}
-    </RadixMenu.Item>
+    </Item>
   );
 }
 
 export function MenuLabel({ children }: { children: ReactNode }) {
-  return <RadixMenu.Label className="menu-label">{children}</RadixMenu.Label>;
+  const { Label } = useContext(Parts);
+  return <Label className="menu-label">{children}</Label>;
+}
+
+/** A menu inside a Menu or ContextMenu behind one of its items, such as Move to; ArrowRight opens it, ArrowLeft goes back. */
+export function MenuSub({ label, children }: { label: string; children: ReactNode }) {
+  const { Sub, SubTrigger, SubContent, Portal } = useContext(Parts);
+  return (
+    <Sub>
+      <SubTrigger className="menu-item menu-sub-trigger">
+        {label}
+        <span className="menu-sub-arrow" aria-hidden="true">
+          ›
+        </span>
+      </SubTrigger>
+      <Portal>
+        <SubContent className="menu" sideOffset={2} collisionPadding={8}>
+          {children}
+        </SubContent>
+      </Portal>
+    </Sub>
+  );
+}
+
+/** The tick on a checked item; its checked state is announced by the item itself. */
+function MenuCheck() {
+  const { ItemIndicator } = useContext(Parts);
+  return (
+    <span className="menu-check" aria-hidden="true">
+      <ItemIndicator asChild>
+        <svg className="menu-check-mark" viewBox="0 0 12 12">
+          <path d="M2.5 6.5 5 9l4.5-6" />
+        </svg>
+      </ItemIndicator>
+    </span>
+  );
+}
+
+/** Items of which one is the current value, each announced as checked or not, such as a Ticket's Statuses. */
+export function MenuRadioGroup<T extends string>({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: T;
+  /** Called with the item chosen, which also closes the menu. */
+  onChange: (value: T) => void;
+  children: ReactNode;
+}) {
+  const { RadioGroup } = useContext(Parts);
+  return (
+    <RadioGroup aria-label={label} value={value} onValueChange={(next) => onChange(next as T)}>
+      {children}
+    </RadioGroup>
+  );
+}
+
+export function MenuRadioItem({ value, children }: { value: string; children: ReactNode }) {
+  const { RadioItem } = useContext(Parts);
+  return (
+    <RadioItem className="menu-item menu-item-checkable" value={value}>
+      <MenuCheck />
+      {children}
+    </RadioItem>
+  );
+}
+
+/** An on/off setting in a menu, announced as checked or not; choosing it flips it and closes the menu. */
+export function MenuCheckboxItem({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
+  const { CheckboxItem } = useContext(Parts);
+  return (
+    <CheckboxItem className="menu-item menu-item-checkable" checked={checked} onCheckedChange={(next) => onChange(next === true)}>
+      <MenuCheck />
+      {children}
+    </CheckboxItem>
+  );
 }
 
 /**
@@ -201,29 +341,31 @@ export function MenuChoice<T extends string>({
   options: { value: T; label: ReactNode }[];
   onChange: (value: T) => void;
 }) {
+  const { RadioGroup, RadioItem } = useContext(Parts);
   return (
-    <RadixMenu.RadioGroup
+    <RadioGroup
       className="segmented menu-choice"
       aria-label={label}
       value={value}
       onValueChange={(next) => onChange(next as T)}
     >
       {options.map((option) => (
-        <RadixMenu.RadioItem
+        <RadioItem
           key={option.value}
           value={option.value}
           className="segmented-item"
           onSelect={(event) => event.preventDefault()}
         >
           {option.label}
-        </RadixMenu.RadioItem>
+        </RadioItem>
       ))}
-    </RadixMenu.RadioGroup>
+    </RadioGroup>
   );
 }
 
 export function MenuSeparator() {
-  return <RadixMenu.Separator className="menu-separator" />;
+  const { Separator } = useContext(Parts);
+  return <Separator className="menu-separator" />;
 }
 
 /** A dialog over the page; its action row is right-aligned, the dismissing button first. */

@@ -13,8 +13,10 @@ import {
   type ProjectSummary,
   type Status,
   type StatusKind,
+  type TicketEdit,
   type TicketFilter,
   type TicketSummary,
+  type User,
   type Workspace,
   type WorkspaceSummary,
 } from "./api.js";
@@ -29,10 +31,24 @@ import { ProjectGlossary } from "./terms.js";
 import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
-import { Avatar } from "./ui/actor.js";
+import { Actor, Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
-import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot } from "./ui/labels.js";
-import { Dialog, DialogActions, DialogClose, HoverPopover, Menu, MenuLink } from "./ui/overlays.js";
+import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
+import {
+  ContextMenu,
+  Dialog,
+  DialogActions,
+  DialogClose,
+  HoverPopover,
+  Menu,
+  MenuCheckboxItem,
+  MenuItem,
+  MenuLink,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuSub,
+} from "./ui/overlays.js";
 
 /** The Workspace's Projects, and a form to create one. */
 export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
@@ -130,10 +146,13 @@ export function ProjectMenu({ project }: { project: ProjectSummary }) {
  */
 export function ProjectScreen({
   workspace,
+  user,
   projectId,
   view,
 }: {
   workspace: WorkspaceSummary;
+  /** The signed-in User, who delegates only to their own Agents. */
+  user: User;
   projectId: string;
   view: View;
 }) {
@@ -259,7 +278,7 @@ export function ProjectScreen({
         }
       />
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
-      {view === "board" && <Board project={project} members={members} agents={agents} tickets={tickets} onMoved={loadTickets} />}
+      {view === "board" && <Board project={project} members={members} agents={agents} user={user} tickets={tickets} onChanged={loadTickets} />}
       {view === "list" && <List project={project} members={members} agents={agents} tickets={tickets} filtered={filtered} />}
     </div>
   );
@@ -483,35 +502,107 @@ function useEdgeScroll() {
 }
 
 /**
- * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
- * which holds links of its own and so sits beside the card's link rather than in it.
+ * A card's context menu: Move to its Project's Statuses, Delegate to the User's own Agents or Undelegate, and, while
+ * it is delegated, Autonomous Delegation. Each saves at once through `onEdit`, as a drop does; Cronk keeps the rules.
  */
-function Card({ ticket, members, agents, arrived }: { ticket: TicketSummary; members: Member[]; agents: Agent[]; arrived: boolean }) {
+function CardMenu({
+  ticket,
+  project,
+  own,
+  onEdit,
+}: {
+  ticket: TicketSummary;
+  project: Project;
+  /** The signed-in User's own Agents, the only ones they delegate to. */
+  own: Agent[];
+  onEdit: (edit: TicketEdit) => void;
+}) {
+  return (
+    <>
+      <MenuSub label="Move to">
+        <MenuRadioGroup label="Statuses" value={ticket.statusId} onChange={(statusId) => statusId !== ticket.statusId && onEdit({ statusId })}>
+          {project.statuses.map((status) => (
+            <MenuRadioItem key={status.id} value={status.id}>
+              <StatusPill kind={status.kind} name={status.name} model={status.step?.model} />
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuSub>
+      <MenuSub label="Delegate to">
+        <MenuRadioGroup
+          label="Agents"
+          value={ticket.delegateId ?? ""}
+          onChange={(delegateId) => delegateId !== ticket.delegateId && onEdit({ delegateId })}
+        >
+          {own.map((agent) => (
+            <MenuRadioItem key={agent.id} value={agent.id}>
+              <Actor actor={{ kind: "agent", name: agent.name }} />
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+        {own.length > 0 && <MenuSeparator />}
+        <MenuItem disabled={ticket.delegateId === null} onSelect={() => onEdit({ delegateId: null })}>
+          Undelegate
+        </MenuItem>
+      </MenuSub>
+      {ticket.delegateId !== null && (
+        <MenuCheckboxItem checked={ticket.autonomousDelegation === true} onChange={(on) => onEdit({ autonomousDelegation: on })}>
+          Autonomous Delegation
+        </MenuCheckboxItem>
+      )}
+    </>
+  );
+}
+
+/**
+ * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
+ * which holds links of its own and so sits beside the card's link rather than in it. Right-clicking it, long-pressing
+ * it or ContextMenu / Shift+F10 on its focused link opens its CardMenu.
+ */
+function Card({
+  ticket,
+  project,
+  members,
+  agents,
+  own,
+  arrived,
+  onEdit,
+}: {
+  ticket: TicketSummary;
+  project: Project;
+  members: Member[];
+  agents: Agent[];
+  own: Agent[];
+  arrived: boolean;
+  onEdit: (edit: TicketEdit) => void;
+}) {
   const to = useAddresses();
   return (
-    <div
-      className={`card${arrived ? " arrived" : ""}`}
-      draggable
-      onDragStart={(event: DragEvent<HTMLDivElement>) => {
-        event.dataTransfer.setData(ticketDrag, ticket.id);
-        event.dataTransfer.effectAllowed = "move";
-      }}
-    >
-      <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
-        <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
-        <span className="card-priority">
-          <PriorityTag priority={ticket.priority} />
-        </span>
-        <span className="card-meta">
-          {ticket.labels.map((label) => (
-            <Chip key={label}>{label}</Chip>
-          ))}
-          <TicketRunState ticket={ticket} />
-          <People ticket={ticket} members={members} agents={agents} />
-        </span>
-      </Link>
-      <BlockedChip ticket={ticket} />
-    </div>
+    <ContextMenu label={`${ticket.key} ${ticket.title}`} content={<CardMenu ticket={ticket} project={project} own={own} onEdit={onEdit} />}>
+      <div
+        className={`card${arrived ? " arrived" : ""}`}
+        draggable
+        onDragStart={(event: DragEvent<HTMLDivElement>) => {
+          event.dataTransfer.setData(ticketDrag, ticket.id);
+          event.dataTransfer.effectAllowed = "move";
+        }}
+      >
+        <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
+          <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
+          <span className="card-priority">
+            <PriorityTag priority={ticket.priority} />
+          </span>
+          <span className="card-meta">
+            {ticket.labels.map((label) => (
+              <Chip key={label}>{label}</Chip>
+            ))}
+            <TicketRunState ticket={ticket} />
+            <People ticket={ticket} members={members} agents={agents} />
+          </span>
+        </Link>
+        <BlockedChip ticket={ticket} />
+      </div>
+    </ContextMenu>
   );
 }
 
@@ -524,14 +615,16 @@ function Board({
   project,
   members,
   agents,
+  user,
   tickets,
-  onMoved,
+  onChanged,
 }: {
   project: Project;
   members: Member[];
   agents: Agent[];
+  user: User;
   tickets: TicketSummary[];
-  onMoved: () => void;
+  onChanged: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<string | null>(null);
@@ -540,18 +633,25 @@ function Board({
   const arrived = useArrivals(tickets.map((t) => `${t.id} ${t.statusId}`));
   const edge = useEdgeScroll();
 
+  const own = agents.filter((agent) => agent.owner.id === user.id);
+
+  /** A drop's or a card menu's change, saved at once; a refusal says why above the board. */
+  const edit = async (ticketId: string, change: TicketEdit) => {
+    setError(null);
+    try {
+      await api.editTicket(ticketId, change);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+    onChanged();
+  };
+
   const drop = async (event: DragEvent<HTMLElement>, status: Status) => {
     event.preventDefault();
     setTarget(null);
     const ticketId = event.dataTransfer.getData(ticketDrag);
     if (!ticketId || tickets.find((t) => t.id === ticketId)?.statusId === status.id) return;
-    setError(null);
-    try {
-      await api.editTicket(ticketId, { statusId: status.id });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-    onMoved();
+    await edit(ticketId, { statusId: status.id });
   };
 
   const collapsed = (status: Status) => collapsible(status) && !opened.has(status.id);
@@ -622,9 +722,12 @@ function Board({
                     <Card
                       key={ticket.id}
                       ticket={ticket}
+                      project={project}
                       members={members}
                       agents={agents}
+                      own={own}
                       arrived={arrived.has(`${ticket.id} ${ticket.statusId}`)}
+                      onEdit={(change) => void edit(ticket.id, change)}
                     />
                   ))}
                 </div>
