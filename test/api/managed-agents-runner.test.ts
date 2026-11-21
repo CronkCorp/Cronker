@@ -522,6 +522,23 @@ describe("webhooks", () => {
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
   });
 
+  test("a delivery whose session Anthropic can't read now fails, so Anthropic's retry ends the Run", async () => {
+    const { ada, startRun, deliver } = await withWebhookSecret();
+    const { run, session } = await startRun();
+    cronk.managedAgents.terminate(session.id);
+    cronk.managedAgents.failNext("GET", `/v1/sessions/${session.id}`, 503);
+
+    const first = await deliver("session.status_terminated", session.id, { id: "whe_01RETRIED" });
+
+    expect(first.status).toBeGreaterThanOrEqual(500);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+
+    const retry = await deliver("session.status_terminated", session.id, { id: "whe_01RETRIED" });
+
+    expect(await retry.json()).toEqual({ ended: true });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("failed");
+  });
+
   test("a repeated delivery changes nothing, and reads no session", async () => {
     const { ada, ticket, startRun, deliver } = await withWebhookSecret();
     const { run, session } = await startRun();
@@ -606,7 +623,9 @@ describe("saving a webhook signing secret", () => {
     const bea = { cookie: (await addMember(cronk, ada.cookie, workspace.id, "bea@example.com")).cookie };
 
     const refused = await call("PUT", `/api/runners/${runner.id}/webhook-secret`, bea, { secret: cronk.managedAgents.webhookSecret() });
+    const notForgotten = await call("DELETE", `/api/runners/${runner.id}/webhook-secret`, bea);
 
     expect(refused.status).toBe(404);
+    expect(notForgotten.status).toBe(404);
   });
 });

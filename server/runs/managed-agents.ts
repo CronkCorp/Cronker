@@ -419,7 +419,14 @@ export async function receiveManagedAgentsDelivery(
   const run = rows[0];
   if (!run) return false;
   // The payload is thin and may be stale or out of order: the session as Anthropic has it now decides, as for polling.
-  const why = await whySessionStopped(context, requireSecretBox(context.config).open(run.apiKeySealed), sessionId);
+  let why: string | null;
+  try {
+    why = await whySessionStopped(context, requireSecretBox(context.config).open(run.apiKeySealed), sessionId);
+  } catch (error) {
+    // Failing the delivery has Anthropic send it again shortly; polling is the backstop if every try fails.
+    if (!(error instanceof SessionUnreadable)) throw error;
+    throw new ApiError(502, "anthropic_unavailable", error.message);
+  }
   if (!why) return false;
   await reports.endedWithoutFinishing(run.runId, why);
   return true;
@@ -445,7 +452,8 @@ export async function pollManagedAgentsSessions(context: Context, reports: RunRe
       const why = await whySessionStopped(context, requireSecretBox(context.config).open(apiKeySealed), sessionId);
       if (why) await reports.endedWithoutFinishing(runId, why);
     } catch (error) {
-      failures.push(error);
+      // A session Anthropic can't answer about now is read again at the next poll.
+      if (!(error instanceof SessionUnreadable)) failures.push(error);
     }
   }
   // A Run whose refused start was unrecorded, as for a rate limit, has no row in `runs` left.
@@ -457,16 +465,23 @@ export async function pollManagedAgentsSessions(context: Context, reports: RunRe
   for (const { runId } of unfinished) await letGo(context, runId).catch((error: unknown) => failures.push(error));
   if (failures.length > 0) throw failures[0];
 }
-/** Why the session stopped without its Agent calling `finish`, or nothing while it is still at work. */
+/** Anthropic answered something other than the session or its events, such as a 429 or a 5xx: ask again later. */
+class SessionUnreadable extends Error {}
+
+/**
+ * Why the session stopped without its Agent calling `finish`, or nothing while it is still at work. Throws
+ * `SessionUnreadable` when Anthropic doesn't answer with the session or its events.
+ */
 async function whySessionStopped(context: Context, apiKey: string, sessionId: string): Promise<string | null> {
   const path = `v1/sessions/${encodeURIComponent(sessionId)}`;
   const session = await anthropic(context, apiKey, "GET", path);
   if (session.status === 404) return "Its session is gone from Anthropic, without the agent calling finish.";
-  if (session.status !== 200) return null;
+  if (session.status !== 200) throw new SessionUnreadable(`Anthropic answered ${errorOf(session)} when Cronk read session ${sessionId}.`);
   if (session.body.status === "terminated") return "Its session terminated without the agent calling finish.";
   if (session.body.status !== "idle") return null;
   // The session carries no stop reason: its latest idle event does.
   const events = await anthropic(context, apiKey, "GET", `${path}/events?order=desc&limit=100`);
+  if (events.status !== 200) throw new SessionUnreadable(`Anthropic answered ${errorOf(events)} when Cronk read the events of session ${sessionId}.`);
   const idle = ((events.body.data ?? []) as { type?: string; stop_reason?: { type?: string } }[]).find(
     (event) => event.type === "session.status_idle",
   );
