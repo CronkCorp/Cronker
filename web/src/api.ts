@@ -512,8 +512,13 @@ export interface TranscriptEntry {
   toolName: string | null;
   toolInput: unknown;
   toolResult: string | null;
-  /** Whether it was cut at 20 KB: its tool result, or the text of a Transcript past 50 MB's last entry over 25 MB alone. */
+  /** Whether any part of it was cut at 20 KB, keeping only the start; `cutParts` says which. */
   cut: boolean;
+  /**
+   * Which parts were cut at 20 KB: a tool call's input (then a string of its JSON's start) and its result, or the
+   * text of a Transcript past 50 MB's last message over 25 MB alone.
+   */
+  cutParts: ("text" | "toolInput" | "toolResult")[];
   at: string | null;
 }
 

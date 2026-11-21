@@ -289,7 +289,7 @@ function Message({ entry, agentName, arrived }: { entry: TranscriptEntry; agentN
           <Markdown text={entry.text} mentions={[]} />
         </div>
       )}
-      {entry.text !== null && entry.cut && (
+      {entry.cutParts.includes("text") && (
         <p className="small muted">Cut at 20 KB: only the start of this message was kept.</p>
       )}
       {entry.toolResult !== null && <ToolResult entry={entry} />}
@@ -300,7 +300,9 @@ function Message({ entry, agentName, arrived }: { entry: TranscriptEntry; agentN
 /** A tool call as one line, its name and a summary of its input, opening on click to the input and the result. */
 function ToolCall({ entry, arrived }: { entry: TranscriptEntry; arrived: boolean }) {
   const [open, setOpen] = useState(false);
-  const summary = summarize(entry.toolInput);
+  // A cut input is a string of its JSON's start, shown as it is.
+  const inputCut = entry.cutParts.includes("toolInput");
+  const summary = inputCut ? oneLine(String(entry.toolInput)) : summarize(entry.toolInput);
   return (
     <li className={`transcript-entry transcript-tool${arrived ? " arrived" : ""}`}>
       <button
@@ -322,7 +324,8 @@ function ToolCall({ entry, arrived }: { entry: TranscriptEntry; arrived: boolean
         <div className="tool-detail">
           <section aria-label="Input">
             <p className="kind-label kind-muted">Input</p>
-            <pre>{JSON.stringify(entry.toolInput, null, 2)}</pre>
+            <pre>{inputCut ? String(entry.toolInput) : JSON.stringify(entry.toolInput, null, 2)}</pre>
+            {inputCut && <p className="small muted">Cut at 20 KB: only the start of this input, as JSON, was kept.</p>}
           </section>
           {entry.toolResult !== null && <ToolResult entry={entry} />}
         </div>
@@ -336,7 +339,7 @@ function ToolResult({ entry }: { entry: TranscriptEntry }) {
     <section aria-label="Result">
       <p className="kind-label kind-muted">Result</p>
       <pre>{entry.toolResult || " "}</pre>
-      {entry.cut && <p className="small muted">Cut at 20 KB: only the start of this result was kept.</p>}
+      {entry.cutParts.includes("toolResult") && <p className="small muted">Cut at 20 KB: only the start of this result was kept.</p>}
     </section>
   );
 }
