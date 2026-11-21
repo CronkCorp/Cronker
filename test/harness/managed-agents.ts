@@ -36,6 +36,8 @@ export interface StandInVault {
 export interface ManagedAgentsCall {
   method: string;
   path: string;
+  /** Its query, such as `limit=1000&page=2`. */
+  query: string;
   apiKey: string;
   headers: IncomingMessage["headers"];
   body: Record<string, unknown> | null;
@@ -117,7 +119,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
         return error(400, "invalid_request_error", "Body is not JSON.");
       }
     }
-    calls.push({ method, path: url.pathname, apiKey, headers: request.headers, body });
+    calls.push({ method, path: url.pathname, query: url.searchParams.toString(), apiKey, headers: request.headers, body });
 
     if (rateLimits.length > 0) {
       const retryAfter = rateLimits.shift();

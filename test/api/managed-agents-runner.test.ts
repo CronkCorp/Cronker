@@ -518,5 +518,107 @@ describe("the Run's Transcript", () => {
     ]);
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
   });
+
+  test("events are fetched page by page until none are left, each fetch going on from the page where the last stopped", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    cronk.managedAgents.pageSize(2);
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    /** The pages of the session's events Cronk read, in order: null for the first, else the page it asked for. */
+    const pagesRead = () =>
+      cronk.managedAgents.calls
+        .filter((c) => c.method === "GET" && c.path === `/v1/sessions/${session.id}/events` && !c.query.includes("order="))
+        .map((c) => new URLSearchParams(c.query).get("page"));
+    const says = (n: number) => ({ type: "agent.message", content: [{ type: "text", text: `Turn ${n}.` }] });
+    // With the Brief, five events: pages of two, two and one.
+    cronk.managedAgents.emit(session.id, says(1), says(2), says(3), says(4));
+
+    expect((await ok("GET", `/api/transcripts/${transcriptId}`, ada)).entryCount).toBe(5);
+    expect(pagesRead()).toEqual([null, "2", "4"]);
+
+    cronk.managedAgents.emit(session.id, says(5), says(6));
+    cronk.managedAgents.idle(session.id, "end_turn");
+    await cronk.pollManagedAgentsSessions();
+
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.slice(1).map((e: { text: string }) => e.text)).toEqual(["Turn 1.", "Turn 2.", "Turn 3.", "Turn 4.", "Turn 5.", "Turn 6."]);
+    // The last page held one event the first fetch took; the next fetch reads on from it.
+    expect(pagesRead()).toEqual([null, "2", "4", "4", "6"]);
+  });
+
+  test("past 50 MB keeps its start and its end, its gap widening as later fetches add to its end", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const megabyte = 1024 * 1024;
+    /** Messages of 1 MB each, numbered from `from`. */
+    const messages = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ type: "agent.message", content: [{ type: "text", text: `${from + i}`.padEnd(megabyte, "m") }] }));
+
+    cronk.managedAgents.emit(session.id, ...messages(1, 30));
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({ entryCount: 31, gap: null });
+
+    // The Brief and 60 MB: the Brief and 24 messages fit in the first 25 MB, the last 25 messages in the other 25 MB.
+    cronk.managedAgents.emit(session.id, ...messages(31, 30));
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 50,
+      gap: { after: 25, entries: 11, bytes: 11 * megabyte },
+    });
+
+    cronk.managedAgents.emit(session.id, ...messages(61, 10));
+    cronk.managedAgents.terminate(session.id);
+    await cronk.pollManagedAgentsSessions();
+
+    const { transcript, entries } = await transcriptOf(run.id, ada);
+    expect(transcript).toMatchObject({ entryCount: 50, gap: { after: 25, entries: 21, bytes: 21 * megabyte } });
+    const first = (e: { text: string }) => Number.parseInt(e.text, 10);
+    expect(entries.slice(1, 25).map(first)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+    expect(entries.slice(25).map(first)).toEqual(Array.from({ length: 25 }, (_, i) => i + 46));
+    expect(entries.slice(25).map((e: { position: number }) => e.position)).toEqual(Array.from({ length: 25 }, (_, i) => i + 47));
+  }, 60_000);
+
+  test("events Anthropic couldn't give when the Run ended are fetched by the next poll", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    cronk.managedAgents.emit(session.id, ...aTurn);
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+    cronk.managedAgents.failNext("GET", `/v1/sessions/${session.id}/events`, 503);
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    expect((await transcriptOf(run.id, ada)).transcript.entryCount).toBe(0);
+
+    await cronk.pollManagedAgentsSessions();
+
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null }) => e.text ?? e.toolName).slice(1)).toEqual([
+      "Reading the Ticket first.",
+      "mcp__cronk__read_ticket",
+      "bash",
+      "It is ready for Implement.",
+      "The session was interrupted.",
+    ]);
+    // Fetched once, the Transcript isn't fetched again.
+    const reads = () => cronk.managedAgents.calls.filter((c) => c.path === `/v1/sessions/${session.id}/events` && c.method === "GET").length;
+    const before = reads();
+    await cronk.pollManagedAgentsSessions();
+    expect(reads()).toBe(before);
+  });
+
+  test("deleted by a User while its Run runs, stays deleted when the Run ends", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    cronk.managedAgents.emit(session.id, ...aTurn);
+    await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    await ok("DELETE", `/api/transcripts/${transcriptId}`, ada);
+    cronk.managedAgents.terminate(session.id);
+    await cronk.pollManagedAgentsSessions();
+
+    const ended = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(ended).toMatchObject({ state: "failed", transcriptId: null, transcriptDeleted: true });
+    expect((await call("GET", `/api/transcripts/${transcriptId}`, ada)).status).toBe(404);
+  });
 });
 
