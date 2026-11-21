@@ -344,9 +344,9 @@ into its variables (step 5), so every session in it can act as the Agent **${pla
 
 Offer the User's environments by name, never asking them to find an id:
 
-- Load your built-in \`schedule\` skill with your \`Skill\` tool, telling it only to list, not to create anything.
-  It lists the account's environments with their ids, and
-  the account's claude.ai connectors with their \`connector_uuid\`, which step 2 needs.
+- Load your built-in \`schedule\` skill with your \`Skill\` tool, only to read two lists from it: the account's
+  environments with their ids, and the account's claude.ai connectors with their \`connector_uuid\`, which step 2
+  needs. Follow these instructions, not the skill's own steps, and create nothing through it.
 - You may also \`list\` the User's routines with \`RemoteTrigger\` and name the environments they use.
 - If the User wants a new environment for Cronk, ask them to create it in Claude Code on the web
   (https://claude.ai/code), then list the environments again to find its id.

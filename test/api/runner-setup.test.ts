@@ -240,13 +240,18 @@ test("a setup for a Project with several Repositories warns that the Transcript 
 
 /** Starts a setup as Ada and fetches its instructions as the command's `curl` does. */
 async function started(ada: Request, runnerId: string, projectId: string) {
-  const setup = await ok("POST", `/api/runners/${runnerId}/setups`, ada, { projectId });
+  const answer = await call("POST", `/api/runners/${runnerId}/setups`, ada, { projectId });
+  expect(answer.status, answer.text).toBe(201);
+  const setup = answer.json;
   const address = /curl -fsSL '([^']+)'/.exec(setup.command)![1]!;
   const setupToken = address.split("/").pop()!;
   const instructions = () => fetch(address);
   const report = (body: unknown, as: Request = {}) => call("POST", `/api/runner-setups/${setupToken}/triggers`, as, body);
-  return { setup, address, instructions, report };
+  return { setup, answer, address, instructions, report };
 }
+
+/** The Transcript hook token served instructions hand over. */
+const hookTokenIn = (instructions: string) => /CRONK_TOKEN=(cronk_agent_[A-Za-z0-9_-]+)/.exec(instructions)![1]!;
 
 const allLabels = (ids: Record<string, string>) => ({
   triggers: Object.entries(ids).map(([label, triggerId]) => ({ label, triggerId })),
@@ -278,10 +283,12 @@ describe("the served instructions", () => {
       ".claude/settings.json",
       "https://claude.ai/code/routines/",
       `${cronk.url}/api/runner-setups/`,
+      "To add the Transcript hook token below to the variables of the environment they chose",
+      `or add \`${new URL(cronk.url).host}\` to its **Limited** allowlist`,
     ]) {
       expect(text).toContain(expected);
     }
-    const hookToken = /CRONK_TOKEN=(cronk_agent_[A-Za-z0-9_-]+)/.exec(text)![1]!;
+    const hookToken = hookTokenIn(text);
     const tokens = await ok("GET", `/api/agents/${agent.id}/tokens`, ada);
     expect(tokens.map((t: { name: string }) => t.name)).toEqual(["Transcript hook · Cronker"]);
     const asHook = await call("GET", `/api/projects/${project.id}`, { headers: { authorization: `Bearer ${hookToken}` } });
@@ -300,8 +307,7 @@ describe("the served instructions", () => {
       JSON.parse(json!),
     ]);
     expect(bodies.map(([label]) => label)).toEqual(["haiku", "sonnet", "opus"]);
-    const [label, haiku] = bodies[0]!;
-    expect(label).toBe("haiku");
+    const [, haiku] = bodies[0]!;
     expect(haiku).toEqual({
       name: "Cronk · Cronker · haiku",
       cron_expression: "",
@@ -344,24 +350,20 @@ describe("the served instructions", () => {
 
   test("are the only place the Transcript hook token appears", async () => {
     const { ada, project, runner, agent } = await adaWithProject();
-    const setup = await call("POST", `/api/runners/${runner.id}/setups`, ada, { projectId: project.id });
-    const address = /curl -fsSL '([^']+)'/.exec(setup.json.command)![1]!;
+    const { answer, instructions } = await started(ada, runner.id, project.id);
 
-    const text = await (await fetch(address)).text();
+    const hookToken = hookTokenIn(await (await instructions()).text());
 
-    const hookToken = /CRONK_TOKEN=(cronk_agent_[A-Za-z0-9_-]+)/.exec(text)![1]!;
     const elsewhere = [
-      setup.text,
+      answer.text,
       (await call("GET", "/api/runners", ada)).text,
       (await call("GET", `/api/agents/${agent.id}/tokens`, ada)).text,
       (await call("GET", `/api/agents/${agent.id}`, ada)).text,
     ];
-    for (const answer of elsewhere) expect(answer).not.toContain(hookToken);
-    expect(text).toContain("To add the Transcript hook token below to the variables of the environment they chose");
-    expect(text).toContain(`or add \`${new URL(cronk.url).host}\` to its **Limited** allowlist`);
+    for (const text of elsewhere) expect(text).not.toContain(hookToken);
   });
 
-  test("have Claude Code name the environment, which every routine needs, from those claude.ai lists", async () => {
+  test("have Claude Code name the environment, which every routine needs, and Cronk's connector from the lists its `schedule` skill reads", async () => {
     const { ada, project, runner } = await adaWithProject();
     const { instructions } = await started(ada, runner.id, project.id);
 
@@ -370,8 +372,9 @@ describe("the served instructions", () => {
     for (const expected of [
       "claude.ai refuses a routine without an `environment_id`",
       "your built-in `schedule` skill",
-      "the account's environments with their ids",
-      "the account's claude.ai connectors with their `connector_uuid`",
+      "environments with their ids",
+      "claude.ai connectors with their `connector_uuid`",
+      "create nothing through it",
     ]) {
       expect(text).toContain(expected);
     }
@@ -541,8 +544,7 @@ test("a setup for a Project whose board has no Step is refused, as it would crea
 });
 
 describe("the Transcript hook token a setup hands over", () => {
-  const hookTokenOf = async (instructions: () => Promise<Response>) =>
-    /CRONK_TOKEN=(cronk_agent_[A-Za-z0-9_-]+)/.exec(await (await instructions()).text())![1]!;
+  const hookTokenOf = async (instructions: () => Promise<Response>) => hookTokenIn(await (await instructions()).text());
 
   test("lasts once the setup is used, stops working when it expires unused, and goes when the button is pressed again", async () => {
     const { ada, project, runner, agent } = await adaWithProject();
