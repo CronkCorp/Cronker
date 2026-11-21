@@ -1,4 +1,5 @@
 import type { ConvertedEntry } from "./transcripts.js";
+import { isObject, resultText, timeOf } from "./converting.js";
 
 /**
  * The converter for Claude Code's JSONL transcripts, as the Transcript hook uploads them: one JSON object a line,
@@ -54,25 +55,4 @@ export function convertClaudeCode(jsonl: string): ConvertedEntry[] {
     }
   }
   return entries;
-}
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-function timeOf(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const time = Date.parse(value);
-  return Number.isNaN(time) ? null : new Date(time).toISOString();
-}
-
-/** A tool result's content as text: a string as it is, or its text blocks joined, with other blocks named. */
-function resultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return content === undefined || content === null ? "" : JSON.stringify(content);
-  return content
-    .map((block) => {
-      if (isObject(block) && block.type === "text" && typeof block.text === "string") return block.text;
-      return isObject(block) && typeof block.type === "string" ? `[${block.type}]` : "";
-    })
-    .join("\n");
 }

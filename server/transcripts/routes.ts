@@ -1,11 +1,12 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
-import type { FastifyBaseLogger, FastifyRequest } from "fastify";
+import type { FastifyRequest } from "fastify";
 import { Type } from "typebox";
 import { authenticateAgent, type AgentCaller } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { followRunTranscript } from "../runs/runs.js";
 import { convertClaudeCode } from "./claude-code.js";
 import { hookScriptPath, readHookScript, TranscriptHook, transcriptHook } from "./hook.js";
 import {
@@ -19,22 +20,6 @@ import {
   Transcript,
   uploadTranscript,
 } from "./transcripts.js";
-
-/**
- * Has the Runner of a running Run add what its session did since it last looked to the Run's Transcript, where its
- * Runner fetches Transcripts itself. Says whether it asked. Opening the Transcript still shows what Cronk holds when
- * the Runner's service can't be reached.
- */
-async function followRunTranscript(context: Context, runId: string, log: FastifyBaseLogger): Promise<boolean> {
-  const { rows } = await context.db.query<{ kind: string }>(
-    "select runners.kind from runs join runners on runners.id = runs.runner_id where runs.id = $1 and runs.state = 'running'",
-    [runId],
-  );
-  const runner = rows[0] ? context.runners[rows[0].kind] : undefined;
-  if (!runner?.followTranscript) return false;
-  await runner.followTranscript({ runId }).catch((error: unknown) => log.warn({ err: error, runId }, "Couldn't follow the Run's Transcript"));
-  return true;
-}
 
 /** The largest upload Cronk reads; what it keeps of one is capped further (ADR 0006). */
 const uploadLimitBytes = 256 * 1024 * 1024;
