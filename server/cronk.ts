@@ -16,7 +16,7 @@ import { Live } from "./live/live.js";
 import { checkMergeability } from "./pipeline/conflicts.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
-import { managedAgentsRunner, pollManagedAgentsSessions } from "./runs/managed-agents.js";
+import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
 
 export interface CronkOptions {
@@ -36,6 +36,8 @@ export interface Cronk {
   checkForLostRuns(): Promise<void>;
   /** Reads the sessions of running Managed Agents Runs, ending the Runs whose sessions stopped. */
   pollManagedAgentsSessions(): Promise<void>;
+  /** Sets fresh installation tokens on the Repositories of running Managed Agents sessions whose tokens expire soon. */
+  rotateRepositoryTokens(): Promise<void>;
   /** Resumes the queues of rate-limited Runners whose pause has passed. */
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied. */
@@ -86,6 +88,7 @@ export async function createCronk({
       },
       checkForLostRuns: () => checkForLostRuns(context),
       pollManagedAgentsSessions: () => pollManagedAgentsSessions(context, reports),
+      rotateRepositoryTokens: () => rotateRepositoryTokens(context),
       resumePausedRunners: () => resumePausedRunners(context),
       replayFailedDeliveries: () => replayFailedDeliveries(context),
       checkMergeability: () => checkMergeability(context),

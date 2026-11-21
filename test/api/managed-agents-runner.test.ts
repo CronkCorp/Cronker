@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { minutes } from "../harness/clock.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -385,5 +386,102 @@ describe("removing the Runner", () => {
       expect((await call("GET", `/api/runs/${first.run.id}`, { headers: { authorization: `Bearer ${token}` } })).status).toBe(401);
     }
     expect(await ok("GET", "/api/runners", ada)).toEqual([]);
+  });
+});
+
+describe("a Run's Repositories", () => {
+  /** The Project lists cronkcorp/cronker and cronkcorp/website, both covered by the GitHub App's installation on cronkcorp. */
+  async function withRepositories() {
+    const setup = await adaWithManagedAgentsRunner();
+    await createGitHubApp(cronk, setup.ada.cookie);
+    const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker", "website"]);
+    for (const repository of installation.repositories) {
+      await ok("POST", `/api/projects/${setup.project.id}/repositories`, setup.ada, { id: repository.id });
+    }
+    return { ...setup, installation };
+  }
+
+  /** The installation tokens GitHub issued that are still good, by the test's clock. */
+  const goodTokens = () =>
+    cronk.github.tokensIssued.filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime()).map((t) => t.token);
+
+  test("are each mounted on the session as a resource, with an installation token", async () => {
+    const { startRun, installation } = await withRepositories();
+
+    const { session } = await startRun();
+
+    const resources = session.body.resources as { type: string; url: string; authorization_token: string }[];
+    expect(resources.map(({ type, url }) => ({ type, url }))).toEqual([
+      { type: "github_repository", url: `${cronk.github.url}/cronkcorp/cronker` },
+      { type: "github_repository", url: `${cronk.github.url}/cronkcorp/website` },
+    ]);
+    for (const { authorization_token: token } of resources) {
+      const issued = cronk.github.tokensIssued.find((t) => t.token === token);
+      expect(issued?.installationId).toBe(installation.id);
+      expect(goodTokens()).toContain(token);
+    }
+  });
+
+  test("are none for a Project listing none, which needs no GitHub App", async () => {
+    const { startRun } = await adaWithManagedAgentsRunner();
+
+    const { run, session } = await startRun();
+
+    expect(run.state).toBe("running");
+    expect(session.body.resources ?? []).toEqual([]);
+    expect(cronk.github.apiCalls).toEqual([]);
+  });
+
+  test("get fresh installation tokens on the session before theirs expire, while the Run runs", async () => {
+    const { startRun } = await withRepositories();
+    const { session } = await startRun();
+    const tokens = () => cronk.managedAgents.session(session.id).resources.map((r) => r.authorizationToken);
+    const first = tokens();
+
+    cronk.clock.advance(minutes(30));
+    await cronk.rotateRepositoryTokens();
+    expect(tokens()).toEqual(first);
+
+    cronk.clock.advance(minutes(21));
+    await cronk.rotateRepositoryTokens();
+    const second = tokens();
+    expect(second).toHaveLength(2);
+    for (const token of second) expect(first).not.toContain(token);
+
+    // The first tokens expire an hour after they were issued; the session's are still good, and keep being renewed.
+    cronk.clock.advance(minutes(10));
+    for (const token of second) expect(goodTokens()).toContain(token);
+    cronk.clock.advance(minutes(40));
+    await cronk.rotateRepositoryTokens();
+    cronk.clock.advance(minutes(10));
+    for (const token of tokens()) expect(goodTokens()).toContain(token);
+  });
+
+  test("that the GitHub App no longer covers keep the Run from starting, saying which", async () => {
+    const { ada, startRun, installation } = await withRepositories();
+    installation.repositories.splice(0, 1);
+    // What GitHub said the installation covers is kept for five minutes.
+    cronk.clock.advance(minutes(6));
+
+    const { run } = await startRun();
+
+    const refused = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(refused.state).toBe("refused");
+    expect(refused.endReason).toContain("cronkcorp/cronker");
+    expect(cronk.managedAgents.sessions).toEqual([]);
+    expect(cronk.managedAgents.vaults).toEqual([]);
+  });
+
+  test("get no fresh tokens once the Run ended", async () => {
+    const { ada, ticket, status, startRun } = await withRepositories();
+    const { session } = await startRun();
+    const first = cronk.managedAgents.session(session.id).resources.map((r) => r.authorizationToken);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Backlog") });
+
+    cronk.clock.advance(minutes(55));
+    await cronk.rotateRepositoryTokens();
+
+    expect(cronk.managedAgents.session(session.id).resources.map((r) => r.authorizationToken)).toEqual(first);
+    expect(cronk.managedAgents.calls.filter((c) => c.path.includes("/resources/"))).toEqual([]);
   });
 });

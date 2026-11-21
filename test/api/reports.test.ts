@@ -48,8 +48,10 @@ async function stagedTicket(project: { id: string; workspaceId: string; statuses
 async function runningRun(options: StartCronkOptions = {}) {
   cronk = await startCronk(options);
   // Setting up, creating a Project and starting its Runs, as today's API does, needs Workspace slugs and the Merge
-  // Step's columns; setting up a Runner needs the columns of a Managed Agents Runner's setup.
+  // Step's columns and the Repositories a Project lists; setting up a Runner needs the columns of a Managed Agents
+  // Runner's setup.
   if (options.migrateBefore !== undefined) {
+    await cronk.applyAhead("0022_repositories.sql");
     await cronk.applyAhead("0033_merge_step.sql");
     await cronk.applyAhead("0043_managed_agents_runner.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
