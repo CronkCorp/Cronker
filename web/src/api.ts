@@ -281,6 +281,8 @@ export interface Runner {
   /** Until when a rate limit pauses its queue. */
   pausedUntil: string | null;
   triggers: Trigger[];
+  /** For a `managed_agents` Runner, the agent definition and cloud environment Cronk created with its API key. */
+  managedAgents: { agentId: string; environmentId: string } | null;
   createdAt: string;
 }
 
@@ -949,7 +951,7 @@ export const api = {
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
   setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId }),
   runners: () => call<Runner[]>("GET", "/api/runners"),
-  createRunner: (input: { name: string; kind: string }) => call<Runner>("POST", "/api/runners", input),
+  createRunner: (input: { name: string; kind: string; apiKey?: string }) => call<Runner>("POST", "/api/runners", input),
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
   saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>

@@ -49,8 +49,18 @@ export interface RunReports {
 
 export interface Runner {
   start(run: RunToStart): Promise<StartResult>;
-  /** Best effort; a Runner that can't stop its sessions leaves this out. */
+  /**
+   * Cronk ended the Run itself (a User took its Ticket away, or it was lost) and asks the Runner to stop its session.
+   * Best effort; a Runner that can't stop its sessions leaves this out.
+   */
   stop?(run: RunToStop): Promise<void>;
+  /**
+   * A Run Cronk didn't stop itself ended: its Agent finished it (or merged), or the Runner reported it ended without
+   * finishing. The Runner lets go of what the Run held, such as its session and credentials. Best effort.
+   */
+  ended?(run: RunToStop): Promise<void>;
+  /** Removing a Runner of this kind stops its running Runs, instead of being refused while they run. */
+  stopsRunsWhenRemoved?: boolean;
 }
 
 /** Builds a kind of Runner, given where to report its Runs' ends. */

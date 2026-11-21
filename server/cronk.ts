@@ -16,6 +16,7 @@ import { Live } from "./live/live.js";
 import { checkMergeability } from "./pipeline/conflicts.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
+import { managedAgentsRunner, pollManagedAgentsSessions } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
 
 export interface CronkOptions {
@@ -33,6 +34,8 @@ export interface Cronk {
   listen(): Promise<void>;
   /** Makes lost the Runs nothing has named for their Workspace's lost-Run threshold. */
   checkForLostRuns(): Promise<void>;
+  /** Reads the sessions of running Managed Agents Runs, ending the Runs whose sessions stopped. */
+  pollManagedAgentsSessions(): Promise<void>;
   /** Resumes the queues of rate-limited Runners whose pause has passed. */
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied. */
@@ -70,6 +73,7 @@ export async function createCronk({
     };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
+    context.runners.managed_agents = managedAgentsRunner(context, reports);
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
     log = app.log;
@@ -81,6 +85,7 @@ export async function createCronk({
         await app.listen({ host: config.host, port: config.port });
       },
       checkForLostRuns: () => checkForLostRuns(context),
+      pollManagedAgentsSessions: () => pollManagedAgentsSessions(context, reports),
       resumePausedRunners: () => resumePausedRunners(context),
       replayFailedDeliveries: () => replayFailedDeliveries(context),
       checkMergeability: () => checkMergeability(context),

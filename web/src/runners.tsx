@@ -56,9 +56,15 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
     setRunners((all) => all?.map((r) => (r.id === updated.id ? updated : r)) ?? null);
   const drop = (removed: Runner) => setRunners((all) => all?.filter((r) => r.id !== removed.id) ?? null);
 
+  const [kind, setKind] = useState<"subscription" | "managed_agents">("subscription");
   const create = useSubmit(async (form, element) => {
-    await api.createRunner({ name: field(form, "name"), kind: "subscription" });
+    await api.createRunner(
+      kind === "managed_agents"
+        ? { name: field(form, "name"), kind, apiKey: field(form, "apiKey") }
+        : { name: field(form, "name"), kind },
+    );
     element.reset();
+    setKind("subscription");
     refresh();
   });
 
@@ -70,6 +76,8 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
         Claude Code on the web scheduled tasks: in claude.ai, create one task per model (for example triage on Haiku,
         implement on Opus) with an API trigger, and its prompt telling Claude to follow the instructions in the fire
         payload. Then save each task's trigger id and token here, and point your Agents at the Runner.
+        A Managed Agents Runner spends your Claude API credits instead: paste an Anthropic API key, and Cronk creates
+        the agent and cloud environment its Runs use in your Anthropic workspace.
       </p>
       <FormError error={error} />
       {runners === null ? (
@@ -92,13 +100,29 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
       )}
       <Panel title="Set up a Runner" id="new-runner">
         <form onSubmit={create.onSubmit}>
-          <Field label="Runner name">
-            <input name="name" required autoComplete="off" placeholder="Claude Max" />
-          </Field>
+          <div className="form-row">
+            <Field label="Runner name">
+              <input name="name" required autoComplete="off" placeholder={kind === "managed_agents" ? "Claude API" : "Claude Max"} />
+            </Field>
+            <Field label="Kind">
+              <select name="kind" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
+                <option value="subscription">Subscription (Claude Code on the web)</option>
+                <option value="managed_agents">Managed Agents (Claude API)</option>
+              </select>
+            </Field>
+          </div>
+          {kind === "managed_agents" && (
+            <Field
+              label="Anthropic API key"
+              hint="Stored encrypted and never shown again. Cronk checks it with Anthropic as it sets the Runner up."
+            >
+              <input name="apiKey" type="password" required autoComplete="off" className="mono" placeholder="sk-ant-api03-…" />
+            </Field>
+          )}
           <FormError error={create.error} />
           <Actions>
             <Button type="submit" variant="primary" disabled={create.busy}>
-              Set up a subscription Runner
+              {kind === "managed_agents" ? "Set up a Managed Agents Runner" : "Set up a subscription Runner"}
             </Button>
           </Actions>
         </form>
@@ -192,6 +216,7 @@ function RunnerSettings({
       >
         {agentsError ?? (agents === null ? "Finding the Agents that use it…" : agentsLeft(agents))}{" "}
         {triggersGoing(runner.triggers)}
+        {runner.kind === "managed_agents" && runner.running > 0 && " Its running Runs stop, and their sessions are archived."}
       </ConfirmDialog>
       {pausedUntil && (
         <Banner tone="warn" label="Paused">
@@ -306,6 +331,27 @@ function RunnerSettings({
         </div>
       )}
       {runner.kind === "subscription" && hook && <TranscriptHookSetup hook={hook} agents={agentsOnIt} />}
+      {runner.managedAgents && (
+        <div className="runner-managed" role="group" aria-label="Managed Agents">
+          <h3>Managed Agents</h3>
+          <p className="muted small">
+            Each Run is a session of this agent in your Anthropic workspace, on its Step's model, with the Brief as its
+            first message and a fresh token for Cronk in a vault of its own, revoked when the Run ends. Ended sessions
+            are archived, never deleted, so each Run's Console link keeps working. Cronk reads running sessions every few
+            minutes to learn of those that stopped without finishing.
+          </p>
+          <dl className="runner-managed-ids">
+            <dt>Agent</dt>
+            <dd>
+              <code>{runner.managedAgents.agentId}</code>
+            </dd>
+            <dt>Environment</dt>
+            <dd>
+              <code>{runner.managedAgents.environmentId}</code>
+            </dd>
+          </dl>
+        </div>
+      )}
     </section>
   );
 }

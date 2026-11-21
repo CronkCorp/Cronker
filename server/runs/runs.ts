@@ -535,15 +535,29 @@ const endedRunColumns = `runs.id as "runId", runs.workspace_id as "workspaceId",
 
 /** Once the transaction commits, asks the Runner of a Run Cronk ended to stop its session too, where it can. */
 function askRunnerToStop(context: Context, tx: Tx, run: EndedRun): void {
+  tellRunner(context, tx, run, "stop");
+}
+
+/**
+ * Once the transaction commits, tells the Runner of a Run that ended without Cronk stopping it (finished, merged, or
+ * reported ended) that it ended, so it lets go of what the Run held. Call it after ending the Run.
+ */
+async function tellRunnerEnded(context: Context, tx: Tx, runId: string): Promise<void> {
+  const { rows } = await tx.query<EndedRun>(`select ${endedRunColumns} from runs where runs.id = $1`, [runId]);
+  for (const run of rows) tellRunner(context, tx, run, "ended");
+}
+
+function tellRunner(context: Context, tx: Tx, run: EndedRun, what: "stop" | "ended"): void {
   const runner = run.runnerKind ? context.runners[run.runnerKind] : undefined;
-  if (!runner?.stop) return;
+  const tell = runner?.[what]?.bind(runner);
+  if (!tell) return;
   const reference = {
     ...(run.sessionId === null ? {} : { sessionId: run.sessionId }),
     ...(run.sessionUrl === null ? {} : { url: run.sessionUrl }),
   };
   afterCommit(tx, async () => {
     // Best effort: the Run has ended in Cronk whatever its Runner says.
-    await runner.stop!({ runId: run.runId, reference }).catch(() => {});
+    await tell({ runId: run.runId, reference }).catch(() => {});
   });
 }
 
@@ -613,6 +627,7 @@ export async function lockOwnRunningRun(
 export async function endRunFinished(context: Context, tx: Tx, runId: string, outcome: string, now: Date): Promise<void> {
   await freeSlot(context, tx, runId);
   await tx.query("update runs set state = 'finished', outcome = $2, ended_at = $3 where id = $1", [runId, outcome, now]);
+  await tellRunnerEnded(context, tx, runId);
 }
 
 /** A Run as the API shows it, read in the caller's view. */
@@ -674,6 +689,7 @@ export async function finishRun(
           `update runs set state = 'finished', outcome = $2, question = $3, question_by = $4, ended_at = $5 where id = $1`,
           [run.id, applied!.name, question, questionBy, now],
         );
+        await tellRunnerEnded(context, tx, run.id);
         if (input.report !== undefined) {
           await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
         }
@@ -815,6 +831,7 @@ export function runReports(context: Context): RunReports {
         if (run) {
           const { workspaceId, projectId, ticketId } = run;
           context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
+          await tellRunnerEnded(context, tx, runId);
         }
       });
     },
