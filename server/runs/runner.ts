@@ -14,6 +14,11 @@ export interface RunToStart {
   model: string;
   ticket: { id: string; key: string };
   project: { id: string; key: string; name: string };
+  /**
+   * The Repositories the Project lists, by GitHub's id and `owner/name`. A Runner that mounts them, such as the
+   * Managed Agents Runner, asks the GitHub App for their installation tokens itself.
+   */
+  repositories: { id: number; fullName: string }[];
   /** The Agent the Run acts as. */
   agent: { id: string; name: string };
   /** The Runner record, set up by the Agent's Owner, the Run starts through. */

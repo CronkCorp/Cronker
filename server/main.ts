@@ -25,11 +25,22 @@ const replayFailedDeliveries = () => cronk.replayFailedDeliveries().catch((error
 void replayFailedDeliveries();
 const everyFiveMinutes = setInterval(replayFailedDeliveries, 5 * 60_000);
 
-// Every minute: Runs nothing has named for their Workspace's lost-Run threshold become lost, and
-// rate-limited Runners whose pause has passed resume their queues.
+// Every minute: Runs nothing has named for their Workspace's lost-Run threshold become lost,
+// rate-limited Runners whose pause has passed resume their queues, and running Managed Agents sessions
+// get fresh installation tokens for their Repositories before theirs expire (one pass at a time, since a
+// pass waits on GitHub and Anthropic).
+let rotatingTokens = false;
 const everyMinute = setInterval(() => {
   cronk.checkForLostRuns().catch((error: unknown) => cronk.app.log.error(error));
   cronk.resumePausedRunners().catch((error: unknown) => cronk.app.log.error(error));
+  if (rotatingTokens) return;
+  rotatingTokens = true;
+  cronk
+    .rotateRepositoryTokens()
+    .catch((error: unknown) => cronk.app.log.error(error))
+    .finally(() => {
+      rotatingTokens = false;
+    });
 }, 60_000);
 
 // Every three minutes: the sessions of running Managed Agents Runs are read, and Runs whose sessions stopped without

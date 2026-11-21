@@ -3,6 +3,9 @@ import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import { transaction } from "../db.js";
+import { appToken } from "../github/app.js";
+import { installationToken } from "../github/client.js";
+import { installationCovering } from "../github/installations.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import type { Runner, RunnerRefusal, RunReports, RunToStart, StartResult } from "./runner.js";
 import { retryAt } from "./subscription.js";
@@ -109,6 +112,41 @@ export async function setUpManagedAgents(context: Context, input: { name: string
   return { apiKeySealed, agentId, environmentId };
 }
 
+/** Something Cronk created in Anthropic: its id and what Anthropic answered. */
+interface Created {
+  id: string;
+  body: Record<string, unknown>;
+}
+
+/** A Repository a session mounts, with a fresh installation token of the GitHub App's for it. */
+interface RepositoryToMount {
+  id: number;
+  fullName: string;
+  token: string;
+  expiresAt: Date;
+}
+
+const withSlash = (url: URL) => (url.href.endsWith("/") ? url : new URL(`${url.href}/`));
+
+/**
+ * Fresh installation tokens for the Repositories, one per installation covering them. Fresh, rather than the tokens
+ * Cronk holds for its own calls, so each lasts the hour GitHub gives it; Cronk sets a new one before it expires. Throws
+ * when GitHub can't be asked or the App covers one of them no longer.
+ */
+async function repositoriesToMount(context: Context, repositories: { id: number; fullName: string }[]): Promise<RepositoryToMount[]> {
+  if (repositories.length === 0) return [];
+  const jwt = await appToken(context);
+  const tokens = new Map<number, Promise<{ token: string; expiresAt: Date }>>();
+  const mounted: RepositoryToMount[] = [];
+  for (const repository of repositories) {
+    const installationId = await installationCovering(context, repository.id);
+    if (installationId === undefined) throw new Error(`the GitHub App isn't installed on ${repository.fullName} any more.`);
+    if (!tokens.has(installationId)) tokens.set(installationId, installationToken(context.config, jwt, installationId));
+    mounted.push({ ...repository, ...(await tokens.get(installationId)!) });
+  }
+  return mounted;
+}
+
 /** The model the agent definition names; every session overrides it with its Step's. */
 const defaultModel = "claude-sonnet-5-5";
 
@@ -173,6 +211,15 @@ export function managedAgentsRunner(context: Context): Runner {
 
   async function start(run: RunToStart, apiKey: string, stored: StoredRunner & { agentId: string; environmentId: string }) {
     const refuse = (refusal: RunnerRefusal): StartResult => ({ started: false, refusal });
+    let repositories: RepositoryToMount[];
+    try {
+      repositories = await repositoriesToMount(context, run.repositories);
+    } catch (error) {
+      return refuse({
+        kind: "unavailable",
+        message: `Cronk couldn't get GitHub tokens for the Repositories of ${run.project.name}: ${(error as Error).message}`,
+      });
+    }
     const token = await mintToken(run, stored.apiKeySealed!);
     /** Refuses the Run as Anthropic's answer says; what it holds so far is let go of once Cronk records the refusal. */
     const refuseFor = (answer: Answer | Error, what: string): StartResult => {
@@ -193,7 +240,7 @@ export function managedAgentsRunner(context: Context): Runner {
       return refuse({ kind: "unavailable", message: `Anthropic answered ${errorOf(answer)} when Cronk created ${named}.` });
     };
     /** Creates something in Anthropic, recording its id on the Run at once, so it is let go of whatever happens next. */
-    const create = async (what: string, path: string, body: unknown, record?: string): Promise<string | StartResult> => {
+    const create = async (what: string, path: string, body: unknown, record?: string): Promise<Created | StartResult> => {
       let answer: Answer;
       try {
         answer = await anthropic(context, apiKey, "POST", path, body);
@@ -202,36 +249,54 @@ export function managedAgentsRunner(context: Context): Runner {
       }
       if (answer.status < 200 || answer.status >= 300 || typeof answer.body.id !== "string") return refuseFor(answer, what);
       if (record) await db.query(`update managed_agent_runs set ${record} where run_id = $1`, [run.runId, answer.body.id]);
-      return answer.body.id;
+      return { id: answer.body.id, body: answer.body };
     };
 
     // A vault of the Run's own: a vault holds one credential per MCP server URL, so Runs at once can't share one.
-    const vaultId = await create(
+    const vault = await create(
       "the vault",
       "v1/vaults",
       { display_name: `Cronk Run on ${run.ticket.key}`, metadata: { cronk_run_id: run.runId } },
       "vault_id = $2, vault_deleted_at = null",
     );
-    if (typeof vaultId !== "string") return vaultId;
-    const credentialId = await create("the vault credential", `v1/vaults/${encodeURIComponent(vaultId)}/credentials`, {
+    if ("started" in vault) return vault;
+    const vaultId = vault.id;
+    const credential = await create("the vault credential", `v1/vaults/${encodeURIComponent(vaultId)}/credentials`, {
       display_name: "Cronk",
       auth: { type: "static_bearer", mcp_server_url: mcpResource(context), token },
     });
-    if (typeof credentialId !== "string") return credentialId;
-    const sessionId = await create(
+    if ("started" in credential) return credential;
+    const session = await create(
       "the session",
       "v1/sessions",
       {
         agent: { type: "agent_with_overrides", id: stored.agentId, model: { id: modelFor(run.model) } },
         environment_id: stored.environmentId,
         vault_ids: [vaultId],
+        resources: repositories.map((r) => ({
+          type: "github_repository",
+          url: new URL(r.fullName, withSlash(context.config.github.url)).toString(),
+          authorization_token: r.token,
+        })),
         title: `${run.ticket.key} in ${run.project.name}`,
         metadata: { cronk_run_id: run.runId },
         initial_events: [{ type: "user.message", content: [{ type: "text", text: run.brief }] }],
       },
       "session_id = $2, archived_at = null",
     );
-    if (typeof sessionId !== "string") return sessionId;
+    if ("started" in session) return session;
+    const sessionId = session.id;
+    // Anthropic lists the session's resources in the order they were given, each with the id a fresh token is set by.
+    const resources = Array.isArray(session.body.resources) ? (session.body.resources as { id?: unknown }[]) : [];
+    for (const [index, repository] of repositories.entries()) {
+      const resourceId = resources[index]?.id;
+      if (typeof resourceId !== "string") continue;
+      await db.query(
+        `insert into managed_agent_run_resources (run_id, resource_id, repository_id, token_expires_at) values ($1, $2, $3, $4)
+         on conflict do nothing`,
+        [run.runId, resourceId, repository.id, repository.expiresAt],
+      );
+    }
     return { started: true, reference: { sessionId, url: consoleUrl(sessionId) } } satisfies StartResult;
   }
 
@@ -379,4 +444,59 @@ async function whySessionStopped(context: Context, apiKey: string, sessionId: st
     return "Its session needs a confirmation, which Cronk can't give: the session asked to confirm a tool call.";
   }
   return `Its session went idle without calling finish (stop reason: ${stopReason}).`;
+}
+
+/** How long before an installation token expires Cronk sets a fresh one on the session: GitHub's last an hour. */
+const rotationMarginMs = 10 * 60 * 1000;
+
+/**
+ * Sets a fresh installation token on each Repository resource of a running Managed Agents Run's session whose token
+ * expires within ten minutes, so a long Run keeps pushing: one fresh token per installation per pass. Ended Runs get
+ * none. A token Cronk couldn't get or set now is tried again next time, while the one the session holds still works.
+ * The server runs this every minute.
+ */
+export async function rotateRepositoryTokens(context: Context): Promise<void> {
+  const { db, clock } = context;
+  const { rows } = await db.query<{ runId: string; sessionId: string; apiKeySealed: string; resourceId: string; repositoryId: string }>(
+    `select r.run_id as "runId", m.session_id as "sessionId", m.api_key_sealed as "apiKeySealed",
+       r.resource_id as "resourceId", r.repository_id as "repositoryId"
+     from managed_agent_run_resources r
+     join managed_agent_runs m on m.run_id = r.run_id
+     join runs on runs.id = r.run_id
+     where runs.state = 'running' and m.session_id is not null and r.token_expires_at <= $1
+     order by r.run_id, r.resource_id`,
+    [new Date(clock.now().getTime() + rotationMarginMs)],
+  );
+  if (rows.length === 0) return;
+  const failures: unknown[] = [];
+  const tokens = new Map<number, Promise<{ token: string; expiresAt: Date }>>();
+  const freshToken = async (repositoryId: number) => {
+    const installationId = await installationCovering(context, repositoryId);
+    if (installationId === undefined) throw new Error(`The GitHub App isn't installed on Repository ${repositoryId} any more.`);
+    if (!tokens.has(installationId)) {
+      const fetching = appToken(context).then((jwt) => installationToken(context.config, jwt, installationId));
+      fetching.catch(() => {});
+      tokens.set(installationId, fetching);
+    }
+    return tokens.get(installationId)!;
+  };
+  for (const row of rows) {
+    try {
+      const { token, expiresAt } = await freshToken(Number(row.repositoryId));
+      const apiKey = requireSecretBox(context.config).open(row.apiKeySealed);
+      const path = `v1/sessions/${encodeURIComponent(row.sessionId)}/resources/${encodeURIComponent(row.resourceId)}`;
+      const answer = await anthropic(context, apiKey, "POST", path, { authorization_token: token });
+      if (answer.status < 200 || answer.status >= 300) {
+        throw new Error(`Anthropic answered ${errorOf(answer)} when Cronk set a fresh GitHub token on session ${row.sessionId}.`);
+      }
+      await db.query("update managed_agent_run_resources set token_expires_at = $3 where run_id = $1 and resource_id = $2", [
+        row.runId,
+        row.resourceId,
+        expiresAt,
+      ]);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
 }
