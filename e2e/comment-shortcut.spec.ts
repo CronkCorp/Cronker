@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import { setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, signInInBrowser, test } from "./fixtures.js";
+import { expect, placeCommentButton, signInInBrowser, test } from "./fixtures.js";
 
 /**
  * Ada signed in, with a Ticket she wrote (CRONK-1) and one whose Run asked her a Question (CRONK-2), which waits in
@@ -60,7 +60,7 @@ test("Cmd+Enter places a Reply to a Comment", async ({ page, cronk }) => {
   await ticketsWithAQuestion(page, cronk);
   await openTicket(page, "CRONK-1");
   await page.getByLabel("New Comment").fill("Is it blocked?");
-  await page.getByRole("button", { name: "Comment", exact: true }).click();
+  await placeCommentButton(page).click();
   const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
   await comment.getByRole("button", { name: "Reply" }).click();
   await comment.getByLabel("Reply").fill("No, it isn't.");
@@ -127,7 +127,7 @@ test("pressing Ctrl+Enter again while a Comment is being sent doesn't place it t
 test("the buttons that place a Comment show the shortcut as a hint, Ctrl+↵ off macOS", async ({ page, cronk }) => {
   await ticketsWithAQuestion(page, cronk);
   await openTicket(page, "CRONK-2");
-  const comment = page.getByRole("button", { name: "Comment", exact: true });
+  const comment = placeCommentButton(page);
   await expect(comment).toHaveText("Comment Ctrl+↵");
   await expect(comment).toHaveAttribute("aria-keyshortcuts", "Control+Enter");
   const question = page.getByRole("article", { name: "Question from claude-max" });
@@ -142,7 +142,7 @@ test("on macOS the hint is ⌘↵", async ({ page, cronk }) => {
   await page.addInitScript(() => Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel" }));
   await ticketsWithAQuestion(page, cronk);
   await openTicket(page, "CRONK-1");
-  const comment = page.getByRole("button", { name: "Comment", exact: true });
+  const comment = placeCommentButton(page);
   await expect(comment).toHaveText("Comment ⌘↵");
   await expect(comment).toHaveAttribute("aria-keyshortcuts", "Meta+Enter");
   await page.getByLabel("New Comment").fill("Is it blocked?");

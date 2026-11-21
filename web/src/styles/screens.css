@@ -681,6 +681,11 @@
 .comment-form {
   gap: var(--space-2);
 }
+/* The Ticket's Comment box, with the line naming its C shortcut close under it. */
+.ticket-comment {
+  display: grid;
+  gap: var(--space-3);
+}
 .report-card {
   border: 1px solid var(--agent);
   border-radius: var(--radius-panel);

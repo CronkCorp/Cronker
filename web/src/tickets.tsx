@@ -1,5 +1,5 @@
 import { useAddresses, type Addresses } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
 import {
   api,
   nameOf,
@@ -32,6 +32,7 @@ import {
 import { attachAll, Attachments, FileList } from "./attachments.js";
 import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
+import { shortcutStandsAside } from "./keys.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
@@ -81,6 +82,30 @@ export function TicketScreen({
   const [dropping, setDropping] = useState(false);
   // Whether the timeline's first load is in, after which new entries are marked as they arrive.
   const [loaded, setLoaded] = useState(false);
+  // The Comment box stays at the end of the timeline; the Comment button and C take the User there.
+  const commentBox = useRef<HTMLTextAreaElement>(null);
+  const toCommentBox = () => commentBox.current && scrollToAndFocus(commentBox.current);
+  useEffect(() => {
+    // Once C has focused the box, its repeats while held land in the box, and must not type there either.
+    let held = false;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "c") return;
+      if (held && event.repeat) return event.preventDefault();
+      if (shortcutStandsAside(event) || !commentBox.current) return;
+      event.preventDefault();
+      held = true;
+      toCommentBox();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "c") held = false;
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
   usePlace("project", project?.id ?? null);
 
   const latestTicket = useLatest();
@@ -265,11 +290,16 @@ export function TicketScreen({
         large
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={
-          !editing && (
-            <Button variant="secondary" onClick={() => setEditing(true)}>
-              Edit
+          <>
+            <Button variant="secondary" aria-keyshortcuts="C" title="Comment (C)" onClick={toCommentBox}>
+              Comment
             </Button>
-          )
+            {!editing && (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
+          </>
         }
       />
       <FormError error={error} />
@@ -307,7 +337,18 @@ export function TicketScreen({
             onAdded={addComment}
             onChanged={loadComments}
           />
-          <CommentForm label="New Comment" button="Comment" placeholder="Comment… Markdown, and Ticket keys link" onSend={async (body) => addComment(await api.comment(ticket.id, { body }))} />
+          <div className="ticket-comment">
+            <CommentForm
+              label="New Comment"
+              button="Comment"
+              placeholder="Comment… Markdown, and Ticket keys link"
+              boxRef={commentBox}
+              onSend={async (body) => addComment(await api.comment(ticket.id, { body }))}
+            />
+            <p className="muted small keys-line">
+              <kbd>C</kbd> writes a Comment from anywhere on the Ticket, as the Comment button does.
+            </p>
+          </div>
         </div>
         <aside className="side side-fits-window" aria-label="Details" ref={fitWindow}>
           <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
@@ -1043,12 +1084,20 @@ function Linked({
   );
 }
 
+/** Scrolls an element into view as the User asked, smoothly unless they prefer reduced motion, and focuses it. */
+function scrollToAndFocus(element: HTMLElement) {
+  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  element.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
+  element.focus({ preventScroll: true });
+}
+
 function CommentForm({
   label,
   button,
   placeholder,
   hint,
   primary = true,
+  boxRef,
   onSend,
 }: {
   label: string;
@@ -1056,6 +1105,7 @@ function CommentForm({
   placeholder?: string;
   hint?: ReactNode;
   primary?: boolean;
+  boxRef?: Ref<HTMLTextAreaElement>;
   onSend: (body: string) => Promise<void>;
 }) {
   // The box empties once the Comment is placed; a refused one stays to be fixed.
@@ -1067,7 +1117,7 @@ function CommentForm({
     <form className="comment-form" onSubmit={onSubmit}>
       <label className="field">
         <span className="sr-only">{label}</span>
-        <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnCtrlOrCmdEnter} />
+        <textarea ref={boxRef} name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnCtrlOrCmdEnter} />
       </label>
       <FormError error={error} />
       <Actions>

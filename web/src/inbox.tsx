@@ -1,6 +1,6 @@
 import { useAddresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
-import { keyBelongsElsewhere } from "./keys.js";
+import { shortcutStandsAside } from "./keys.js";
 import {
   api,
   nameOf,
@@ -147,9 +147,6 @@ function writeSelection(key: string | null) {
   window.history.replaceState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}`);
 }
 
-/** Whether a key press comes from a place it must not act from, such as a text field or an open dialog. */
-const typing = (event: KeyboardEvent) => event.metaKey || event.ctrlKey || event.altKey || keyBelongsElsewhere(event);
-
 /** Everything in the Workspace waiting on the signed-in User, as a split view: the list, and the selected item. */
 export function InboxScreen({ workspace, user }: { workspace: Workspace; user: User }) {
   usePlace("inbox");
@@ -220,7 +217,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
 
   const onKey = useRef<(event: KeyboardEvent) => void>(() => {});
   onKey.current = (event: KeyboardEvent) => {
-    if (typing(event)) return;
+    if (shortcutStandsAside(event)) return;
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
     else if (key === "k") move(-1);
