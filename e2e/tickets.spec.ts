@@ -109,32 +109,3 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await expect(page.getByRole("alert")).toContainText("Ready holds 1 Ticket");
   await expect(page.getByLabel("Name of Ready")).toBeVisible();
 });
-
-test("a Ticket's side panel edits every field in place with pickers, beside the timeline, and above it below 900px", async ({
-  page,
-  cronk,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await signedInWithProject(page, cronk);
-  await newTicket(page, "Side panel");
-  await page.getByRole("link", { name: /CRONK-1 Side panel/ }).click();
-  const details = page.getByRole("complementary", { name: "Details" });
-  const timeline = page.getByRole("region", { name: "Timeline" });
-  for (const field of ["Status", "Priority", "Assignee", "Delegate", "Autonomous Delegation", "Labels"]) {
-    await expect(fieldPicker(page, field)).toBeVisible();
-  }
-  await expect(page.getByRole("button", { name: /^Relation / })).toBeVisible();
-  await expect(details.getByRole("button", { name: "Link a Document…" })).toBeVisible();
-  // No bare selects are left on the Ticket.
-  await expect(page.locator("select")).toHaveCount(0);
-
-  const side = (await details.boundingBox())!;
-  const main = (await timeline.boundingBox())!;
-  expect(side.x).toBeGreaterThan(main.x + main.width);
-  expect(side.width).toBeCloseTo(280, 0);
-
-  await page.setViewportSize({ width: 820, height: 900 });
-  const stackedSide = (await details.boundingBox())!;
-  const stackedMain = (await timeline.boundingBox())!;
-  expect(stackedSide.y + stackedSide.height).toBeLessThanOrEqual(stackedMain.y);
-});

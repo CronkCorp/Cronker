@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { expect, test as base, type Locator, type Page } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
 import { firstUser } from "../test/harness/flows.js";
 import { startCronk, type StartedCronk } from "../test/harness/start-cronk.js";
 
@@ -35,11 +35,6 @@ export async function newTicket(page: Page, title: string) {
 export async function openProjectSettings(page: Page) {
   await page.getByRole("button", { name: "More of this Project" }).click();
   await page.getByRole("menuitem", { name: "Project settings" }).click();
-}
-
-/** How wide something is drawn, to tell a button that fits its label from one that spans its card. */
-export async function widthOf(locator: Locator) {
-  return (await locator.boundingBox())!.width;
 }
 
 /** Signs the first User in through the sign-in page, as `setUp` made them, and waits for the frame. */
