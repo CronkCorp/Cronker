@@ -1491,7 +1491,7 @@ describe("Send-back Comments written before they were marked", () => {
     // reading a Ticket needs the columns of Runs' costs.
     await cronk.applyAhead("0033_merge_step.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
-    await cronk.applyAhead("0046_run_costs.sql");
+    await cronk.applyAhead("0049_run_costs.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

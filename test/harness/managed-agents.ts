@@ -1,17 +1,33 @@
+import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 
 /**
  * A stand-in for the Claude API's Managed Agents endpoints the `managed_agents` Runner calls: agents, environments,
- * vaults and their credentials, sessions with their events, interrupts and archives. The real service is never called.
+ * vaults and their credentials, sessions with their events, resources, interrupts and archives. The real service is
+ * never called.
  *
  * Only API keys it is given with `apiKey(key)` are accepted (`x-api-key`); any other answers 401. As the real
  * service does, a vault holds one active credential per MCP server URL (a second answers 409), and a session made
- * with `initial_events` starts running. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, has
+ * with `initial_events` starts running. Each of a session's `github_repository` resources gets an id, and its
+ * `authorization_token` can be replaced on the running session, as the real service allows. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, has
  * it spend with `charge(id, cents)`, and stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
+ *
+ * It also sends webhook deliveries as Anthropic does from an endpoint registered in the Console: `deliver(url, …)`
+ * posts a thin event about a session, signed with the endpoint's `whsec_` secret (`webhookSecret()` makes one).
  */
+
+/** A `github_repository` resource of a session. */
+export interface StandInResource {
+  id: string;
+  type: string;
+  url: string;
+  /** The token the session holds for it now: the create request's, or the latest update's. */
+  authorizationToken: string;
+}
 
 export interface StandInSession {
   id: string;
+  resources: StandInResource[];
   /** The create request's body, as sent. */
   body: Record<string, unknown>;
   status: "idle" | "running" | "rescheduling" | "terminated";
@@ -38,6 +54,8 @@ export interface StandInVault {
 export interface ManagedAgentsCall {
   method: string;
   path: string;
+  /** Its query, such as `limit=1000&page=2`. */
+  query: string;
   apiKey: string;
   headers: IncomingMessage["headers"];
   body: Record<string, unknown> | null;
@@ -67,7 +85,36 @@ export interface StandInManagedAgents {
   terminate(id: string): void;
   /** The session spent this many more US cents at list prices, adding to its `usage.list_cost`. */
   charge(id: string, cents: number): void;
+  /**
+   * The session recorded these events, as the agent's work does (`agent.message`, `agent.tool_use`, …): each gets an
+   * id and a `processed_at` unless given one.
+   */
+  emit(id: string, ...events: Record<string, unknown>[]): void;
+  /** Lists at most this many events a page, whatever `limit` asks, as a service capping its pages would. */
+  pageSize(size: number): void;
+  /** A new signing secret, as the Console shows once for a webhook endpoint: `whsec_` and 32 random bytes in base64. */
+  webhookSecret(): string;
+  /**
+   * Sends a webhook delivery to `url` as Anthropic does: a thin event of this type about the session, with the
+   * `webhook-id`, `webhook-timestamp` and `webhook-signature` headers, signed with `secret` (another secret signs it
+   * wrongly). `id` is the event's id, the same on every retry of it; `at` the time of this attempt. Returns Cronk's answer.
+   */
+  deliver(url: string, delivery: WebhookDelivery): Promise<Response>;
   stop(): Promise<void>;
+}
+
+export interface WebhookDelivery {
+  secret: string;
+  type: string;
+  sessionId: string;
+  at: Date;
+  id?: string;
+}
+
+/** Signs a webhook delivery as Standard Webhooks, which Anthropic follows, says: `v1,` and the base64 HMAC-SHA256 of `id.timestamp.body`. */
+function signature(secret: string, id: string, timestamp: string, body: string): string {
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  return `v1,${createHmac("sha256", key).update(`${id}.${timestamp}.${body}`).digest("base64")}`;
 }
 
 export async function startStandInManagedAgents(): Promise<StandInManagedAgents> {
@@ -80,6 +127,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
   const vaults: StandInVault[] = [];
   const sessions: StandInSession[] = [];
   let ids = 0;
+  let maxPageSize = Infinity;
   const nextId = (prefix: string) => `${prefix}_0${++ids}STANDIN`;
   const emit = (session: StandInSession, event: Record<string, unknown>) => {
     session.events.push({ id: nextId("sevt"), processed_at: new Date().toISOString(), ...event });
@@ -91,6 +139,8 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     archived_at: s.archived ? new Date().toISOString() : null,
     environment_id: s.body.environment_id,
     vault_ids: s.body.vault_ids ?? [],
+    // The token is never echoed, as Anthropic never echoes it.
+    resources: s.resources.map((r) => ({ type: r.type, id: r.id, url: r.url })),
     budget: s.body.budget ?? null,
     usage: { list_cost: { amount: String(s.listCost), currency: "USD" } },
   });
@@ -115,7 +165,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
         return error(400, "invalid_request_error", "Body is not JSON.");
       }
     }
-    calls.push({ method, path: url.pathname, apiKey, headers: request.headers, body });
+    calls.push({ method, path: url.pathname, query: url.searchParams.toString(), apiKey, headers: request.headers, body });
 
     if (rateLimits.length > 0) {
       const retryAfter = rateLimits.shift();
@@ -188,8 +238,18 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       if (!agents.some((a) => a.id === agent?.id)) return error(404, "not_found_error", "No such agent.");
       if (!environments.some((e) => e.id === body?.environment_id)) return error(404, "not_found_error", "No such environment.");
       const initial = (body?.initial_events ?? []) as Record<string, unknown>[];
+      const resources = (body?.resources ?? []) as Record<string, unknown>[];
+      if (resources.some((r) => r.type !== "github_repository" || typeof r.url !== "string" || typeof r.authorization_token !== "string")) {
+        return error(400, "invalid_request_error", "A github_repository resource needs a url and an authorization_token.");
+      }
       const session: StandInSession = {
         id: nextId("sesn"),
+        resources: resources.map((r) => ({
+          id: nextId("sesrsc"),
+          type: "github_repository",
+          url: r.url as string,
+          authorizationToken: r.authorization_token as string,
+        })),
         body: body ?? {},
         status: initial.length > 0 ? "running" : "idle",
         events: [],
@@ -210,7 +270,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const session = sessionOf(match[1]!);
       if (!session) return error(404, "not_found_error", "No such session.");
       const ordered = url.searchParams.get("order") === "desc" ? [...session.events].reverse() : session.events;
-      const limit = Number(url.searchParams.get("limit") ?? "1000");
+      const limit = Math.min(Number(url.searchParams.get("limit") ?? "1000"), maxPageSize);
       const from = Number(url.searchParams.get("page") ?? "0");
       const page = ordered.slice(from, from + limit);
       const next = from + limit < ordered.length ? String(from + limit) : null;
@@ -228,6 +288,14 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
         }
       }
       return json(200, { data: [] });
+    }
+    if ((match = route(/^\/v1\/sessions\/([^/]+)\/resources\/([^/]+)$/, "POST"))) {
+      const session = sessionOf(match[1]!);
+      const resource = session?.resources.find((r) => r.id === match![2]);
+      if (!session || !resource) return error(404, "not_found_error", "No such resource.");
+      if (typeof body?.authorization_token !== "string") return error(400, "invalid_request_error", "authorization_token is required.");
+      resource.authorizationToken = body.authorization_token;
+      return json(200, { type: resource.type, id: resource.id, url: resource.url });
     }
     if ((match = route(/^\/v1\/sessions\/([^/]+)\/archive$/, "POST"))) {
       const session = sessionOf(match[1]!);
@@ -283,6 +351,33 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     },
     charge(id, cents) {
       session(id).listCost += cents;
+    },
+    emit(id, ...events) {
+      const s = session(id);
+      for (const event of events) emit(s, event);
+    },
+    pageSize(size) {
+      maxPageSize = size;
+    },
+    webhookSecret: () => `whsec_${randomBytes(32).toString("base64")}`,
+    deliver(url, { secret, type, sessionId, at, id = nextId("whe") }) {
+      const body = JSON.stringify({
+        type: "event",
+        id,
+        created_at: at.toISOString(),
+        data: { type, id: sessionId, organization_id: "org-standin", workspace_id: "wrkspc-standin" },
+      });
+      const timestamp = String(Math.floor(at.getTime() / 1000));
+      return fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "webhook-id": id,
+          "webhook-timestamp": timestamp,
+          "webhook-signature": signature(secret, id, timestamp, body),
+        },
+        body,
+      });
     },
     stop: () =>
       new Promise((resolve) => {

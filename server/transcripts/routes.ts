@@ -6,6 +6,7 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
+import { followRunTranscript } from "../runs/runs.js";
 import { convertClaudeCode } from "./claude-code.js";
 import { hookScriptPath, readHookScript, TranscriptHook, transcriptHook } from "./hook.js";
 import {
@@ -151,11 +152,19 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Transcripts"],
           summary: "A Transcript",
+          description:
+            "Opening the Transcript of a running Run whose Runner fetches Transcripts itself, as the Managed Agents " +
+            "Runner does, first fetches what its session did since it was last fetched.",
           params: TranscriptParams,
           response: { 200: Transcript, 401: ErrorBody, 404: ErrorBody },
         },
       },
-      async (request) => findTranscript(context, await requireCaller(context, request), request.params.transcriptId),
+      async (request) => {
+        const viewer = await requireCaller(context, request);
+        const transcript = await findTranscript(context, viewer, request.params.transcriptId);
+        if (!transcript.runId || !(await followRunTranscript(context, transcript.runId, request.log))) return transcript;
+        return findTranscript(context, viewer, transcript.id);
+      },
     );
 
     app.delete(

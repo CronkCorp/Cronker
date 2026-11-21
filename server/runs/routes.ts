@@ -2,14 +2,29 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { authenticateAgent } from "../agents/tokens.js";
+import { deliveryRoute } from "../http/deliveries.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
-import { createRunner, pasteTriggerToken, removeRunner, removeTrigger, RunnerRecord, Trigger, runnersOf, saveTrigger, updateRunner, BudgetPerRun } from "./runners.js";
+import {
+  createRunner,
+  forgetWebhookSecret,
+  pasteTriggerToken,
+  removeRunner,
+  removeTrigger,
+  RunnerRecord,
+  Trigger,
+  runnersOf,
+  saveTrigger,
+  saveWebhookSecret,
+  updateRunner,
+  BudgetPerRun,
+} from "./runners.js";
+import { managedAgentsWebhookPath, receiveManagedAgentsDelivery } from "./managed-agents.js";
 import { instructionsPath, reportSetup, setupInstructions, startSetup, StartedSetup } from "./runner-setups.js";
-import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
+import { briefOfRun, findRun, finishRun, retryRun, Run, runReports, runsOf } from "./runs.js";
 import { mergePullRequest } from "./merging.js";
 import { Ticket } from "../work/tickets.js";
 
@@ -263,14 +278,23 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "The claude.ai scheduled task your `subscription` Runner fires for Steps wanting the model, with its API " +
             "trigger's id and token. With a `projectId`, it overrides the Runner's own trigger for the model on that " +
             "Project's Tickets. Replaces the trigger saved for the same model and Project. The token is stored " +
-            "encrypted and never returned. Refused with `runner_has_no_triggers` for other kinds of Runner, and with " +
-            "`no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+            "encrypted and never returned. Without a token, the trigger keeps the token it has under the same trigger " +
+            "id, or else waits for one (`waitingForToken`): Runs needing it can't start until it is pasted. Refused " +
+            "with `runner_has_no_triggers` for other kinds of Runner, and with `no_secret_key`, when it has a token, " +
+            "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
           body: Type.Object({
             model: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, such as `haiku`." }),
             projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
             triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
-            token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }),
+            token: Type.Optional(
+              Type.String({
+                minLength: 1,
+                maxLength: 1000,
+                pattern: "\\S",
+                description: "The trigger's token; leave it out to save the trigger waiting for it.",
+              }),
+            ),
           }),
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
@@ -367,10 +391,12 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Runs"],
           summary: "Paste the token of a trigger of your subscription Runner",
           description:
-            "For a trigger waiting for its token, as a Runner setup leaves each: the API token generated for its routine " +
-            "in claude.ai, which makes it usable. Generating a new token in claude.ai revokes the routine's previous one. " +
-            "The token is stored encrypted and never returned. Runs that couldn't start for want of it are retried as " +
-            "any other. Refused with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+            "For a trigger waiting for its token (`waitingForToken`), as one saved without it or made by a Runner setup " +
+            "is: the API token generated for its routine in claude.ai, which makes it usable; for a working one, its new " +
+            "token. Generating a new token in claude.ai revokes the routine's previous one. The token is stored encrypted " +
+            "and never returned. Pasted into a waiting trigger, the Tickets whose Runs couldn't start for want of it are " +
+            "rechecked, so they start or wait for a slot; otherwise they wait for Retry. Refused with `no_secret_key` " +
+            "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
           body: Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) }),
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
@@ -398,5 +424,83 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
         return removeTrigger(context, user.id, request.params.runnerId, request.params.triggerId);
       },
     );
+
+    app.put(
+      "/api/runners/:runnerId/webhook-secret",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Save the webhook signing secret of your Managed Agents Runner",
+          description:
+            "The `whsec_` signing secret the Anthropic Console shows once for the webhook endpoint you added there at the " +
+            "Runner's `webhookUrl`, subscribed to `session.status_idled` and `session.status_terminated`. Signed " +
+            "deliveries then end Runs whose sessions stopped at once; polling stays as the backstop. Stored encrypted and " +
+            "never returned; saving again replaces it, as after rotating it in the Console. Only its format is checked: " +
+            "deliveries signed with another secret are refused, and the Console disables an endpoint that keeps failing. Refused with " +
+            "`invalid_webhook_secret` for one not starting `whsec_`, with `runner_has_no_webhook` for other kinds of " +
+            "Runner, and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+          params: Type.Object({ runnerId: Type.String() }),
+          body: Type.Object({ secret: Type.String({ minLength: 1, maxLength: 200 }) }),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return saveWebhookSecret(context, user.id, request.params.runnerId, request.body.secret);
+      },
+    );
+
+    app.delete(
+      "/api/runners/:runnerId/webhook-secret",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Forget the webhook signing secret of your Managed Agents Runner",
+          description:
+            "Deliveries are then refused, and Runs whose sessions stopped end by polling alone. Remove the endpoint in the " +
+            "Anthropic Console too: refused deliveries count as failures, and the Console disables an endpoint that keeps failing.",
+          params: Type.Object({ runnerId: Type.String() }),
+          response: { 200: RunnerRecord, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return forgetWebhookSecret(context, user.id, request.params.runnerId);
+      },
+    );
+
+    const reports = runReports(context);
+    await deliveryRoute(
+      app,
+      managedAgentsWebhookPath,
+      {
+        bodyLimit: webhookBodyLimit,
+        schema: {
+          tags: ["Runs"],
+          summary: "Where Anthropic sends a Managed Agents Runner's webhook deliveries",
+          description:
+            "For Anthropic only. A delivery must carry the `webhook-id`, `webhook-timestamp` and `webhook-signature` " +
+            "headers, signed with the Runner's saved signing secret within five minutes of now, or it is refused with " +
+            "`invalid_signature` before anything else is looked at, as is every delivery to a Runner without one. A " +
+            "`session.status_idled` or `session.status_terminated` about the session of one of the Runner's running " +
+            "Runs reads that session and ends the Run as polling would; `ended` says whether it did. Refused with " +
+            "`anthropic_unavailable` when Anthropic can't answer about the session now, so it sends the delivery again. " +
+            "Anything else, a repeated delivery included, changes nothing.",
+          params: Type.Object({ runnerId: Type.String() }),
+          response: { 200: Type.Object({ ended: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async ({ body, header, params }) => {
+        const ended = await receiveManagedAgentsDelivery(context, reports, params.runnerId!, body, {
+          id: header("webhook-id"),
+          timestamp: header("webhook-timestamp"),
+          signature: header("webhook-signature"),
+        });
+        return { ended };
+      },
+    );
   };
 }
+
+/** Anthropic's thin webhook payloads name an event and a resource; a megabyte is far more than one takes. */
+const webhookBodyLimit = 1024 * 1024;

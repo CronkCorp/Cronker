@@ -272,7 +272,7 @@ export interface Trigger {
   /** The Project it overrides the Runner's own trigger on; null for all Projects. */
   projectId: string | null;
   triggerId: string;
-  /** Made by a Runner setup and waiting for the token the Owner pastes; Runs needing it can't start until then. */
+  /** Saved without its token, or made by a Runner setup, and waiting for the token the Owner pastes; Runs needing it can't start until then. */
   waitingForToken: boolean;
   /** The routine's page in claude.ai, where its token is generated. */
   routineUrl: string;
@@ -321,7 +321,14 @@ export interface Runner {
   pausedUntil: string | null;
   triggers: Trigger[];
   /** For a `managed_agents` Runner, the agent definition and cloud environment Cronk created with its API key. */
-  managedAgents: { agentId: string; environmentId: string } | null;
+  managedAgents: {
+    agentId: string;
+    environmentId: string;
+    /** The webhook endpoint URL to add in the Anthropic Console. */
+    webhookUrl: string;
+    /** Whether the endpoint's signing secret is saved; without one, Runs end only by polling. */
+    webhookSecretSaved: boolean;
+  } | null;
   /** For a `managed_agents` Runner, the most each Run may cost, passed as each session's budget; null for none. */
   budgetPerRun: Cost | null;
   /** What its Runs that ended this calendar month cost, one total per currency. */
@@ -1023,12 +1030,14 @@ export const api = {
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
   setBudgetPerRun: (id: string, budgetPerRun: Cost | null) => call<Runner>("PATCH", runner(id), { budgetPerRun }),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
-  saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
+  saveWebhookSecret: (id: string, secret: string) => call<Runner>("PUT", `${runner(id)}/webhook-secret`, { secret }),
+  forgetWebhookSecret: (id: string) => call<Runner>("DELETE", `${runner(id)}/webhook-secret`),
+  saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token?: string }) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
-  startRunnerSetup: (runnerId: string, input: { projectId: string; agentId?: string }) =>
-    call<StartedSetup>("POST", `${runner(runnerId)}/setups`, input),
   pasteTriggerToken: (runnerId: string, triggerId: string, token: string) =>
     call<Runner>("PUT", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}/token`, { token }),
+  startRunnerSetup: (runnerId: string, input: { projectId: string; agentId?: string }) =>
+    call<StartedSetup>("POST", `${runner(runnerId)}/setups`, input),
   removeTrigger: (runnerId: string, triggerId: string) =>
     call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),

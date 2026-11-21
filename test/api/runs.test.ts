@@ -85,6 +85,7 @@ describe("starting Runs", () => {
       model: "haiku",
       ticket: { id: ticket.id, key: "CRONK-1" },
       project: { id: project.id, key: "CRONK", name: "Cronker" },
+      repositories: [],
       agent: { id: agent.id, name: "claude-max" },
       runner: { id: runner.id, ownerId: agent.owner.id, name: "Fake" },
     });

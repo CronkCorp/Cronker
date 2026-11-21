@@ -189,6 +189,30 @@ describe("Runner settings", () => {
     }
   });
 
+  test("a trigger saved with only its id is listed as waiting for its token, with a link to its routine", async () => {
+    const { ada, project, runner } = await adaWithSubscriptionRunner();
+
+    const saved = await ok("POST", `/api/runners/${runner.id}/triggers`, ada, {
+      model: "opus",
+      projectId: project.id,
+      triggerId: "trig_01Opus",
+    });
+
+    expect(saved.triggers).toEqual([
+      expect.objectContaining({ model: "haiku", triggerId: "trig_haiku", waitingForToken: false }),
+      {
+        id: expect.any(String),
+        model: "opus",
+        projectId: project.id,
+        triggerId: "trig_01Opus",
+        waitingForToken: true,
+        routineUrl: "https://claude.ai/code/routines/trig_01Opus",
+        createdAt: expect.any(String),
+      },
+    ]);
+    expect((await ok("GET", "/api/runners", ada))[0].triggers).toEqual(saved.triggers);
+  });
+
   test("saving a trigger again for the same model and Project replaces it", async () => {
     const { ada, runner } = await adaWithSubscriptionRunner();
 
@@ -201,6 +225,33 @@ describe("Runner settings", () => {
     expect(replaced.triggers.map((t: { model: string; triggerId: string }) => [t.model, t.triggerId])).toEqual([
       ["HAIKU", "trig_new"],
     ]);
+  });
+
+  test("saving the same trigger id again without a token keeps its token; another id waits for one", async () => {
+    const { ada, ticket, runner, agent, status } = await adaWithSubscriptionRunner();
+
+    const kept = await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_haiku" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const other = await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_new" });
+
+    expect(kept.triggers).toEqual([expect.objectContaining({ triggerId: "trig_haiku", waitingForToken: false })]);
+    expect(cronk.claude.fires.map((f) => [f.triggerId, f.token])).toEqual([["trig_haiku", haikuToken]]);
+    expect(other.triggers).toEqual([expect.objectContaining({ triggerId: "trig_new", waitingForToken: true })]);
+  });
+
+  test("pasting a token needs one, into a trigger the Runner has", async () => {
+    const { ada, runner } = await adaWithSubscriptionRunner();
+    const [trigger] = (await ok("GET", "/api/runners", ada))[0].triggers;
+
+    const blank = await call("PUT", `/api/runners/${runner.id}/triggers/${trigger.id}/token`, ada, { token: "  " });
+    const unknown = await call("PUT", `/api/runners/${runner.id}/triggers/${crypto.randomUUID()}/token`, ada, {
+      token: "x",
+    });
+    const notAnId = await call("PUT", `/api/runners/${runner.id}/triggers/trig_haiku/token`, ada, { token: "x" });
+
+    expect(blank.status).toBe(400);
+    expect([unknown.status, notAnId.status]).toEqual([404, 404]);
+    expect(unknown.json.error.message).toBe("Claude Max has no such trigger.");
   });
 
   test("a removed trigger is gone", async () => {
@@ -230,6 +281,14 @@ describe("Runner settings", () => {
     );
     expect(asBea.status).toBe(404);
     expect(await ok("GET", "/api/runners", { cookie: bea.cookie })).toEqual([]);
+    const [trigger] = (await ok("GET", "/api/runners", ada))[0].triggers;
+    const pastedByBea = await call(
+      "PUT",
+      `/api/runners/${runner.id}/triggers/${trigger.id}/token`,
+      { cookie: bea.cookie },
+      { token: "sk-ant-oat01-bea" },
+    );
+    expect(pastedByBea.status).toBe(404);
 
     const outOfView = await call("POST", `/api/runners/${runner.id}/triggers`, ada, {
       model: "haiku",
@@ -259,7 +318,7 @@ describe("Runner settings", () => {
   });
 });
 
-test("saving a trigger is refused while Cronk has no CRONK_SECRET_KEY to encrypt its token with", async () => {
+test("saving or pasting a token is refused while Cronk has no CRONK_SECRET_KEY to encrypt it with; a trigger waiting for one is not", async () => {
   await cronk.stop();
   cronk = await startCronk({ noSecretKey: true });
   await setUp(cronk);
@@ -271,9 +330,19 @@ test("saving a trigger is refused while Cronk has no CRONK_SECRET_KEY to encrypt
     triggerId: "trig_x",
     token: "x",
   });
+  const waiting = await call("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_x" });
+  const pasted = await call("PUT", `/api/runners/${runner.id}/triggers/${waiting.json.triggers[0].id}/token`, ada, {
+    token: "x",
+  });
 
   expect(refused.status).toBe(409);
   expect(refused.json.error.code).toBe("no_secret_key");
+  expect(waiting.status).toBe(200);
+  expect(pasted.status).toBe(409);
+  expect(pasted.json.error.code).toBe("no_secret_key");
+  expect((await ok("GET", "/api/runners", ada))[0].triggers).toEqual([
+    expect.objectContaining({ triggerId: "trig_x", waitingForToken: true }),
+  ]);
 });
 
 describe("Runs that couldn't start", () => {
@@ -293,6 +362,102 @@ describe("Runs that couldn't start", () => {
           "Claude Max has no trigger for the model opus: its Owner adds one in the Runner's settings, for all Projects or for Cronker.",
       }),
     ]);
+  });
+
+  test("a trigger waiting for its token: couldn't start, with the reason in the Inbox, and nothing fired", async () => {
+    const { ada, project, ticket, runner, agent, status, inbox } = await adaWithSubscriptionRunner();
+    await ok("POST", `/api/runners/${runner.id}/triggers`, ada, {
+      model: "haiku",
+      projectId: project.id,
+      triggerId: "trig_cronker_haiku",
+    });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+
+    expect(cronk.claude.fires).toEqual([]);
+    expect(await refusedItem(inbox)).toEqual([
+      expect.objectContaining({
+        state: "refused",
+        endReason:
+          "Claude Max's trigger trig_cronker_haiku for haiku on Cronker is waiting for its token: its Owner generates " +
+          "one for the routine in claude.ai and pastes it into the trigger on the Runner's card.",
+      }),
+    ]);
+  });
+
+  test("pasting the token into a waiting trigger starts the Ticket that couldn't start", async () => {
+    const { ada, project, ticket, runner, agent, status, inbox } = await adaWithSubscriptionRunner();
+    const saved = await ok("POST", `/api/runners/${runner.id}/triggers`, ada, {
+      model: "haiku",
+      projectId: project.id,
+      triggerId: "trig_cronker_haiku",
+    });
+    const waiting = saved.triggers.find((t: { triggerId: string }) => t.triggerId === "trig_cronker_haiku");
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    cronk.claude.trigger("trig_cronker_haiku", "sk-ant-oat01-cronker-secret");
+
+    const pasted = await call("PUT", `/api/runners/${runner.id}/triggers/${waiting.id}/token`, ada, {
+      token: " sk-ant-oat01-cronker-secret ",
+    });
+
+    expect(pasted.status).toBe(200);
+    expect(pasted.json.triggers).toContainEqual(
+      expect.objectContaining({ id: waiting.id, triggerId: "trig_cronker_haiku", waitingForToken: false }),
+    );
+    expect(JSON.stringify(pasted.json)).not.toContain("cronker-secret");
+    expect(JSON.stringify(await ok("GET", "/api/runners", ada))).not.toContain("cronker-secret");
+    expect(cronk.claude.fires.map((f) => [f.triggerId, f.token])).toEqual([
+      ["trig_cronker_haiku", "sk-ant-oat01-cronker-secret"],
+    ]);
+    expect((await runsOf(ticket.id, ada)).map((r: { state: string }) => r.state)).toEqual(["refused", "running"]);
+    expect(await inbox()).toEqual({ count: 0, items: [] });
+  });
+
+  test("pasting into a waiting trigger restarts only the Tickets whose Runs would fire it", async () => {
+    const { workspace, ada, project, ticket, runner, agent, status } = await adaWithSubscriptionRunner();
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const otherTriage = other.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    const otherTicket = await ok("POST", `/api/projects/${other.id}/tickets`, ada, { title: "Elsewhere" });
+    const opusTicket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "On opus" });
+    const movedOn = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Moved on" });
+    const cronkerHaiku = (
+      await ok("POST", `/api/runners/${runner.id}/triggers`, ada, {
+        model: "haiku",
+        projectId: project.id,
+        triggerId: "trig_cronker_haiku",
+      })
+    ).triggers.find((t: { triggerId: string }) => t.triggerId === "trig_cronker_haiku");
+    await ok("POST", `/api/runners/${runner.id}/triggers`, ada, { model: "haiku", triggerId: "trig_haiku_new" });
+    for (const t of [ticket, movedOn]) {
+      await ok("PATCH", `/api/tickets/${t.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    }
+    await ok("PATCH", `/api/tickets/${otherTicket.id}`, ada, { delegateId: agent.id, statusId: otherTriage });
+    await ok("PATCH", `/api/tickets/${opusTicket.id}`, ada, { delegateId: agent.id, statusId: status("Implement") });
+    await ok("PATCH", `/api/tickets/${movedOn.id}`, ada, { statusId: status("Backlog") });
+    const states = async () =>
+      Promise.all(
+        [ticket, otherTicket, opusTicket, movedOn].map(async (t) =>
+          (await runsOf(t.id, ada)).map((r: { state: string }) => r.state),
+        ),
+      );
+    expect(await states()).toEqual([["refused"], ["refused"], ["refused"], ["refused"]]);
+    cronk.claude.trigger("trig_cronker_haiku", "sk-ant-oat01-cronker");
+
+    await ok("PUT", `/api/runners/${runner.id}/triggers/${cronkerHaiku.id}/token`, ada, { token: "sk-ant-oat01-cronker" });
+
+    expect(await states()).toEqual([["refused", "running"], ["refused"], ["refused"], ["refused"]]);
+
+    // Only pasting into a waiting trigger restarts Tickets: saving a trigger with its token, or pasting over a working
+    // token, leaves them to Retry.
+    const allProjects = (await ok("POST", `/api/runners/${runner.id}/triggers`, ada, {
+      model: "HAIKU",
+      triggerId: "trig_haiku",
+      token: haikuToken,
+    })).triggers.find((t: { projectId: string | null }) => t.projectId === null);
+    await ok("PUT", `/api/runners/${runner.id}/triggers/${allProjects.id}/token`, ada, { token: haikuToken });
+
+    expect(await states()).toEqual([["refused", "running"], ["refused"], ["refused"], ["refused"]]);
+    expect(cronk.claude.fires.map((f) => f.triggerId)).toEqual(["trig_cronker_haiku"]);
   });
 
   test("a token claude.ai rejects: couldn't start, with the reason in the Inbox", async () => {

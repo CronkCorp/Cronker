@@ -48,6 +48,8 @@ export interface StartedCronk {
   checkForLostRuns(): Promise<void>;
   /** Reads the sessions of running Managed Agents Runs, ending those that stopped, as the server does every few minutes. */
   pollManagedAgentsSessions(): Promise<void>;
+  /** Sets fresh installation tokens on running Managed Agents sessions whose tokens expire soon, as the server does every minute; move the clock first. */
+  rotateRepositoryTokens(): Promise<void>;
   /** Resumes the queues of Runners whose rate limit has passed, as the server does every minute; move the clock first. */
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied, as the server does on startup and every five minutes. */
@@ -204,6 +206,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),
     pollManagedAgentsSessions: () => cronk.pollManagedAgentsSessions(),
+    rotateRepositoryTokens: () => cronk.rotateRepositoryTokens(),
     resumePausedRunners: () => cronk.resumePausedRunners(),
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     checkMergeability: () => cronk.checkMergeability(),
