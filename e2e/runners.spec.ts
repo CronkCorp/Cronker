@@ -224,6 +224,8 @@ test("set up a Managed Agents Runner with an API key, after a rejected one is re
   await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
   await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
   const runner = page.getByRole("region", { name: "Claude API" });
+  // The stand-in holds the agent and environment once the card shows, not as soon as the button is pressed.
+  await expect(runner.getByRole("group", { name: "Managed Agents" })).toBeVisible();
   const [agent] = cronk.managedAgents.agents;
   const [environment] = cronk.managedAgents.environments;
   await expect(runner.getByRole("group", { name: "Managed Agents" })).toContainText(agent!.id);
