@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
 import {
   api,
   nameOf,
@@ -31,6 +31,7 @@ import {
 import { attachAll, Attachments, FileList } from "./attachments.js";
 import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
+import { scrollToAndFocus, shortcutStandsAside } from "./keys.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
@@ -84,6 +85,18 @@ export function TicketScreen({
   const [loaded, setLoaded] = useState(false);
   const otherWorkspace = useRef(onOtherWorkspace);
   otherWorkspace.current = onOtherWorkspace;
+  // The Comment box stays at the end of the timeline; the Comment button and C take the User there.
+  const commentBox = useRef<HTMLTextAreaElement>(null);
+  const toCommentBox = () => commentBox.current && scrollToAndFocus(commentBox.current);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "c" || shortcutStandsAside(event) || !commentBox.current) return;
+      event.preventDefault();
+      toCommentBox();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   usePlace("project", project?.id ?? null);
 
   const latestTicket = useLatest();
@@ -268,11 +281,16 @@ export function TicketScreen({
         large
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={
-          !editing && (
-            <Button variant="secondary" onClick={() => setEditing(true)}>
-              Edit
+          <>
+            <Button variant="secondary" aria-keyshortcuts="C" title="Comment (C)" onClick={toCommentBox}>
+              Comment
             </Button>
-          )
+            {!editing && (
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+            )}
+          </>
         }
       />
       <FormError error={error} />
@@ -310,7 +328,18 @@ export function TicketScreen({
             onAdded={addComment}
             onChanged={loadComments}
           />
-          <CommentForm label="New Comment" button="Comment" placeholder="Comment… Markdown, and Ticket keys link" onSend={async (body) => addComment(await api.comment(ticket.id, { body }))} />
+          <div className="ticket-comment">
+            <CommentForm
+              label="New Comment"
+              button="Comment"
+              placeholder="Comment… Markdown, and Ticket keys link"
+              boxRef={commentBox}
+              onSend={async (body) => addComment(await api.comment(ticket.id, { body }))}
+            />
+            <p className="muted small keys-line">
+              <kbd>C</kbd> writes a Comment from anywhere on the Ticket, as the Comment button does.
+            </p>
+          </div>
         </div>
         <aside className="side side-fits-window" aria-label="Details" ref={fitWindow}>
           <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
@@ -1050,6 +1079,7 @@ function CommentForm({
   placeholder,
   hint,
   primary = true,
+  boxRef,
   onSend,
 }: {
   label: string;
@@ -1057,6 +1087,7 @@ function CommentForm({
   placeholder?: string;
   hint?: ReactNode;
   primary?: boolean;
+  boxRef?: Ref<HTMLTextAreaElement>;
   onSend: (body: string) => Promise<void>;
 }) {
   // The box empties once the Comment is placed; a refused one stays to be fixed.
@@ -1068,7 +1099,7 @@ function CommentForm({
     <form className="comment-form" onSubmit={onSubmit}>
       <label className="field">
         <span className="sr-only">{label}</span>
-        <textarea name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnCtrlOrCmdEnter} />
+        <textarea ref={boxRef} name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnCtrlOrCmdEnter} />
       </label>
       <FormError error={error} />
       <Actions>

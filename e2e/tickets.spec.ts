@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, fieldPicker, newTicket, openProjectSettings, pick, test } from "./fixtures.js";
+import { expect, fieldPicker, newTicket, openProjectSettings, pick, placeCommentButton, test } from "./fixtures.js";
 
 async function signedInWithProject(page: Page, cronk: StartedCronk) {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -75,7 +75,7 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await expect(timeline).toContainText("ada@example.com changed Estimate from none to 3");
 
   await page.getByLabel("New Comment").fill("Blocked by CRONK-1?");
-  await page.getByRole("button", { name: "Comment", exact: true }).click();
+  await placeCommentButton(page).click();
   const comment = timeline.getByRole("article", { name: "Comment by ada@example.com" });
   await expect(comment).toHaveCount(1);
   await expect(comment).toContainText("Blocked by CRONK-1?");

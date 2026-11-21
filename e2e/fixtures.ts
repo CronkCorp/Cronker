@@ -50,3 +50,7 @@ export async function signInInBrowser(page: Page, cronk: StartedCronk) {
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
 }
+
+/** The Ticket's Comment box's own Comment button, which places the Comment, not the page head's that leads to it. */
+export const placeCommentButton = (page: Page) =>
+  page.locator("form").filter({ has: page.getByLabel("New Comment") }).getByRole("button", { name: "Comment", exact: true });
