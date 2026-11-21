@@ -147,3 +147,28 @@ test("a subscription Runner shows the Transcript hook's snippet with Cronk's add
   await expect(tokens.getByRole("row", { name: /Transcript hook/ })).toHaveCount(0);
   await expect(tokens.getByRole("row", { name: /laptop/ })).toHaveCount(1);
 });
+
+test("set up a Managed Agents Runner with an API key, after a rejected one is reported", async ({ page, cronk }) => {
+  await setUp(cronk);
+  cronk.managedAgents.apiKey("sk-ant-api03-ada-secret");
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "Runners" }).click();
+
+  await page.getByLabel("Runner name").fill("Claude API");
+  await page.getByLabel("Kind").selectOption("managed_agents");
+  await page.getByLabel("Anthropic API key").fill("sk-ant-wrong");
+  await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
+  await expect(page.getByRole("alert")).toContainText("Anthropic rejected the API key");
+  await expect(page.getByRole("region", { name: "Claude API" })).toHaveCount(0);
+
+  await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
+  await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
+  const runner = page.getByRole("region", { name: "Claude API" });
+  const [agent] = cronk.managedAgents.agents;
+  const [environment] = cronk.managedAgents.environments;
+  await expect(runner.getByRole("group", { name: "Managed Agents" })).toContainText(agent!.id);
+  await expect(runner.getByRole("group", { name: "Managed Agents" })).toContainText(environment!.id);
+  await expect(runner).toContainText("managed_agents");
+  await expect(runner).not.toContainText("Triggers");
+  await expect(page.getByRole("button", { name: "Set up a subscription Runner" })).toBeVisible();
+});

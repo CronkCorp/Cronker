@@ -136,6 +136,19 @@ Revoking the token on the Agent's page cuts it off from the next request.
 
 To keep Transcripts of what Claude Code on your laptop does, commit the step 8 snippet in the Repository (or put it in your own `~/.claude/settings.json`) and export `CRONK_TOKEN` with one of the Agent's full tokens in the shell Claude Code starts from. Its sessions match no Run, so each is kept as the Agent's own Transcript.
 
+## 10. Run on the Claude API instead (optional)
+
+A Managed Agents Runner runs your Agents' Runs as sessions in your own Anthropic workspace, spending its Claude API credits rather than your Claude subscription, and needs none of steps 5 to 8: Cronk sets everything up itself.
+
+1. In the [Claude Console](https://platform.claude.com), make an API key in the workspace the Runs should spend.
+2. On **Runners**, under **Set up a Runner**, give it a name such as `Claude API`, choose the kind **Managed Agents (Claude API)**, paste the key and choose **Set up a Managed Agents Runner**. Cronk checks the key with Anthropic at once: a rejected key is reported and nothing is set up. The key is stored encrypted (it needs `CRONK_SECRET_KEY`) and never shown again.
+3. Cronk creates one agent definition, `Cronk: Claude API`, with Cronk's MCP server and its default tools allowed without asking (an unattended Run can't answer a confirmation), and one cloud environment with unrestricted network access, in that workspace. The Runner's card names both; edit the environment in the Console if your Runs should reach less.
+4. On the Agent's page, set **Runner** to the new Runner.
+
+Each Run is then a session of that agent on its Step's model (`haiku`, `sonnet`, `opus` and `fable` stand for the current models of that name; a Step may also name a model id in full, such as `claude-opus-4-8`), with the Brief as its first message. The session reaches Cronk with a fresh token of the Agent, kept in a vault of the Run's own and revoked, with the vault deleted, as soon as the Run ends. Its Timeline's **Session** link opens the session in the Console (in the workspace `default`; in another workspace, swap its id into the address).
+
+Cronk reads the sessions of running Runs every three minutes. A session that went idle without the agent calling `finish` fails its Run with the stop reason Anthropic gave (such as `end_turn` or `retries_exhausted`), one asking for a confirmation fails it as *needs a confirmation*, and a terminated one fails it; each waits in your Inbox with **Retry**. A Run with no Cronk calls for the lost-Run threshold becomes lost, as with any Runner. Stopping a Run, by moving, undelegating or re-delegating its Ticket, interrupts its session; every ended Run's session is archived, never deleted, so its Console link keeps working. Its token is revoked the moment it ends; if Anthropic can't be reached then, Cronk deletes the vault and archives the session at its next poll. A rate limit from Anthropic pauses the Runner's queue until its retry time, while Tickets wait. Removing the Runner stops its running Runs and revokes their tokens.
+
 ## Upgrading
 
 Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releases](https://github.com/CronkCorp/Cronker/releases). Read the notes of every release you skip: they call out anything to do by hand, such as a GitHub App permission to accept.
