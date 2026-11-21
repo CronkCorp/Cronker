@@ -558,6 +558,11 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
             ),
           },
           !!settings && {
+            id: "model-ids",
+            label: "Model ids",
+            children: <ModelIds workspace={workspace} settings={settings} onSaved={setSettings} />,
+          },
+          !!settings && {
             id: "lost-runs",
             label: "Lost Runs",
             children: (
@@ -580,6 +585,75 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
         ]}
       />
     </div>
+  );
+}
+
+/**
+ * The exact model id each model label stands for in the Workspace, which a Runner setup gives each routine. Labels
+ * match a Step's model ignoring case.
+ */
+function ModelIds({
+  workspace,
+  settings,
+  onSaved,
+}: {
+  workspace: WorkspaceSummary;
+  settings: WorkspaceSettings;
+  onSaved: (settings: WorkspaceSettings) => void;
+}) {
+  const [rows, setRows] = useState(() => settings.modelIds.map((m, key) => ({ ...m, key })));
+  const [next, setNext] = useState(settings.modelIds.length);
+  const [saved, setSaved] = useState(false);
+  const save = useSubmit(async () => {
+    setSaved(false);
+    const changed = await api.changeWorkspaceSettings(workspace.id, {
+      modelIds: rows.map(({ label, modelId }) => ({ label, modelId })),
+    });
+    onSaved(changed);
+    setSaved(true);
+  });
+  const edit = (key: number, change: Partial<{ label: string; modelId: string }>) =>
+    setRows((all) => all.map((row) => (row.key === key ? { ...row, ...change } : row)));
+  return (
+    <Panel
+      title="Model ids"
+      id="model-ids"
+      description="The exact model a Step's model label stands for. Set up with Claude Code gives each routine the model id of its label; routines already made keep theirs."
+    >
+      <form onSubmit={save.onSubmit} className="model-ids">
+        {rows.map((row) => (
+          <div key={row.key} className="form-row model-id-row" role="group" aria-label={`Model id of ${row.label || "a new label"}`}>
+            <Field label="Model label">
+              <input required className="mono" value={row.label} onChange={(event) => edit(row.key, { label: event.target.value })} />
+            </Field>
+            <Field label="Model id">
+              <input required className="mono" value={row.modelId} onChange={(event) => edit(row.key, { modelId: event.target.value })} />
+            </Field>
+            <Button variant="ghost" size="small" onClick={() => setRows((all) => all.filter((r) => r.key !== row.key))}>
+              Remove
+            </Button>
+          </div>
+        ))}
+        <div>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setRows((all) => [...all, { label: "", modelId: "", key: next }]);
+              setNext(next + 1);
+            }}
+          >
+            Add a model label
+          </Button>
+        </div>
+        <FormError error={save.error} />
+        <Actions>
+          <Button type="submit" variant="primary" disabled={save.busy}>
+            Save model ids
+          </Button>
+          <Saved shown={saved} />
+        </Actions>
+      </form>
+    </Panel>
   );
 }
 

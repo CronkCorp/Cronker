@@ -5,6 +5,7 @@ import {
   type AgentToken,
   type ProjectSummary,
   type Runner,
+  type StartedSetup,
   type TranscriptHook,
   type Trigger,
   type WorkspaceSummary,
@@ -13,7 +14,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
 import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
-import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
+import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
 /**
@@ -126,6 +127,7 @@ function RunnerSettings({
   onRemoved: (runner: Runner) => void;
 }) {
   const [removingTrigger, setRemovingTrigger] = useState<Trigger | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
   const [removing, setRemoving] = useState(false);
   // The Agents pointed at it, loaded as removing it asks first, so the dialog names them as they stand.
   const [agents, setAgents] = useState<Agent[] | null>(null);
@@ -241,7 +243,10 @@ function RunnerSettings({
                     </td>
                     <td>{projectName(trigger.projectId)}</td>
                     <td>
-                      <code>{trigger.triggerId}</code>
+                      <div className="runner-trigger-id">
+                        <code>{trigger.triggerId}</code>
+                        {trigger.waitingForToken && <Chip tone="warn">waiting for token</Chip>}
+                      </div>
                     </td>
                     <td className="cell-actions">
                       <div>
@@ -255,6 +260,38 @@ function RunnerSettings({
               </tbody>
             </table>
           )}
+          {runner.triggers.some((t) => t.waitingForToken) && (
+            <div role="group" aria-label="Waiting for tokens" className="runner-waiting">
+              <p className="muted small">
+                For each trigger waiting for its token, open its routine in claude.ai, generate an API token there and
+                paste it here. Generating a new token revokes the routine's previous one, so do it once per routine.
+              </p>
+              {runner.triggers
+                .filter((t) => t.waitingForToken)
+                .map((trigger) => (
+                  <TokenPaste
+                    key={trigger.id}
+                    runner={runner}
+                    trigger={trigger}
+                    project={projectName(trigger.projectId)}
+                    onChanged={onChanged}
+                  />
+                ))}
+            </div>
+          )}
+          <div className="runner-setup">
+            <span className="muted small">
+              Or have your own Claude Code create a Project's routines, one per model label its board uses.
+            </span>
+            <Button onClick={() => setSettingUp(true)}>Set up with Claude Code</Button>
+          </div>
+          <RunnerSetupDialog
+            open={settingUp}
+            onOpenChange={setSettingUp}
+            runner={runner}
+            projects={projects}
+            agents={agentsOnIt}
+          />
           <form onSubmit={save.onSubmit} aria-label="Save a trigger" className="runner-trigger-form">
             <div className="form-row">
               <Field label="Model">
@@ -379,6 +416,177 @@ function HookToken({ agent, variable }: { agent: Agent; variable: string }) {
         </ShownOnce>
       )}
     </form>
+  );
+}
+
+/** Pastes the token of a trigger waiting for it, beside a link to its routine in claude.ai. */
+function TokenPaste({
+  runner,
+  trigger,
+  project,
+  onChanged,
+}: {
+  runner: Runner;
+  trigger: Trigger;
+  project: string;
+  onChanged: (runner: Runner) => void;
+}) {
+  const paste = useSubmit(async (form) => {
+    onChanged(await api.pasteTriggerToken(runner.id, trigger.id, field(form, "token")));
+  });
+  const name = `${trigger.model} on ${project}`;
+  return (
+    <form onSubmit={paste.onSubmit} aria-label={`Token for ${name}`} className="runner-token-paste">
+      <div className="form-row">
+        <Field label={`Token for ${name}`}>
+          <input name="token" type="password" required autoComplete="off" />
+        </Field>
+        <Button type="submit" disabled={paste.busy}>
+          Save token
+        </Button>
+        <a href={trigger.routineUrl} target="_blank" rel="noreferrer">
+          Open routine in claude.ai
+        </a>
+      </div>
+      <FormError error={paste.error} />
+    </form>
+  );
+}
+
+/**
+ * Starts a Runner setup for a Project: the User picks the Project, and the Agent whose Transcript hook token it makes
+ * when several are pointed at the Runner there, then copies the command into their own Claude Code.
+ */
+function RunnerSetupDialog({
+  open,
+  onOpenChange,
+  runner,
+  projects,
+  agents,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  runner: Runner;
+  projects: ProjectSummary[];
+  /** The Agents pointed at the Runner, in every Workspace. */
+  agents: Agent[];
+}) {
+  const [projectId, setProjectId] = useState("");
+  const [started, setStarted] = useState<StartedSetup | null>(null);
+  useEffect(() => {
+    if (!open) {
+      setStarted(null);
+      setProjectId("");
+    }
+  }, [open]);
+  const project = projects.find((p) => p.id === projectId);
+  const choices = project ? agents.filter((a) => a.workspaceId === project.workspaceId) : [];
+  const start = useSubmit(async (form) => {
+    const agentId = field(form, "agentId");
+    setStarted(await api.startRunnerSetup(runner.id, { projectId: field(form, "projectId"), ...(agentId ? { agentId } : {}) }));
+  });
+  const expiresAt = started ? new Date(started.expiresAt) : null;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Set up with Claude Code"
+      description={
+        started
+          ? undefined
+          : `Your own Claude Code creates a claude.ai routine on ${runner.name} for each model label the Project's board uses, with only its Repository and the Cronk connector, and reports their trigger ids back.`
+      }
+      wide
+    >
+      {started && expiresAt ? (
+        <div className="runner-setup-started">
+          {started.warning && (
+            <Banner tone="warn" label="Several Repositories">
+              <p>{started.warning}</p>
+            </Banner>
+          )}
+          <Field
+            label="Command"
+            hint={`Paste it into a terminal with Claude Code signed in to your claude.ai account. It works once, until ${clockTime(expiresAt)}.`}
+          >
+            <textarea readOnly rows={3} value={started.command} className="mono" onFocus={(event) => event.currentTarget.select()} />
+          </Field>
+          <div>
+            <CopyButton text={started.command} label="Copy command" />
+          </div>
+          <table aria-label="Routines">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Model id</th>
+                <th>Routine</th>
+              </tr>
+            </thead>
+            <tbody>
+              {started.plan.routines.map((routine) => (
+                <tr key={routine.label}>
+                  <td>
+                    <ModelLabel model={routine.label} />
+                  </td>
+                  <td>
+                    <code>{routine.modelId}</code>
+                  </td>
+                  <td>{routine.name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted small">
+            Claude Code asks which cloud environment to use, and shows you the Transcript hook token of{" "}
+            {started.plan.agent.name} to add to it as <code>CRONK_TOKEN</code>. Once it reports back, the routines'
+            triggers show on this card, each waiting for the token you generate in claude.ai.
+          </p>
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="primary">Done</Button>
+            </DialogClose>
+          </DialogActions>
+        </div>
+      ) : (
+        <form onSubmit={start.onSubmit} className="runner-setup-form">
+          <Field label="Project">
+            <select name="projectId" required value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+              <option value="" disabled>
+                Choose a Project
+              </option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {choices.length > 1 && (
+            <Field label="Transcript hook token of" hint="The Agent whose token the routines' cloud environment uploads Transcripts with.">
+              <select name="agentId" required defaultValue="">
+                <option value="" disabled>
+                  Choose an Agent
+                </option>
+                {choices.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <FormError error={start.error} />
+          <DialogActions>
+            <DialogClose asChild>
+              <Button variant="ghost">Cancel</Button>
+            </DialogClose>
+            <Button type="submit" variant="primary" disabled={start.busy}>
+              Make the command
+            </Button>
+          </DialogActions>
+        </form>
+      )}
+    </Dialog>
   );
 }
 

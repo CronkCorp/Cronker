@@ -1,4 +1,4 @@
-import { setUp, signIn } from "../test/harness/flows.js";
+import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
 import { expect, pick, signInInBrowser, test } from "./fixtures.js";
 
 test("set up a subscription Runner, point an Agent at it, and follow a Run to its claude.ai session, then remove the trigger", async ({
@@ -146,4 +146,64 @@ test("a subscription Runner shows the Transcript hook's snippet with Cronk's add
   await page.getByRole("dialog", { name: "Revoke Transcript hook?" }).getByRole("button", { name: "Revoke" }).click();
   await expect(tokens.getByRole("row", { name: /Transcript hook/ })).toHaveCount(0);
   await expect(tokens.getByRole("row", { name: /laptop/ })).toHaveCount(1);
+});
+
+test("set up a Project's routines with Claude Code: the command, the routines reported back, and pasting a waiting trigger's token", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker"]);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call("POST", `/api/projects/${project.id}/repositories`, { id: installation.repositories[0]!.id });
+  const runner = await call("POST", "/api/runners", { name: "Claude Max", kind: "subscription" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  await signInInBrowser(page, cronk);
+
+  await page.getByRole("link", { name: "Runners" }).click();
+  const card = page.getByRole("region", { name: "Claude Max" });
+  await card.getByRole("button", { name: "Set up with Claude Code" }).click();
+  const dialog = page.getByRole("dialog", { name: "Set up with Claude Code" });
+  await dialog.getByLabel("Project").selectOption("Cronker");
+  await dialog.getByRole("button", { name: "Make the command" }).click();
+  const command = dialog.getByLabel("Command");
+  await expect(command).toHaveValue(new RegExp(`^claude "\\$\\(curl -fsSL '${cronk.url}/runner-setups/cronk_runner_setup_`));
+  await expect(dialog.getByRole("table", { name: "Routines" }).getByRole("row", { name: /opus/ })).toContainText("claude-opus-5-5");
+  await expect(dialog.getByRole("button", { name: "Copy command" })).toBeVisible();
+
+  // Claude Code follows the instructions and reports the routines back; the card shows them at once.
+  const address = /curl -fsSL '([^']+)'/.exec(await command.inputValue())![1]!;
+  expect((await fetch(address)).status).toBe(200);
+  const reported = await cronk.request("POST", `/api/runner-setups/${address.split("/").pop()}/triggers`, {
+    body: {
+      triggers: [
+        { label: "haiku", triggerId: "trig_haiku" },
+        { label: "sonnet", triggerId: "trig_sonnet" },
+        { label: "opus", triggerId: "trig_opus" },
+      ],
+    },
+  });
+  expect(reported.status).toBe(200);
+  await dialog.getByRole("button", { name: "Done" }).click();
+  const haiku = card.getByRole("row", { name: /haiku/ });
+  await expect(haiku).toContainText("Cronker");
+  await expect(haiku).toContainText("waiting for token");
+
+  const waiting = card.getByRole("group", { name: "Waiting for tokens" });
+  await expect(waiting).toContainText("Generating a new token revokes the routine's previous one");
+  const paste = waiting.getByRole("form", { name: "Token for haiku on Cronker" });
+  await expect(paste.getByRole("link", { name: "Open routine in claude.ai" })).toHaveAttribute(
+    "href",
+    "https://claude.ai/code/routines/trig_haiku",
+  );
+  await paste.getByLabel("Token for haiku on Cronker").fill("sk-ant-oat01-pasted");
+  await paste.getByRole("button", { name: "Save token" }).click();
+  await expect(haiku).not.toContainText("waiting for token");
+  await expect(card.getByRole("row", { name: /opus/ })).toContainText("waiting for token");
+  await expect(waiting.getByRole("form")).toHaveCount(2);
+  expect(await page.content()).not.toContain("sk-ant-oat01-pasted");
 });
