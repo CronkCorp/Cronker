@@ -240,25 +240,33 @@ export async function removeTrigger(context: Context, userId: string, runnerId: 
 
 /**
  * Saves the signing secret of a `managed_agents` Runner's webhook endpoint, as the Anthropic Console shows it once,
- * sealed under `CRONK_SECRET_KEY` and never returned; null forgets it, leaving Runs to end by polling alone.
+ * sealed under `CRONK_SECRET_KEY` and never returned, replacing any saved before.
  */
-export async function saveWebhookSecret(
+export async function saveWebhookSecret(context: Context, userId: string, runnerId: string, secret: string): Promise<RunnerRecord> {
+  const trimmed = secret.trim();
+  if (!/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
+    throw new ApiError(400, "invalid_webhook_secret", "A webhook signing secret starts with `whsec_`: copy it from the endpoint in the Anthropic Console.");
+  }
+  return setWebhookSecret(context, userId, runnerId, () => requireSecretBox(context.config).seal(trimmed));
+}
+
+/** Forgets a `managed_agents` Runner's webhook signing secret, so its deliveries are refused and Runs end by polling alone. */
+export async function forgetWebhookSecret(context: Context, userId: string, runnerId: string): Promise<RunnerRecord> {
+  return setWebhookSecret(context, userId, runnerId, () => null);
+}
+
+async function setWebhookSecret(
   context: Context,
   userId: string,
   runnerId: string,
-  secret: string | null,
+  sealed: () => string | null,
 ): Promise<RunnerRecord> {
   const runner = await findRunner(context, userId, runnerId);
   if (!runner) throw noSuchRunner();
   if (runner.kind !== "managed_agents") {
     throw new ApiError(409, "runner_has_no_webhook", `${runner.name} is a Runner of the kind ${runner.kind}, which takes no webhooks.`);
   }
-  const trimmed = secret?.trim() ?? null;
-  if (trimmed !== null && !/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
-    throw new ApiError(400, "invalid_webhook_secret", "A webhook signing secret starts with `whsec_`: copy it from the endpoint in the Anthropic Console.");
-  }
-  const sealed = trimmed === null ? null : requireSecretBox(context.config).seal(trimmed);
-  await context.db.query("update runners set webhook_secret_sealed = $2 where id = $1", [runnerId, sealed]);
+  await context.db.query("update runners set webhook_secret_sealed = $2 where id = $1", [runnerId, sealed()]);
   return (await findRunner(context, userId, runnerId))!;
 }
 

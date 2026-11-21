@@ -2,6 +2,7 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { authenticateAgent } from "../agents/tokens.js";
+import { deliveryRoute } from "../http/deliveries.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
@@ -9,6 +10,7 @@ import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
 import {
   createRunner,
+  forgetWebhookSecret,
   pasteTriggerToken,
   removeRunner,
   removeTrigger,
@@ -416,7 +418,8 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "The `whsec_` signing secret the Anthropic Console shows once for the webhook endpoint you added there at the " +
             "Runner's `webhookUrl`, subscribed to `session.status_idled` and `session.status_terminated`. Signed " +
             "deliveries then end Runs whose sessions stopped at once; polling stays as the backstop. Stored encrypted and " +
-            "never returned; saving again replaces it, as after rotating it in the Console. Refused with " +
+            "never returned; saving again replaces it, as after rotating it in the Console. Only its format is checked: " +
+            "deliveries signed with another secret are refused, and the Console disables an endpoint that keeps failing. Refused with " +
             "`invalid_webhook_secret` for one not starting `whsec_`, with `runner_has_no_webhook` for other kinds of " +
             "Runner, and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
@@ -436,56 +439,49 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Runs"],
           summary: "Forget the webhook signing secret of your Managed Agents Runner",
-          description: "Deliveries are then refused, and Runs whose sessions stopped end by polling alone.",
+          description:
+            "Deliveries are then refused, and Runs whose sessions stopped end by polling alone. Remove the endpoint in the " +
+            "Anthropic Console too: refused deliveries count as failures, and the Console disables an endpoint that keeps failing.",
           params: Type.Object({ runnerId: Type.String() }),
           response: { 200: RunnerRecord, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return saveWebhookSecret(context, user.id, request.params.runnerId, null);
+        return forgetWebhookSecret(context, user.id, request.params.runnerId);
       },
     );
 
-    // The webhook endpoint reads its body as bytes, since the signature covers exactly those.
     const reports = runReports(context);
-    await app.register(async (hooks) => {
-      hooks.removeAllContentTypeParsers();
-      hooks.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: webhookBodyLimit }, (_request, body, done) => done(null, body));
-      hooks.post(
-        managedAgentsWebhookPath,
-        {
-          bodyLimit: webhookBodyLimit,
-          schema: {
-            tags: ["Runs"],
-            summary: "Where Anthropic sends a Managed Agents Runner's webhook deliveries",
-            description:
-              "For Anthropic only. A delivery must carry the `webhook-id`, `webhook-timestamp` and `webhook-signature` " +
-              "headers, signed with the Runner's saved signing secret within five minutes of now, or it is refused with " +
-              "`invalid_signature` before anything else is looked at, as is every delivery to a Runner without one. A " +
-              "`session.status_idled` or `session.status_terminated` about the session of one of the Runner's running " +
-              "Runs reads that session and ends the Run as polling would; `ended` says whether it did. Anything else, " +
-              "a repeated delivery included, changes nothing.",
-            params: Type.Object({ runnerId: Type.String() }),
-            response: { 200: Type.Object({ ended: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody },
-          },
+    await deliveryRoute(
+      app,
+      managedAgentsWebhookPath,
+      {
+        bodyLimit: webhookBodyLimit,
+        schema: {
+          tags: ["Runs"],
+          summary: "Where Anthropic sends a Managed Agents Runner's webhook deliveries",
+          description:
+            "For Anthropic only. A delivery must carry the `webhook-id`, `webhook-timestamp` and `webhook-signature` " +
+            "headers, signed with the Runner's saved signing secret within five minutes of now, or it is refused with " +
+            "`invalid_signature` before anything else is looked at, as is every delivery to a Runner without one. A " +
+            "`session.status_idled` or `session.status_terminated` about the session of one of the Runner's running " +
+            "Runs reads that session and ends the Run as polling would; `ended` says whether it did. Refused with " +
+            "`anthropic_unavailable` when Anthropic can't answer about the session now, so it sends the delivery again. " +
+            "Anything else, a repeated delivery included, changes nothing.",
+          params: Type.Object({ runnerId: Type.String() }),
+          response: { 200: Type.Object({ ended: Type.Boolean() }), 400: ErrorBody, 401: ErrorBody, 502: ErrorBody },
         },
-        async (request) => {
-          const header = (name: string): string | undefined => {
-            const value = request.headers[name];
-            return Array.isArray(value) ? value[0] : value;
-          };
-          const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
-          const { runnerId } = request.params as { runnerId: string };
-          const ended = await receiveManagedAgentsDelivery(context, reports, runnerId, body, {
-            id: header("webhook-id"),
-            timestamp: header("webhook-timestamp"),
-            signature: header("webhook-signature"),
-          });
-          return { ended };
-        },
-      );
-    });
+      },
+      async ({ body, header, params }) => {
+        const ended = await receiveManagedAgentsDelivery(context, reports, params.runnerId!, body, {
+          id: header("webhook-id"),
+          timestamp: header("webhook-timestamp"),
+          signature: header("webhook-signature"),
+        });
+        return { ended };
+      },
+    );
   };
 }
 
