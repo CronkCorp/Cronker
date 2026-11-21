@@ -317,12 +317,21 @@ export async function createTicket(
     let discovery: { runId: string | null; sourceTicketId: string | null } | null = null;
     let parent: TicketRow | undefined;
     if (input.parentId !== undefined) {
-      parent = await findTicketRow(tx, creator, input.parentId);
+      // Held, for an Agent, so a User settling its waiting Discovered Ticket meanwhile settles the new Sub-Ticket too.
+      parent = await findTicketRow(tx, creator, input.parentId, { lock: creator.kind === "agent" });
       if (!parent) throw unknownTicket();
       if (parent.projectId !== project.id) {
         throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
       }
-      if (creator.kind === "agent") actor = { kind: "agent", id: creator.id, runId: await runOfAgent(tx, creator, parent) };
+      if (creator.kind === "agent" && holdsDiscoveredTicket(creator, parent)) {
+        // The Agent splits a Discovered Ticket it filed, while it waits: its Sub-Tickets are Discovered Tickets of
+        // the same Agent and source, settled with their parent.
+        actor = await discoveringAgent(tx, creator, parent);
+        discovery = { runId: parent.discovered!.runId, sourceTicketId: parent.discovered!.sourceTicket?.id ?? null };
+      } else if (creator.kind === "agent") {
+        const runId = await runForSubTicket(tx, creator, parent);
+        actor = { kind: "agent", id: creator.id, runId };
+      }
       // A Sub-Ticket inherits its parent's Delegation and Autonomous Delegation, and so its Assignee, whose Agent the
       // Delegate is.
       assigneeId = parent.assigneeId;
@@ -651,6 +660,7 @@ export async function editTicket(
         next.discovered?.waiting ?? false,
       ],
     );
+    if (ticket.discovered?.waiting && !next.discovered?.waiting) await settleDiscoveredSubTickets(context, tx, ticket);
     // Moving the Ticket ends its waiting from a needs you Outcome.
     if (next.statusId !== ticket.statusId) await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
     await recordChanges(tx, ticket, actor, now, changes);
@@ -869,10 +879,32 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
       );
     }
     await tx.query("update tickets set discovery_waits = false where id = $1", [ticket.id]);
+    await settleDiscoveredSubTickets(context, tx, ticket);
     await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
     return fullTicket(tx, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
+}
+
+/**
+ * A User took up a waiting Discovered Ticket: the Sub-Tickets its Agent split it into, waiting with it, are settled
+ * with it, leaving the Agent's hands. Call it in the transaction that settles the Ticket.
+ */
+async function settleDiscoveredSubTickets(context: Context, tx: Tx, ticket: TicketRow): Promise<void> {
+  const { rows } = await tx.query<{ id: string }>(
+    `with recursive settled (id) as (
+       select id from tickets where parent_id = $1 and discovery_waits and discovered_by_agent_id = $2
+       union
+       select tickets.id from tickets join settled on tickets.parent_id = settled.id
+       where tickets.discovery_waits and tickets.discovered_by_agent_id = $2
+     )
+     update tickets set discovery_waits = false from settled where tickets.id = settled.id
+     returning tickets.id`,
+    [ticket.id, ticket.discovered!.agentId],
+  );
+  for (const { id } of rows) {
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: id });
+  }
 }
 
 /** Whether the Ticket is a Discovered Ticket the Agent filed that still waits for a User, so the Agent may change it. */
@@ -891,7 +923,8 @@ export async function discoveringAgent(tx: Tx, agent: AgentCaller, ticket: Ticke
 
 /**
  * Who links or unlinks a Document or Artifact (`linked`) on the Ticket: a User, or an Agent during its own running Run
- * on it or on a waiting Discovered Ticket it filed. Refused otherwise, with the rule.
+ * on it or on a waiting Discovered Ticket it filed. Refused otherwise, with the rule: a Discovered Ticket another
+ * Agent filed, or a User took up, gets `not_your_discovered_ticket`.
  */
 export async function linkingActor(
   tx: Tx,
@@ -904,16 +937,25 @@ export async function linkingActor(
   if (holdsDiscoveredTicket(agent, ticket)) return discoveringAgent(tx, agent, ticket);
   const runId = await findRunningRunOn(tx, agent, ticket);
   if (runId) return { kind: "agent", id: agent.id, runId };
+  const refusal = {
+    rule:
+      `An Agent links ${linked}s to a Ticket, and unlinks them, during its own running Run on it, or on a Discovered ` +
+      "Ticket it filed until a User delegates, moves or dismisses it.",
+    advice: `Name the ${linked} in a Comment on ${ticket.key} instead; linking it is for its Users, or a Run of its own.`,
+  };
+  if (ticket.discovered !== null) {
+    throw new ApiError(
+      403,
+      "not_your_discovered_ticket",
+      `${agent.name} didn't file ${ticket.key}, or a User has taken it up.`,
+      refusal,
+    );
+  }
   throw new ApiError(
     403,
     "no_running_run",
-    `${agent.name} has no running Run on ${ticket.key}, and didn't file it as a Discovered Ticket that still waits for a User.`,
-    {
-      rule:
-        `An Agent links ${linked}s to a Ticket, and unlinks them, during its own running Run on it, or on a Discovered ` +
-        "Ticket it filed until a User delegates, moves or dismisses it.",
-      advice: `Name the ${linked} in a Comment on ${ticket.key} instead; linking it is for its Users, or a Run of its own.`,
-    },
+    `${agent.name} has no running Run on ${ticket.key}, and didn't file it as a Discovered Ticket.`,
+    refusal,
   );
 }
 
@@ -956,6 +998,37 @@ async function findRunningRunOn(tx: Tx, agent: AgentCaller, ticket: TicketRow): 
     [ticket.id, agent.id],
   );
   return rows[0]?.id ?? null;
+}
+
+/**
+ * The Agent's running Run on the parent it makes a Sub-Ticket of; refused if it has none, saying where an Agent may
+ * make Sub-Tickets. A Discovered Ticket another Agent filed, or a User took up, gets `not_your_discovered_ticket`.
+ */
+async function runForSubTicket(tx: Tx, agent: AgentCaller, parent: TicketRow): Promise<string> {
+  const runId = await findRunningRunOn(tx, agent, parent);
+  if (runId) return runId;
+  const refusal = {
+    rule:
+      "An Agent makes Sub-Tickets only of its own running Run's Ticket, or, in or outside a Run, of a Discovered " +
+      "Ticket it filed until a User delegates, moves or dismisses it.",
+    advice:
+      `File the work with \`file_ticket\` as a Discovered Ticket of your own and split that instead, naming ` +
+      `${parent.key} at the top of its description, or leave a Comment on ${parent.key} asking its Users to split it.`,
+  };
+  if (parent.discovered !== null) {
+    throw new ApiError(
+      403,
+      "not_your_discovered_ticket",
+      `${agent.name} didn't file ${parent.key}, or a User has taken it up.`,
+      refusal,
+    );
+  }
+  throw new ApiError(
+    403,
+    "no_running_run",
+    `${agent.name} has no running Run on ${parent.key}, and didn't file it as a Discovered Ticket.`,
+    refusal,
+  );
 }
 
 /** A Status or User, looked up by the query, as `{ id, name }` as it is named now; or null for no id. */

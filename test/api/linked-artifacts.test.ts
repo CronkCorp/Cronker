@@ -294,11 +294,15 @@ describe("Linked Artifacts", () => {
       await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
       const afterDelegated = await call("DELETE", `/api/tickets/${found.id}/artifacts/${board.id}`, asAgent);
 
-      for (const refused of [onAUsersTicket, byAnotherAgent, afterDelegated]) {
+      expect(onAUsersTicket.status).toBe(403);
+      expect(onAUsersTicket.json.error).toEqual(
+        expect.objectContaining({ code: "no_running_run", rule: expect.stringContaining("Discovered Ticket it filed") }),
+      );
+      for (const refused of [byAnotherAgent, afterDelegated]) {
         expect(refused.status).toBe(403);
         expect(refused.json.error).toEqual(
           expect.objectContaining({
-            code: "no_running_run",
+            code: "not_your_discovered_ticket",
             rule: expect.stringContaining("Discovered Ticket it filed"),
             advice: expect.any(String),
           }),
@@ -306,6 +310,18 @@ describe("Linked Artifacts", () => {
       }
       expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([]);
       expect(await ok("GET", `/api/tickets/${found.id}/artifacts`, ada)).toEqual([expect.objectContaining({ id: board.id })]);
+    });
+
+    test("outside a Run, an Agent links Artifacts on a Sub-Ticket of its waiting Discovered Ticket", async () => {
+      const { ada, project, found, board, agent, asAgent } = await discovered();
+      const half = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Half", parentId: found.id });
+
+      await ok("POST", `/api/tickets/${half.id}/artifacts`, asAgent, { artifactId: board.id });
+
+      expect(await ok("GET", `/api/tickets/${half.id}/artifacts`, ada)).toEqual([expect.objectContaining({ id: board.id })]);
+      await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
+      const settled = await call("DELETE", `/api/tickets/${half.id}/artifacts/${board.id}`, asAgent);
+      expect(settled.json.error.code).toBe("not_your_discovered_ticket");
     });
 
     test("an Agent links only Artifacts of its Discovered Ticket's Project or of the Workspace", async () => {

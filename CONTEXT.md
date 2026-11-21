@@ -41,7 +41,7 @@ How urgent a Ticket is: Urgent, High, Medium, Low or None. Waiting Tickets get R
 _Avoid_: Severity, importance, rank
 
 **Sub-Ticket**:
-A Ticket that splits up part of a parent Ticket's work, in the same Project, inheriting its Delegation. A parent gets no Runs while a Sub-Ticket is unfinished.
+A Ticket that splits up part of a parent Ticket's work, in the same Project, inheriting its Delegation. A parent gets no Runs while a Sub-Ticket is unfinished. An Agent makes Sub-Tickets of its Run's Ticket, and of a Discovered Ticket it filed that still waits for a User.
 _Avoid_: Subtask, child issue
 
 **Relation**:
@@ -49,7 +49,7 @@ A link between two Tickets: one **blocks** the other, or they **relate to** each
 _Avoid_: Dependency, link
 
 **Discovered Ticket**:
-A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee (or, filed outside a Run, the Agent's Owner), recording its source Ticket and Run, and waits in their Inbox until a User delegates, moves or dismisses it. Until then the Agent that filed it may edit it, add blocks from it, and link Documents and Artifacts to it and unlink them, such as the spec it was filed from.
+A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee (or, filed outside a Run, the Agent's Owner), recording its source Ticket and Run, and waits in their Inbox until a User delegates, moves or dismisses it. Until then the Agent that filed it may edit it, add blocks from it, link Documents and Artifacts to it and unlink them (such as the spec it was filed from), and split it into Sub-Tickets, which are Discovered Tickets too but wait with it rather than in the Inbox: settling it settles them, and delegating it hands them the Delegation.
 _Avoid_: Follow-up, spin-off, finding
 
 **Step**:

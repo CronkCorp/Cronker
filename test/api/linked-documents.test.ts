@@ -272,11 +272,15 @@ describe("Linked Documents", () => {
       const afterDismissed = await call("DELETE", `/api/tickets/${found.id}/documents/${design.id}`, asAgent);
       const afterMoved = await call("POST", `/api/tickets/${moved.id}/documents`, asAgent, { documentId: design.id });
 
-      for (const refused of [onAUsersTicket, byAnotherAgent, afterDismissed, afterMoved]) {
+      expect(onAUsersTicket.status).toBe(403);
+      expect(onAUsersTicket.json.error).toEqual(
+        expect.objectContaining({ code: "no_running_run", rule: expect.stringContaining("Discovered Ticket it filed") }),
+      );
+      for (const refused of [byAnotherAgent, afterDismissed, afterMoved]) {
         expect(refused.status).toBe(403);
         expect(refused.json.error).toEqual(
           expect.objectContaining({
-            code: "no_running_run",
+            code: "not_your_discovered_ticket",
             rule: expect.stringContaining("Discovered Ticket it filed"),
             advice: expect.any(String),
           }),
@@ -285,6 +289,18 @@ describe("Linked Documents", () => {
       expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([]);
       expect(await ok("GET", `/api/tickets/${found.id}/documents`, ada)).toEqual([expect.objectContaining({ id: design.id })]);
       expect(await ok("GET", `/api/tickets/${moved.id}/documents`, ada)).toEqual([]);
+    });
+
+    test("outside a Run, an Agent links Documents on a Sub-Ticket of its waiting Discovered Ticket", async () => {
+      const { ada, project, found, design, agent, asAgent } = await discovered();
+      const half = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Half", parentId: found.id });
+
+      await ok("POST", `/api/tickets/${half.id}/documents`, asAgent, { documentId: design.id });
+
+      expect(await ok("GET", `/api/tickets/${half.id}/documents`, ada)).toEqual([expect.objectContaining({ id: design.id })]);
+      await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
+      const settled = await call("DELETE", `/api/tickets/${half.id}/documents/${design.id}`, asAgent);
+      expect(settled.json.error.code).toBe("not_your_discovered_ticket");
     });
 
     test("an Agent links only Documents of its Discovered Ticket's Project or of the Workspace", async () => {

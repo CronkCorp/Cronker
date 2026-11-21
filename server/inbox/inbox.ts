@@ -211,7 +211,10 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
        json_build_object('id', agents.id, 'name', agents.name) as agent
      from tickets join projects on projects.id = tickets.project_id
      join agents on agents.id = tickets.discovered_by_agent_id
+     left join tickets parents on parents.id = tickets.parent_id
      where tickets.workspace_id = $1 and tickets.assignee_id = $2 and tickets.discovery_waits
+       -- A Sub-Ticket the Agent split its waiting Discovered Ticket into waits with its parent, not on its own.
+       and (parents.discovery_waits and parents.discovered_by_agent_id = tickets.discovered_by_agent_id) is not true
      order by projects.key, tickets.number`,
     [workspaceId, userId],
   );

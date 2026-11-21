@@ -301,6 +301,162 @@ describe("the filing Agent and its Discovered Ticket", () => {
   });
 });
 
+describe("Sub-Tickets of a waiting Discovered Ticket, outside a Run", () => {
+  /** A running Run whose Agent filed CRONK-3 from it, then finished the Run. */
+  async function discovered() {
+    const setup = await runningRun();
+    const { project, run, asAgent } = setup;
+    const found = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Plan", runId: run.id });
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    return { ...setup, found };
+  }
+
+  test("are Discovered Tickets of the same Agent, recording the same source, each Change naming the Agent", async () => {
+    const { user, ada, project, ticket, agent, run, found, asAgent, status } = await discovered();
+
+    const slice = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Slice one", parentId: found.id });
+
+    expect(slice).toEqual(
+      expect.objectContaining({
+        key: "CRONK-4",
+        statusId: status("Backlog"),
+        parentId: found.id,
+        assigneeId: user.id,
+        delegateId: null,
+        discovered: {
+          agentId: agent.id,
+          sourceTicket: { id: ticket.id, projectId: project.id, key: "CRONK-1", title: "Make it so" },
+          runId: run.id,
+          waiting: true,
+        },
+      }),
+    );
+    const [created] = await ok("GET", `/api/tickets/${slice.id}/timeline`, ada);
+    expect(created).toEqual(expect.objectContaining({ field: "created", runId: null, actor: expect.objectContaining({ id: agent.id }) }));
+    const [gained] = (await ok("GET", `/api/tickets/${found.id}/timeline`, ada)).slice(-1);
+    expect(gained).toEqual(expect.objectContaining({ field: "subTicket", to: expect.objectContaining({ key: "CRONK-4" }) }));
+  });
+
+  test("the Agent edits them and adds blocks between them", async () => {
+    const { ada, project, found, asAgent } = await discovered();
+    const first = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Slice one", parentId: found.id });
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Slice two", parentId: found.id });
+
+    const edited = await ok("PATCH", `/api/tickets/${second.id}`, asAgent, { title: "Slice two: the parser", priority: "high" });
+    await ok("POST", `/api/tickets/${first.id}/relations`, asAgent, { kind: "blocks", ticketId: second.id });
+
+    expect(edited).toEqual(expect.objectContaining({ title: "Slice two: the parser", priority: "high" }));
+    const { relations } = await ok("GET", `/api/tickets/${second.id}/relations`, ada);
+    expect(relations.map((r: { kind: string; ticket: { key: string } }) => [r.kind, r.ticket.key])).toEqual([["blockedBy", "CRONK-4"]]);
+  });
+
+  test("the Agent splits a slice further", async () => {
+    const { project, found, asAgent } = await discovered();
+    const slice = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Slice", parentId: found.id });
+
+    const part = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Part", parentId: slice.id });
+
+    expect(part).toEqual(expect.objectContaining({ parentId: slice.id, discovered: expect.objectContaining({ waiting: true }) }));
+  });
+
+  test("are refused under a Ticket the Agent didn't file, one a User settled, or another Agent's, with the rule", async () => {
+    const { workspace, ada, project, other, found, asAgent } = await discovered();
+    const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
+    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "full" });
+    const asOther = { headers: { authorization: `Bearer ${secret}` } };
+    const refusedUnder = async (parentId: string, as = asAgent) => {
+      const refused = await call("POST", `/api/projects/${project.id}/tickets`, as, { title: "Nope", parentId });
+      expect(refused.status).toBe(403);
+      return refused.json.error;
+    };
+    const rule = (code: string) =>
+      expect.objectContaining({ code, rule: expect.stringContaining("Discovered Ticket it filed"), advice: expect.any(String) });
+
+    expect(await refusedUnder(other.id)).toEqual(rule("no_running_run"));
+    expect(await refusedUnder(found.id, asOther)).toEqual(rule("not_your_discovered_ticket"));
+    await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
+    expect(await refusedUnder(found.id)).toEqual(rule("not_your_discovered_ticket"));
+    expect(await ok("GET", `/api/projects/${project.id}/tickets`, ada)).toHaveLength(3);
+  });
+});
+
+describe("a split Discovered Ticket in the Inbox", () => {
+  /** CRONK-3, a Discovered Ticket its Agent split outside a Run into CRONK-4, itself split into CRONK-5. */
+  async function split() {
+    const setup = await runningRun();
+    const { workspace, project, run, ada, asAgent } = setup;
+    const found = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Plan", runId: run.id });
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    const slice = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Slice", parentId: found.id });
+    const part = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Part", parentId: slice.id });
+    const inbox = async () => (await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items.map((i: { kind: string; ticket: { key: string } }) => [i.kind, i.ticket.key]);
+    /** Whether the Agent may still edit each Sub-Ticket, and add a block from it. */
+    const agentHolds = async () =>
+      Promise.all(
+        [slice, part].map(async (t) => {
+          const edit = await call("PATCH", `/api/tickets/${t.id}`, asAgent, { priority: "low" });
+          const block = await call("POST", `/api/tickets/${t.id}/relations`, asAgent, { kind: "blocks", ticketKey: "CRONK-2" });
+          return [edit.status, block.status];
+        }),
+      );
+    const waiting = async () =>
+      Promise.all([slice, part].map(async (t) => (await ok("GET", `/api/tickets/${t.id}`, ada)).discovered.waiting));
+    return { ...setup, found, slice, part, inbox, agentHolds, waiting };
+  }
+
+  test("only the parent waits there", async () => {
+    const { inbox } = await split();
+
+    expect(await inbox()).toEqual([["discovered", "CRONK-3"]]);
+  });
+
+  test("delegating the parent hands over the whole set: the Sub-Tickets inherit it and leave the Agent's hands", async () => {
+    const { ada, agent, found, slice, part, inbox, agentHolds, waiting, status } = await split();
+
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
+
+    expect(await inbox()).toEqual([]);
+    expect(await waiting()).toEqual([false, false]);
+    for (const t of [slice, part]) expect((await ok("GET", `/api/tickets/${t.id}`, ada)).delegateId).toBe(agent.id);
+    expect(await agentHolds()).toEqual([
+      [403, 403],
+      [403, 403],
+    ]);
+    // The parent gets no Run while its Sub-Tickets are unfinished.
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { statusId: status("Triage") });
+    expect((await ok("GET", `/api/tickets/${found.id}`, ada)).waiting).toBe("blocked");
+    expect(await ok("GET", `/api/tickets/${found.id}/runs`, ada)).toEqual([]);
+  });
+
+  test("moving the parent settles its Sub-Tickets, leaving them where they are", async () => {
+    const { ada, found, slice, inbox, agentHolds, waiting, status } = await split();
+
+    await ok("PATCH", `/api/tickets/${found.id}`, ada, { statusId: status("Ready") });
+
+    expect(await inbox()).toEqual([]);
+    expect(await waiting()).toEqual([false, false]);
+    expect((await ok("GET", `/api/tickets/${slice.id}`, ada)).statusId).toBe(status("Backlog"));
+    expect(await agentHolds()).toEqual([
+      [403, 403],
+      [403, 403],
+    ]);
+  });
+
+  test("dismissing the parent settles its Sub-Tickets, leaving them where they are", async () => {
+    const { ada, found, slice, inbox, agentHolds, waiting, status } = await split();
+
+    await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
+
+    expect(await inbox()).toEqual([]);
+    expect(await waiting()).toEqual([false, false]);
+    expect((await ok("GET", `/api/tickets/${slice.id}`, ada)).statusId).toBe(status("Backlog"));
+    expect(await agentHolds()).toEqual([
+      [403, 403],
+      [403, 403],
+    ]);
+  });
+});
+
 describe("waiting Discovered Tickets in the Inbox", () => {
   async function discoveredInInbox() {
     const setup = await runningRun();

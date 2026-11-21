@@ -66,7 +66,9 @@ const rights =
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
   "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, add blocks from " +
-  "it, and link Documents and Artifacts to it and unlink them, such as the spec Document you filed it from. Anything else is refused with the rule and what to do instead.";
+  "it, link Documents and Artifacts to it and unlink them, such as the spec Document you filed it from, and split " +
+  "it into Sub-Tickets, which are Discovered Tickets of yours too and are settled along with it, so a planned piece " +
+  "of work is filed as one parent Ticket with its slices under it. Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -302,13 +304,19 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "create_sub_ticket",
     {
-      title: "Split your Run's Ticket into a Sub-Ticket",
+      title: "Split a Ticket into a Sub-Ticket",
       description:
         "During your running Run on a Ticket, creates a Sub-Ticket of it in the same Project's first Backlog Status, " +
-        "with its Assignee and Delegation. The Ticket gets no Runs while a Sub-Ticket is unfinished. Refused for any " +
-        "other Ticket and outside a running Run.",
+        "with its Assignee and Delegation. The Ticket gets no Runs while a Sub-Ticket is unfinished. Outside a Run, " +
+        "splits a Discovered Ticket you filed that still waits for a User, to file a planned piece of work as one " +
+        "parent with its slices under it: each Sub-Ticket is a Discovered Ticket of yours with the same source, which " +
+        "you may edit and add blocks from (between slices, say), but only the parent waits in the Inbox. When a User " +
+        "delegates, moves or dismisses the parent, its Sub-Tickets are settled with it; delegating it hands them the " +
+        "Delegation. Refused for any other parent, such as a Ticket you didn't file or one a User has taken up.",
       inputSchema: {
-        ticket: ticketArgument.describe("Your Run's Ticket, the parent: its key, such as `CRONK-12`, or its id."),
+        ticket: ticketArgument.describe(
+          "The parent: your Run's Ticket, or a waiting Discovered Ticket you filed. Its key, such as `CRONK-12`, or its id.",
+        ),
         title: z.string().min(1),
         description: z.string().optional().describe("Markdown."),
       },
@@ -328,8 +336,8 @@ export function buildMcpServer(api: Api): McpServer {
         "Files a Ticket you found that isn't part of your Ticket's work, such as a bug noticed on the way, as a " +
         "Discovered Ticket: in the Project's first Backlog Status, undelegated, assigned to the Assignee of your Run's " +
         "Ticket (or, without a Run, to your Owner) and waiting in their Inbox. Until a User delegates, moves or " +
-        "dismisses it you may edit it with `edit_ticket` and add blocks from it with `add_block`. To split your own " +
-        "Ticket's work, use `create_sub_ticket` instead.",
+        "dismisses it you may edit it with `edit_ticket`, add blocks from it with `add_block` and split it into " +
+        "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead.",
       inputSchema: {
         project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
         title: z.string().min(1),
