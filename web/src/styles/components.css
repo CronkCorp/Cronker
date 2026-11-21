@@ -787,6 +787,31 @@ textarea.markdown-source {
 .menu-item-danger {
   color: var(--danger);
 }
+/* An item behind which a menu opens, such as Move to: its arrow at the right, highlighted while that menu is open. */
+.menu-sub-trigger[data-state="open"] {
+  background: var(--surface-2);
+}
+.menu-sub-arrow {
+  margin-left: auto;
+  padding-left: var(--space-3);
+  color: var(--muted);
+}
+/* A checkable item keeps room for its tick, so checked and unchecked items line up. */
+.menu-check {
+  display: inline-flex;
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.menu-check-mark {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .menu-label {
   padding: 6px 10px 2px;
   color: var(--muted);
