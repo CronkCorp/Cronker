@@ -83,7 +83,7 @@ All colours are CSS custom properties on `:root` in the web client's stylesheet.
 ## Typography
 
 - **Faces:** IBM Plex Sans for UI and prose, and IBM Plex Mono for Ticket keys, Run ids, model labels, code and Markdown sources. They are bundled from npm (`@fontsource/ibm-plex-sans`, `@fontsource/ibm-plex-mono`) and served by Cronk itself. Never load fonts from a CDN, since installations may be offline. The fallbacks are `system-ui` and `ui-monospace`.
-- **Scale:** 24/600 (Ticket and Document titles), 20/600 (`h1`), 16/600 (`h2`), 14/600 (`h3`), 14/400 (body), 13 (meta and controls), 12 (small meta, chips, keys), and 11/600 uppercase with 0.06em letter-spacing (kind labels and nav group labels).
+- **Scale:** 24/600 (Ticket and Document titles), 20/600 (`h1`), 16/600 (`h2`), 14/600 (`h3`), 13/600 (`h4`, a part of an `h3` section, such as a Managed Agents Runner's Webhook), 14/400 (body), 13 (meta and controls), 12 (small meta, chips, keys), and 11/600 uppercase with 0.06em letter-spacing (kind labels and nav group labels).
 - **Line height:** 1.5 for UI and 1.65 for Document bodies. Document text is 15px with a 720px measure.
 
 ## Component conventions

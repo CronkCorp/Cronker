@@ -171,7 +171,9 @@ A webhook makes those ends immediate instead of up to three minutes late. It is 
 2. In the Claude Console, under **Manage → Webhooks**, add an endpoint with that URL, subscribed to `session.status_idled` and `session.status_terminated`.
 3. Paste the endpoint's `whsec_` signing secret, which the Console shows once, under **Signing secret** on the card and choose **Save secret**. It is stored encrypted and never shown again; after rotating it in the Console, save the new one.
 
-Cronk refuses deliveries that aren't signed with the saved secret, or signed more than five minutes ago; a delivery about a session of none of the Runner's running Runs, or one Anthropic sends again, changes nothing. Each Runner has its own URL and secret: two Runners with keys to the same Anthropic workspace each need their own endpoint there.
+Cronk refuses deliveries that aren't signed with the saved secret, or signed more than five minutes ago, and counts on Anthropic to send one again when it can't read the session at that moment; a delivery about a session of none of the Runner's running Runs, or one Anthropic sends again, changes nothing. Each Runner has its own URL and secret: two Runners with keys to the same Anthropic workspace each need their own endpoint there.
+
+Saving checks only that the secret starts with `whsec_`. With a wrong one, or none, every delivery is refused, and the Console disables an endpoint whose deliveries keep failing; Runs still end by polling. If the Console shows the endpoint disabled, save the right secret, then enable the endpoint again there. To stop using the webhook, choose **Forget it** on the card and remove the endpoint in the Console.
 
 ## Upgrading
 

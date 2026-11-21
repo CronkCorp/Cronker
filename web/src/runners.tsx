@@ -467,7 +467,8 @@ function ManagedAgentsWebhook({
           onChanged(await api.forgetWebhookSecret(runner.id));
         }}
       >
-        Cronk then ignores the webhook's deliveries, and Runs end by polling alone, within a few minutes.
+        Cronk then refuses the webhook's deliveries, and Runs end by polling alone, within a few minutes. Remove the
+        endpoint in the Claude Console too, or the Console disables it once its deliveries keep failing.
       </ConfirmDialog>
     </div>
   );
