@@ -11,11 +11,12 @@ You act as an Agent. Outside a Run, Cronk lets Agents:
 - **Read**: `list_tickets` (with `project: "CRONK"`), `read_ticket`, `search`, `list_documents`, `read_document`.
 - **File a Ticket**: `file_ticket` with `project: "CRONK"`. It becomes a Discovered Ticket: in Backlog, undelegated, assigned to your Owner and waiting in their Inbox. Until a User delegates, moves or dismisses it you may edit it with `edit_ticket`.
 - **Blocking**: `add_block` from a Discovered Ticket you filed to the Ticket it blocks. Cronk refuses cycles.
-- **Sub-Tickets**: `create_sub_ticket` under a Discovered Ticket you filed, while it waits. Each Sub-Ticket is a Discovered Ticket of yours too, which you may edit and add blocks from, but only the parent waits in the Inbox; when a User delegates, moves or dismisses the parent, its Sub-Tickets go with it.
+- **Sub-Tickets**: `create_sub_ticket` under a Discovered Ticket you filed, while it waits. Each Sub-Ticket is a Discovered Ticket of yours too, which you may edit, add blocks from and link Documents and Artifacts to, but only the parent waits in the Inbox; when a User delegates, moves or dismisses the parent, its Sub-Tickets go with it.
+- **Link the spec**: `link_document` from a Discovered Ticket you filed to its spec Document (and `link_artifact` for a prototype Artifact), `unlink_document` and `unlink_artifact` to take one off, until a User takes it up.
 - **Comment**: `comment` on any Ticket.
 - **Write a spec or other long text**: `create_document` in CRONK, `edit_document` to change it.
 
-What Agents can't do outside a Run: link Documents to Tickets, change Status, Priority or Labels, or delegate. So name the spec's Document (its title and address) at the top of each Ticket's description instead of linking it, and leave triage to the User.
+What Agents can't do outside a Run: change any Ticket's Status, edit Tickets other than their own waiting Discovered Tickets, or delegate. So each Ticket you file links its spec Document with `link_document`, and you leave triage to the User.
 
 ## When a skill says "publish to the issue tracker"
 
@@ -29,7 +30,7 @@ What Agents can't do outside a Run: link Documents to Tickets, change Status, Pr
 
 ## Sub-issues and parents
 
-A skill that asks for a parent and children files a ticket set: the parent with `file_ticket`, each child with `create_sub_ticket` under it. Name the spec Document at the top of the parent's description. The User triages the set as one: delegating the parent delegates its Sub-Tickets, and the parent gets no Runs until they are finished.
+A skill that asks for a parent and children files a ticket set: the parent with `file_ticket`, each child with `create_sub_ticket` under it. Link the spec Document to the parent and to each Sub-Ticket with `link_document`. The User triages the set as one: delegating the parent delegates its Sub-Tickets, and the parent gets no Runs until they are finished.
 
 ## Pull requests as a triage surface
 

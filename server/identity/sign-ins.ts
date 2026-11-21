@@ -81,7 +81,7 @@ export async function requireUser(context: Context, request: FastifyRequest): Pr
   const agent = await authenticateAgent(context, request);
   if (agent) {
     throw new ApiError(403, "agent_not_allowed", `${agent.name} is an Agent, and only a User can do that.`, {
-      rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit and add blocks from a Discovered Ticket they filed until a User takes it up. Everything else needs a User.",
+      rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit a Discovered Ticket they filed, add blocks from it, and link Documents and Artifacts to it and unlink them, until a User takes it up. Everything else needs a User.",
       advice: `Read the Ticket and its Comments, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, to do it.`,
     });
   }

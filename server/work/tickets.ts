@@ -921,6 +921,44 @@ export async function discoveringAgent(tx: Tx, agent: AgentCaller, ticket: Ticke
   return { kind: "agent", id: agent.id, runId: rowCount ? runId : null };
 }
 
+/**
+ * Who links or unlinks a Document or Artifact (`linked`) on the Ticket: a User, or an Agent during its own running Run
+ * on it or on a waiting Discovered Ticket it filed. Refused otherwise, with the rule: a Discovered Ticket another
+ * Agent filed, or a User took up, gets `not_your_discovered_ticket`.
+ */
+export async function linkingActor(
+  tx: Tx,
+  caller: Caller,
+  ticket: TicketRow,
+  linked: "Document" | "Artifact",
+): Promise<ChangeActor> {
+  if (caller.kind === "user") return caller.id;
+  const agent = caller;
+  if (holdsDiscoveredTicket(agent, ticket)) return discoveringAgent(tx, agent, ticket);
+  const runId = await findRunningRunOn(tx, agent, ticket);
+  if (runId) return { kind: "agent", id: agent.id, runId };
+  const refusal = {
+    rule:
+      `An Agent links ${linked}s to a Ticket, and unlinks them, during its own running Run on it, or on a Discovered ` +
+      "Ticket it filed until a User delegates, moves or dismisses it.",
+    advice: `Name the ${linked} in a Comment on ${ticket.key} instead; linking it is for its Users, or a Run of its own.`,
+  };
+  if (ticket.discovered !== null) {
+    throw new ApiError(
+      403,
+      "not_your_discovered_ticket",
+      `${agent.name} didn't file ${ticket.key}, or a User has taken it up.`,
+      refusal,
+    );
+  }
+  throw new ApiError(
+    403,
+    "no_running_run",
+    `${agent.name} has no running Run on ${ticket.key}, and didn't file it as a Discovered Ticket.`,
+    refusal,
+  );
+}
+
 /** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */
 function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean): void {
   const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
@@ -945,15 +983,21 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
 
 /** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
 export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
-  const { rows } = await tx.query<{ id: string }>(
-    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
-    [ticket.id, agent.id],
-  );
-  if (rows[0]) return rows[0].id;
+  const runId = await findRunningRunOn(tx, agent, ticket);
+  if (runId) return runId;
   throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
     rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
     advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
   });
+}
+
+/** The Agent's running Run on the Ticket, or null for none. */
+async function findRunningRunOn(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string | null> {
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
+    [ticket.id, agent.id],
+  );
+  return rows[0]?.id ?? null;
 }
 
 /**
@@ -961,11 +1005,8 @@ export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow):
  * make Sub-Tickets. A Discovered Ticket another Agent filed, or a User took up, gets `not_your_discovered_ticket`.
  */
 async function runForSubTicket(tx: Tx, agent: AgentCaller, parent: TicketRow): Promise<string> {
-  const { rows } = await tx.query<{ id: string }>(
-    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
-    [parent.id, agent.id],
-  );
-  if (rows[0]) return rows[0].id;
+  const runId = await findRunningRunOn(tx, agent, parent);
+  if (runId) return runId;
   const refusal = {
     rule:
       "An Agent makes Sub-Tickets only of its own running Run's Ticket, or, in or outside a Run, of a Discovered " +

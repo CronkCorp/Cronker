@@ -177,8 +177,9 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Links a Document of the Ticket's Project or of the Workspace (`document_outside_project` for another " +
             "Project's; `unknown_document` for one not in the Workspace), once (`document_already_linked`). An Agent " +
-            "links only during its own running Run on the Ticket (`no_running_run`). A deleted Document drops out of " +
-            "its links.",
+            "links only during its own running Run on the Ticket, or on a Discovered Ticket it filed that still waits " +
+            "for a User (`no_running_run`; `not_your_discovered_ticket` for another Agent's or a settled one). A " +
+            "deleted Document drops out of its links.",
           params: TicketParams,
           body: Type.Object({ documentId: Type.String({ description: "A Document of the Ticket's Project or Workspace." }) }),
           response: { 201: LinkedDocument, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
@@ -199,7 +200,9 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Unlink a Document from a Ticket",
           description:
             "The Document stays in its page tree; a Document the Ticket doesn't link answers `not_found`. An Agent " +
-            "unlinks only during its own running Run on the Ticket (`no_running_run`).",
+            "unlinks only during its own running Run on the Ticket, or on a Discovered Ticket it filed that still " +
+            "waits for a User (`no_running_run`; `not_your_discovered_ticket` for another Agent's " +
+            "or a settled one).",
           params: Type.Object({ ticketId: Type.String(), documentId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },

@@ -66,8 +66,9 @@ const rights =
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
   "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, add blocks from " +
-  "it, and split it into Sub-Tickets, which are Discovered Tickets of yours too and are settled along with it, so a " +
-  "planned piece of work is filed as one parent Ticket with its slices under it. Anything else is refused with the rule and what to do instead.";
+  "it, link Documents and Artifacts to it and unlink them, such as the spec Document you filed it from, and split " +
+  "it into Sub-Tickets, which are Discovered Tickets of yours too and are settled along with it, so a planned piece " +
+  "of work is filed as one parent Ticket with its slices under it. Anything else is refused with the rule and what to do instead.";
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -627,11 +628,12 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "link_document",
     {
-      title: "Link a Document to your Run's Ticket",
+      title: "Link a Document to a Ticket",
       description:
-        "During your running Run on a Ticket, links a Document of the Ticket's Project or of the Workspace to it, so " +
-        "it is one click away for its Users and later Runs read it with the Ticket. Refused for a Document of another " +
-        "Project, for any other Ticket and outside a running Run.",
+        "During your running Run on a Ticket, or on a Discovered Ticket you filed until a User delegates, moves or " +
+        "dismisses it, links a Document of the Ticket's Project or of the Workspace to it, so it is one click away " +
+        "for its Users and later Runs read it with the Ticket: link the spec a Discovered Ticket comes from rather " +
+        "than only naming it. Refused for a Document of another Project and for any other Ticket.",
       inputSchema: { ticket: ticketArgument, document: documentArgument },
     },
     ({ ticket, document }) =>
@@ -644,10 +646,11 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "unlink_document",
     {
-      title: "Unlink a Document from your Run's Ticket",
+      title: "Unlink a Document from a Ticket",
       description:
-        "During your running Run on a Ticket, unlinks one of its Linked Documents; the Document stays in its page " +
-        "tree. Answers with the Ticket's Linked Documents left. Refused for any other Ticket and outside a running Run.",
+        "During your running Run on a Ticket, or on a Discovered Ticket you filed until a User delegates, moves or " +
+        "dismisses it, unlinks one of its Linked Documents; the Document stays in its page tree. Answers with the " +
+        "Ticket's Linked Documents left. Refused for any other Ticket.",
       inputSchema: { ticket: ticketArgument, document: documentArgument },
     },
     ({ ticket, document }) =>
@@ -786,11 +789,11 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "link_artifact",
     {
-      title: "Link an Artifact to your Run's Ticket",
+      title: "Link an Artifact to a Ticket",
       description:
-        "During your running Run on a Ticket, links an Artifact of the Ticket's Project or of the Workspace to it, so " +
-        "it is one click away for its Users. Refused for an Artifact of another Project, for any other Ticket and " +
-        "outside a running Run.",
+        "During your running Run on a Ticket, or on a Discovered Ticket you filed until a User delegates, moves or " +
+        "dismisses it, links an Artifact of the Ticket's Project or of the Workspace to it, so it is one click away " +
+        "for its Users. Refused for an Artifact of another Project and for any other Ticket.",
       inputSchema: { ticket: ticketArgument, artifact: artifactArgument },
     },
     ({ ticket, artifact }) =>
@@ -803,10 +806,11 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "unlink_artifact",
     {
-      title: "Unlink an Artifact from your Run's Ticket",
+      title: "Unlink an Artifact from a Ticket",
       description:
-        "During your running Run on a Ticket, unlinks one of its Linked Artifacts; the Artifact stays where it is " +
-        "kept. Answers with the Ticket's Linked Artifacts left. Refused for any other Ticket and outside a running Run.",
+        "During your running Run on a Ticket, or on a Discovered Ticket you filed until a User delegates, moves or " +
+        "dismisses it, unlinks one of its Linked Artifacts; the Artifact stays where it is kept. Answers with the " +
+        "Ticket's Linked Artifacts left. Refused for any other Ticket.",
       inputSchema: { ticket: ticketArgument, artifact: artifactArgument },
     },
     ({ ticket, artifact }) =>

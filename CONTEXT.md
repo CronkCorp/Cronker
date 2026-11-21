@@ -49,7 +49,7 @@ A link between two Tickets: one **blocks** the other, or they **relate to** each
 _Avoid_: Dependency, link
 
 **Discovered Ticket**:
-A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee (or, filed outside a Run, the Agent's Owner), recording its source Ticket and Run, and waits in their Inbox until a User delegates, moves or dismisses it. Until then the Agent that filed it may edit it, add blocks from it and split it into Sub-Tickets, which are Discovered Tickets too but wait with it rather than in the Inbox: settling it settles them, and delegating it hands them the Delegation.
+A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backlog, undelegated, assigned to its source Ticket's Assignee (or, filed outside a Run, the Agent's Owner), recording its source Ticket and Run, and waits in their Inbox until a User delegates, moves or dismisses it. Until then the Agent that filed it may edit it, add blocks from it, link Documents and Artifacts to it and unlink them (such as the spec it was filed from), and split it into Sub-Tickets, which are Discovered Tickets too but wait with it rather than in the Inbox: settling it settles them, and delegating it hands them the Delegation.
 _Avoid_: Follow-up, spin-off, finding
 
 **Step**:

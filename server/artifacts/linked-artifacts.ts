@@ -7,7 +7,7 @@ import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
-import { findTicketRow, runOfAgent, ticketNotFound, type TicketRow } from "../work/tickets.js";
+import { findTicketRow, linkingActor, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findArtifact } from "./artifacts.js";
 
 /**
@@ -44,13 +44,13 @@ export async function linkedArtifactsOf(db: Db, viewer: Viewer, ticketId: string
 
 /**
  * Links an Artifact of the Ticket's Project or of its Workspace to the Ticket. A User links on any Ticket; an Agent
- * only during its own running Run on it.
+ * only during its own running Run on it, or on a Discovered Ticket it filed that waits for a User.
  */
 export async function linkArtifact(context: Context, caller: Caller, ticketId: string, artifactId: string): Promise<LinkedArtifact> {
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const actor = await linkingActor(tx, caller, ticket);
+    const actor = await linkingActor(tx, caller, ticket, "Artifact");
     // Held until the link is made, so a delete of the Artifact either went first, and it is unknown, or waits.
     if (isUuid(artifactId)) await tx.query("select 1 from artifacts where id = $1 for key share", [artifactId]);
     // An Artifact of another Workspace answers as unknown, even to a User who belongs to both.
@@ -90,12 +90,12 @@ export async function insertLink(
   return linked;
 }
 
-/** Unlinks an Artifact from the Ticket, by a User or by an Agent during its Run on it; the Artifact stays where it is kept. */
+/** Unlinks an Artifact from the Ticket, by a User or by an Agent that may link on it; the Artifact stays where it is kept. */
 export async function unlinkArtifact(context: Context, caller: Caller, ticketId: string, artifactId: string): Promise<void> {
   await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    const actor = await linkingActor(tx, caller, ticket);
+    const actor = await linkingActor(tx, caller, ticket, "Artifact");
     const { rows } = isUuid(artifactId)
       ? await tx.query<LinkedArtifact>(
           `select ${columns} from ${fromLinks}
@@ -110,11 +110,6 @@ export async function unlinkArtifact(context: Context, caller: Caller, ticketId:
   });
 }
 
-/** Who links or unlinks: a User, or an Agent only during its own running Run on the Ticket, refused otherwise. */
-async function linkingActor(tx: Tx, caller: Caller, ticket: TicketRow): Promise<ChangeActor> {
-  if (caller.kind === "user") return caller.id;
-  return { kind: "agent", id: caller.id, runId: await runOfAgent(tx, caller, ticket) };
-}
 
 /** An Artifact as a link's Change names it: its id, and its title then. */
 type Named = { id: string; title: string };
