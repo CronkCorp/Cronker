@@ -5,13 +5,12 @@ import { issueToken } from "../agents/tokens.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
-import { isUuid } from "../http/ids.js";
 import { mcpPath } from "../mcp/routes.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
 import { transcriptHook } from "../transcripts/hook.js";
-import { presentTrigger, triggerJson, type Trigger, type TriggerRow } from "./runners.js";
+import { findRunner, noSuchProject, noSuchRunner, replaceProjectTriggers, type Trigger } from "./runners.js";
 import { modelIdOf, settingsOf } from "../workspaces/workspaces.js";
 
 /**
@@ -81,7 +80,14 @@ async function labelsOf({ db }: Context, projectId: string): Promise<string[]> {
   return [...labels.values()];
 }
 
-const branchPart = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+/** What a Project with several Repositories gives up, as every routine gets them all. */
+const severalRepositoriesWarning = (project: string) =>
+  `${project} lists several Repositories, so each routine gets them all, and the Transcript hook doesn't run in ` +
+  "sessions with more than one: its Runs get no Transcripts and become lost if they work longer than the lost-Run " +
+  "threshold without calling Cronk.";
+
+/** Text as a part of a branch name: lowercase letters and digits joined by hyphens. */
+const branchSlug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 /**
  * Starts a Runner setup of one of the User's own subscription Runners for a Project they can see: plans a routine
@@ -95,19 +101,13 @@ export async function startSetup(
   input: { projectId: string; agentId?: string },
 ): Promise<StartedSetup> {
   const { db, clock, config } = context;
-  const { rows: runners } = isUuid(runnerId)
-    ? await db.query<{ id: string; name: string; kind: string }>(
-        "select id, name, kind from runners where id = $1 and owner_id = $2",
-        [runnerId, userId],
-      )
-    : { rows: [] };
-  const runner = runners[0];
-  if (!runner) throw new ApiError(404, "not_found", "You have no such Runner.");
+  const runner = await findRunner(db, userId, runnerId);
+  if (!runner) throw noSuchRunner();
   if (runner.kind !== "subscription") {
     throw new ApiError(409, "runner_has_no_triggers", `${runner.name} is a Runner of the kind ${runner.kind}, which fires no routines.`);
   }
   const project = await findProject(db, userViewer(userId), input.projectId);
-  if (!project) throw new ApiError(404, "project_not_found", "There is no such Project in your Workspaces.");
+  if (!project) throw noSuchProject();
 
   const { rows: repositories } = await db.query<{ fullName: string }>(
     `select repositories.full_name as "fullName" from project_repositories
@@ -124,6 +124,13 @@ export async function startSetup(
   }
   const settings = await settingsOf(db, project.workspaceId);
   const labels = await labelsOf(context, project.id);
+  if (labels.length === 0) {
+    throw new ApiError(
+      409,
+      "board_has_no_steps",
+      `${project.name}'s board has no Step, so there is no model to create a routine for: add a Step in its Project settings first.`,
+    );
+  }
   const unmapped = labels.find((label) => modelIdOf(settings, label) === undefined);
   if (unmapped !== undefined) {
     const { rows } = await db.query<{ name: string }>("select name from workspaces where id = $1", [project.workspaceId]);
@@ -144,7 +151,7 @@ export async function startSetup(
     repositories: repositories.map((r) => r.fullName),
     prompt: routinePrompt,
     mcpUrl,
-    branchPrefix: `claude/cronk-${branchPart(project.key)}-${branchPart(label)}`,
+    branchPrefix: `claude/cronk-${branchSlug(project.key)}-${branchSlug(label)}`,
   }));
   const plan: SetupPlan = {
     project: { id: project.id, name: project.name, key: project.key },
@@ -157,24 +164,38 @@ export async function startSetup(
   const now = clock.now();
   const expiresAt = new Date(now.getTime() + setupLifetimeMs);
   await transaction(db, async (tx) => {
-    // The environment's own Transcript hook token, revoked on its own on the Agent's page; only the instructions hand it over.
-    const hook = await issueToken(tx, clock, agent, { name: `Transcript hook · ${project.name}`, access: "full" });
+    // Pressing the button again leaves the earlier unused setups of the Runner and Project to expire, without their tokens.
     await tx.query(
-      `insert into runner_setups (user_id, runner_id, project_id, agent_id, token_hash, hook_token_sealed, plan, expires_at, created_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [userId, runner.id, project.id, agent.id, hashSecret(setupToken), box.seal(hook.secret), JSON.stringify(plan), expiresAt, now],
+      `delete from agent_tokens where id in (
+         select hook_token_id from runner_setups where runner_id = $1 and project_id = $2 and used_at is null)`,
+      [runner.id, project.id],
+    );
+    // The environment's own Transcript hook token, revoked on its own on the Agent's page; only the instructions hand it
+    // over. It expires with the setup unless the setup is used.
+    const hook = await issueToken(tx, clock, agent, { name: `Transcript hook · ${project.name}`, access: "full", expiresAt });
+    await tx.query(
+      `insert into runner_setups (user_id, runner_id, project_id, agent_id, token_hash, hook_token_id, hook_token_sealed, plan,
+         expires_at, created_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        userId,
+        runner.id,
+        project.id,
+        agent.id,
+        hashSecret(setupToken),
+        hook.token.id,
+        box.seal(hook.secret),
+        JSON.stringify(plan),
+        expiresAt,
+        now,
+      ],
     );
   });
   const instructionsUrl = `${config.publicUrl.origin}${instructionsPath.replace(":setupToken", setupToken)}`;
   return {
     command: `claude "$(curl -fsSL '${instructionsUrl}')"`,
     expiresAt: expiresAt.toISOString(),
-    warning:
-      repositories.length > 1
-        ? `${project.name} lists several Repositories, so each routine gets them all, and the Transcript hook doesn't run in ` +
-          "sessions with more than one: its Runs get no Transcripts and become lost if they work longer than the " +
-          "lost-Run threshold without calling Cronk."
-        : null,
+    warning: repositories.length > 1 ? severalRepositoriesWarning(project.name) : null,
     plan,
   };
 }
@@ -223,8 +244,8 @@ async function chooseAgent(
   return (await findAgent(db, rows[0]!.id))!;
 }
 
-/** A setup as its setup token finds it, while it can still be used. */
-interface OpenSetup {
+/** A setup its setup token finds while it can still be used: not used yet, nor expired. */
+interface UsableSetup {
   id: string;
   userId: string;
   runnerId: string;
@@ -236,8 +257,8 @@ interface OpenSetup {
 const pressAgain = "press Set up with Claude Code again on the Runner's card in Cronk for a new command.";
 
 /** The setup a setup token belongs to, refusing one that is unknown, used or expired. */
-async function openSetup(db: Db | Tx, now: Date, setupToken: string, { lock = false } = {}): Promise<OpenSetup> {
-  const { rows } = await db.query<OpenSetup & { usedAt: Date | null; expiresAt: Date }>(
+async function usableSetup(db: Db | Tx, now: Date, setupToken: string, { lock = false } = {}): Promise<UsableSetup> {
+  const { rows } = await db.query<UsableSetup & { usedAt: Date | null; expiresAt: Date }>(
     `select id, user_id as "userId", runner_id as "runnerId", project_id as "projectId",
        hook_token_sealed as "hookTokenSealed", plan, used_at as "usedAt", expires_at as "expiresAt"
      from runner_setups where token_hash = $1 ${lock ? "for update" : ""}`,
@@ -258,7 +279,7 @@ async function openSetup(db: Db | Tx, now: Date, setupToken: string, { lock = fa
  */
 export async function setupInstructions(context: Context, setupToken: string): Promise<string> {
   const { db, clock, config } = context;
-  const setup = await openSetup(db, clock.now(), setupToken);
+  const setup = await usableSetup(db, clock.now(), setupToken);
   const hookToken = setup.hookTokenSealed ? requireSecretBox(config).open(setup.hookTokenSealed) : null;
   const cronk = config.publicUrl.origin;
   const reportUrl = `${cronk}/api/runner-setups/${setupToken}/triggers`;
@@ -305,7 +326,7 @@ export async function setupInstructions(context: Context, setupToken: string): P
       // One line per branch list reads better, and is what the plan names.
       .replace(/"branches": \[\s+("[^"]+")\s+\]/g, '"branches": [$1]');
 
-  const several = (first?.repositories.length ?? 0) > 1;
+  const severalRepositories = (first?.repositories.length ?? 0) > 1;
   return `# Set up Cronk's routines for ${plan.project.name}
 
 You are Claude Code, run by the User to set up the claude.ai routines that Cronk (${cronk}) fires for the Project
@@ -341,7 +362,7 @@ Each routine gets only the Cronk connector, given in \`mcp_connections\`, which 
 Create these ${plan.routines.length} routine${plan.routines.length === 1 ? "" : "s"} with \`RemoteTrigger\`'s \`create\`, one per model label
 ${plan.project.name}'s board uses. Send each body exactly as given, with \`<ENVIRONMENT_ID>\`,
 \`<CRONK_CONNECTOR_UUID>\` and \`<A FRESH UUID>\` (a new random UUID for each) filled in. Each has no schedule (Cronk
-fires it), only the Project's ${several ? "Repositories" : "Repository"}, only the Cronk connector, and a \`claude/…\` branch prefix, so each
+fires it), only the Project's ${severalRepositories ? "Repositories" : "Repository"}, only the Cronk connector, and a \`claude/…\` branch prefix, so each
 fire starts on a branch of its own. Note each routine's trigger id (\`trig_…\`) from the answer.
 
 ${plan.routines
@@ -389,15 +410,7 @@ ${JSON.stringify(hook.settings, null, 2)
   .map((line) => `   ${line}`)
   .join("\n")}
    \`\`\`
-${
-  several
-    ? `
-${plan.project.name} lists several Repositories, so each routine gets them all. Tell the User that the Transcript
-hook doesn't run in sessions with more than one: its Runs get no Transcripts, and become lost if they work longer than
-the lost-Run threshold without calling Cronk.
-`
-    : ""
-}`;
+${severalRepositories ? `\nTell the User this too: ${severalRepositoriesWarning(plan.project.name)}\n` : ""}`;
 }
 
 /**
@@ -413,7 +426,7 @@ export async function reportSetup(
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const now = clock.now();
-    const setup = await openSetup(tx, now, setupToken, { lock: true });
+    const setup = await usableSetup(tx, now, setupToken, { lock: true });
     const byLabel = new Map(input.triggers.map((t) => [t.label.trim().toLowerCase(), t.triggerId.trim()]));
     const labels = setup.plan.routines.map((r) => r.label);
     if (byLabel.size !== input.triggers.length || byLabel.size !== labels.length || labels.some((l) => !byLabel.has(l.toLowerCase()))) {
@@ -423,16 +436,17 @@ export async function reportSetup(
         `Report one trigger id for each of the setup's model labels, once each: ${labels.join(", ")}.`,
       );
     }
-    await tx.query("delete from runner_triggers where runner_id = $1 and project_id = $2", [setup.runnerId, setup.projectId]);
-    const triggers: Trigger[] = [];
-    for (const label of labels) {
-      const { rows } = await tx.query<TriggerRow>(
-        `insert into runner_triggers as t (runner_id, project_id, model, trigger_id, token_sealed, created_at)
-         values ($1, $2, $3, $4, null, $5) returning ${triggerJson} as trigger`,
-        [setup.runnerId, setup.projectId, label, byLabel.get(label.toLowerCase())!, now],
-      );
-      triggers.push(presentTrigger((rows[0] as unknown as { trigger: TriggerRow }).trigger));
-    }
+    const triggers = await replaceProjectTriggers(
+      tx,
+      setup.runnerId,
+      setup.projectId,
+      labels.map((label) => ({ model: label, triggerId: byLabel.get(label.toLowerCase())! })),
+      now,
+    );
+    // Used, its Transcript hook token lasts until revoked on the Agent's page.
+    await tx.query("update agent_tokens set expires_at = null where id = (select hook_token_id from runner_setups where id = $1)", [
+      setup.id,
+    ]);
     await tx.query("update runner_setups set used_at = $2, hook_token_sealed = null where id = $1", [setup.id, now]);
     live.publishToOwner(tx, setup.userId, { type: "runner.changed", runnerId: setup.runnerId });
     return { triggers };

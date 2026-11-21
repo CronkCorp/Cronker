@@ -430,3 +430,40 @@ describe("a trigger waiting for its token", () => {
     expect((await ok("GET", "/api/runners", ada))[0].triggers.every((t: { waitingForToken: boolean }) => t.waitingForToken)).toBe(true);
   });
 });
+
+test("a setup for a Project whose board has no Step is refused, as it would create no routine", async () => {
+  const { ada, project, runner } = await adaWithProject();
+  for (const status of project.statuses) {
+    await call("DELETE", `/api/projects/${project.id}/statuses/${status.id}/step`, ada);
+  }
+
+  const refused = await call("POST", `/api/runners/${runner.id}/setups`, ada, { projectId: project.id });
+
+  expect(refused.status).toBe(409);
+  expect(refused.json.error.code).toBe("board_has_no_steps");
+});
+
+describe("the Transcript hook token a setup hands over", () => {
+  const hookTokenOf = async (instructions: () => Promise<Response>) =>
+    /CRONK_TOKEN=(cronk_agent_[A-Za-z0-9_-]+)/.exec(await (await instructions()).text())![1]!;
+
+  test("lasts once the setup is used, stops working when it expires unused, and goes when the button is pressed again", async () => {
+    const { ada, project, runner, agent } = await adaWithProject();
+    const asToken = (token: string) => call("GET", `/api/projects/${project.id}`, { headers: { authorization: `Bearer ${token}` } });
+    const used = await started(ada, runner.id, project.id);
+    const kept = await hookTokenOf(used.instructions);
+    await used.report(allLabels({ haiku: "trig_h", sonnet: "trig_s", opus: "trig_o" }));
+    const abandoned = await started(ada, runner.id, project.id);
+    const unused = await hookTokenOf(abandoned.instructions);
+    const pressedAgain = await started(ada, runner.id, project.id);
+    const expiring = await hookTokenOf(pressedAgain.instructions);
+
+    expect((await asToken(unused)).status).toBe(401);
+    expect((await asToken(expiring)).status).toBe(200);
+    expect((await ok("GET", `/api/agents/${agent.id}/tokens`, ada)).length).toBe(2);
+
+    cronk.clock.advance(60 * 60 * 1000);
+    expect((await asToken(expiring)).status).toBe(401);
+    expect((await asToken(kept)).status).toBe(200);
+  });
+});

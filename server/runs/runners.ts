@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { afterCommit, transaction, type Db } from "../db.js";
+import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -53,13 +53,13 @@ export const RunnerRecord = Type.Object({
 });
 export type RunnerRecord = Static<typeof RunnerRecord>;
 
-export type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
+type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
 type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers"> & {
   createdAt: Date;
   pausedUntil: Date | null;
   triggers: TriggerRow[];
 };
-export const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
+const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
   'waitingForToken', t.token_sealed is null, 'createdAt', t.created_at)`;
 const columns = `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
@@ -76,7 +76,7 @@ const present = (row: Row): RunnerRecord => ({
 /** A routine's page in claude.ai, where its Owner generates its token. */
 export const routineUrl = (triggerId: string): string => `https://claude.ai/code/routines/${encodeURIComponent(triggerId)}`;
 
-export const presentTrigger = (t: TriggerRow): Trigger => ({
+const presentTrigger = (t: TriggerRow): Trigger => ({
   ...t,
   routineUrl: routineUrl(t.triggerId),
   createdAt: new Date(t.createdAt).toISOString(),
@@ -109,13 +109,14 @@ export async function createRunner(
 }
 
 /** One of the User's own Runners; otherwise nothing, as if it didn't exist. */
-async function findRunner(db: Db, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
+export async function findRunner(db: Db, userId: string, runnerId: string): Promise<RunnerRecord | undefined> {
   if (!isUuid(runnerId)) return undefined;
   const { rows } = await db.query<Row>(`select ${columns} from runners where id = $1 and owner_id = $2`, [runnerId, userId]);
   return rows[0] && present(rows[0]);
 }
 
-const noSuchRunner = () => new ApiError(404, "not_found", "You have no such Runner.");
+export const noSuchRunner = () => new ApiError(404, "not_found", "You have no such Runner.");
+export const noSuchProject = () => new ApiError(404, "project_not_found", "There is no such Project in your Workspaces.");
 
 /**
  * Saves the trigger a `subscription` Runner fires for a model, for all Projects or overriding that for one Project,
@@ -134,7 +135,7 @@ export async function saveTrigger(
   }
   const projectId = input.projectId ?? null;
   if (projectId !== null && !(await findProject(context.db, userViewer(userId), projectId))) {
-    throw new ApiError(404, "project_not_found", "There is no such Project in your Workspaces.");
+    throw noSuchProject();
   }
   const sealed = requireSecretBox(context.config).seal(input.token.trim());
   const model = input.model.trim();
@@ -148,6 +149,30 @@ export async function saveTrigger(
     [runnerId, projectId, model, input.triggerId.trim(), sealed, context.clock.now()],
   );
   return (await findRunner(context.db, userId, runnerId))!;
+}
+
+/**
+ * Replaces a Project's triggers on a Runner with new ones, one per model label, each waiting for its token, as a
+ * Runner setup leaves them; the Runner's triggers for all Projects stay. Returns them in the order given.
+ */
+export async function replaceProjectTriggers(
+  tx: Tx,
+  runnerId: string,
+  projectId: string,
+  triggers: { model: string; triggerId: string }[],
+  now: Date,
+): Promise<Trigger[]> {
+  await tx.query("delete from runner_triggers where runner_id = $1 and project_id = $2", [runnerId, projectId]);
+  const saved: Trigger[] = [];
+  for (const { model, triggerId } of triggers) {
+    const { rows } = await tx.query<{ trigger: TriggerRow }>(
+      `insert into runner_triggers as t (runner_id, project_id, model, trigger_id, token_sealed, created_at)
+       values ($1, $2, $3, $4, null, $5) returning ${triggerJson} as trigger`,
+      [runnerId, projectId, model, triggerId, now],
+    );
+    saved.push(presentTrigger(rows[0]!.trigger));
+  }
+  return saved;
 }
 
 /**

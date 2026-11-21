@@ -61,13 +61,13 @@ export async function issueToken(
   db: Db | Tx,
   clock: Clock,
   agent: Agent,
-  input: { name: string; access: TokenAccess },
+  input: { name: string; access: TokenAccess; expiresAt?: Date },
 ): Promise<IssuedToken> {
   const secret = issueSecret("agent");
   const { rows } = await db.query<Row>(
-    `insert into agent_tokens (agent_id, name, access, token_hash, created_at) values ($1, $2, $3, $4, $5)
+    `insert into agent_tokens (agent_id, name, access, token_hash, created_at, expires_at) values ($1, $2, $3, $4, $5, $6)
      returning ${columns}`,
-    [agent.id, input.name.trim(), input.access, hashSecret(secret), clock.now()],
+    [agent.id, input.name.trim(), input.access, hashSecret(secret), clock.now(), input.expiresAt ?? null],
   );
   return { token: present(rows[0]!), secret };
 }

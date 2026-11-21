@@ -1217,7 +1217,7 @@
 }
 .runner-token-paste a {
   font-size: 13px;
-  padding-bottom: 8px;
+  padding-bottom: var(--space-2);
 }
 .runner-setup {
   display: flex;

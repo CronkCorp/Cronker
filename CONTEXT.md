@@ -174,7 +174,7 @@ _Avoid_: Provider, backend, executor
 
 **Runner setup**:
 A one-time, short-lived handoff in which a User's own Claude Code creates a Project's claude.ai routines for their subscription Runner, one per model label its board uses, and reports their trigger ids back to Cronk. Each becomes the Project's trigger for its label, waiting for the token the User pastes. Cronk never holds a claude.ai credential.
-_Avoid_: Install, bootstrap, onboarding
+_Avoid_: Install, bootstrap
 
 **Run**:
 One agent execution Cronk starts for one Ticket, acting as an Agent through one of its Owner's Runners. It is **running** until the agent reports it **finished**, or it becomes **failed** (the Runner says it ended without finishing), **lost** (no call naming it or its Ticket for the Workspace's lost-Run threshold) or **stopped** (a User moved, undelegated or re-delegated its Ticket, or an Admin removed its Agent's Owner from the Workspace, after which Cronk refuses its calls); a Run its Runner wouldn't start is **refused**, and its Ticket *couldn't start*. A rate-limited Runner refuses nothing: the Ticket waits. A Ticket has at most one running Run. After a failed, lost or refused Run, only a User's **Retry** starts the same Step again.
