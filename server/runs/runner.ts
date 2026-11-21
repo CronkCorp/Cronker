@@ -59,6 +59,11 @@ export interface Runner {
    * finishing. The Runner lets go of what the Run held, such as its session and credentials. Best effort.
    */
   ended?(run: RunToStop): Promise<void>;
+  /**
+   * Someone opens the Transcript of the running Run: the Runner adds to it what the Run's session did since it last
+   * looked, where Cronk fetches Transcripts itself rather than having them uploaded. Throws when it can't.
+   */
+  followTranscript?(run: { runId: string }): Promise<void>;
   /** Removing a Runner of this kind stops its running Runs, instead of being refused while they run. */
   stopsRunsWhenRemoved?: boolean;
 }

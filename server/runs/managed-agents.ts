@@ -4,6 +4,8 @@ import { ApiError } from "../http/errors.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import { transaction } from "../db.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
+import { convertManagedAgentsEvents } from "../transcripts/managed-agents.js";
+import { appendTranscript } from "../transcripts/transcripts.js";
 import type { Runner, RunnerRefusal, RunReports, RunToStart, StartResult } from "./runner.js";
 import { retryAt } from "./subscription.js";
 
@@ -144,11 +146,12 @@ interface HeldRun {
   revoked: boolean;
   vaultDeleted: boolean;
   archived: boolean;
+  transcriptFetched: boolean;
 }
 
 const heldColumns = `run_id as "runId", api_key_sealed as "apiKeySealed", token_id as "tokenId", vault_id as "vaultId",
   session_id as "sessionId", revoked_at is not null as revoked, vault_deleted_at is not null as "vaultDeleted",
-  archived_at is not null as archived`;
+  archived_at is not null as archived, transcript_fetched_at is not null as "transcriptFetched"`;
 
 /** The `managed_agents` Runner. */
 export function managedAgentsRunner(context: Context): Runner {
@@ -232,6 +235,15 @@ export function managedAgentsRunner(context: Context): Runner {
       "session_id = $2, archived_at = null",
     );
     if (typeof sessionId !== "string") return sessionId;
+    // The Run's Transcript is there from its start, for its Ticket to link while it runs; opening it fetches its events.
+    await transaction(db, async (tx) => {
+      const { rows } = await tx.query<{ workspaceId: string }>(`select workspace_id as "workspaceId" from runs where id = $1`, [
+        run.runId,
+      ]);
+      if (!rows[0]) return;
+      const session = { workspaceId: rows[0].workspaceId, agentId: run.agent.id, runId: run.runId, sessionId };
+      await appendTranscript(context, tx, session, { entries: [], results: [] });
+    });
     return { started: true, reference: { sessionId, url: consoleUrl(sessionId) } } satisfies StartResult;
   }
 
@@ -286,6 +298,9 @@ export function managedAgentsRunner(context: Context): Runner {
     async ended(run) {
       await letGo(context, run.runId);
     },
+    async followTranscript(run) {
+      await fetchEvents(context, run.runId);
+    },
     stopsRunsWhenRemoved: true,
   };
 }
@@ -314,18 +329,90 @@ async function letGo(context: Context, runId: string): Promise<void> {
     if ((deleted >= 200 && deleted < 300) || deleted === 404) await mark("vault_deleted_at");
   }
   if (!held.archived) {
-    if (!held.sessionId) return void (await mark("archived_at"));
-    const path = `v1/sessions/${encodeURIComponent(held.sessionId)}`;
+    if (!held.sessionId) await mark("archived_at");
+    else if (!(await archive(held.sessionId))) return;
+  }
+  // Once the session is archived its events are all there is: the last of them go into the Run's Transcript.
+  if (!held.transcriptFetched) {
+    await fetchEvents(context, runId);
+    await mark("transcript_fetched_at");
+  }
+
+  /** Archives the session once idle, saying whether it is archived (or gone) now. */
+  async function archive(sessionId: string): Promise<boolean> {
+    const path = `v1/sessions/${encodeURIComponent(sessionId)}`;
     let session = await call("GET", path);
-    if (session.status === 404) return void (await mark("archived_at"));
+    if (session.status === 404) {
+      await mark("archived_at");
+      return true;
+    }
     if (session.body.status === "running" || session.body.status === "rescheduling") {
       await call("POST", `${path}/events`, { events: [{ type: "user.interrupt" }] });
       session = await call("GET", path);
     }
     // A running session can't be archived; an interrupt makes it idle, and the next poll archives it if it isn't yet.
-    if (session.status !== 200 || session.body.status === "running" || session.body.status === "rescheduling") return;
-    if (session.body.archived_at || (await call("POST", `${path}/archive`)).status === 200) await mark("archived_at");
+    if (session.status !== 200 || session.body.status === "running" || session.body.status === "rescheduling") return false;
+    if (!session.body.archived_at && (await call("POST", `${path}/archive`)).status !== 200) return false;
+    await mark("archived_at");
+    return true;
   }
+}
+
+/** How many events Cronk asks for a page. */
+const eventsPageSize = 1000;
+
+/**
+ * Appends what the Run's session recorded since the last fetch to its Transcript: reads its events page by page from
+ * the page where the last fetch stopped, until none are left, and converts those it hadn't taken. A fetch that another
+ * finished first meanwhile is dropped, as that one took the same events. Throws when Anthropic doesn't answer, leaving
+ * the Transcript as it was; a session gone from Anthropic has nothing more to add.
+ */
+async function fetchEvents(context: Context, runId: string): Promise<void> {
+  const { rows } = await context.db.query<{
+    apiKeySealed: string;
+    sessionId: string | null;
+    eventsPage: string | null;
+    eventsTaken: number;
+    workspaceId: string;
+    agentId: string;
+  }>(
+    `select m.api_key_sealed as "apiKeySealed", m.session_id as "sessionId", m.events_page as "eventsPage",
+       m.events_taken as "eventsTaken", runs.workspace_id as "workspaceId", runs.agent_id as "agentId"
+     from managed_agent_runs m join runs on runs.id = m.run_id where m.run_id = $1`,
+    [runId],
+  );
+  const held = rows[0];
+  if (!held?.sessionId) return;
+  const apiKey = requireSecretBox(context.config).open(held.apiKeySealed);
+  const path = `v1/sessions/${encodeURIComponent(held.sessionId)}/events`;
+  const events: unknown[] = [];
+  let page = held.eventsPage;
+  let skip = held.eventsTaken;
+  let reached = { page: held.eventsPage, taken: held.eventsTaken };
+  for (;;) {
+    const query = new URLSearchParams({ limit: String(eventsPageSize), ...(page === null ? {} : { page }) });
+    const answer = await anthropic(context, apiKey, "GET", `${path}?${query}`);
+    if (answer.status === 404) return;
+    if (answer.status !== 200) throw new Error(`Anthropic answered ${errorOf(answer)} when Cronk fetched the events of ${held.sessionId}.`);
+    const data = Array.isArray(answer.body.data) ? (answer.body.data as unknown[]) : [];
+    events.push(...data.slice(skip));
+    if (data.length > skip) reached = { page, taken: data.length };
+    skip = 0;
+    const next = answer.body.next_page;
+    if (typeof next !== "string" || !next) break;
+    page = next;
+  }
+  if (events.length === 0) return;
+  await transaction(context.db, async (tx) => {
+    const { rowCount } = await tx.query(
+      `update managed_agent_runs set events_page = $2, events_taken = $3
+       where run_id = $1 and events_page is not distinct from $4 and events_taken = $5`,
+      [runId, reached.page, reached.taken, held.eventsPage, held.eventsTaken],
+    );
+    if (!rowCount) return;
+    const session = { workspaceId: held.workspaceId, agentId: held.agentId, runId, sessionId: held.sessionId! };
+    await appendTranscript(context, tx, session, convertManagedAgentsEvents(events));
+  });
 }
 
 /**
@@ -354,7 +441,7 @@ export async function pollManagedAgentsSessions(context: Context, reports: RunRe
   // A Run whose refused start was unrecorded, as for a rate limit, has no row in `runs` left.
   const { rows: unfinished } = await context.db.query<{ runId: string }>(
     `select m.run_id as "runId" from managed_agent_runs m left join runs on runs.id = m.run_id
-     where (m.revoked_at is null or m.vault_deleted_at is null or m.archived_at is null)
+     where (m.revoked_at is null or m.vault_deleted_at is null or m.archived_at is null or m.transcript_fetched_at is null)
        and runs.state is distinct from 'running'`,
   );
   for (const { runId } of unfinished) await letGo(context, runId).catch((error: unknown) => failures.push(error));

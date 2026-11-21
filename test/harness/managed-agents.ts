@@ -63,6 +63,13 @@ export interface StandInManagedAgents {
   idle(id: string, stopReason: string): void;
   /** The session terminated, recording a `session.status_terminated` event. */
   terminate(id: string): void;
+  /**
+   * The session recorded these events, as the agent's work does (`agent.message`, `agent.tool_use`, …): each gets an
+   * id and a `processed_at` unless given one.
+   */
+  emit(id: string, ...events: Record<string, unknown>[]): void;
+  /** Lists at most this many events a page, whatever `limit` asks, as a service capping its pages would. */
+  pageSize(size: number): void;
   stop(): Promise<void>;
 }
 
@@ -76,6 +83,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
   const vaults: StandInVault[] = [];
   const sessions: StandInSession[] = [];
   let ids = 0;
+  let maxPageSize = Infinity;
   const nextId = (prefix: string) => `${prefix}_0${++ids}STANDIN`;
   const emit = (session: StandInSession, event: Record<string, unknown>) => {
     session.events.push({ id: nextId("sevt"), processed_at: new Date().toISOString(), ...event });
@@ -203,7 +211,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const session = sessionOf(match[1]!);
       if (!session) return error(404, "not_found_error", "No such session.");
       const ordered = url.searchParams.get("order") === "desc" ? [...session.events].reverse() : session.events;
-      const limit = Number(url.searchParams.get("limit") ?? "1000");
+      const limit = Math.min(Number(url.searchParams.get("limit") ?? "1000"), maxPageSize);
       const from = Number(url.searchParams.get("page") ?? "0");
       const page = ordered.slice(from, from + limit);
       const next = from + limit < ordered.length ? String(from + limit) : null;
@@ -273,6 +281,13 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const s = session(id);
       s.status = "terminated";
       emit(s, { type: "session.status_terminated" });
+    },
+    emit(id, ...events) {
+      const s = session(id);
+      for (const event of events) emit(s, event);
+    },
+    pageSize(size) {
+      maxPageSize = size;
     },
     stop: () =>
       new Promise((resolve) => {

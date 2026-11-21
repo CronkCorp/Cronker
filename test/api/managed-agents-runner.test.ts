@@ -387,3 +387,136 @@ describe("removing the Runner", () => {
     expect(await ok("GET", "/api/runners", ada)).toEqual([]);
   });
 });
+
+/** What a session's agent does in one turn, as Managed Agents records it: says something, calls a tool of Cronk's, says more. */
+const aTurn = [
+  { type: "agent.message", processed_at: "2026-01-01T09:00:05.000Z", content: [{ type: "text", text: "Reading the Ticket first." }] },
+  {
+    id: "sevt_call1",
+    type: "agent.mcp_tool_use",
+    processed_at: "2026-01-01T09:00:06.000Z",
+    mcp_server_name: "cronk",
+    name: "read_ticket",
+    input: { ticket: "CRONK-1" },
+  },
+  {
+    type: "agent.mcp_tool_result",
+    processed_at: "2026-01-01T09:00:07.000Z",
+    mcp_tool_use_id: "sevt_call1",
+    content: [{ type: "text", text: "CRONK-1 Make it so" }],
+  },
+  {
+    id: "sevt_call2",
+    type: "agent.tool_use",
+    processed_at: "2026-01-01T09:00:08.000Z",
+    name: "bash",
+    input: { command: "ls" },
+  },
+  {
+    type: "agent.tool_result",
+    processed_at: "2026-01-01T09:00:09.000Z",
+    tool_use_id: "sevt_call2",
+    content: [{ type: "text", text: "README.md" }],
+  },
+  { type: "agent.message", processed_at: "2026-01-01T09:00:10.000Z", content: [{ type: "text", text: "It is ready for Implement." }] },
+];
+
+/** The Run's Transcript and all its entries, as a User reads them. */
+async function transcriptOf(runId: string, as: Request) {
+  const run = await ok("GET", `/api/runs/${runId}`, as);
+  expect(run.transcriptId, "the Run has a Transcript").not.toBeNull();
+  const transcript = await ok("GET", `/api/transcripts/${run.transcriptId}`, as);
+  const { entries } = await ok("GET", `/api/transcripts/${run.transcriptId}/entries?limit=1000`, as);
+  return { transcript, entries };
+}
+
+describe("the Run's Transcript", () => {
+  test("an ended Run's Transcript holds its session's events as entries: the Brief, messages and tool calls with their results", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    cronk.managedAgents.emit(session.id, ...aTurn);
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    const { transcript, entries } = await transcriptOf(run.id, ada);
+    expect(transcript).toMatchObject({ runId: run.id, sessionId: session.id, agent: { name: "claude-api" }, gap: null });
+    const brief = (session.body.initial_events as { content: { text: string }[] }[])[0]!.content[0]!.text;
+    expect(entries).toEqual([
+      expect.objectContaining({ position: 1, role: "user", text: brief, toolName: null }),
+      { position: 2, role: "assistant", text: "Reading the Ticket first.", toolName: null, toolInput: null, toolResult: null, cut: false, at: "2026-01-01T09:00:05.000Z" },
+      {
+        position: 3,
+        role: "assistant",
+        text: null,
+        toolName: "mcp__cronk__read_ticket",
+        toolInput: { ticket: "CRONK-1" },
+        toolResult: "CRONK-1 Make it so",
+        cut: false,
+        at: "2026-01-01T09:00:06.000Z",
+      },
+      expect.objectContaining({ position: 4, toolName: "bash", toolInput: { command: "ls" }, toolResult: "README.md" }),
+      expect.objectContaining({ position: 5, role: "assistant", text: "It is ready for Implement." }),
+      // Its session was still running when the agent called finish, so Cronk interrupted it before archiving it.
+      expect.objectContaining({ position: 6, role: "system", text: "The session was interrupted." }),
+    ]);
+  });
+
+  test("is scrubbed and its long tool results cut, as any Transcript, when a terminated session ends the Run", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    // Made up, of GitHub's shape, put together here so the source holds none whole.
+    const secret = "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a";
+    cronk.managedAgents.emit(
+      session.id,
+      { type: "agent.message", content: [{ type: "text", text: `Pushing with ${secret} now.` }] },
+      { id: "sevt_read", type: "agent.tool_use", name: "read", input: { path: "big.log", token: secret } },
+      { type: "agent.tool_result", tool_use_id: "sevt_read", content: [{ type: "text", text: "a".repeat(20 * 1024) + "b".repeat(100) }] },
+    );
+    cronk.managedAgents.terminate(session.id);
+
+    await cronk.pollManagedAgentsSessions();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("failed");
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.slice(1)).toEqual([
+      expect.objectContaining({ text: "Pushing with [scrubbed] now." }),
+      expect.objectContaining({ toolName: "read", toolInput: { path: "big.log", token: "[scrubbed]" }, toolResult: "a".repeat(20 * 1024), cut: true }),
+    ]);
+  });
+
+  test("a running Run's Transcript, opened, fetches the events its session added since the last fetch", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const eventReads = () => cronk.managedAgents.calls.filter((c) => c.method === "GET" && c.path === `/v1/sessions/${session.id}/events`);
+    // The call is made, its result not back yet.
+    cronk.managedAgents.emit(session.id, ...aTurn.slice(0, 2));
+
+    const opened = await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    expect(opened.entryCount).toBe(3);
+    const { entries: first } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
+    expect(first.map((e: { text: string; toolName: string }) => e.text ?? e.toolName).slice(1)).toEqual([
+      "Reading the Ticket first.",
+      "mcp__cronk__read_ticket",
+    ]);
+    expect(first[2].toolResult).toBeNull();
+
+    cronk.managedAgents.emit(session.id, ...aTurn.slice(2));
+    const readsBefore = eventReads().length;
+    const reopened = await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    expect(eventReads().length).toBe(readsBefore + 1);
+    expect(reopened.entryCount).toBe(5);
+    const { entries } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
+    expect(entries.slice(1).map((e: { text: string; toolName: string; toolResult: string }) => [e.text ?? e.toolName, e.toolResult])).toEqual([
+      ["Reading the Ticket first.", null],
+      ["mcp__cronk__read_ticket", "CRONK-1 Make it so"],
+      ["bash", "README.md"],
+      ["It is ready for Implement.", null],
+    ]);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+});
+
