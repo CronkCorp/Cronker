@@ -1,12 +1,14 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { ErrorBody } from "../http/errors.js";
+import { authenticateAgent } from "../agents/tokens.js";
+import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
-import { createRunner, removeRunner, removeTrigger, RunnerRecord, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
+import { createRunner, pasteTriggerToken, removeRunner, removeTrigger, RunnerRecord, Trigger, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
+import { instructionsPath, reportSetup, setupInstructions, startSetup, StartedSetup } from "./runner-setups.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
 import { mergePullRequest } from "./merging.js";
 import { Ticket } from "../work/tickets.js";
@@ -262,6 +264,107 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return saveTrigger(context, user.id, request.params.runnerId, request.body);
+      },
+    );
+
+    app.post(
+      "/api/runners/:runnerId/setups",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Set up a Project's routines with Claude Code",
+          description:
+            "Starts a Runner setup of your `subscription` Runner for a Project you can see: plans one claude.ai routine " +
+            "per model label the Project's board uses, with the model id the Workspace maps it to, and returns the " +
+            "command to paste into your own Claude Code, which creates them and reports their trigger ids back. The " +
+            "command works once, for an hour. The Agent, pointed at the Runner in the Project's Workspace, is the one " +
+            "whose new *Transcript hook* token the instructions hand over; it may be left out when there is only one. " +
+            "Users only.",
+          params: Type.Object({ runnerId: Type.String() }),
+          body: Type.Object({
+            projectId: Type.String({ format: "uuid" }),
+            agentId: Type.Optional(Type.String({ format: "uuid" })),
+          }),
+          response: { 201: StartedSetup, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        return reply.code(201).send(await startSetup(context, user.id, request.params.runnerId, request.body));
+      },
+    );
+
+    // The command's `curl -f` fetches these as the User's prompt for Claude Code; a refusal is plain text, so it fails.
+    app.get(instructionsPath, { schema: { hide: true, params: Type.Object({ setupToken: Type.String() }) } }, async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      try {
+        const text = await setupInstructions(context, request.params.setupToken);
+        return reply.type("text/markdown; charset=utf-8").send(text);
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        return reply.code(error.statusCode).type("text/plain; charset=utf-8").send(`${error.message}\n`);
+      }
+    });
+
+    app.post(
+      "/api/runner-setups/:setupToken/triggers",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Report a Runner setup's routines back",
+          description:
+            "Called by the User's Claude Code, authenticated only by the setup token its instructions hold: the trigger id " +
+            "of the routine it created for each of the setup's model labels, all in one call. Each becomes the Project's " +
+            "trigger for its label on the Runner, waiting for its token, replacing the Project's earlier triggers; " +
+            "triggers for all Projects stay. Marks the setup used. Refused with `setup_used`, `setup_expired` or " +
+            "`setup_not_found` (press Set up with Claude Code again), and to Agents.",
+          params: Type.Object({ setupToken: Type.String() }),
+          body: Type.Object({
+            triggers: Type.Array(
+              Type.Object({
+                label: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, as the plan names it." }),
+                triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
+              }),
+              { maxItems: 50 },
+            ),
+          }),
+          response: {
+            200: Type.Object({ triggers: Type.Array(Trigger) }),
+            400: ErrorBody,
+            403: ErrorBody,
+            404: ErrorBody,
+            410: ErrorBody,
+          },
+        },
+      },
+      async (request) => {
+        const agent = await authenticateAgent(context, request);
+        if (agent) {
+          throw new ApiError(403, "agent_not_allowed", `${agent.name} is an Agent, and only a User's Claude Code completes a Runner setup.`);
+        }
+        return reportSetup(context, request.params.setupToken, request.body);
+      },
+    );
+
+    app.put(
+      "/api/runners/:runnerId/triggers/:triggerId/token",
+      {
+        schema: {
+          tags: ["Runs"],
+          summary: "Paste the token of a trigger of your subscription Runner",
+          description:
+            "For a trigger waiting for its token, as a Runner setup leaves each: the API token generated for its routine " +
+            "in claude.ai, which makes it usable. Generating a new token in claude.ai revokes the routine's previous one. " +
+            "The token is stored encrypted and never returned. Runs that couldn't start for want of it are retried as " +
+            "any other. Refused with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+          params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
+          body: Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) }),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return pasteTriggerToken(context, user.id, request.params.runnerId, request.params.triggerId, request.body.token);
       },
     );
 

@@ -153,6 +153,8 @@ describe("Runner settings", () => {
             model: "haiku",
             projectId: null,
             triggerId: "trig_haiku",
+            waitingForToken: false,
+            routineUrl: "https://claude.ai/code/routines/trig_haiku",
             createdAt: expect.any(String),
           },
           {
@@ -160,6 +162,8 @@ describe("Runner settings", () => {
             model: "opus",
             projectId: project.id,
             triggerId: "trig_opus_cronker",
+            waitingForToken: false,
+            routineUrl: "https://claude.ai/code/routines/trig_opus_cronker",
             createdAt: expect.any(String),
           },
         ],

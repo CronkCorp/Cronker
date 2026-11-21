@@ -16,6 +16,12 @@ export const Trigger = Type.Object({
     description: "The Project whose Tickets it fires for, overriding the Runner's own trigger for the model; null for all Projects.",
   }),
   triggerId: Type.String({ description: "The scheduled task's trigger id in claude.ai, such as `trig_01ABC…`." }),
+  waitingForToken: Type.Boolean({
+    description:
+      "Made by a Runner setup and waiting for the token its Owner generates in claude.ai and pastes; Runs needing it " +
+      "can't start until then.",
+  }),
+  routineUrl: Type.String({ format: "uri", description: "The routine's page in claude.ai, where its token is generated." }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Trigger = Static<typeof Trigger>;
@@ -47,14 +53,14 @@ export const RunnerRecord = Type.Object({
 });
 export type RunnerRecord = Static<typeof RunnerRecord>;
 
-type TriggerRow = Omit<Trigger, "createdAt"> & { createdAt: string };
+export type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
 type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers"> & {
   createdAt: Date;
   pausedUntil: Date | null;
   triggers: TriggerRow[];
 };
-const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
-  'createdAt', t.created_at)`;
+export const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
+  'waitingForToken', t.token_sealed is null, 'createdAt', t.created_at)`;
 const columns = `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
   paused_until as "pausedUntil", created_at as "createdAt",
@@ -63,8 +69,17 @@ const columns = `id, name, kind, run_limit as limit,
 const present = (row: Row): RunnerRecord => ({
   ...row,
   pausedUntil: row.pausedUntil?.toISOString() ?? null,
-  triggers: row.triggers.map((t) => ({ ...t, createdAt: new Date(t.createdAt).toISOString() })),
+  triggers: row.triggers.map(presentTrigger),
   createdAt: row.createdAt.toISOString(),
+});
+
+/** A routine's page in claude.ai, where its Owner generates its token. */
+export const routineUrl = (triggerId: string): string => `https://claude.ai/code/routines/${encodeURIComponent(triggerId)}`;
+
+export const presentTrigger = (t: TriggerRow): Trigger => ({
+  ...t,
+  routineUrl: routineUrl(t.triggerId),
+  createdAt: new Date(t.createdAt).toISOString(),
 });
 
 /** The User's own Runners, oldest first. */
@@ -132,6 +147,26 @@ export async function saveTrigger(
        token_sealed = excluded.token_sealed, created_at = excluded.created_at`,
     [runnerId, projectId, model, input.triggerId.trim(), sealed, context.clock.now()],
   );
+  return (await findRunner(context.db, userId, runnerId))!;
+}
+
+/**
+ * Pastes the token of one of a Runner's triggers, such as one a Runner setup made, waiting for it, sealed under
+ * `CRONK_SECRET_KEY` as saving a trigger seals it, and never returned. Runs that couldn't start for want of it are
+ * retried by the User, as any Run that couldn't start.
+ */
+export async function pasteTriggerToken(
+  context: Context,
+  userId: string,
+  runnerId: string,
+  triggerId: string,
+  token: string,
+): Promise<RunnerRecord> {
+  const runner = await findRunner(context.db, userId, runnerId);
+  if (!runner) throw noSuchRunner();
+  if (!runner.triggers.some((t) => t.id === triggerId)) throw new ApiError(404, "not_found", `${runner.name} has no such trigger.`);
+  const sealed = requireSecretBox(context.config).seal(token.trim());
+  await context.db.query("update runner_triggers set token_sealed = $3 where id = $1 and runner_id = $2", [triggerId, runnerId, sealed]);
   return (await findRunner(context.db, userId, runnerId))!;
 }
 

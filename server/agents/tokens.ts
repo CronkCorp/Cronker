@@ -2,7 +2,7 @@ import type { FastifyRequest } from "fastify";
 import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
-import type { Db } from "../db.js";
+import type { Db, Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
@@ -58,7 +58,7 @@ export async function tokensOf(db: Db, agent: Agent): Promise<AgentToken[]> {
 }
 
 export async function issueToken(
-  db: Db,
+  db: Db | Tx,
   clock: Clock,
   agent: Agent,
   input: { name: string; access: TokenAccess },
