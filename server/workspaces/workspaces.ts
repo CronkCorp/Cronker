@@ -95,6 +95,9 @@ export const ModelId = Type.Object({
 });
 export type ModelId = Static<typeof ModelId>;
 
+/** How many model labels a Workspace may have. */
+export const mostModelLabels = 50;
+
 /** A Workspace's settings beyond its name, set by its Admins. */
 export const WorkspaceSettings = Type.Object({
   lostRunMinutes: Type.Integer({
@@ -103,7 +106,7 @@ export const WorkspaceSettings = Type.Object({
     description: "How long a Run may go without a call naming it or its Ticket before it is lost. 30 unless changed.",
   }),
   modelIds: Type.Array(ModelId, {
-    maxItems: 50,
+    maxItems: mostModelLabels,
     description:
       "The model id each model label stands for, labels unique ignoring case. A Runner setup gives each routine the " +
       "model id of its label. Ships with the latest Haiku, Sonnet and Opus for `haiku`, `sonnet` and `opus`.",

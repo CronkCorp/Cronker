@@ -30,9 +30,11 @@ import {
   Workspace,
   WorkspaceName,
   WorkspaceSettings,
+  ModelId,
 } from "./workspaces.js";
 import { Link } from "../identity/links.js";
 import { WorkspaceSlug } from "./slugs.js";
+import { modelIdsOf, ModelLabel, removeModelId, saveModelId } from "./model-ids.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -127,6 +129,68 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
         return changeSettings(db, workspace.id, request.body);
+      },
+    );
+
+    app.get(
+      "/api/workspaces/:workspaceId/model-ids",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "The Workspace's model ids, for its Users and Agents",
+          description:
+            "The exact model id each model label stands for, so a Runner setup knows which model each routine gets. " +
+            "Labels are matched ignoring case. The same list, in the same order, as the Workspace's settings' `modelIds`.",
+          params: Type.Object({ workspaceId: Type.String() }),
+          response: { 200: Type.Array(ModelId), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const workspace = await findWorkspace(db, caller, request.params.workspaceId);
+        if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
+        return modelIdsOf(db, workspace.id);
+      },
+    );
+
+    const ModelIdParams = Type.Object({ workspaceId: Type.String(), label: ModelLabel });
+
+    app.put(
+      "/api/workspaces/:workspaceId/model-ids/:label",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Set the model id a label stands for (Admins only)",
+          description:
+            "Adds the label, or changes the one matching it ignoring case, which then takes this spelling.",
+          params: ModelIdParams,
+          body: Type.Object({ modelId: ModelId.properties.modelId }),
+          response: { 200: ModelId, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        return saveModelId(db, workspace.id, request.params.label, request.body.modelId);
+      },
+    );
+
+    app.delete(
+      "/api/workspaces/:workspaceId/model-ids/:label",
+      {
+        schema: {
+          tags: ["Workspaces"],
+          summary: "Remove a label's model id (Admins only)",
+          description: "Removes the label matching this one ignoring case.",
+          params: ModelIdParams,
+          response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        const workspace = await requireAdmin(db, user.id, request.params.workspaceId);
+        await removeModelId(db, workspace.id, request.params.label);
+        return reply.code(204).send(null);
       },
     );
 

@@ -27,6 +27,7 @@ import { instructionsPath, reportSetup, setupInstructions, startSetup, StartedSe
 import { briefOfRun, findRun, finishRun, retryRun, Run, runReports, runsOf } from "./runs.js";
 import { mergePullRequest } from "./merging.js";
 import { Ticket } from "../work/tickets.js";
+import { ModelLabel } from "../workspaces/model-ids.js";
 
 export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
   return async (app) => {
@@ -284,7 +285,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
           body: Type.Object({
-            model: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, such as `haiku`." }),
+            model: ModelLabel,
             projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
             triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
             token: Type.Optional(
