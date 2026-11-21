@@ -73,9 +73,23 @@ The scheduled tasks reach Cronk through a claude.ai connector, which signs in by
 
 On the Agent's page in Cronk, the connection is now listed among its tokens under claude.ai's name. Revoking it there disconnects claude.ai.
 
-## 6. Create one scheduled task per model
+## 6. Create one routine per model
 
-A scheduled task in Claude Code on the web fixes its model, Repository and connectors, so you need one per model your Steps use. The default board uses three model labels: `haiku` (Triage), `sonnet` (Investigate and Code review) and `opus` (Implement).
+A routine (a scheduled task in Claude Code on the web) fixes its model, Repository and connectors, so you need one per model your Steps use. The default board uses three model labels: `haiku` (Triage), `sonnet` (Investigate and Code review) and `opus` (Implement). Your own Claude Code can create them for a Project (below), or you create them by hand.
+
+### With Claude Code
+
+You need Claude Code on your machine, signed in with your claude.ai subscription, the `Cronk` connector added to claude.ai (step 5), and the Project's Repository added on its **Settings**, which needs the GitHub App (step 3).
+
+1. On **Runners**, set up a subscription Runner, for example `Claude Max`, and on the Agent's page set its **Runner** to it (step 7, items 1 and 4).
+2. On the Runner's card, choose **Set up with Claude Code**, pick the Project (and, with several Agents pointed at the Runner, the one whose Transcript hook token to make) and choose **Make the command**. Cronk shows the routines it plans, one per model label the Project's board uses, each with the exact model id the Workspace maps its label to. An Admin changes those on the Workspace's **Settings**, under **Model ids**; a label with none is refused, naming it. A Project with no Repository is refused; one with several gets a warning, as the Transcript hook doesn't run in sessions with more than one.
+3. Copy the command, `claude "$(curl -fsSL 'https://cronk.example.com/runner-setups/cronk_runner_setup_…')"`, and run it in a terminal. It works once, for an hour; if it has expired or was used, choose the button again. Claude Code asks which cloud environment the routines run in (keep one for Cronk), creates each routine with only the Project's Repository, only the Cronk connector, the prompt below, no schedule and a `claude/…` branch prefix, and reports their trigger ids back to Cronk. It never changes routines you already have.
+4. Claude Code then lists the routines with their claude.ai links, and shows a *Transcript hook* token of the Agent to add to that environment as `CRONK_TOKEN` (step 8, items 3 and 4), with the `settings.json` snippet to commit if the Repository hasn't got it yet (step 8, item 1).
+5. Back on the Runner's card, each routine's trigger is listed for the Project, marked **waiting for token**. For each, open its routine in claude.ai from **Open routine in claude.ai**, generate an API token there, paste it under **Waiting for tokens** and choose **Save token**. Generating a new token revokes the routine's previous one, so do it once per routine. Until then, a Run needing that trigger couldn't start, with the reason in your Inbox; **Retry** it once the token is saved.
+
+Running the setup again for a Project replaces that Project's triggers on the Runner with the new routines'; triggers for all Projects stay. The old routines stay in claude.ai for you to delete there, since Claude Code can't delete routines. Cronk never holds your claude.ai sign-in (ADR 0008).
+
+### By hand
 
 For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled task:
 
@@ -96,6 +110,8 @@ For each model, in Claude Code on the web (`claude.ai/code`), create a scheduled
 - **Trigger**: add an API trigger. claude.ai shows its trigger id (`trig_…`) and a token; copy both now, as the token is shown once.
 
 ## 7. Enter the triggers in Cronk
+
+After a setup with Claude Code, only items 3 and 4 are left, if you haven't done them yet.
 
 1. On **Runners**, set up a subscription Runner, for example `Claude Max`.
 2. For each scheduled task, under the Runner's **Save a trigger**, enter the model label exactly as the Steps use it (`haiku`, `sonnet`, `opus`), leave **For** at All Projects (or pick one Project to give it its own task, for example on another Repository), paste the trigger id and token, and choose **Save trigger**. The token is stored encrypted and never shown again.
