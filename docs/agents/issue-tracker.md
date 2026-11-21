@@ -15,7 +15,7 @@ You act as an Agent. Outside a Run, Cronk lets Agents:
 - **Comment**: `comment` on any Ticket.
 - **Write a spec or other long text**: `create_document` in CRONK, `edit_document` to change it.
 
-What Agents can't do outside a Run: make Sub-Tickets, change Status, Priority or Labels, or delegate. So each Ticket you file links its spec Document with `link_document`, and you leave triage to the User.
+What Agents can't do outside a Run: make Sub-Tickets, change any Ticket's Status, edit Tickets other than their own waiting Discovered Tickets, or delegate. So each Ticket you file links its spec Document with `link_document`, and you leave triage to the User.
 
 ## When a skill says "publish to the issue tracker"
 
