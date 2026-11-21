@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import { useLiveState, useRunnersLiveState, type LiveState } from "../live.js";
 import { Link } from "../router.js";
+import { addresses } from "../addresses.js";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
@@ -119,8 +120,8 @@ export interface Crumb {
 }
 
 /** The crumb every page of a Workspace starts from: its name, leading to its home. */
-export function workspaceCrumb(workspace: { id: string; name: string }): Crumb {
-  return { label: workspace.name, to: `/workspaces/${workspace.id}` };
+export function workspaceCrumb(workspace: { name: string; slug: string }): Crumb {
+  return { label: workspace.name, to: addresses.workspace(workspace) };
 }
 
 /** The head of a page: breadcrumbs, then the title, its view switcher and its actions, the primary last. */

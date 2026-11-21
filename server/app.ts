@@ -9,6 +9,7 @@ import type { Context } from "./context.js";
 import { agentOfRequest, agentOfToken, offersBearer } from "./agents/tokens.js";
 import { ApiError, guidanceForAgent, sendError, type Guidance } from "./http/errors.js";
 import { refuseOtherOrigins } from "./http/origin.js";
+import { acceptReadableForms } from "./http/readable.js";
 import { artifactRoutes } from "./artifacts/routes.js";
 import { sandboxRoutes } from "./artifacts/sandbox.js";
 import { attachmentRoutes } from "./attachments/routes.js";
@@ -128,6 +129,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   app.get("/api/openapi.json", { schema: { hide: true } }, async () => app.swagger());
 
   await app.register(cookie);
+  acceptReadableForms(app, context);
   refuseStoppedRunCalls(app, context);
   await app.register(identityRoutes(context));
   await app.register(githubRoutes(context));

@@ -207,3 +207,28 @@ test("set up a Project's routines with Claude Code: the command, the routines re
   await expect(waiting.getByRole("form")).toHaveCount(2);
   expect(await page.content()).not.toContain("sk-ant-oat01-pasted");
 });
+
+test("set up a Managed Agents Runner with an API key, after a rejected one is reported", async ({ page, cronk }) => {
+  await setUp(cronk);
+  cronk.managedAgents.apiKey("sk-ant-api03-ada-secret");
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "Runners" }).click();
+
+  await page.getByLabel("Runner name").fill("Claude API");
+  await page.getByLabel("Kind").selectOption("managed_agents");
+  await page.getByLabel("Anthropic API key").fill("sk-ant-wrong");
+  await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
+  await expect(page.getByRole("alert")).toContainText("Anthropic rejected the API key");
+  await expect(page.getByRole("region", { name: "Claude API" })).toHaveCount(0);
+
+  await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
+  await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
+  const runner = page.getByRole("region", { name: "Claude API" });
+  const [agent] = cronk.managedAgents.agents;
+  const [environment] = cronk.managedAgents.environments;
+  await expect(runner.getByRole("group", { name: "Managed Agents" })).toContainText(agent!.id);
+  await expect(runner.getByRole("group", { name: "Managed Agents" })).toContainText(environment!.id);
+  await expect(runner).toContainText("managed_agents");
+  await expect(runner).not.toContainText("Triggers");
+  await expect(page.getByRole("button", { name: "Set up a subscription Runner" })).toBeVisible();
+});

@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import type { Caller } from "../identity/callers.js";
+import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Viewer } from "../identity/viewers.js";
 import { findTicketRow, runOfAgent, ticketNotFound } from "../work/tickets.js";
 import { insertVersion } from "./documents.js";
@@ -18,6 +19,7 @@ export const Report = Type.Object({
   runId: Type.String({ format: "uuid", description: "The Run that wrote it." }),
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }, { description: "The Run's Agent." }),
   title: Type.String({ description: "Its current Version's." }),
+  slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown; its current Version's." }),
   createdAt: Type.String({ format: "date-time" }),
 });
@@ -26,7 +28,8 @@ export type Report = Static<typeof Report>;
 type Row = Omit<Report, "createdAt"> & { createdAt: Date };
 
 const columns = `documents.id, documents.ticket_id as "ticketId", documents.run_id as "runId",
-  json_build_object('id', agents.id, 'name', agents.name) as agent, versions.title, versions.body,
+  json_build_object('id', agents.id, 'name', agents.name) as agent, versions.title,
+  ${slugColumn("document", "documents.id", "versions.title")} as slug, versions.body,
   documents.created_at as "createdAt"`;
 
 const fromReports = `documents
@@ -39,11 +42,16 @@ const fromReports = `documents
  * as `{ id, title }` json, or null when it has none: what lists show of a Ticket's Reports.
  */
 export const latestReportOf = (ticketId: string) =>
-  `(select json_build_object('id', documents.id, 'title', versions.title) from ${fromReports}
+  `(select json_build_object('id', documents.id, 'title', versions.title,
+      'slug', ${slugColumn("document", "documents.id", "versions.title")}) from ${fromReports}
     where documents.ticket_id = ${ticketId} order by documents.seq desc limit 1)`;
 
 /** A Report as lists show it, by its id and title. */
-export const ReportRef = Type.Object({ id: Type.String({ format: "uuid" }), title: Type.String({ description: "Its current Version's." }) });
+export const ReportRef = Type.Object({
+  id: Type.String({ format: "uuid" }),
+  title: Type.String({ description: "Its current Version's." }),
+  slug: Type.String({ description: slugDescription }),
+});
 export type ReportRef = Static<typeof ReportRef>;
 
 const present = (row: Row): Report => ({ ...row, createdAt: row.createdAt.toISOString() });

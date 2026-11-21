@@ -1,5 +1,6 @@
+import { useAddresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
-import { keyBelongsElsewhere } from "./keys.js";
+import { shortcutStandsAside } from "./keys.js";
 import {
   api,
   nameOf,
@@ -53,10 +54,11 @@ function useInbox(workspaceId: string): { inbox: Inbox | null; failure: string |
 
 /** The Inbox link for the sidebar, with its count in red. */
 export function InboxLink({ workspaceId, current }: { workspaceId: string; current: boolean }) {
+  const to = useAddresses();
   const count = useInbox(workspaceId).inbox?.count ?? null;
   const waiting = count === null ? "" : count === 0 ? ", nothing waiting" : `, ${count} waiting`;
   return (
-    <Link to={`/workspaces/${workspaceId}/inbox`} current={current} aria-label={`Inbox${waiting}`} className="side-link">
+    <Link to={to.workspace("inbox")} current={current} aria-label={`Inbox${waiting}`} className="side-link">
       Inbox{count ? <span className="count">{count}</span> : null}
     </Link>
   );
@@ -145,9 +147,6 @@ function writeSelection(key: string | null) {
   window.history.replaceState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}`);
 }
 
-/** Whether a key press comes from a place it must not act from, such as a text field or an open dialog. */
-const typing = (event: KeyboardEvent) => event.metaKey || event.ctrlKey || event.altKey || keyBelongsElsewhere(event);
-
 /** Everything in the Workspace waiting on the signed-in User, as a split view: the list, and the selected item. */
 export function InboxScreen({ workspace, user }: { workspace: Workspace; user: User }) {
   usePlace("inbox");
@@ -218,7 +217,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
 
   const onKey = useRef<(event: KeyboardEvent) => void>(() => {});
   onKey.current = (event: KeyboardEvent) => {
-    if (typing(event)) return;
+    if (shortcutStandsAside(event)) return;
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
     else if (key === "k") move(-1);
@@ -352,6 +351,7 @@ function Detail({
   onReopening: (open: boolean) => void;
   onActed: () => void;
 }) {
+  const to = useAddresses();
   const { busy, error, run } = useAction(onActed);
   const ticket = item.ticket;
   const disabled = busy || resolved;
@@ -360,7 +360,7 @@ function Detail({
     <div className="detail">
       <p className="detail-head">
         <KindLabel kind={kindOf(item)} />
-        <Link to={`/tickets/${ticket.id}`}>
+        <Link to={to.ticket(ticket)}>
           <Key>{ticket.key}</Key> {ticket.title}
         </Link>
       </p>
@@ -544,6 +544,7 @@ function Reopen({
 
 /** The Ticket's latest Report, rendered inline, if it has one; fetched again after each live event, like the Inbox. */
 function LatestReport({ ticketId, workspaceId }: { ticketId: string; workspaceId: string }) {
+  const to = useAddresses();
   const [report, setReport] = useState<Report | null>(null);
   const latest = useLatest();
   const load = useCallback(
@@ -557,7 +558,7 @@ function LatestReport({ ticketId, workspaceId }: { ticketId: string; workspaceId
     <div className="report-card">
       <header className="report-card-head">
         <h3>
-          <KindLabel kind="Report" /> <Link to={`/documents/${report.id}`}>{report.title}</Link>
+          <KindLabel kind="Report" /> <Link to={to.document(report)}>{report.title}</Link>
         </h3>
         <Actor actor={{ kind: "agent", name: report.agent.name }} />
       </header>
@@ -653,6 +654,7 @@ function Discovered({
   disabled: boolean;
   run: (action: () => Promise<unknown>) => void;
 }) {
+  const to = useAddresses();
   const source = item.ticket.discovered?.sourceTicket;
   const [agents, setAgents] = useState<Agent[]>([]);
   const [moving, setMoving] = useState(false);
@@ -670,7 +672,7 @@ function Discovered({
         {source && (
           <>
             {" "}
-            while on <Link to={`/tickets/${source.id}`}>{source.key}</Link>
+            while on <Link to={to.ticket(source)}>{source.key}</Link>
           </>
         )}
         : delegate, move or dismiss it.

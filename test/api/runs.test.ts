@@ -68,6 +68,7 @@ describe("starting Runs", () => {
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
         transcriptId: null,
+        transcriptSlug: null,
         transcriptDeleted: false,
         startedAt: "2026-01-01T09:00:00.000Z",
         endedAt: null,
@@ -393,10 +394,20 @@ describe("Runners and Agents", () => {
 
     const unknown = await call("POST", "/api/runners", ada, { name: "Mystery", kind: "mystery" });
     expect(unknown.status).toBe(400);
-    expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has subscription, fake." });
+    expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has subscription, managed_agents, fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
-      { id: agent.runnerId, name: "Fake", kind: "fake", limit: 2, running: 0, pausedUntil: null, triggers: [], createdAt: expect.any(String) },
+      {
+        id: agent.runnerId,
+        name: "Fake",
+        kind: "fake",
+        limit: 2,
+        running: 0,
+        pausedUntil: null,
+        triggers: [],
+        managedAgents: null,
+        createdAt: expect.any(String),
+      },
     ]);
     const notOwn = await call("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: "00000000-0000-0000-0000-000000000000" });
     expect(notOwn.json.error.code).toBe("unknown_runner");

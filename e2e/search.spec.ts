@@ -24,7 +24,7 @@ test("search from the sidebar, see results grouped by kind with highlighted snip
   await box.press("Enter");
 
   await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
-  await expect(page).toHaveURL(/\/workspaces\/[^/]+\/search\?q=merged$/);
+  await expect(page).toHaveURL(`${cronk.url}/adas-workspace/search?q=merged`);
   const results = page.getByRole("region", { name: "Search results" });
   await expect(results.getByRole("heading", { level: 2 })).toHaveText(["Tickets 2", "Documents 1", "Terms 1"]);
   const tickets = page.getByRole("region", { name: "Tickets" });
@@ -39,7 +39,7 @@ test("search from the sidebar, see results grouped by kind with highlighted snip
 
   await page.getByRole("link", { name: /Labels vanish/ }).click();
   await expect(page.getByRole("heading", { name: "Labels vanish" })).toBeVisible();
-  await expect(page).toHaveURL(/\/tickets\//);
+  await expect(page).toHaveURL(`${cronk.url}/adas-workspace/tickets/CRONK-1`);
 });
 
 test("a search that finds nothing says so", async ({ page, cronk }) => {
@@ -91,6 +91,6 @@ test("a Transcript found by its text shows after every other kind and opens its 
   await expect(transcripts.locator("mark")).toHaveText("webhook");
 
   await transcripts.getByRole("link", { name: /Transcript of the Triage Run/ }).click();
-  await expect(page).toHaveURL(/\/transcripts\//);
+  await expect(page).toHaveURL(/\/adas-workspace\/transcripts\/claude-max-[0-9a-f]{8}$/);
   await expect(page.getByRole("heading", { name: "Transcript of the Triage Run", level: 1 })).toBeVisible();
 });

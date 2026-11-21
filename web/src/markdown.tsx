@@ -1,6 +1,7 @@
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import { attachmentUrl, isAttachmentUrl, type Mention } from "./api.js";
 import { Link } from "./router.js";
+import { useAddresses, type Addresses } from "./addresses.js";
 
 /** A minimal view of the Markdown syntax tree, enough to find text outside links and code. */
 interface Node {
@@ -11,7 +12,7 @@ interface Node {
 }
 
 /** Turns each mentioned Ticket key in the text into a link to its Ticket. */
-function linkMentions(mentions: Mention[]) {
+function linkMentions(mentions: Mention[], to: Addresses) {
   const byText = new Map(mentions.map((m) => [m.text, m]));
   const escaped = mentions.map((m) => m.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const pattern = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
@@ -23,7 +24,7 @@ function linkMentions(mentions: Mention[]) {
       .map((part) => {
         const mention = byText.get(part);
         return mention
-          ? { type: "link", url: `/tickets/${mention.ticketId}`, children: [{ type: "text", value: part }] }
+          ? { type: "link", url: to.ticket(mention), children: [{ type: "text", value: part }] }
           : { type: "text", value: part };
       });
 
@@ -64,9 +65,10 @@ const components: Components = {
 
 /** Markdown as written by Users, without raw HTML, with Ticket keys as links and `attachment:` references resolved. */
 export function Markdown({ text, mentions }: { text: string; mentions: Mention[] }) {
+  const to = useAddresses();
   return (
     <div className="markdown">
-      <ReactMarkdown remarkPlugins={[linkMentions(mentions)]} components={components} urlTransform={urlTransform}>
+      <ReactMarkdown remarkPlugins={[linkMentions(mentions, to)]} components={components} urlTransform={urlTransform}>
         {text}
       </ReactMarkdown>
     </div>

@@ -470,3 +470,28 @@ describe("the Transcript hook token a setup hands over", () => {
     ]);
   });
 });
+
+describe("the address of a setup's instructions", () => {
+  test("is no Workspace's slug, so no Workspace's pages are under it", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+
+    const created = await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Runner setups" } });
+
+    expect(await created.json()).toMatchObject({ slug: "runner-setups-2" });
+  });
+
+  test("moves a Workspace that had it as its slug before to another", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ migrateBefore: "0045_runner_setups.sql" });
+    const { user } = await setUp(cronk);
+    const id = crypto.randomUUID();
+    await cronk.stage("insert into workspaces (id, name, slug, created_at) values ($1, 'Runner setups', 'runner-setups', now())", [id]);
+    await cronk.stage("insert into memberships (workspace_id, user_id, created_at) values ($1, $2, now())", [id, user.id]);
+
+    await cronk.upgrade();
+
+    const me = await ok("GET", "/api/me", { cookie: await signIn(cronk) });
+    expect(me.workspaces.find((w: { id: string }) => w.id === id).slug).toBe("runner-setups-2");
+  });
+});

@@ -1,3 +1,4 @@
+import { useAddresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Project, type Run, type Ticket, type Transcript, type TranscriptEntry, type Workspace } from "./api.js";
 import { usePlace } from "./frame.js";
@@ -42,6 +43,7 @@ async function entriesFromStart(transcriptId: string, count: number): Promise<{ 
  * Delete, for when the scrubbing missed a secret.
  */
 export function TranscriptScreen({ workspace, transcriptId }: { workspace: Workspace; transcriptId: string }) {
+  const to = useAddresses();
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   // The Run the Transcript records, with its Ticket and Project, for the page head.
   const [ofRun, setOfRun] = useState<{ run: Run; ticket: Ticket; project: Project } | null>(null);
@@ -129,13 +131,13 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   const run = ofRun?.run;
   if (ofRun) {
     crumbs.push(
-      { label: <span className="mono">{ofRun.project.key}</span>, to: `/projects/${ofRun.project.id}` },
-      { label: <span className="mono">{ofRun.ticket.key}</span>, to: `/tickets/${ofRun.ticket.id}` },
+      { label: <span className="mono">{ofRun.project.key}</span>, to: to.project(ofRun.project) },
+      { label: <span className="mono">{ofRun.ticket.key}</span>, to: to.ticket(ofRun.ticket) },
     );
   } else {
     crumbs.push(
-      { label: "Agents", to: `/workspaces/${workspace.id}/agents` },
-      { label: transcript.agent.name, to: `/workspaces/${workspace.id}/agents/${transcript.agent.id}` },
+      { label: "Agents", to: to.workspace("agents") },
+      { label: transcript.agent.name, to: to.agent(transcript.agent.id) },
     );
   }
   crumbs.push({ label: "Transcript" });
@@ -143,8 +145,8 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   const agent = { kind: "agent" as const, name: transcript.agent.name };
   // Where the page leads once the Transcript is gone: its Run's Ticket, or its Agent's page.
   const back = ofRun
-    ? { to: `/tickets/${ofRun.ticket.id}`, label: `Back to ${ofRun.ticket.key}` }
-    : { to: `/workspaces/${workspace.id}/agents/${transcript.agent.id}`, label: `Back to ${transcript.agent.name}` };
+    ? { to: to.ticket(ofRun.ticket), label: `Back to ${ofRun.ticket.key}` }
+    : { to: to.agent(transcript.agent.id), label: `Back to ${transcript.agent.name}` };
   return (
     <div className="page transcript-page">
       <PageHead
@@ -188,7 +190,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
                 {transcript.tickets.map((ticket, index) => (
                   <span key={ticket.id}>
                     {index > 0 && ", "}
-                    <Link to={`/tickets/${ticket.id}`} className="mono" title={ticket.title}>
+                    <Link to={to.ticket(ticket)} className="mono" title={ticket.title}>
                       {ticket.key}
                     </Link>
                   </span>

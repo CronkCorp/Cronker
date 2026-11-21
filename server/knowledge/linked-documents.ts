@@ -4,6 +4,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
+import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { findTicketRow, runOfAgent, ticketNotFound, type TicketRow } from "../work/tickets.js";
@@ -20,10 +21,12 @@ export const LinkedDocument = Type.Object({
     description: "The Project whose page tree holds it, or null for the Workspace's.",
   }),
   title: Type.String({ description: "Its current Version's title." }),
+  slug: Type.String({ description: slugDescription }),
 });
 export type LinkedDocument = Static<typeof LinkedDocument>;
 
-const columns = `documents.id, documents.project_id as "projectId", versions.title`;
+const columns = `documents.id, documents.project_id as "projectId", versions.title,
+  ${slugColumn("document", "documents.id", "versions.title")} as slug`;
 const fromLinks = `linked_documents
   join documents on documents.id = linked_documents.document_id
   join document_versions versions on versions.document_id = documents.id and versions.number = documents.version`;
@@ -75,7 +78,7 @@ export async function linkDocument(
       [ticket.id, document.id, ticket.workspaceId, context.clock.now()],
     );
     if (!rowCount) throw new ApiError(409, "document_already_linked", `${ticket.key} already links ${document.title}.`);
-    const linked: LinkedDocument = { id: document.id, projectId: document.projectId, title: document.title };
+    const linked: LinkedDocument = { id: document.id, projectId: document.projectId, title: document.title, slug: document.slug };
     await recordLinkChange(context, tx, ticket, actor, { from: null, to: { id: linked.id, title: linked.title } });
     return linked;
   });

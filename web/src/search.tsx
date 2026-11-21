@@ -5,22 +5,24 @@ import { useLatest } from "./live.js";
 import { Link, navigate, usePath, useQuery } from "./router.js";
 import { EmptyState, FormError, PageHead, workspaceCrumb } from "./ui/controls.js";
 import { Key } from "./ui/labels.js";
+import { useAddresses, type Addresses } from "./addresses.js";
 
 /** How many results of each kind a search gives at most, as the API does. */
 const perKind = 20;
 
 /** Where a search of the Workspace shows its results, narrowed to a Project when one is given. */
-function searchPage(workspaceId: string, q: string, project?: string): string {
+function searchPage(to: Addresses, q: string, project?: string): string {
   const query = new URLSearchParams({ q });
   if (project) query.set("project", project);
-  return `/workspaces/${workspaceId}/search?${query}`;
+  return to.search(`${query}`);
 }
 
 /** The sidebar's search box: Enter opens the Workspace's results page. */
-export function SearchBox({ workspaceId }: { workspaceId: string }) {
+export function SearchBox() {
   const path = usePath();
+  const to = useAddresses();
   const shown = useQuery().get("q") ?? "";
-  const onResults = path === `/workspaces/${workspaceId}/search`;
+  const onResults = path === to.workspace("search");
   const [q, setQ] = useState(onResults ? shown : "");
   // Following a link to other results, or going back to them, shows their words in the box.
   useEffect(() => {
@@ -29,7 +31,7 @@ export function SearchBox({ workspaceId }: { workspaceId: string }) {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (q.trim()) navigate(searchPage(workspaceId, q.trim()));
+    if (q.trim()) navigate(searchPage(to, q.trim()));
   };
   return (
     <form role="search" aria-label="Workspace" className="sidebar-search" onSubmit={submit}>
@@ -48,27 +50,29 @@ const groups: { kind: SearchKind; heading: string }[] = [
   { kind: "transcript", heading: "Transcripts" },
 ];
 
-const pageOf = (result: SearchResult): string => {
+const pageOf = (to: Addresses, result: SearchResult): string => {
+  const slug = { slug: result.slug ?? result.id };
   switch (result.kind) {
     case "ticket":
-      return `/tickets/${result.id}`;
+      return to.ticket({ key: result.ticketKey ?? "" });
     case "document":
     case "report":
-      return `/documents/${result.id}`;
+      return to.document(slug);
     case "term":
-      return `/terms/${result.id}`;
+      return to.term({ id: result.id, projectId: result.projectId, name: result.title });
     case "decision":
-      return `/decisions/${result.id}`;
+      return to.decision({ id: result.id, projectId: result.projectId, number: result.number ?? 0 });
     case "artifact":
-      return `/artifacts/${result.id}`;
+      return to.artifact(slug);
     case "transcript":
-      return `/transcripts/${result.id}`;
+      return to.transcript(slug);
   }
 };
 
 /** A search's results across the Workspace, or one Project, grouped by kind, each with where it matched. */
 export function SearchScreen({ workspace }: { workspace: Workspace }) {
   usePlace(null);
+  const to = useAddresses();
   const query = useQuery();
   const q = query.get("q") ?? "";
   const project = query.get("project") ?? "";
@@ -102,7 +106,7 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
       <div className="filters" role="group" aria-label="Filters">
         <label className="filter">
           <span className="sr-only">Project</span>
-          <select value={project} onChange={(e) => navigate(searchPage(workspace.id, q, e.target.value || undefined))}>
+          <select value={project} onChange={(e) => navigate(searchPage(to, q, e.target.value || undefined))}>
             <option value="">All Projects</option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -133,7 +137,7 @@ export function SearchScreen({ workspace }: { workspace: Workspace }) {
                   <ul className="search-list">
                     {found.map((result) => (
                       <li key={result.id} className="search-result">
-                        <Link to={pageOf(result)} className="search-title">
+                        <Link to={pageOf(to, result)} className="search-title">
                           {result.ticketKey && <Key>{result.ticketKey}</Key>} {result.title}
                         </Link>
                         {result.projectId ? (

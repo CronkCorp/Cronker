@@ -10,6 +10,14 @@ A self-hosted platform where humans and AI agents share Tickets, Documents, Term
 A group of Users sharing Projects and the knowledge that spans them. An installation may hold several; a User sees only the Workspaces they belong to.
 _Avoid_: Organization, tenant, team, space
 
+**Workspace slug**:
+A Workspace's name in its web addresses, such as `acme` in `/acme/tickets/RP-12`: lower case letters and digits with dashes between words, unique across the installation, made from the Workspace's name or chosen when it is created, and never changed.
+_Avoid_: Workspace key, handle, subdomain
+
+**Readable form**:
+What a web address, the HTTP API and the MCP tools name a thing by in place of its id: a Workspace slug, a Project's or Ticket's key, a Decision's number or a Term's name within its Project or the Workspace, or the slug of a Document, Artifact or Transcript, the words of its title then its **short id**, the first 8 hex digits of its id. A readable form that could name more than one thing names none.
+_Avoid_: Alias, handle, permalink
+
 **Project**:
 The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's.
 _Avoid_: Board, space, repo

@@ -33,12 +33,12 @@ describe("signing in", () => {
     expect(me.status).toBe(200);
     expect(await me.json()).toEqual({
       user,
-      workspaces: [{ id: workspace.id, name: "Ada's Workspace", isAdmin: true }],
+      workspaces: [{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: true }],
     });
 
     const shown = await cronk.request("GET", `/api/workspaces/${workspace.id}`, { cookie });
     expect(shown.status).toBe(200);
-    expect(await shown.json()).toEqual({ id: workspace.id, name: "Ada's Workspace" });
+    expect(await shown.json()).toEqual({ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace" });
   });
 });
 

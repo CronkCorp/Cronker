@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { hashPassword } from "./passwords.js";
 import { hashSecret, issueSecret, secretMatches } from "./secrets.js";
 import { userColumns, type User } from "./user.js";
-import type { Workspace } from "../workspaces/workspaces.js";
+import { insertWorkspace, type Workspace } from "../workspaces/workspaces.js";
 
 /**
  * Setup turns a fresh installation into one with its first User and Workspace.
@@ -65,15 +65,12 @@ export async function runSetup(db: Db, clock: Clock, input: SetupInput): Promise
       `insert into users (email, password_hash, created_at) values ($1, $2, $3) returning ${userColumns}`,
       [input.email, passwordHash, now],
     );
-    const workspace = await tx.query<Workspace>(
-      "insert into workspaces (name, created_at) values ($1, $2) returning id, name",
-      [input.workspaceName.trim(), now],
-    );
+    const workspace = await insertWorkspace(tx, input.workspaceName, now);
     await tx.query(
       "insert into memberships (workspace_id, user_id, is_admin, created_at) values ($1, $2, true, $3)",
-      [workspace.rows[0]!.id, user.rows[0]!.id, now],
+      [workspace.id, user.rows[0]!.id, now],
     );
     await tx.query("update installation set set_up_at = $1, setup_code_hash = null", [now]);
-    return { user: user.rows[0]!, workspace: workspace.rows[0]! };
+    return { user: user.rows[0]!, workspace };
   });
 }

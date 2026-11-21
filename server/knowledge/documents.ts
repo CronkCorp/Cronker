@@ -4,6 +4,7 @@ import { forgetAttachments } from "../attachments/attachments.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn, slugDescription } from "../http/readable.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inView, type Viewer } from "../identity/viewers.js";
@@ -46,6 +47,7 @@ export const Document = Type.Object({
     description: "Its place among its siblings, counting from 0; null for a Report.",
   }),
   title: Type.String(),
+  slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
 });
@@ -57,7 +59,8 @@ export type Tree = Place;
 type Row = Omit<Document, "version"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
 
 const columns = `documents.id, documents.workspace_id as "workspaceId", documents.project_id as "projectId",
-  documents.ticket_id as "ticketId", documents.run_id as "runId", documents.parent_id as "parentId", documents.position, versions.title, versions.body,
+  documents.ticket_id as "ticketId", documents.run_id as "runId", documents.parent_id as "parentId", documents.position, versions.title,
+  ${slugColumn("document", "documents.id", "versions.title")} as slug, versions.body,
   json_build_object('number', versions.number, 'title', versions.title,
     'actor', ${actorColumn("users", "agents")}, 'savedAt', versions.saved_at) as version`;
 

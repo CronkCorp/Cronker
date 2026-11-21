@@ -34,3 +34,20 @@ create index runner_setups_runner on runner_setups (runner_id);
 alter table agent_tokens drop constraint agent_tokens_oauth_check;
 alter table agent_tokens add constraint agent_tokens_oauth_check
   check ((oauth_client_id is null) = (refresh_hash is null) and (oauth_client_id is null or expires_at is not null));
+
+-- A setup's instructions are served at `/runner-setups/<setup token>`, so no Workspace slug may be `runner-setups`
+-- (`server/workspaces/slugs.ts`). A Workspace that already had it gets `-2`, `-3` and so on, as 0044 gave slugs.
+do $$
+declare
+  n integer := 1;
+  candidate text := 'runner-setups';
+begin
+  if exists (select 1 from workspaces where slug = 'runner-setups') then
+    loop
+      n := n + 1;
+      candidate := 'runner-setups-' || n;
+      exit when not exists (select 1 from workspaces where slug = candidate);
+    end loop;
+    update workspaces set slug = candidate where slug = 'runner-setups';
+  end if;
+end $$;
