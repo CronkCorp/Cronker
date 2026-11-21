@@ -241,8 +241,8 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Links an Artifact of the Ticket's Project or of the Workspace (`artifact_outside_project` for another " +
             "Project's; `unknown_artifact` for one not in the Workspace), once (`artifact_already_linked`). An Agent " +
-            "links only during its own running Run on the Ticket (`no_running_run`). A deleted Artifact drops out of " +
-            "its links.",
+            "links only during its own running Run on the Ticket, or on a Discovered Ticket it filed that still waits " +
+            "for a User (`no_running_run`). A deleted Artifact drops out of its links.",
           params: TicketParams,
           body: Type.Object({ artifactId: Type.String({ description: "An Artifact of the Ticket's Project or Workspace." }) }),
           response: { 201: LinkedArtifact, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
@@ -263,7 +263,8 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Unlink an Artifact from a Ticket",
           description:
             "The Artifact stays in its Project or the Workspace; an Artifact the Ticket doesn't link answers " +
-            "`not_found`. An Agent unlinks only during its own running Run on the Ticket (`no_running_run`).",
+            "`not_found`. An Agent unlinks only during its own running Run on the Ticket, or on a Discovered Ticket " +
+            "it filed that still waits for a User (`no_running_run`).",
           params: Type.Object({ ticketId: Type.String(), artifactId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },

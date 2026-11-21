@@ -256,5 +256,67 @@ describe("Linked Artifacts", () => {
       expect(await ok("GET", `/api/projects/${other.id}/artifacts`, ada)).toEqual([]);
       expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([]);
     });
+
+    /** `claude-max`, with no Run, files CRONK-2 as a Discovered Ticket that waits for Ada. */
+    async function discovered() {
+      const setup = await ticketWithArtifacts();
+      const found = await ok("POST", `/api/projects/${setup.project.id}/tickets`, setup.asAgent, { title: "Found it" });
+      return { ...setup, found };
+    }
+
+    test("outside a Run, an Agent links and unlinks Artifacts on a waiting Discovered Ticket it filed", async () => {
+      const { ada, found, board, tokens, agent, asAgent } = await discovered();
+
+      await ok("POST", `/api/tickets/${found.id}/artifacts`, asAgent, { artifactId: board.id });
+      await ok("POST", `/api/tickets/${found.id}/artifacts`, asAgent, { artifactId: tokens.id });
+      await ok("DELETE", `/api/tickets/${found.id}/artifacts/${tokens.id}`, asAgent);
+
+      expect(await ok("GET", `/api/tickets/${found.id}/artifacts`, ada)).toEqual([expect.objectContaining({ id: board.id })]);
+      const changes = (await ok("GET", `/api/tickets/${found.id}/timeline`, ada)).filter(
+        (c: { field: string }) => c.field === "linkedArtifact",
+      );
+      expect(changes.map((c: { actor: { id: string }; runId: string | null }) => [c.actor.id, c.runId])).toEqual([
+        [agent.id, null],
+        [agent.id, null],
+        [agent.id, null],
+      ]);
+    });
+
+    test("outside a Run, an Agent may not link or unlink on a Ticket it didn't file, or one a User has taken up", async () => {
+      const { workspace, ada, ticket, found, board, agent, asAgent } = await discovered();
+      const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
+      const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "full" });
+      const asOther = { headers: { authorization: `Bearer ${secret}` } };
+      await ok("POST", `/api/tickets/${found.id}/artifacts`, asAgent, { artifactId: board.id });
+
+      const onAUsersTicket = await call("POST", `/api/tickets/${ticket.id}/artifacts`, asAgent, { artifactId: board.id });
+      const byAnotherAgent = await call("DELETE", `/api/tickets/${found.id}/artifacts/${board.id}`, asOther);
+      await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
+      const afterDelegated = await call("DELETE", `/api/tickets/${found.id}/artifacts/${board.id}`, asAgent);
+
+      for (const refused of [onAUsersTicket, byAnotherAgent, afterDelegated]) {
+        expect(refused.status).toBe(403);
+        expect(refused.json.error).toEqual(
+          expect.objectContaining({
+            code: "no_running_run",
+            rule: expect.stringContaining("Discovered Ticket it filed"),
+            advice: expect.any(String),
+          }),
+        );
+      }
+      expect(await ok("GET", `/api/tickets/${ticket.id}/artifacts`, ada)).toEqual([]);
+      expect(await ok("GET", `/api/tickets/${found.id}/artifacts`, ada)).toEqual([expect.objectContaining({ id: board.id })]);
+    });
+
+    test("an Agent links only Artifacts of its Discovered Ticket's Project or of the Workspace", async () => {
+      const { workspace, ada, found, asAgent } = await discovered();
+      const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Board", key: "BOARD" });
+      const elsewhere = await ok("POST", `/api/projects/${other.id}/artifacts`, ada, { title: "Board notes", files });
+
+      const refused = await call("POST", `/api/tickets/${found.id}/artifacts`, asAgent, { artifactId: elsewhere.id });
+
+      expect(refused.status).toBe(400);
+      expect(refused.json.error.code).toBe("artifact_outside_project");
+    });
   });
 });

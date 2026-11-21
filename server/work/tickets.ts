@@ -889,6 +889,32 @@ export async function discoveringAgent(tx: Tx, agent: AgentCaller, ticket: Ticke
   return { kind: "agent", id: agent.id, runId: rowCount ? runId : null };
 }
 
+/**
+ * The Agent linking or unlinking a Document or Artifact (`thing`) on the Ticket: during its own running Run on it, or
+ * on a waiting Discovered Ticket it filed. Refused otherwise, with the rule.
+ */
+export async function linkingAgent(
+  tx: Tx,
+  agent: AgentCaller,
+  ticket: TicketRow,
+  thing: "Document" | "Artifact",
+): Promise<ChangeActor> {
+  if (holdsDiscoveredTicket(agent, ticket)) return discoveringAgent(tx, agent, ticket);
+  const runId = await agentRunOn(tx, agent, ticket);
+  if (runId) return { kind: "agent", id: agent.id, runId };
+  throw new ApiError(
+    403,
+    "no_running_run",
+    `${agent.name} has no running Run on ${ticket.key}, and didn't file it as a Discovered Ticket that still waits for a User.`,
+    {
+      rule:
+        `An Agent links ${thing}s to a Ticket, and unlinks them, during its own running Run on it, or on a Discovered ` +
+        "Ticket it filed until a User delegates, moves or dismisses it.",
+      advice: `Name the ${thing} in a Comment on ${ticket.key} instead; linking it is for its Users, or a Run of its own.`,
+    },
+  );
+}
+
 /** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */
 function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean): void {
   const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
@@ -913,15 +939,21 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
 
 /** The Agent's running Run on the Ticket, which locked the Ticket; refused if it has none. */
 export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
-  const { rows } = await tx.query<{ id: string }>(
-    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
-    [ticket.id, agent.id],
-  );
-  if (rows[0]) return rows[0].id;
+  const runId = await agentRunOn(tx, agent, ticket);
+  if (runId) return runId;
   throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
     rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
     advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
   });
+}
+
+/** The Agent's running Run on the Ticket, or null for none. */
+async function agentRunOn(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string | null> {
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from runs where ticket_id = $1 and agent_id = $2 and state = 'running'",
+    [ticket.id, agent.id],
+  );
+  return rows[0]?.id ?? null;
 }
 
 /** A Status or User, looked up by the query, as `{ id, name }` as it is named now; or null for no id. */

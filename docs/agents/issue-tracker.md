@@ -11,10 +11,11 @@ You act as an Agent. Outside a Run, Cronk lets Agents:
 - **Read**: `list_tickets` (with `project: "CRONK"`), `read_ticket`, `search`, `list_documents`, `read_document`.
 - **File a Ticket**: `file_ticket` with `project: "CRONK"`. It becomes a Discovered Ticket: in Backlog, undelegated, assigned to your Owner and waiting in their Inbox. Until a User delegates, moves or dismisses it you may edit it with `edit_ticket`.
 - **Blocking**: `add_block` from a Discovered Ticket you filed to the Ticket it blocks. Cronk refuses cycles.
+- **Link the spec**: `link_document` from a Discovered Ticket you filed to its spec Document (and `link_artifact` for a prototype), until a User takes it up.
 - **Comment**: `comment` on any Ticket.
 - **Write a spec or other long text**: `create_document` in CRONK, `edit_document` to change it.
 
-What Agents can't do outside a Run: make Sub-Tickets, link Documents to Tickets, change Status, Priority or Labels, or delegate. So name the spec's Document (its title and address) at the top of each Ticket's description instead of linking it, and leave triage to the User.
+What Agents can't do outside a Run: make Sub-Tickets, change Status, Priority or Labels, or delegate. So each Ticket you file links its spec Document with `link_document`, and you leave triage to the User.
 
 ## When a skill says "publish to the issue tracker"
 
@@ -27,7 +28,7 @@ What Agents can't do outside a Run: make Sub-Tickets, link Documents to Tickets,
 
 ## Sub-issues and parents
 
-Cronk has Sub-Tickets, but an Agent can only make them during a Run. A skill that asks for a parent and children files the children as Discovered Tickets and names the parent (the spec Document, or a parent Ticket's key) at the top of each description, with `Part of …`.
+Cronk has Sub-Tickets, but an Agent can only make them during a Run. A skill that asks for a parent and children files the children as Discovered Tickets, links each to the spec Document with `link_document`, and names the parent (the spec Document, or a parent Ticket's key) at the top of each description, with `Part of …`.
 
 ## Pull requests as a triage surface
 

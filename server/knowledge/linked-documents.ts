@@ -7,7 +7,7 @@ import type { Caller } from "../identity/callers.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
-import { findTicketRow, runOfAgent, ticketNotFound, type TicketRow } from "../work/tickets.js";
+import { findTicketRow, linkingAgent, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findDocument } from "./documents.js";
 
 /**
@@ -47,7 +47,7 @@ type Named = { id: string; title: string };
 
 /**
  * Links a Document of the Ticket's Project or of its Workspace to the Ticket. A User links on any Ticket; an Agent
- * only during its own running Run on it.
+ * only during its own running Run on it, or on a Discovered Ticket it filed that waits for a User.
  */
 export async function linkDocument(
   context: Context,
@@ -84,7 +84,10 @@ export async function linkDocument(
   });
 }
 
-/** Unlinks a Document from the Ticket, by a User or by an Agent during its Run on it; the Document stays in its page tree. */
+/**
+ * Unlinks a Document from the Ticket, by a User or by an Agent that may link on it; the Document stays in its page
+ * tree.
+ */
 export async function unlinkDocument(context: Context, caller: Caller, ticketId: string, documentId: string): Promise<void> {
   await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
@@ -104,10 +107,13 @@ export async function unlinkDocument(context: Context, caller: Caller, ticketId:
   });
 }
 
-/** Who links or unlinks: a User, or an Agent only during its own running Run on the Ticket, refused otherwise. */
+/**
+ * Who links or unlinks: a User, or an Agent during its own running Run on the Ticket or on a waiting Discovered
+ * Ticket it filed, refused otherwise.
+ */
 async function linkingActor(tx: Tx, caller: Caller, ticket: TicketRow): Promise<ChangeActor> {
   if (caller.kind === "user") return caller.id;
-  return { kind: "agent", id: caller.id, runId: await runOfAgent(tx, caller, ticket) };
+  return linkingAgent(tx, caller, ticket, "Document");
 }
 
 /**
