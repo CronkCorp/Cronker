@@ -65,11 +65,11 @@ One of the named ways a Step's Run may end, each moving the Ticket to a set Stat
 _Avoid_: Result, verdict, transition
 
 **Assignee**:
-The User accountable for a Ticket. Always a User, never an Agent.
+The User accountable for a Ticket. Always a User with Write in its Project, never an Agent; losing Write unassigns them, as leaving the Workspace does.
 _Avoid_: Owner (reserved for Agents), responsible
 
 **Delegation**:
-A User's handing of a Ticket to one of their own Agents, its **Delegate**. Only a delegated Ticket gets Runs; delegating an unassigned Ticket assigns the delegating User. Each Project sets whether new Tickets start delegated.
+A User's handing of a Ticket to one of their own Agents, its **Delegate**. Only a delegated Ticket gets Runs; delegating an unassigned Ticket assigns the delegating User. Each Project sets whether new Tickets start delegated. A Delegate needs Write in the Ticket's Project, the less of its Agent Access and its Owner's Access; losing it undelegates the Ticket.
 _Avoid_: Agent assignment, hand-off, dispatch
 
 **Autonomous Delegation**:
@@ -89,7 +89,7 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor, or Cronk itself, writes on a Ticket, possibly as a reply to another Comment on the same Ticket. Cronk writes one when a failing check, a review requesting changes or a merge conflict sends a Ticket back, linking it (for a conflict, the merge that caused it).
+A Markdown message an Actor, or Cronk itself, writes on a Ticket or an Artifact, possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline. Cronk writes one when a failing check, a review requesting changes or a merge conflict sends a Ticket back, linking it (for a conflict, the merge that caused it).
 _Avoid_: Note, message, post
 
 **Change**:
@@ -114,6 +114,10 @@ _Avoid_: Page, doc, wiki page, note
 One saved state of a Document, Term, Decision or Artifact, recording which Actor saved it. A save based on an outdated Version is refused.
 _Avoid_: Revision, snapshot
 
+**Section**:
+A heading of a Document, of any level, with everything under it up to the next heading of the same or a higher level, its own subsections included. Agents read and replace a Document one Section at a time, naming it by its heading, or by a path such as `Install/Linux` where two headings read alike.
+_Avoid_: Block, part, chunk
+
 **Report**:
 A Document a Run writes on its Ticket, such as an investigation's findings, listed with the Ticket instead of in a page tree. Later Runs on the Ticket read it.
 _Avoid_: Summary, write-up, result
@@ -121,6 +125,14 @@ _Avoid_: Summary, write-up, result
 **Linked Document**:
 A Document of the Ticket's Project or of the Workspace, linked from the Ticket's side so it is one click away.
 _Avoid_: Relation (reserved for Ticket to Ticket), reference
+
+**Mention**:
+Text that names a Ticket's key (`WEB-4`), a Decision's key (`WEB-D7`, or `D7` for the Workspace's) or a Term's name, written with its capitalisation as a whole word, outside code and links. The text links to it, and the Ticket, Decision or Term lists what mentions it. A Mention of something the reader can't read stays plain text.
+_Avoid_: Reference, backlink, tag
+
+**Embed**:
+An Artifact's address alone on its own line of Markdown, which shows the Artifact in place, isolated as on its own page: the Version the address names, else the latest.
+_Avoid_: Inline Artifact, preview
 
 **Attachment**:
 A plain file, such as an image or log, attached to a Ticket, Document or Comment and readable by whoever can read that.
@@ -162,6 +174,14 @@ _Avoid_: Person, account, member (as the general term)
 A User who manages one Workspace: who belongs to it and its settings. Whoever creates a Workspace is its first Admin; there is no role above the Workspaces.
 _Avoid_: Owner, superuser
 
+**Access**:
+What a User may do in a Project: **Write**, **Read**, or nothing. A Project is **open** or **private**, and may list Users with Read or Write; a User it doesn't list has Write in an open Project and nothing in a private one, which answers as if it didn't exist. An Admin has Write in every Project of their Workspace, and only Admins change a Project's Access. The Workspace's own knowledge is Write for all its Users. What a User can't read answers as if it didn't exist, except that a Ticket blocked by one still counts it.
+_Avoid_: Permission, role, membership
+
+**Agent Access**:
+The most a Project, or the Workspace for its own knowledge, lets Agents do in it: Write (the default), Read or None. An Agent may do the least of its Agent Access, its Owner's Access and its token's access, within what Agents may ever do.
+_Avoid_: Agent permissions, agent scope
+
 **Agent**:
 A non-human account that acts in Cronk on behalf of exactly one User, its Owner. Runs act as an Agent, and so does an agent the Owner connects by hand, such as Claude Code on their laptop.
 _Avoid_: Bot, AI user, integration
@@ -169,6 +189,10 @@ _Avoid_: Bot, AI user, integration
 **Owner**:
 The User an Agent acts for, who sets up its Runners and whose credentials its Runs spend.
 _Avoid_: Operator, sponsor
+
+**Agent Record**:
+Everything an Agent did across the Workspace, newest first: its Runs, the Changes it made, its Comments, the Versions it saved and its hand-connected Transcripts. Anyone in the Workspace sees what of it they can read, and it stays after the Agent is removed.
+_Avoid_: Activity log, audit trail, history
 
 **Actor**:
 Either a User or an Agent; whoever performed an action.

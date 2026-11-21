@@ -1,5 +1,7 @@
 # One installation serves several Workspaces
 
+_Who sees what inside a Workspace is replaced by ADR 0010: Projects have Access levels. The rest of this decision stands._
+
 The first Cronk served exactly one Workspace per installation (its ADR 0008), to keep tenancy out of the early work. This rewrite lets one installation hold several Workspaces, each its own group of Users who see everything inside it and nothing outside it. A User may belong to several and switches between them. The immediate need is one personal Workspace and one shared with a small group, without running two servers with two sign-ins and two MCP addresses; it also keeps a hosted, paid Cronk possible later.
 
 ## Considered Options

@@ -16,11 +16,11 @@ The old Cronk's code and docs are a reference to copy from; where this repo's do
 
 ### Issue tracker
 
-Issues and specs live in GitHub Issues on `CronkCorp/Cronker`, managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Tickets and specs live in the CRONK Project on the maintainer's Cronker, reached through the `cronk` MCP connector; code and pull requests stay on GitHub (`CronkCorp/Cronker`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+Triage happens in Cronk itself: filed Tickets wait in the Inbox and a User delegates them. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

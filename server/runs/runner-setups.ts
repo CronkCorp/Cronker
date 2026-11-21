@@ -14,7 +14,7 @@ import { findRunner, noSuchProject, noSuchRunner, replaceProjectTriggers, type T
 import { modelIdOf, settingsOf } from "../workspaces/workspaces.js";
 
 /**
- * Runner setups (ADR 0008): a one-time, short-lived handoff in which a User's own Claude Code creates a Project's
+ * Runner setups (ADR 0009): a one-time, short-lived handoff in which a User's own Claude Code creates a Project's
  * claude.ai routines, one per model label its board uses, and reports their trigger ids back. Cronk never holds a
  * claude.ai credential: it only serves the instructions and saves the trigger ids it is given, each as a trigger
  * waiting for the token the User pastes.

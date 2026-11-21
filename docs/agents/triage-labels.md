@@ -1,15 +1,13 @@
-# Triage Labels
+# Triage in Cronk
 
-The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
+The skills speak in terms of five canonical triage roles. In the CRONK Project these are not Labels, since an Agent can't set Labels outside a Run and Cronk already has a place for each role:
 
-| Label in mattpocock/skills | Label in our tracker | Meaning                                  |
-| -------------------------- | -------------------- | ---------------------------------------- |
-| `needs-triage`             | `needs-triage`       | Maintainer needs to evaluate this issue  |
-| `needs-info`               | `needs-info`         | Waiting on reporter for more information |
-| `ready-for-agent`          | `ready-for-agent`    | Fully specified, ready for an AFK agent  |
-| `ready-for-human`          | `ready-for-human`    | Requires human implementation            |
-| `wontfix`                  | `wontfix`            | Will not be actioned                     |
+| Role in mattpocock/skills | In Cronk                                                                 |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `needs-triage`            | A Discovered Ticket waiting in its Assignee's Inbox (every filed Ticket) |
+| `needs-info`              | A Comment on the Ticket asking for what's missing                        |
+| `ready-for-agent`         | The User delegates the Ticket to an Agent                                |
+| `ready-for-human`         | The User keeps it undelegated and moves it out of Backlog                |
+| `wontfix`                 | The User dismisses it, or moves it to a Canceled Status                  |
 
-When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
-
-Edit the "Label in our tracker" column to match whatever vocabulary you actually use.
+When a skill says to apply a role, file the Ticket and say in your reply which role you'd give it (for example "ready for an agent"); the User makes the change. A Ticket that needs a human can say so in its description.

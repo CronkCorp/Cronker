@@ -87,7 +87,7 @@ You need Claude Code on your machine, signed in with your claude.ai subscription
 4. Claude Code then lists the routines with their claude.ai links, and shows a *Transcript hook* token of the Agent to add to that environment as `CRONK_TOKEN` (step 8, items 3 and 4), with the `settings.json` snippet to commit if the Repository hasn't got it yet (step 8, item 1). That token stops working if the setup expires without reporting back, and goes if you press the button again first for the same Runner and Project; once the setup reports back, it lasts until you revoke it on the Agent's page.
 5. Back on the Runner's card, each routine's trigger is listed for the Project, marked **waiting for token**. For each, open its routine in claude.ai from **Open routine in claude.ai**, generate an API token there, paste it under **Waiting for tokens** and choose **Save token**. Generating a new token revokes the routine's previous one, so do it once per routine. Until then, a Run needing that trigger couldn't start, with the reason in your Inbox; it starts once the token is saved.
 
-Running the setup again for a Project replaces that Project's triggers on the Runner with the new routines'; triggers for all Projects stay. The old routines stay in claude.ai for you to delete there, since Claude Code can't delete routines. Cronk never holds your claude.ai sign-in (ADR 0008).
+Running the setup again for a Project replaces that Project's triggers on the Runner with the new routines'; triggers for all Projects stay. The old routines stay in claude.ai for you to delete there, since Claude Code can't delete routines. Cronk never holds your claude.ai sign-in (ADR 0009).
 
 ### By hand
 
