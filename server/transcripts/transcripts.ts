@@ -190,31 +190,166 @@ export async function uploadTranscript(
       context.live.publish(tx, agent.workspace.id, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
     }
     await tx.query("delete from transcript_entries where transcript_id = $1", [id]);
-    for (let start = 0; start < entries.length; start += insertBatch) {
-      const batch = entries.slice(start, start + insertBatch);
-      await tx.query(
-        `insert into transcript_entries (transcript_id, position, role, text, tool_name, tool_input, tool_result, cut, at)
-         select $1, * from unnest($2::int[], $3::transcript_role[], $4::text[], $5::text[], $6::jsonb[], $7::text[],
-           $8::boolean[], $9::timestamptz[])`,
-        [
-          id,
-          batch.map((entry) => entry.position),
-          batch.map((entry) => entry.role),
-          batch.map((entry) => entry.text),
-          batch.map((entry) => entry.toolName),
-          batch.map(toolInputJson),
-          batch.map((entry) => entry.toolResult),
-          batch.map((entry) => entry.cut),
-          batch.map((entry) => entry.at),
-        ],
-      );
-    }
+    await insertEntries(tx, id, entries);
     const transcript = present((await transcriptRow(tx, "transcripts.id = $1", [id]))!);
     // A Run that gains its Transcript links it on its Ticket's timeline.
     if (transcript.runId && transcript.runId !== held.rows[0]?.runId) await runTicketChanged(context, tx, transcript.runId);
     transcriptChanged(context, tx, agent.workspace.id, transcript);
     return { transcript, created };
   });
+}
+
+/** Inserts entries, a batch at a time, each with its size and the id its source gave its tool call, if any. */
+async function insertEntries(tx: Tx, transcriptId: string, entries: (TranscriptEntry & { callId?: string | null })[]): Promise<void> {
+  for (let start = 0; start < entries.length; start += insertBatch) {
+    const batch = entries.slice(start, start + insertBatch);
+    await tx.query(
+      `insert into transcript_entries (transcript_id, position, role, text, tool_name, tool_input, tool_result, cut, at,
+         bytes, call_id)
+       select $1, * from unnest($2::int[], $3::transcript_role[], $4::text[], $5::text[], $6::jsonb[], $7::text[],
+         $8::boolean[], $9::timestamptz[], $10::bigint[], $11::text[])`,
+      [
+        transcriptId,
+        batch.map((entry) => entry.position),
+        batch.map((entry) => entry.role),
+        batch.map((entry) => entry.text),
+        batch.map((entry) => entry.toolName),
+        batch.map(toolInputJson),
+        batch.map((entry) => entry.toolResult),
+        batch.map((entry) => entry.cut),
+        batch.map((entry) => entry.at),
+        batch.map(sizeOf),
+        batch.map((entry) => entry.callId ?? null),
+      ],
+    );
+  }
+}
+
+/**
+ * What a source fetched a part at a time adds to a Transcript: its new entries, each tool call with the id its source
+ * gave it, and the results of calls an earlier part brought, by those ids.
+ */
+export interface AppendedEntries {
+  entries: (ConvertedEntry & { callId: string | null })[];
+  results: { callId: string; toolResult: string }[];
+}
+
+/** The Run and session a Transcript filled a part at a time records, and the Agent it belongs to. */
+export interface RunSession {
+  workspaceId: string;
+  agentId: string;
+  runId: string;
+  sessionId: string;
+}
+
+/**
+ * Appends to the Transcript of a Run's session what its source added since the last part, scrubbed and capped as any
+ * upload: new entries after those it holds, and results to the calls they answer, unless a cap left those out. Past
+ * 50 MB it keeps its start and its end, widening the gap as the end moves on. Makes the Transcript, empty, if the
+ * session has none yet; one a User deleted stays deleted. Says whether the Transcript changed.
+ */
+export async function appendTranscript(context: Context, tx: Tx, session: RunSession, appended: AppendedEntries): Promise<boolean> {
+  const now = context.clock.now();
+  // Made here unless the session has one: one made meanwhile by another transaction is waited for and appended to.
+  const made = await tx.query(
+    `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, run_id) values ($1, $2, $3, $4, $5)
+     on conflict (agent_id, session_id) do nothing`,
+    [session.workspaceId, session.agentId, session.sessionId, now, session.runId],
+  );
+  const created = made.rowCount === 1;
+  const held = await tx.query<{ id: string; deleted: boolean; gapAfter: number | null; gapEntries: number | null; gapBytes: string | null }>(
+    `select id, deleted_at is not null as deleted, gap_after as "gapAfter", gap_entries as "gapEntries", gap_bytes as "gapBytes"
+     from transcripts where agent_id = $1 and session_id = $2 for update`,
+    [session.agentId, session.sessionId],
+  );
+  const transcript = held.rows[0]!;
+  if (transcript.deleted) return false;
+  const id = transcript.id;
+  if (!created && appended.entries.length === 0 && appended.results.length === 0) return false;
+  const gap =
+    transcript.gapAfter === null
+      ? null
+      : { after: transcript.gapAfter, entries: transcript.gapEntries!, bytes: Number(transcript.gapBytes) };
+
+  // Positions go on from the last entry seen, kept or left out.
+  const { rows: last } = await tx.query<{ last: number }>(
+    "select coalesce(max(position), 0) as last from transcript_entries where transcript_id = $1",
+    [id],
+  );
+  const after = Math.max(last[0]!.last, gap ? gap.after + gap.entries : 0);
+  const entries = appended.entries.map(scrub).map((entry, index) => {
+    const cut = cutToolResult(entry, index);
+    return { ...cut, position: after + cut.position };
+  });
+  await insertEntries(tx, id, entries);
+  const results = appended.results.map(({ callId, toolResult }) => ({
+    callId,
+    ...cutToolResult(scrub({ role: "assistant", text: null, toolName: null, toolInput: null, toolResult, at: null }), 0),
+  }));
+  if (results.length > 0) {
+    await tx.query(
+      `update transcript_entries set tool_result = answered.result, cut = answered.cut, bytes = transcript_entries.bytes + answered.bytes
+       from unnest($2::text[], $3::text[], $4::boolean[], $5::bigint[]) as answered (call_id, result, cut, bytes)
+       where transcript_entries.transcript_id = $1 and transcript_entries.call_id = answered.call_id
+         and transcript_entries.tool_result is null`,
+      [
+        id,
+        results.map((result) => result.callId),
+        results.map((result) => result.toolResult),
+        results.map((result) => result.cut),
+        results.map((result) => Buffer.byteLength(result.toolResult ?? "")),
+      ],
+    );
+  }
+  const capped = await capKeptEntries(tx, id, gap);
+  await tx.query("update transcripts set uploaded_at = $2, gap_after = $3, gap_entries = $4, gap_bytes = $5 where id = $1", [
+    id,
+    now,
+    capped?.after ?? null,
+    capped?.entries ?? null,
+    capped?.bytes ?? null,
+  ]);
+  // A Run that gains its Transcript links it on its Ticket's timeline.
+  if (created) await runTicketChanged(context, tx, session.runId);
+  transcriptChanged(context, tx, session.workspaceId, { id, runId: session.runId });
+  return true;
+}
+
+/**
+ * Keeps a Transcript's stored entries within 50 MB as an upload's are: past it, its start (up to half, or what a
+ * gap already left before it) and as much of its end as fits in the other half, widening the gap between. Results
+ * added to calls in its start since make the end's share smaller, so the whole stays within 50 MB. Returns the gap.
+ */
+async function capKeptEntries(tx: Tx, transcriptId: string, gap: Gap | null): Promise<Gap | null> {
+  const { rows } = await tx.query<{ total: number }>(
+    "select coalesce(sum(bytes), 0)::float8 as total from transcript_entries where transcript_id = $1",
+    [transcriptId],
+  );
+  if (rows[0]!.total <= transcriptLimitBytes) return gap;
+  const half = transcriptLimitBytes / 2;
+  let headLast = gap?.after;
+  if (headLast === undefined) {
+    const head = await tx.query<{ last: number }>(
+      `select coalesce(max(position), 0) as last from (select position, sum(bytes) over (order by position) as upto
+         from transcript_entries where transcript_id = $1) as sized where upto <= $2`,
+      [transcriptId, half],
+    );
+    headLast = head.rows[0]!.last;
+  }
+  const { rows: head } = await tx.query<{ bytes: number }>(
+    "select coalesce(sum(bytes), 0)::float8 as bytes from transcript_entries where transcript_id = $1 and position <= $2",
+    [transcriptId, headLast],
+  );
+  const endShare = Math.max(0, Math.min(half, transcriptLimitBytes - head[0]!.bytes));
+  const { rows: left } = await tx.query<{ entries: number; bytes: number }>(
+    `with tail as (select position, sum(bytes) over (order by position desc) as from_end
+       from transcript_entries where transcript_id = $1 and position > $2),
+     dropped as (delete from transcript_entries using tail where transcript_entries.transcript_id = $1
+       and transcript_entries.position = tail.position and tail.from_end > $3 returning transcript_entries.bytes)
+     select count(*)::int as entries, coalesce(sum(bytes), 0)::float8 as bytes from dropped`,
+    [transcriptId, headLast, endShare],
+  );
+  return { after: headLast, entries: (gap?.entries ?? 0) + left[0]!.entries, bytes: (gap?.bytes ?? 0) + left[0]!.bytes };
 }
 
 /** The tool calls to Cronk's own MCP server, as Claude Code names them when the server is added as `cronk`. */
@@ -274,7 +409,7 @@ async function linkNamedTickets(
 }
 
 /** The entry with every known secret in its text, tool input and tool result scrubbed. */
-function scrub(entry: ConvertedEntry): ConvertedEntry {
+function scrub<Entry extends ConvertedEntry>(entry: Entry): Entry {
   return {
     ...entry,
     text: entry.text === null ? null : scrubText(entry.text),
@@ -284,7 +419,7 @@ function scrub(entry: ConvertedEntry): ConvertedEntry {
 }
 
 /** The entry with its tool result cut to its first 20 KB, never splitting a character, and marked if it was. */
-function cutToolResult(entry: ConvertedEntry, index: number): TranscriptEntry {
+function cutToolResult<Entry extends ConvertedEntry>(entry: Entry, index: number): Entry & TranscriptEntry {
   const positioned = { ...entry, position: index + 1, cut: false };
   if (entry.toolResult === null) return positioned;
   const bytes = Buffer.from(entry.toolResult, "utf8");

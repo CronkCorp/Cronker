@@ -394,6 +394,268 @@ describe("removing the Runner", () => {
   });
 });
 
+/** What a session's agent does in one turn, as Managed Agents records it: says something, calls a tool of Cronk's, says more. */
+const aTurn = [
+  { type: "agent.message", processed_at: "2026-01-01T09:00:05.000Z", content: [{ type: "text", text: "Reading the Ticket first." }] },
+  {
+    id: "sevt_call1",
+    type: "agent.mcp_tool_use",
+    processed_at: "2026-01-01T09:00:06.000Z",
+    mcp_server_name: "cronk",
+    name: "read_ticket",
+    input: { ticket: "CRONK-1" },
+  },
+  {
+    type: "agent.mcp_tool_result",
+    processed_at: "2026-01-01T09:00:07.000Z",
+    mcp_tool_use_id: "sevt_call1",
+    content: [{ type: "text", text: "CRONK-1 Make it so" }],
+  },
+  {
+    id: "sevt_call2",
+    type: "agent.tool_use",
+    processed_at: "2026-01-01T09:00:08.000Z",
+    name: "bash",
+    input: { command: "ls" },
+  },
+  {
+    type: "agent.tool_result",
+    processed_at: "2026-01-01T09:00:09.000Z",
+    tool_use_id: "sevt_call2",
+    content: [{ type: "text", text: "README.md" }],
+  },
+  { type: "agent.message", processed_at: "2026-01-01T09:00:10.000Z", content: [{ type: "text", text: "It is ready for Implement." }] },
+];
+
+/** The Run's Transcript and all its entries, as a User reads them. */
+async function transcriptOf(runId: string, as: Request) {
+  const run = await ok("GET", `/api/runs/${runId}`, as);
+  expect(run.transcriptId, "the Run has a Transcript").not.toBeNull();
+  const transcript = await ok("GET", `/api/transcripts/${run.transcriptId}`, as);
+  const { entries } = await ok("GET", `/api/transcripts/${run.transcriptId}/entries?limit=1000`, as);
+  return { transcript, entries };
+}
+
+describe("the Run's Transcript", () => {
+  test("an ended Run's Transcript holds its session's events as entries: the Brief, messages and tool calls with their results", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    cronk.managedAgents.emit(session.id, ...aTurn);
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    const { transcript, entries } = await transcriptOf(run.id, ada);
+    expect(transcript).toMatchObject({ runId: run.id, sessionId: session.id, agent: { name: "claude-api" }, gap: null });
+    const brief = (session.body.initial_events as { content: { text: string }[] }[])[0]!.content[0]!.text;
+    expect(entries).toEqual([
+      expect.objectContaining({ position: 1, role: "user", text: brief, toolName: null }),
+      { position: 2, role: "assistant", text: "Reading the Ticket first.", toolName: null, toolInput: null, toolResult: null, cut: false, at: "2026-01-01T09:00:05.000Z" },
+      {
+        position: 3,
+        role: "assistant",
+        text: null,
+        toolName: "mcp__cronk__read_ticket",
+        toolInput: { ticket: "CRONK-1" },
+        toolResult: "CRONK-1 Make it so",
+        cut: false,
+        at: "2026-01-01T09:00:06.000Z",
+      },
+      expect.objectContaining({ position: 4, toolName: "bash", toolInput: { command: "ls" }, toolResult: "README.md" }),
+      expect.objectContaining({ position: 5, role: "assistant", text: "It is ready for Implement." }),
+      // Its session was still running when the agent called finish, so Cronk interrupted it before archiving it.
+      expect.objectContaining({ position: 6, role: "system", text: "The session was interrupted." }),
+    ]);
+  });
+
+  test("is scrubbed and its long tool results cut, as any Transcript, when a terminated session ends the Run", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    // Made up, of GitHub's shape, put together here so the source holds none whole.
+    const secret = "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a";
+    cronk.managedAgents.emit(
+      session.id,
+      { type: "agent.message", content: [{ type: "text", text: `Pushing with ${secret} now.` }] },
+      { id: "sevt_read", type: "agent.tool_use", name: "read", input: { path: "big.log", token: secret } },
+      { type: "agent.tool_result", tool_use_id: "sevt_read", content: [{ type: "text", text: "a".repeat(20 * 1024) + "b".repeat(100) }] },
+    );
+    cronk.managedAgents.terminate(session.id);
+
+    await cronk.pollManagedAgentsSessions();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("failed");
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.slice(1)).toEqual([
+      expect.objectContaining({ text: "Pushing with [scrubbed] now." }),
+      expect.objectContaining({ toolName: "read", toolInput: { path: "big.log", token: "[scrubbed]" }, toolResult: "a".repeat(20 * 1024), cut: true }),
+    ]);
+  });
+
+  test("a running Run's Transcript, opened, fetches the events its session added since the last fetch", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const eventReads = () => cronk.managedAgents.calls.filter((c) => c.method === "GET" && c.path === `/v1/sessions/${session.id}/events`);
+    // The call is made, its result not back yet.
+    cronk.managedAgents.emit(session.id, ...aTurn.slice(0, 2));
+
+    const opened = await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    expect(opened.entryCount).toBe(3);
+    const { entries: first } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
+    expect(first.map((e: { text: string; toolName: string }) => e.text ?? e.toolName).slice(1)).toEqual([
+      "Reading the Ticket first.",
+      "mcp__cronk__read_ticket",
+    ]);
+    expect(first[2].toolResult).toBeNull();
+
+    cronk.managedAgents.emit(session.id, ...aTurn.slice(2));
+    const readsBefore = eventReads().length;
+    const reopened = await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    expect(eventReads().length).toBe(readsBefore + 1);
+    expect(reopened.entryCount).toBe(5);
+    const { entries } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
+    expect(entries.slice(1).map((e: { text: string; toolName: string; toolResult: string }) => [e.text ?? e.toolName, e.toolResult])).toEqual([
+      ["Reading the Ticket first.", null],
+      ["mcp__cronk__read_ticket", "CRONK-1 Make it so"],
+      ["bash", "README.md"],
+      ["It is ready for Implement.", null],
+    ]);
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+
+  test("events are fetched page by page until none are left, each fetch going on from the page where the last stopped", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    cronk.managedAgents.pageSize(2);
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    /** The pages of the session's events Cronk read, in order: null for the first, else the page it asked for. */
+    const pagesRead = () =>
+      cronk.managedAgents.calls
+        .filter((c) => c.method === "GET" && c.path === `/v1/sessions/${session.id}/events` && !c.query.includes("order="))
+        .map((c) => new URLSearchParams(c.query).get("page"));
+    const says = (n: number) => ({ type: "agent.message", content: [{ type: "text", text: `Turn ${n}.` }] });
+    // With the Brief, five events: pages of two, two and one.
+    cronk.managedAgents.emit(session.id, says(1), says(2), says(3), says(4));
+
+    expect((await ok("GET", `/api/transcripts/${transcriptId}`, ada)).entryCount).toBe(5);
+    expect(pagesRead()).toEqual([null, "2", "4"]);
+
+    cronk.managedAgents.emit(session.id, says(5), says(6));
+    cronk.managedAgents.idle(session.id, "end_turn");
+    await cronk.pollManagedAgentsSessions();
+
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.slice(1).map((e: { text: string }) => e.text)).toEqual(["Turn 1.", "Turn 2.", "Turn 3.", "Turn 4.", "Turn 5.", "Turn 6."]);
+    // The last page held one event the first fetch took; the next fetch reads on from it.
+    expect(pagesRead()).toEqual([null, "2", "4", "4", "6"]);
+  });
+
+  test("past 50 MB keeps its start and its end, its gap widening as later fetches add to its end", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const megabyte = 1024 * 1024;
+    /** Messages of 1 MB each, numbered from `from`. */
+    const messages = (from: number, count: number) =>
+      Array.from({ length: count }, (_, i) => ({ type: "agent.message", content: [{ type: "text", text: `${from + i}`.padEnd(megabyte, "m") }] }));
+
+    cronk.managedAgents.emit(session.id, ...messages(1, 30));
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({ entryCount: 31, gap: null });
+
+    // The Brief and 60 MB: the Brief and 24 messages fit in the first 25 MB, the last 25 messages in the other 25 MB.
+    cronk.managedAgents.emit(session.id, ...messages(31, 30));
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 50,
+      gap: { after: 25, entries: 11, bytes: 11 * megabyte },
+    });
+
+    cronk.managedAgents.emit(session.id, ...messages(61, 10));
+    cronk.managedAgents.terminate(session.id);
+    await cronk.pollManagedAgentsSessions();
+
+    const { transcript, entries } = await transcriptOf(run.id, ada);
+    expect(transcript).toMatchObject({ entryCount: 50, gap: { after: 25, entries: 21, bytes: 21 * megabyte } });
+    const first = (e: { text: string }) => Number.parseInt(e.text, 10);
+    expect(entries.slice(1, 25).map(first)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+    expect(entries.slice(25).map(first)).toEqual(Array.from({ length: 25 }, (_, i) => i + 46));
+    expect(entries.slice(25).map((e: { position: number }) => e.position)).toEqual(Array.from({ length: 25 }, (_, i) => i + 47));
+  }, 60_000);
+
+  test("events Anthropic couldn't give when the Run ended are fetched by the next poll", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    cronk.managedAgents.emit(session.id, ...aTurn);
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+    cronk.managedAgents.failNext("GET", `/v1/sessions/${session.id}/events`, 503);
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+
+    expect((await transcriptOf(run.id, ada)).transcript.entryCount).toBe(0);
+
+    await cronk.pollManagedAgentsSessions();
+
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null }) => e.text ?? e.toolName).slice(1)).toEqual([
+      "Reading the Ticket first.",
+      "mcp__cronk__read_ticket",
+      "bash",
+      "It is ready for Implement.",
+      "The session was interrupted.",
+    ]);
+    // Fetched once, the Transcript isn't fetched again.
+    const reads = () => cronk.managedAgents.calls.filter((c) => c.path === `/v1/sessions/${session.id}/events` && c.method === "GET").length;
+    const before = reads();
+    await cronk.pollManagedAgentsSessions();
+    expect(reads()).toBe(before);
+  });
+
+  test("deleted by a User while its Run runs, stays deleted when the Run ends", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    cronk.managedAgents.emit(session.id, ...aTurn);
+    await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    await ok("DELETE", `/api/transcripts/${transcriptId}`, ada);
+    cronk.managedAgents.terminate(session.id);
+    await cronk.pollManagedAgentsSessions();
+
+    const ended = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(ended).toMatchObject({ state: "failed", transcriptId: null, transcriptDeleted: true });
+    expect((await call("GET", `/api/transcripts/${transcriptId}`, ada)).status).toBe(404);
+  });
+
+  test("past 50 MB stays within it when a later result lands on a call in its kept start", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const megabyte = 1024 * 1024;
+    const brief = (session.body.initial_events as { content: { text: string }[] }[])[0]!.content[0]!.text;
+    const says = (bytes: number) => ({ type: "agent.message", content: [{ type: "text", text: "m".repeat(bytes) }] });
+    // The Brief, a call (`bash` and `{}`: 6 bytes) and a message fill the first 25 MB exactly; 26 messages of 1 MB follow.
+    cronk.managedAgents.emit(
+      session.id,
+      { id: "sevt_early", type: "agent.tool_use", name: "bash", input: {} },
+      says(25 * megabyte - Buffer.byteLength(brief) - 6),
+      ...Array.from({ length: 26 }, () => says(megabyte)),
+    );
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 28,
+      gap: { after: 3, entries: 1, bytes: megabyte },
+    });
+
+    // The call's result makes the start 100 bytes larger, so the end gives up its first message to stay within 50 MB.
+    cronk.managedAgents.emit(session.id, { type: "agent.tool_result", tool_use_id: "sevt_early", content: "r".repeat(100) });
+
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({
+      entryCount: 27,
+      gap: { after: 3, entries: 2, bytes: 2 * megabyte },
+    });
+  }, 60_000);
+});
+
 describe("webhooks", () => {
   /** Ada's Runner with the signing secret of its webhook endpoint saved, as she pastes it from the Console. */
   async function withWebhookSecret() {
