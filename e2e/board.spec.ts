@@ -321,3 +321,68 @@ test("a card dragged onto another column moves its Ticket there, onto its own co
   await expect(shippedCard("Done")).toBeVisible();
   await expect(shippedCard("In Review")).toBeHidden();
 });
+
+test("Group Sub-Tickets folds them into their parent's card with a count, unfolds them there, and is remembered", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const parent = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Board view" });
+  const sub = (title: string, parentId = parent.id) => call("POST", `/api/projects/${project.id}/tickets`, { title, parentId });
+  const columns = await sub("Columns");
+  const cards = await sub("Cards");
+  await sub("Drag and drop");
+  await sub("Card heights", cards.id);
+  await call("PATCH", `/api/tickets/${columns.id}`, { statusId: status("Done") });
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const lane = (name: string) => board.getByRole("region", { name, exact: true });
+  const backlog = lane("Backlog");
+  const toggle = page.getByRole("button", { name: "Group Sub-Tickets" });
+
+  // Off by default: every Sub-Ticket has its own card.
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(backlog.getByRole("link", { name: /^CRONK-3 Cards/ })).toBeVisible();
+  await expect(backlog.getByRole("link", { name: /^CRONK-5 Card heights/ })).toBeVisible();
+  await expect(lane("Done").getByRole("button", { name: "Done, 1 Ticket" })).toBeVisible();
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  // Folded, whatever their Status: only the parent keeps a card, counting its direct Sub-Tickets and the finished ones.
+  await expect(backlog.getByRole("link")).toHaveCount(1);
+  await expect(backlog.locator(".column-count")).toHaveText("1");
+  await expect(lane("Done").getByRole("button", { name: "Done, 0 Tickets" })).toBeVisible();
+  const count = backlog.getByRole("button", { name: "1 / 3 Sub-Tickets" });
+  await expect(count).toHaveAttribute("aria-expanded", "false");
+
+  await count.click();
+  await expect(count).toHaveAttribute("aria-expanded", "true");
+  const list = backlog.getByRole("list", { name: "Sub-Tickets" }).first();
+  for (const name of ["CRONK-2 Columns", "CRONK-3 Cards", "CRONK-4 Drag and drop", "CRONK-5 Card heights"]) {
+    await expect(list.getByRole("link", { name })).toBeVisible();
+  }
+  await list.getByRole("link", { name: "CRONK-3 Cards" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Cards");
+
+  // Remembered on this browser, and the count follows live updates.
+  await page.goBack();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await call("PATCH", `/api/tickets/${cards.id}`, { statusId: status("Done") });
+  await expect(backlog.getByRole("button", { name: "2 / 3 Sub-Tickets" })).toBeVisible();
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(backlog.getByRole("link")).toHaveCount(1);
+
+  // Off again: the board is as before.
+  await toggle.click();
+  await expect(backlog.getByRole("link", { name: /^CRONK-4 Drag and drop/ })).toBeVisible();
+  await expect(backlog.getByRole("button", { name: /Sub-Tickets$/ })).toHaveCount(0);
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+});

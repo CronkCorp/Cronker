@@ -1,5 +1,5 @@
 import { addresses, useAddresses } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
   nameOf,
@@ -24,6 +24,7 @@ import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Link, navigate } from "./router.js";
+import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
 import { ProjectArtifacts } from "./artifacts.js";
 import { ProjectDecisions } from "./decisions.js";
 import { ProjectDocuments } from "./documents.js";
@@ -162,6 +163,7 @@ export function ProjectScreen({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
   const [filter, setFilter] = useState<TicketFilter>({});
+  const [group, setGroup] = useState(storedGroupSubTickets);
   const [failure, setFailure] = useState<string | null>(null);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
@@ -268,6 +270,20 @@ export function ProjectScreen({
                 { label: "Board", to: base, current: view === "board" },
               ]}
             />
+            {view === "board" && (
+              <button
+                type="button"
+                className="toggle-button"
+                aria-pressed={group}
+                title="Fold Sub-Tickets into their parent's card"
+                onClick={() => {
+                  keepGroupSubTickets(!group);
+                  setGroup(!group);
+                }}
+              >
+                Group Sub-Tickets
+              </button>
+            )}
           </>
         }
         actions={
@@ -278,7 +294,9 @@ export function ProjectScreen({
         }
       />
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
-      {view === "board" && <Board project={project} members={members} agents={agents} user={user} tickets={tickets} onChanged={loadTickets} />}
+      {view === "board" && (
+        <Board project={project} members={members} agents={agents} user={user} tickets={tickets} group={group} onChanged={loadTickets} />
+      )}
       {view === "list" && <List project={project} members={members} agents={agents} tickets={tickets} filtered={filtered} />}
     </div>
   );
@@ -566,6 +584,7 @@ function Card({
   agents,
   own,
   arrived,
+  folded,
   onEdit,
 }: {
   ticket: TicketSummary;
@@ -574,6 +593,8 @@ function Card({
   agents: Agent[];
   own: Agent[];
   arrived: boolean;
+  /** With Group Sub-Tickets on, the Sub-Tickets folded into their parents; none otherwise. */
+  folded: Folded;
   onEdit: (edit: TicketEdit) => void;
 }) {
   const to = useAddresses();
@@ -601,8 +622,86 @@ function Card({
           </span>
         </Link>
         <BlockedChip ticket={ticket} />
+        <SubTickets ticket={ticket} project={project} folded={folded} />
       </div>
     </ContextMenu>
+  );
+}
+
+/** Each loaded Ticket's loaded Sub-Tickets, by its id. */
+type Folded = Map<string, TicketSummary[]>;
+const noneFolded: Folded = new Map();
+
+/**
+ * Group Sub-Tickets: a Ticket whose parent is loaded folds into its parent's card, in any Status. One whose parent
+ * isn't loaded, such as one a filter leaves out, keeps its own card. A Sub-Ticket's own Sub-Tickets fold into it, and
+ * so show nested under it when its parent's card unfolds.
+ */
+function foldSubTickets(tickets: TicketSummary[]): { children: Folded; hidden: Set<string> } {
+  const loaded = new Set(tickets.map((ticket) => ticket.id));
+  const children: Folded = new Map();
+  const hidden = new Set<string>();
+  for (const ticket of tickets) {
+    if (ticket.parentId === null || !loaded.has(ticket.parentId)) continue;
+    hidden.add(ticket.id);
+    children.set(ticket.parentId, [...(children.get(ticket.parentId) ?? []), ticket]);
+  }
+  return { children, hidden };
+}
+
+/**
+ * A parent's folded Sub-Tickets on its card: *3 / 8 Sub-Tickets*, counting its direct ones and those of them finished
+ * (in a Done or Canceled Status, Unverified included). It unfolds a list on the card, each by Status dot, key and
+ * title, a link to its Ticket. Like the Blocked chip it holds links of its own, so it sits beside the card's link.
+ * Which cards are unfolded isn't stored.
+ */
+function SubTickets({ ticket, project, folded }: { ticket: TicketSummary; project: Project; folded: Folded }) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const subTickets = folded.get(ticket.id);
+  if (!subTickets) return null;
+  const kindOf = (statusId: string) => project.statuses.find((status) => status.id === statusId)?.kind ?? "backlog";
+  const finished = subTickets.filter((sub) => ["done", "canceled"].includes(kindOf(sub.statusId))).length;
+  return (
+    <div className="card-sub-tickets">
+      <button type="button" className="chip chip-sub-tickets" aria-expanded={open} aria-controls={listId} onClick={() => setOpen(!open)}>
+        <svg className="chip-icon" viewBox="0 0 12 12" aria-hidden="true">
+          <path d={open ? "M2.5 4.5 6 8l3.5-3.5" : "M4.5 2.5 8 6l-3.5 3.5"} />
+        </svg>
+        {finished} / {subTickets.length} Sub-Ticket{subTickets.length === 1 ? "" : "s"}
+      </button>
+      {open && <SubTicketList id={listId} subTickets={subTickets} kindOf={kindOf} folded={folded} />}
+    </div>
+  );
+}
+
+/** Unfolded Sub-Tickets, each with its own folded ones nested under it. */
+function SubTicketList({
+  id,
+  subTickets,
+  kindOf,
+  folded,
+}: {
+  id?: string;
+  subTickets: TicketSummary[];
+  kindOf: (statusId: string) => StatusKind;
+  folded: Folded;
+}) {
+  const to = useAddresses();
+  return (
+    <ul id={id} className="sub-ticket-list" aria-label="Sub-Tickets">
+      {subTickets.map((sub) => {
+        const nested = folded.get(sub.id);
+        return (
+          <li key={sub.id}>
+            <Link to={to.ticket(sub)} className="ticket-link" draggable={false}>
+              <StatusDot kind={kindOf(sub.statusId)} /> <Key>{sub.key}</Key> {sub.title}
+            </Link>
+            {nested && <SubTicketList subTickets={nested} kindOf={kindOf} folded={folded} />}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -617,6 +716,7 @@ function Board({
   agents,
   user,
   tickets,
+  group,
   onChanged,
 }: {
   project: Project;
@@ -624,6 +724,8 @@ function Board({
   agents: Agent[];
   user: User;
   tickets: TicketSummary[];
+  /** Group Sub-Tickets: fold Sub-Tickets into their parent's card. */
+  group: boolean;
   onChanged: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -654,6 +756,8 @@ function Board({
     await edit(ticketId, { statusId: status.id });
   };
 
+  const folded = group ? foldSubTickets(tickets) : null;
+  const carded = folded ? tickets.filter((ticket) => !folded.hidden.has(ticket.id)) : tickets;
   const collapsed = (status: Status) => collapsible(status) && !opened.has(status.id);
   return (
     <>
@@ -668,7 +772,7 @@ function Board({
         onDragEnd={edge.stop}
       >
         {project.statuses.map((status) => {
-          const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
+          const inStatus = carded.filter((ticket) => ticket.statusId === status.id);
           const isCollapsed = collapsed(status);
           return (
             <section
@@ -727,6 +831,7 @@ function Board({
                       agents={agents}
                       own={own}
                       arrived={arrived.has(`${ticket.id} ${ticket.statusId}`)}
+                      folded={folded?.children ?? noneFolded}
                       onEdit={(change) => void edit(ticket.id, change)}
                     />
                   ))}
