@@ -132,17 +132,17 @@ test("an Admin sets, changes and removes model ids in the Workspace's settings",
 
   const modelIds = page.getByRole("region", { name: "Model ids" });
   const rows = modelIds.getByRole("row");
-  await expect(rows).toHaveText([/Label\s*Model id/, /haiku\s*claude-haiku-5-5/, /opus\s*claude-opus-5-5/, /sonnet\s*claude-sonnet-5-5/]);
+  await expect(rows).toHaveText([/Model label\s*Model id/, /haiku\s*claude-haiku-5-5/, /opus\s*claude-opus-5-5/, /sonnet\s*claude-sonnet-5-5/]);
 
-  await modelIds.getByLabel("Label", { exact: true }).fill("Opus");
+  await modelIds.getByLabel("Model label", { exact: true }).fill("Opus");
   await modelIds.getByLabel("Model id", { exact: true }).fill("claude-opus-5");
   await modelIds.getByRole("button", { name: "Set model id" }).click();
   await expect(modelIds.getByRole("status")).toHaveText("Saved.");
-  await expect(rows).toHaveText([/Label\s*Model id/, /haiku\s*claude-haiku-5-5/, /Opus\s*claude-opus-5\s*Remove/, /sonnet\s*claude-sonnet-5-5/]);
-  await expect(modelIds.getByLabel("Label", { exact: true })).toHaveValue("");
+  await expect(rows).toHaveText([/Model label\s*Model id/, /haiku\s*claude-haiku-5-5/, /Opus\s*claude-opus-5\s*Remove/, /sonnet\s*claude-sonnet-5-5/]);
+  await expect(modelIds.getByLabel("Model label", { exact: true })).toHaveValue("");
 
-  await modelIds.getByRole("button", { name: "Remove haiku" }).click();
-  await expect(rows).toHaveText([/Label\s*Model id/, /Opus\s*claude-opus-5\s*Remove/, /sonnet\s*claude-sonnet-5-5/]);
+  await modelIds.getByRole("button", { name: "Remove the haiku model label" }).click();
+  await expect(rows).toHaveText([/Model label\s*Model id/, /Opus\s*claude-opus-5\s*Remove/, /sonnet\s*claude-sonnet-5-5/]);
 });
 
 test("Workspace settings, Members and the GitHub page share the settings layout", async ({ page, cronk }) => {

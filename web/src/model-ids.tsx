@@ -42,7 +42,7 @@ export function ModelIdsPanel({ workspaceId }: { workspaceId: string }) {
           <table>
             <thead>
               <tr>
-                <th>Label</th>
+                <th>Model label</th>
                 <th>Model id</th>
                 <th>
                   <span className="sr-only">Actions</span>
@@ -60,7 +60,7 @@ export function ModelIdsPanel({ workspaceId }: { workspaceId: string }) {
                   </td>
                   <td className="cell-actions">
                     <div>
-                      <Button variant="ghost" size="small" onClick={() => void remove(entry.label)} aria-label={`Remove ${entry.label}`}>
+                      <Button variant="ghost" size="small" onClick={() => void remove(entry.label)} aria-label={`Remove the ${entry.label} model label`}>
                         Remove
                       </Button>
                     </div>
@@ -74,14 +74,14 @@ export function ModelIdsPanel({ workspaceId }: { workspaceId: string }) {
         <FormError error={failure} />
         <form onSubmit={save.onSubmit} aria-label="Set a model id" className="model-ids-form">
           <div className="form-row">
-            <Field label="Label">
+            <Field label="Model label">
               <input name="label" required maxLength={50} autoComplete="off" placeholder="opus" className="mono" />
             </Field>
             <Field label="Model id">
               <input name="modelId" required maxLength={200} autoComplete="off" placeholder="claude-opus-5-5" className="mono" />
             </Field>
           </div>
-          <p className="field-hint">Labels match ignoring case, so setting one again changes its model id.</p>
+          <p className="field-hint">Model labels match ignoring case, so setting one again changes its model id.</p>
           <FormError error={save.error} />
           <Actions>
             <Button type="submit" variant="primary" disabled={save.busy}>
