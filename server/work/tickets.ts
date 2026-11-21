@@ -134,6 +134,14 @@ const blockersColumn = (alias: string) =>
      from projects blocker_projects, ${unfinishedBlockers(alias)}
        and blocker_projects.id = blockers.project_id), '[]'::json)`;
 
+/**
+ * SQL ranking the Ticket `alias` within its Status: 0 while a Run on it is running, 1 while an unfinished Ticket
+ * blocks it, 2 otherwise. Running is tested first, so a Ticket both running and blocked ranks as running.
+ */
+const runningFirstThenBlocked = (alias: string) =>
+  `case when exists (select 1 from runs where runs.ticket_id = ${alias}.id and runs.state = 'running') then 0
+     when exists (select 1 from ${unfinishedBlockers(alias)}) then 1 else 2 end`;
+
 /** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
 export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
@@ -481,7 +489,7 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, tickets.number`,
+     order by statuses.position, ${runningFirstThenBlocked("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
