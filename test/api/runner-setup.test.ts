@@ -288,6 +288,22 @@ describe("the served instructions", () => {
     expect(asHook.status).toBe(200);
   });
 
+  test("have Claude Code name the environment, which every routine needs, from those claude.ai lists", async () => {
+    const { ada, project, runner } = await adaWithProject();
+    const { instructions } = await started(ada, runner.id, project.id);
+
+    const text = await (await instructions()).text();
+
+    for (const expected of [
+      "claude.ai refuses a routine without an `environment_id`",
+      "your built-in `schedule` skill",
+      "the account's environments with their ids",
+      "the account's claude.ai connectors with their `connector_uuid`",
+    ]) {
+      expect(text).toContain(expected);
+    }
+  });
+
   test("are refused once the setup is used, saying to press the button again", async () => {
     const { ada, project, runner } = await adaWithProject();
     const { instructions, report } = await started(ada, runner.id, project.id);

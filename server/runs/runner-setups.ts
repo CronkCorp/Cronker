@@ -338,19 +338,31 @@ already exists, except the one you create in step 2 yourself. If a step fails, s
 
 ## 1. Choose the cloud environment
 
-Every routine runs in a claude.ai cloud environment, given as \`environment_id\`. Ask the User which environment
-to use. Recommend one kept for Cronk's routines: the Transcript hook's token goes into its variables, so every
-session in it can act as the Agent **${plan.agent.name}**. To offer choices, you may \`list\` the User's routines with
-\`RemoteTrigger\` and name the environments they use. Use the \`environment_id\` the User picks (\`env_…\`) as
-\`<ENVIRONMENT_ID>\` below.
+Every routine runs in a claude.ai cloud environment, and claude.ai refuses a routine without an \`environment_id\`.
+Ask the User which environment to use. Recommend one kept for Cronk's routines: the Transcript hook's token goes
+into its variables (step 5), so every session in it can act as the Agent **${plan.agent.name}**.
+
+Offer the User's environments by name, never asking them to find an id:
+
+- Load your built-in \`schedule\` skill with your \`Skill\` tool, telling it only to list, not to create anything.
+  It lists the account's environments with their ids, and
+  the account's claude.ai connectors with their \`connector_uuid\`, which step 2 needs.
+- You may also \`list\` the User's routines with \`RemoteTrigger\` and name the environments they use.
+- If the User wants a new environment for Cronk, ask them to create it in Claude Code on the web
+  (https://claude.ai/code), then list the environments again to find its id.
+- Only if neither lists the environment the User wants, ask them for its id.
+
+Use the chosen environment's id (\`env_…\`) as \`<ENVIRONMENT_ID>\` below.
 
 ## 2. Find the Cronk connector
 
 Each routine gets only the Cronk connector, given in \`mcp_connections\`, which needs the connector's
-\`connector_uuid\`.
+\`connector_uuid\`. Look for it in this order:
 
-- \`list\` the User's routines with \`RemoteTrigger\`. If one has an \`mcp_connections\` entry whose \`url\` is
-  \`${mcpUrl}\`, use its \`connector_uuid\` as \`<CRONK_CONNECTOR_UUID>\`.
+- The connectors your \`schedule\` skill listed in step 1: use the \`connector_uuid\` of the one whose URL is
+  \`${mcpUrl}\` as \`<CRONK_CONNECTOR_UUID>\`.
+- Otherwise \`list\` the User's routines with \`RemoteTrigger\`. If one has an \`mcp_connections\` entry whose \`url\`
+  is \`${mcpUrl}\`, use its \`connector_uuid\`.
 - If none has, create the first routine below **without** its \`mcp_connections\` field. claude.ai then attaches
   every connector the User has connected. \`get\` it, take the \`connector_uuid\` of the connection whose \`url\` is
   \`${mcpUrl}\`, and at once \`update\` that routine so its \`mcp_connections\` holds only the Cronk entry, as below.
