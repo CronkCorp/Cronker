@@ -1,6 +1,6 @@
-import { slugColumn } from "../http/readable.js";
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
+import { slugColumn } from "../http/readable.js";
 
 /**
  * Search over a Workspace's Tickets, knowledge, Artifacts (by title and description) and Transcripts with Postgres

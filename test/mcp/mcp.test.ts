@@ -317,7 +317,7 @@ describe("MCP with an Agent token", () => {
 
     const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
 
-    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design" }]);
+    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design", slug: document.slug }]);
   });
 
   test("an Agent lists Tickets, narrowed by Project and Status", async () => {
@@ -501,7 +501,7 @@ describe("MCP with an Agent token", () => {
     const client = await connect(secret);
 
     const linked = await call(client, "link_document", { ticket: "CRONK-1", document: design.id });
-    expect(linked).toEqual({ isError: false, json: { id: design.id, projectId: project.id, title: "Sign-in design" } });
+    expect(linked).toEqual({ isError: false, json: { id: design.id, projectId: project.id, title: "Sign-in design", slug: design.slug } });
     const refused = await call(client, "link_document", { ticket: "CRONK-2", document: design.id });
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
 
@@ -530,15 +530,15 @@ describe("MCP with an Agent token", () => {
     const unlinked = await call(client, "unlink_artifact", { ticket: "CRONK-1", artifact: sketch.id });
 
     expect(created.isError).toBe(false);
-    expect(linked).toEqual({ isError: false, json: { id: sketch.id, projectId: project.id, title: "Sketch" } });
+    expect(linked).toEqual({ isError: false, json: { id: sketch.id, projectId: project.id, title: "Sketch", slug: sketch.slug } });
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run" }) });
     expect(read.linkedArtifacts).toEqual([
-      { id: created.json.id, projectId: project.id, title: "Board prototype" },
-      { id: sketch.id, projectId: project.id, title: "Sketch" },
+      { id: created.json.id, projectId: project.id, title: "Board prototype", slug: created.json.slug },
+      { id: sketch.id, projectId: project.id, title: "Sketch", slug: sketch.slug },
     ]);
     expect(unlinked).toEqual({
       isError: false,
-      json: [{ id: created.json.id, projectId: project.id, title: "Board prototype" }],
+      json: [{ id: created.json.id, projectId: project.id, title: "Board prototype", slug: created.json.slug }],
     });
   });
 

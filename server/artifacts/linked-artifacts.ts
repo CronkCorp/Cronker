@@ -1,9 +1,9 @@
-import { slugColumn, slugDescription } from "../http/readable.js";
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
 import type { Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";

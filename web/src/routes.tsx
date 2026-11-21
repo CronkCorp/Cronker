@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type WorkspaceSummary } from "./api.js";
-import { addresses, type ProjectView, type WorkspacePage } from "./addresses.js";
-import { replace } from "./router.js";
+import { addresses, settle, type ProjectView, type WorkspacePage } from "./addresses.js";
 
 /** A page of a Workspace, as its readable address names it. */
 export type Route =
@@ -53,11 +52,6 @@ export function parseAddress(path: string): { slug: string; route: Route | null 
     return null;
   })();
   return { slug, route };
-}
-
-/** Moves to an address, keeping the query and fragment, unless it is the one shown. */
-function settle(address: string) {
-  if (address !== window.location.pathname) replace(`${address}${window.location.search}${window.location.hash}`);
 }
 
 /** What a page's address resolved to: the id of what it shows, or a failure. */

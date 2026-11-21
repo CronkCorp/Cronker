@@ -118,6 +118,11 @@ export function useCanonicalAddress(address: string | null) {
   const { workspace } = useContext(AddressContext);
   useEffect(() => {
     if (!address || !workspace || !address.startsWith(`/${workspace.slug}/`)) return;
-    if (address !== window.location.pathname) replace(`${address}${window.location.search}${window.location.hash}`);
+    settle(address);
   }, [address, workspace]);
+}
+
+/** Moves to an address in place of the one shown, keeping the query and fragment, unless it is the one shown. */
+export function settle(address: string) {
+  if (address !== window.location.pathname) replace(`${address}${window.location.search}${window.location.hash}`);
 }

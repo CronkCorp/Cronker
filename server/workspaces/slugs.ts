@@ -59,7 +59,9 @@ export async function slugForNewWorkspace(tx: Tx, name: string, chosen?: string)
   const { rows } = await tx.query<{ slug: string }>("select slug_of($1) as slug", [name]);
   const base = rows[0]!.slug || "workspace";
   for (let n = 1; ; n++) {
-    const candidate = n === 1 ? base : `${base}-${n}`;
+    const suffix = n === 1 ? "" : `-${n}`;
+    // The suffix takes the place of the base's last characters, so the slug stays within 40.
+    const candidate = `${base.slice(0, 40 - suffix.length).replace(/-+$/, "")}${suffix}`;
     if (await isFree(tx, candidate)) return candidate;
   }
 }

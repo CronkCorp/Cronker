@@ -2,8 +2,9 @@
 -- installation and never changed once set. Existing Workspaces get one from their name, oldest first: lower case
 -- letters and digits with single dashes between words, accents and apostrophes dropped, at most 40 characters,
 -- `workspace` for a name with none of those; a slug already taken, or a word the web client's own pages use, gets
--- `-2`, `-3` and so on. Cronk makes new ones the same way (`server/workspaces/slugs.ts`), and the slugs in the
--- addresses of Documents, Artifacts and Transcripts from their titles with the same function.
+-- `-2`, `-3` and so on in place of its last characters, keeping it within 40. Cronk makes new ones the same way
+-- (`server/workspaces/slugs.ts`), and the slugs in the addresses of Documents, Artifacts and Transcripts from their
+-- titles with the same function.
 create function slug_of(title text) returns text language sql immutable parallel safe return
   trim(both '-' from left(trim(both '-' from regexp_replace(
     regexp_replace(lower(normalize(title, NFKD)), '[\u0300-\u036f''’]', '', 'g'), '[^a-z0-9]+', '-', 'g')), 40));
@@ -18,10 +19,7 @@ declare
   n integer;
 begin
   for workspace in select id, name from workspaces order by created_at, id loop
-    base := lower(normalize(workspace.name, NFKD));
-    base := regexp_replace(base, '[̀-ͯ''’]', '', 'g');
-    base := regexp_replace(base, '[^a-z0-9]+', '-', 'g');
-    base := trim(both '-' from left(trim(both '-' from base), 40));
+    base := slug_of(workspace.name);
     if base = '' then base := 'workspace'; end if;
     candidate := base;
     n := 1;
@@ -29,7 +27,7 @@ begin
         'transcripts', 'password', 'github', 'runners', 'link', 'connect', 'api', 'assets', 'mcp', 'oauth', 'hooks')
       or exists (select 1 from workspaces taken where taken.slug = candidate) loop
       n := n + 1;
-      candidate := base || '-' || n;
+      candidate := trim(trailing '-' from left(base, 40 - length('-' || n))) || '-' || n;
     end loop;
     update workspaces set slug = candidate where id = workspace.id;
   end loop;

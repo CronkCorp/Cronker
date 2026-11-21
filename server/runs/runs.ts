@@ -1,10 +1,10 @@
-import { slugColumn } from "../http/readable.js";
 import { randomUUID } from "node:crypto";
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { inView, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";

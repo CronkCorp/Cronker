@@ -38,6 +38,9 @@ describe("creating a Workspace", () => {
     expect(await (await create({ name: "Café Crème & Co." })).json()).toMatchObject({ slug: "cafe-creme-co" });
     expect(await (await create({ name: "cafe creme co" })).json()).toMatchObject({ slug: "cafe-creme-co-2" });
     expect(await (await create({ name: "Runners" })).json()).toMatchObject({ slug: "runners-2" });
+    const long = "A very long Workspace name that goes on and on";
+    expect(await (await create({ name: long })).json()).toMatchObject({ slug: "a-very-long-workspace-name-that-goes-on" });
+    expect(await (await create({ name: long })).json()).toMatchObject({ slug: "a-very-long-workspace-name-that-goes-o-2" });
     const chosen = await (await create({ name: "Friends", slug: "pals" })).json();
     expect(chosen).toEqual({ id: expect.any(String), name: "Friends", slug: "pals", isAdmin: true });
 
