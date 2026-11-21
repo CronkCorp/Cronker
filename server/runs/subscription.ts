@@ -42,7 +42,7 @@ async function triggerFor({ db }: Context, run: RunToStart): Promise<StoredTrigg
  * When to try again after a 429, from its `Retry-After`: seconds or an HTTP date, a minute when it is
  * neither, and a day at most.
  */
-function retryAt(now: Date, retryAfter: string | null): Date {
+export function retryAt(now: Date, retryAfter: string | null): Date {
   const value = retryAfter?.trim() ?? "";
   let waitMs = defaultRetryAfterMs;
   if (/^\d+$/.test(value)) waitMs = Number(value) * 1000;

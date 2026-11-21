@@ -48,7 +48,11 @@ async function stagedTicket(project: { id: string; workspaceId: string; statuses
 async function runningRun(options: StartCronkOptions = {}) {
   cronk = await startCronk(options);
   // Creating a Project and starting its Runs, as today's API does, needs the Merge Step's columns.
-  if (options.migrateBefore !== undefined) await cronk.applyAhead("0033_merge_step.sql");
+  if (options.migrateBefore !== undefined) {
+    await cronk.applyAhead("0033_merge_step.sql");
+    // Setting up a Runner, as today's API does, needs the columns of a Managed Agents Runner's setup.
+    await cronk.applyAhead("0043_managed_agents_runner.sql");
+  }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
