@@ -7,7 +7,7 @@ import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
 import { setUpManagedAgents } from "./managed-agents.js";
-import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets } from "./runs.js";
+import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -19,8 +19,8 @@ export const Trigger = Type.Object({
   triggerId: Type.String({ description: "The scheduled task's trigger id in claude.ai, such as `trig_01ABC…`." }),
   waitingForToken: Type.Boolean({
     description:
-      "Made by a Runner setup and waiting for the token its Owner generates in claude.ai and pastes; Runs needing it " +
-      "can't start until then.",
+      "Saved without its token, or made by a Runner setup, and waiting for the token its Owner generates in claude.ai " +
+      "and pastes; Runs needing it can't start until then.",
   }),
   routineUrl: Type.String({ format: "uri", description: "The routine's page in claude.ai, where its token is generated." }),
   createdAt: Type.String({ format: "date-time" }),
@@ -142,13 +142,14 @@ export const noSuchProject = () => new ApiError(404, "project_not_found", "There
 
 /**
  * Saves the trigger a `subscription` Runner fires for a model, for all Projects or overriding that for one Project,
- * replacing the one it had for the same model and Project. The token is sealed under `CRONK_SECRET_KEY` and never returned.
+ * replacing the one it had for the same model and Project. The token is sealed under `CRONK_SECRET_KEY` and never returned;
+ * without one, the trigger keeps the token it had under the same trigger id, or else waits for its token.
  */
 export async function saveTrigger(
   context: Context,
   userId: string,
   runnerId: string,
-  input: { model: string; projectId?: string | null; triggerId: string; token: string },
+  input: { model: string; projectId?: string | null; triggerId: string; token?: string },
 ): Promise<RunnerRecord> {
   const runner = await findRunner(context.db, userId, runnerId);
   if (!runner) throw noSuchRunner();
@@ -159,15 +160,18 @@ export async function saveTrigger(
   if (projectId !== null && !(await findProject(context.db, userViewer(userId), projectId))) {
     throw noSuchProject();
   }
-  const sealed = requireSecretBox(context.config).seal(input.token.trim());
+  const sealed = input.token === undefined ? null : requireSecretBox(context.config).seal(input.token.trim());
   const model = input.model.trim();
-  // One trigger per model for the Runner, and per model for each Project: saving again replaces it.
+  // One trigger per model for the Runner, and per model for each Project: saving again replaces it. Saved again
+  // without a token, the same trigger id keeps the token it has, so a working trigger isn't left waiting by mistake.
   const conflict = projectId === null ? "(runner_id, lower(model)) where project_id is null" : "(runner_id, project_id, lower(model)) where project_id is not null";
   await context.db.query(
     `insert into runner_triggers (runner_id, project_id, model, trigger_id, token_sealed, created_at)
      values ($1, $2, $3, $4, $5, $6)
      on conflict ${conflict} do update set model = excluded.model, trigger_id = excluded.trigger_id,
-       token_sealed = excluded.token_sealed, created_at = excluded.created_at`,
+       token_sealed = coalesce(excluded.token_sealed,
+         case when runner_triggers.trigger_id = excluded.trigger_id then runner_triggers.token_sealed end),
+       created_at = excluded.created_at`,
     [runnerId, projectId, model, input.triggerId.trim(), sealed, context.clock.now()],
   );
   return (await findRunner(context.db, userId, runnerId))!;
@@ -198,9 +202,10 @@ export async function replaceProjectTriggers(
 }
 
 /**
- * Pastes the token of one of a Runner's triggers, such as one a Runner setup made, waiting for it, sealed under
- * `CRONK_SECRET_KEY` as saving a trigger seals it, and never returned. Runs that couldn't start for want of it are
- * retried by the User, as any Run that couldn't start.
+ * Pastes the token into one of a `subscription` Runner's triggers, such as one saved without it or made by a Runner setup,
+ * waiting for it, replacing any it had. It is sealed under `CRONK_SECRET_KEY` as saving a trigger seals it, and never
+ * returned. Pasted into a trigger waiting for it, the Tickets whose Runs couldn't start for want of it are rechecked; a
+ * token replacing a working one leaves them to Retry.
  */
 export async function pasteTriggerToken(
   context: Context,
@@ -211,10 +216,48 @@ export async function pasteTriggerToken(
 ): Promise<RunnerRecord> {
   const runner = await findRunner(context.db, userId, runnerId);
   if (!runner) throw noSuchRunner();
-  if (!runner.triggers.some((t) => t.id === triggerId)) throw new ApiError(404, "not_found", `${runner.name} has no such trigger.`);
   const sealed = requireSecretBox(context.config).seal(token.trim());
-  await context.db.query("update runner_triggers set token_sealed = $3 where id = $1 and runner_id = $2", [triggerId, runnerId, sealed]);
+  await transaction(context.db, async (tx) => {
+    const { rows } = isUuid(triggerId)
+      ? await tx.query<PastedTrigger & { waited: boolean }>(
+          `select runner_id as "runnerId", model, project_id as "projectId", token_sealed is null as waited
+           from runner_triggers where id = $1 and runner_id = $2 for update`,
+          [triggerId, runnerId],
+        )
+      : { rows: [] };
+    const trigger = rows[0];
+    if (!trigger) throw new ApiError(404, "not_found", `${runner.name} has no such trigger.`);
+    await tx.query("update runner_triggers set token_sealed = $2 where id = $1", [triggerId, sealed]);
+    if (trigger.waited) await recheckCouldntStart(context, tx, trigger);
+  });
   return (await findRunner(context.db, userId, runnerId))!;
+}
+
+/** A trigger whose token was just pasted: whose Runner, for which model and Project. */
+interface PastedTrigger {
+  runnerId: string;
+  model: string;
+  projectId: string | null;
+}
+
+/**
+ * Once the transaction commits, rechecks the Tickets whose latest Run couldn't start where that Run would now fire this
+ * trigger, as Retry would: a Ticket of the Runner's Agents, still in that Run's Status, whose Run wanted the trigger's
+ * model on its Project (for a trigger for all Projects, one without its own trigger for the model).
+ */
+async function recheckCouldntStart(context: Context, tx: Tx, trigger: PastedTrigger): Promise<void> {
+  const { rows } = await tx.query<WaitingTicket>(
+    `select tickets.id, agents.runner_id as "runnerId"
+     from tickets join agents on agents.id = tickets.delegate_id
+     join lateral (select state, status_id, model from runs where runs.ticket_id = tickets.id order by seq desc limit 1) latest on true
+     where agents.runner_id = $1 and latest.state = 'refused' and latest.status_id = tickets.status_id
+       and lower(latest.model) = lower($2)
+       and (tickets.project_id = $3 or ($3::uuid is null and not exists (
+         select 1 from runner_triggers own where own.runner_id = $1 and own.project_id = tickets.project_id
+           and lower(own.model) = lower($2))))`,
+    [trigger.runnerId, trigger.model, trigger.projectId],
+  );
+  recheckWaiting(context, tx, rows);
 }
 
 /** Removes one of a Runner's triggers; Runs needing it then can't start until another is saved. */

@@ -453,8 +453,9 @@ export async function waitingTickets(tx: Tx, where: string, params: unknown[]): 
 }
 
 /**
- * Once the transaction commits, rechecks each of the waiting Tickets, which starts it, keeps it waiting or ends
- * its wait, and then gives their Runners' free slots out in queue order.
+ * Once the transaction commits, rechecks each of the Tickets, which starts it, keeps it waiting or ends its wait, and
+ * then gives their Runners' free slots out in queue order. They are waiting Tickets, or Tickets whose Run couldn't start
+ * for want of a trigger's token that was just pasted.
  */
 export function recheckWaiting(context: Context, tx: Tx, tickets: WaitingTicket[]): void {
   if (tickets.length === 0) return;

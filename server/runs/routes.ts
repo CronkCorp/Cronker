@@ -258,14 +258,23 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "The claude.ai scheduled task your `subscription` Runner fires for Steps wanting the model, with its API " +
             "trigger's id and token. With a `projectId`, it overrides the Runner's own trigger for the model on that " +
             "Project's Tickets. Replaces the trigger saved for the same model and Project. The token is stored " +
-            "encrypted and never returned. Refused with `runner_has_no_triggers` for other kinds of Runner, and with " +
-            "`no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+            "encrypted and never returned. Without a token, the trigger keeps the token it has under the same trigger " +
+            "id, or else waits for one (`waitingForToken`): Runs needing it can't start until it is pasted. Refused " +
+            "with `runner_has_no_triggers` for other kinds of Runner, and with `no_secret_key`, when it has a token, " +
+            "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
           body: Type.Object({
             model: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, such as `haiku`." }),
             projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
             triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
-            token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }),
+            token: Type.Optional(
+              Type.String({
+                minLength: 1,
+                maxLength: 1000,
+                pattern: "\\S",
+                description: "The trigger's token; leave it out to save the trigger waiting for it.",
+              }),
+            ),
           }),
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
@@ -362,10 +371,12 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Runs"],
           summary: "Paste the token of a trigger of your subscription Runner",
           description:
-            "For a trigger waiting for its token, as a Runner setup leaves each: the API token generated for its routine " +
-            "in claude.ai, which makes it usable. Generating a new token in claude.ai revokes the routine's previous one. " +
-            "The token is stored encrypted and never returned. Runs that couldn't start for want of it are retried as " +
-            "any other. Refused with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
+            "For a trigger waiting for its token (`waitingForToken`), as one saved without it or made by a Runner setup " +
+            "is: the API token generated for its routine in claude.ai, which makes it usable; for a working one, its new " +
+            "token. Generating a new token in claude.ai revokes the routine's previous one. The token is stored encrypted " +
+            "and never returned. Pasted into a waiting trigger, the Tickets whose Runs couldn't start for want of it are " +
+            "rechecked, so they start or wait for a slot; otherwise they wait for Retry. Refused with `no_secret_key` " +
+            "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
           body: Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) }),
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },

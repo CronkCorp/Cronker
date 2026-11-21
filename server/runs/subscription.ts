@@ -24,7 +24,7 @@ const httpDate = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GM
 /** A sealed trigger as stored. */
 interface StoredTrigger {
   triggerId: string;
-  /** None while the trigger, made by a Runner setup, waits for the token its Owner pastes. */
+  /** None while the trigger, saved without it or made by a Runner setup, waits for the token its Owner pastes. */
   tokenSealed: string | null;
 }
 
