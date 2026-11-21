@@ -165,6 +165,14 @@ Each Run is then a session of that agent on its Step's model (`haiku`, `sonnet`,
 
 Cronk reads the sessions of running Runs every three minutes. A session that went idle without the agent calling `finish` fails its Run with the stop reason Anthropic gave (such as `end_turn` or `retries_exhausted`), one asking for a confirmation fails it as *needs a confirmation*, and a terminated one fails it; each waits in your Inbox with **Retry**. A Run with no Cronk calls for the lost-Run threshold becomes lost, as with any Runner. Stopping a Run, by moving, undelegating or re-delegating its Ticket, interrupts its session; every ended Run's session is archived, never deleted, so its Console link keeps working. Its token is revoked the moment it ends; if Anthropic can't be reached then, Cronk deletes the vault and archives the session at its next poll. A rate limit from Anthropic pauses the Runner's queue until its retry time, while Tickets wait. Removing the Runner stops its running Runs and revokes their tokens.
 
+A webhook makes those ends immediate instead of up to three minutes late. It is optional, and polling stays as the backstop, since Anthropic drops a delivery after three failed tries:
+
+1. Copy the **Webhook URL** from the Runner's card. Anthropic only delivers to a public HTTPS address on port 443, so `CRONK_PUBLIC_URL` must be one.
+2. In the Claude Console, under **Manage → Webhooks**, add an endpoint with that URL, subscribed to `session.status_idled` and `session.status_terminated`.
+3. Paste the endpoint's `whsec_` signing secret, which the Console shows once, under **Signing secret** on the card and choose **Save secret**. It is stored encrypted and never shown again; after rotating it in the Console, save the new one.
+
+Cronk refuses deliveries that aren't signed with the saved secret, or signed more than five minutes ago; a delivery about a session of none of the Runner's running Runs, or one Anthropic sends again, changes nothing. Each Runner has its own URL and secret: two Runners with keys to the same Anthropic workspace each need their own endpoint there.
+
 ## Upgrading
 
 Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releases](https://github.com/CronkCorp/Cronker/releases). Read the notes of every release you skip: they call out anything to do by hand, such as a GitHub App permission to accept.

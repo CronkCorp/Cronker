@@ -313,7 +313,14 @@ export interface Runner {
   pausedUntil: string | null;
   triggers: Trigger[];
   /** For a `managed_agents` Runner, the agent definition and cloud environment Cronk created with its API key. */
-  managedAgents: { agentId: string; environmentId: string } | null;
+  managedAgents: {
+    agentId: string;
+    environmentId: string;
+    /** The webhook endpoint URL to add in the Anthropic Console. */
+    webhookUrl: string;
+    /** Whether the endpoint's signing secret is saved; without one, Runs end only by polling. */
+    webhookSecretSaved: boolean;
+  } | null;
   createdAt: string;
 }
 
@@ -1008,6 +1015,8 @@ export const api = {
   createRunner: (input: { name: string; kind: string; apiKey?: string }) => call<Runner>("POST", "/api/runners", input),
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
+  saveWebhookSecret: (id: string, secret: string) => call<Runner>("PUT", `${runner(id)}/webhook-secret`, { secret }),
+  forgetWebhookSecret: (id: string) => call<Runner>("DELETE", `${runner(id)}/webhook-secret`),
   saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
   startRunnerSetup: (runnerId: string, input: { projectId: string; agentId?: string }) =>

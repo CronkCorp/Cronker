@@ -232,3 +232,42 @@ test("set up a Managed Agents Runner with an API key, after a rejected one is re
   await expect(runner).not.toContainText("Triggers");
   await expect(page.getByRole("button", { name: "Set up a subscription Runner" })).toBeVisible();
 });
+
+test("add a Managed Agents Runner's webhook: copy its URL, and save its signing secret, after a wrong one is refused", async ({
+  page,
+  cronk,
+}) => {
+  await setUp(cronk);
+  cronk.managedAgents.apiKey("sk-ant-api03-ada-secret");
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "Runners" }).click();
+  await page.getByLabel("Runner name").fill("Claude API");
+  await page.getByLabel("Kind").selectOption("managed_agents");
+  await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
+  await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
+  const webhook = page.getByRole("region", { name: "Claude API" }).getByRole("group", { name: "Webhook" });
+  const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  const [runner] = await (await cronk.request("GET", "/api/runners", { cookie })).json();
+
+  await expect(webhook.getByLabel("Webhook URL")).toHaveText(`${cronk.url}/api/runners/${runner.id}/managed-agents/webhook`);
+  await expect(webhook.getByRole("button", { name: "Copy URL" })).toBeVisible();
+  await expect(webhook).toContainText("No secret yet");
+
+  await webhook.getByLabel("Signing secret", { exact: true }).fill("sk-ant-api03-not-a-secret");
+  await webhook.getByRole("button", { name: "Save secret" }).click();
+  await expect(webhook.getByRole("alert")).toContainText("whsec_");
+
+  const secret = cronk.managedAgents.webhookSecret();
+  await webhook.getByLabel("Signing secret", { exact: true }).fill(secret);
+  await webhook.getByRole("button", { name: "Save secret" }).click();
+  await expect(webhook.getByRole("status")).toContainText("Saved");
+  await expect(webhook).toContainText("A secret is saved");
+  await expect(webhook.getByLabel("Signing secret", { exact: true })).toHaveValue("");
+  await page.reload();
+  await expect(page.getByRole("group", { name: "Webhook" }).getByRole("button", { name: "Replace secret" })).toBeVisible();
+  expect(await page.content()).not.toContain(secret.slice(6));
+
+  await page.getByRole("group", { name: "Webhook" }).getByRole("button", { name: "Forget it" }).click();
+  await page.getByRole("dialog", { name: "Forget the webhook signing secret?" }).getByRole("button", { name: "Forget" }).click();
+  await expect(page.getByRole("group", { name: "Webhook" })).toContainText("No secret yet");
+});
