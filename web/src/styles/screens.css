@@ -1181,8 +1181,17 @@
 .runner-usage strong {
   font-size: 16px;
 }
+.runner-cost {
+  font-size: 13px;
+}
+.runner-cost strong {
+  font-size: 16px;
+}
 .runner-limit > .field {
   flex: 0 0 120px;
+}
+.runner-budget > .field {
+  flex: 0 0 180px;
 }
 .runner-triggers {
   display: grid;

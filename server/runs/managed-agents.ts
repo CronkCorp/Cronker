@@ -4,7 +4,7 @@ import { ApiError } from "../http/errors.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import { transaction } from "../db.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
-import type { Runner, RunnerRefusal, RunReports, RunToStart, StartResult } from "./runner.js";
+import type { Cost, Runner, RunnerRefusal, RunReports, RunToStart, StartResult } from "./runner.js";
 import { retryAt } from "./subscription.js";
 
 /**
@@ -129,6 +129,8 @@ interface StoredRunner {
   apiKeySealed: string | null;
   agentId: string | null;
   environmentId: string | null;
+  /** Its budget per Run in US cents, or null for none. */
+  budgetPerRun: number | null;
 }
 
 /**
@@ -150,8 +152,8 @@ const heldColumns = `run_id as "runId", api_key_sealed as "apiKeySealed", token_
   session_id as "sessionId", revoked_at is not null as revoked, vault_deleted_at is not null as "vaultDeleted",
   archived_at is not null as archived`;
 
-/** The `managed_agents` Runner. */
-export function managedAgentsRunner(context: Context): Runner {
+/** The `managed_agents` Runner, reporting its Runs' costs to `reports`. */
+export function managedAgentsRunner(context: Context, reports: RunReports): Runner {
   const { db, clock } = context;
 
   /** Mints a fresh full token of the Run's Agent, recorded against the Run so it is revoked when the Run ends. */
@@ -227,6 +229,9 @@ export function managedAgentsRunner(context: Context): Runner {
         vault_ids: [vaultId],
         title: `${run.ticket.key} in ${run.project.name}`,
         metadata: { cronk_run_id: run.runId },
+        ...(stored.budgetPerRun === null
+          ? {}
+          : { budget: { type: "limit", max_list_cost: { amount: String(stored.budgetPerRun), currency: "USD" } } }),
         initial_events: [{ type: "user.message", content: [{ type: "text", text: run.brief }] }],
       },
       "session_id = $2, archived_at = null",
@@ -238,7 +243,8 @@ export function managedAgentsRunner(context: Context): Runner {
   return {
     async start(run): Promise<StartResult> {
       const { rows } = await db.query<StoredRunner>(
-        `select api_key_sealed as "apiKeySealed", managed_agent_id as "agentId", managed_environment_id as "environmentId"
+        `select api_key_sealed as "apiKeySealed", managed_agent_id as "agentId", managed_environment_id as "environmentId",
+           budget_per_run as "budgetPerRun"
          from runners where id = $1`,
         [run.runner.id],
       );
@@ -268,7 +274,7 @@ export function managedAgentsRunner(context: Context): Runner {
         result = await start(run, apiKey, { ...stored, agentId: stored.agentId, environmentId: stored.environmentId });
       } catch (error) {
         // Cronk records the Run as couldn't start: what it holds so far is let go of, as for a refusal.
-        await letGo(context, run.runId).catch(() => {});
+        await letGo(context, reports, run.runId).catch(() => {});
         throw error;
       }
       // A refused Run lets go of what it holds so far. So does one that ended while it started, as when a User moved
@@ -277,26 +283,37 @@ export function managedAgentsRunner(context: Context): Runner {
       const { rows: still } = await db.query<{ running: boolean }>("select state = 'running' as running from runs where id = $1", [
         run.runId,
       ]);
-      if (!result.started || !still[0]?.running) await letGo(context, run.runId).catch(() => {});
+      if (!result.started || !still[0]?.running) await letGo(context, reports, run.runId).catch(() => {});
       return result;
     },
     async stop(run) {
-      await letGo(context, run.runId);
+      await letGo(context, reports, run.runId);
     },
     async ended(run) {
-      await letGo(context, run.runId);
+      await letGo(context, reports, run.runId);
     },
     stopsRunsWhenRemoved: true,
   };
 }
 
+/** What a session cost so far at list prices, as its `usage.list_cost` reports it; nothing if it reports none. */
+function costOf(session: Record<string, unknown>): Cost | null {
+  const listCost = (session.usage as { list_cost?: { amount?: unknown; currency?: unknown } } | undefined)?.list_cost;
+  const amount = typeof listCost?.amount === "string" && /^\d{1,15}$/.test(listCost.amount) ? Number(listCost.amount) : null;
+  return amount !== null && typeof listCost?.currency === "string" ? { amount, currency: listCost.currency } : null;
+}
+
+/** A cost as a person reads it, such as `$5.00`, or `500 EUR` (minor units) for a currency other than US dollars. */
+const shownCost = ({ amount, currency }: Cost) => (currency === "USD" ? `$${(amount / 100).toFixed(2)}` : `${amount} ${currency} (minor units)`);
+
 /**
  * Lets go of what an ended Run holds, each step at most once and recorded as it succeeds: revokes its token (the
  * guard that counts), deletes its vault, and interrupts its session if it is still running, archiving it once idle.
- * A session is archived, never deleted, so its Console link keeps working. Whatever Anthropic didn't take now, such
- * as a session still busy after its interrupt, the next poll tries again.
+ * A session is archived, never deleted, so its Console link keeps working. Once the session no longer runs, what it
+ * cost is reported for the Run. Whatever Anthropic didn't take now, such as a session still busy after its
+ * interrupt, the next poll tries again.
  */
-async function letGo(context: Context, runId: string): Promise<void> {
+async function letGo(context: Context, reports: RunReports, runId: string): Promise<void> {
   const { db, clock } = context;
   const { rows } = await db.query<HeldRun>(`select ${heldColumns} from managed_agent_runs where run_id = $1`, [runId]);
   const held = rows[0];
@@ -324,6 +341,9 @@ async function letGo(context: Context, runId: string): Promise<void> {
     }
     // A running session can't be archived; an interrupt makes it idle, and the next poll archives it if it isn't yet.
     if (session.status !== 200 || session.body.status === "running" || session.body.status === "rescheduling") return;
+    // A session that no longer runs spends nothing more, so what it reports now is what the Run cost.
+    const cost = costOf(session.body);
+    if (cost) await reports.cost(runId, cost);
     if (session.body.archived_at || (await call("POST", `${path}/archive`)).status === 200) await mark("archived_at");
   }
 }
@@ -357,7 +377,7 @@ export async function pollManagedAgentsSessions(context: Context, reports: RunRe
      where (m.revoked_at is null or m.vault_deleted_at is null or m.archived_at is null)
        and runs.state is distinct from 'running'`,
   );
-  for (const { runId } of unfinished) await letGo(context, runId).catch((error: unknown) => failures.push(error));
+  for (const { runId } of unfinished) await letGo(context, reports, runId).catch((error: unknown) => failures.push(error));
   if (failures.length > 0) throw failures[0];
 }
 /** Why the session stopped without its Agent calling `finish`, or nothing while it is still at work. */
@@ -377,6 +397,11 @@ async function whySessionStopped(context: Context, apiKey: string, sessionId: st
   if (!stopReason) return null;
   if (stopReason === "requires_action") {
     return "Its session needs a confirmation, which Cronk can't give: the session asked to confirm a tool call.";
+  }
+  if (stopReason === "budget_reached") {
+    const budget = (session.body.budget as { max_list_cost?: Record<string, unknown> } | null | undefined)?.max_list_cost;
+    const cap = budget && costOf({ usage: { list_cost: budget } });
+    return `Budget reached: its session stopped at the budget per Run${cap ? ` of ${shownCost(cap)}` : ""}, without the agent calling finish.`;
   }
   return `Its session went idle without calling finish (stop reason: ${stopReason}).`;
 }

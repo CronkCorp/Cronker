@@ -7,7 +7,7 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
-import { createRunner, pasteTriggerToken, removeRunner, removeTrigger, RunnerRecord, Trigger, runnersOf, saveTrigger, setRunnerLimit } from "./runners.js";
+import { createRunner, pasteTriggerToken, removeRunner, removeTrigger, RunnerRecord, Trigger, runnersOf, saveTrigger, updateRunner, BudgetPerRun } from "./runners.js";
 import { instructionsPath, reportSetup, setupInstructions, startSetup, StartedSetup } from "./runner-setups.js";
 import { briefOfRun, findRun, finishRun, retryRun, Run, runsOf } from "./runs.js";
 import { mergePullRequest } from "./merging.js";
@@ -175,7 +175,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           response: { 200: Type.Array(RunnerRecord), 401: ErrorBody, 403: ErrorBody },
         },
       },
-      async (request) => runnersOf(context.db, (await requireUser(context, request)).id),
+      async (request) => runnersOf(context, (await requireUser(context, request)).id),
     );
 
     app.post(
@@ -211,18 +211,23 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Runs"],
-          summary: "Set your Runner's limit on Runs at once",
+          summary: "Set your Runner's limit on Runs at once or its budget per Run",
           description:
-            "Tickets needing a Run beyond the limit wait for a slot, highest Priority first, then the one that entered " +
-            "its Status first. Raising the limit starts waiting Tickets at once; lowering it stops no running Run.",
+            "Changes what the body names. Tickets needing a Run beyond the limit wait for a slot, highest Priority " +
+            "first, then the one that entered its Status first. Raising the limit starts waiting Tickets at once; " +
+            "lowering it stops no running Run. A `managed_agents` Runner's budget per Run applies to Runs started from " +
+            "then on; other kinds are refused one with `runner_has_no_budget`.",
           params: Type.Object({ runnerId: Type.String() }),
-          body: Type.Object({ limit: Type.Integer({ minimum: 1, maximum: 100 }) }),
-          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          body: Type.Object(
+            { limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), budgetPerRun: Type.Optional(BudgetPerRun) },
+            { minProperties: 1 },
+          ),
+          response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return setRunnerLimit(context, user.id, request.params.runnerId, request.body.limit);
+        return updateRunner(context, user.id, request.params.runnerId, request.body);
       },
     );
 

@@ -9,6 +9,7 @@ import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { findProject, projectNotFound } from "./projects.js";
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
+import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 
@@ -110,10 +111,15 @@ export const TicketSummary = Type.Object({
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
-/** A Ticket with the Ticket keys its description mentions. */
+/** A Ticket with the Ticket keys its description mentions and what its Runs cost. */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
   mentions: Type.Array(Mention),
+  cost: Type.Array(Cost, {
+    description:
+      "What its Runs cost in all, one total per currency, counting the Runs whose Runner reported a cost; empty when " +
+      "none did, as for subscription Runs.",
+  }),
 });
 export type Ticket = Static<typeof Ticket>;
 
@@ -234,7 +240,8 @@ export async function findTicketByKey(
 }
 
 async function withMentions(db: Db | Tx, row: Row): Promise<Ticket> {
-  return { ...ticketSummary(row), mentions: await mentionsIn(db, row.workspaceId, row.description) };
+  const { rows } = await db.query<{ cost: Cost[] }>(`select ${costTotalsSql("runs.ticket_id = $1")} as cost`, [row.id]);
+  return { ...ticketSummary(row), mentions: await mentionsIn(db, row.workspaceId, row.description), cost: rows[0]!.cost };
 }
 
 const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;

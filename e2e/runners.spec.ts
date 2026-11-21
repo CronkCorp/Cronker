@@ -232,3 +232,45 @@ test("set up a Managed Agents Runner with an API key, after a rejected one is re
   await expect(runner).not.toContainText("Triggers");
   await expect(page.getByRole("button", { name: "Set up a subscription Runner" })).toBeVisible();
 });
+
+test("set a Managed Agents Runner's budget per Run, and see a Run stopped by it: its cost on the Run, the Ticket and the Runner", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  cronk.managedAgents.apiKey("sk-ant-api03-ada-secret");
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  const runner = await call("POST", "/api/runners", { name: "Claude API", kind: "managed_agents", apiKey: "sk-ant-api03-ada-secret" });
+  const created = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-api" });
+  const agent = await call("PATCH", `/api/agents/${created.id}`, { runnerId: runner.id });
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "Runners" }).click();
+  const card = page.getByRole("region", { name: "Claude API" });
+  await expect(card).toContainText("$0.00 this month");
+  await expect(card.getByLabel("Budget per Run (USD)")).toHaveValue("");
+
+  await card.getByLabel("Budget per Run (USD)").fill("5");
+  await card.getByRole("button", { name: "Save budget" }).click();
+  await expect(card.locator(".runner-budget").getByRole("status")).toHaveText("Saved.");
+  await page.reload();
+  await expect(card.getByLabel("Budget per Run (USD)")).toHaveValue("5.00");
+
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
+  const session = cronk.managedAgents.sessions.at(-1)!;
+  expect(session.body.budget).toEqual({ type: "limit", max_list_cost: { amount: "500", currency: "USD" } });
+  cronk.managedAgents.charge(session.id, 512);
+  cronk.managedAgents.idle(session.id, "budget_reached");
+  await cronk.pollManagedAgentsSessions();
+  await expect(card).toContainText("$5.12 this month");
+
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const run = page.locator(".entry-run");
+  await expect(run).toContainText("$5.12");
+  await expect(run).toContainText("Budget reached");
+  await expect(page.locator(".field-row").filter({ hasText: "Cost" })).toContainText("$5.12");
+  await expect(page.getByRole("region", { name: "Run" }).getByRole("button", { name: "Retry" })).toBeVisible();
+});

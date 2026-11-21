@@ -41,10 +41,18 @@ export interface RunToStop {
 
 export type StartResult = { started: true; reference: RunReference } | { started: false; refusal: RunnerRefusal };
 
+/** What something cost: an amount in the currency's minor units, such as US cents. */
+export interface Cost {
+  amount: number;
+  currency: string;
+}
+
 /** What a Runner tells Cronk about its Runs after starting them. */
 export interface RunReports {
   /** The Run's session ended without the agent calling `finish`: the Run becomes failed. */
   endedWithoutFinishing(runId: string, reason: string): Promise<void>;
+  /** What the Run's session cost, once the Run ended; a later report replaces an earlier one. */
+  cost(runId: string, cost: Cost): Promise<void>;
 }
 
 export interface Runner {

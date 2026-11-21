@@ -67,6 +67,7 @@ describe("starting Runs", () => {
         questionBy: null,
         endReason: null,
         sessionUrl: "https://claude.ai/code/session_1",
+        cost: null,
         transcriptId: null,
         transcriptSlug: null,
         transcriptDeleted: false,
@@ -406,6 +407,8 @@ describe("Runners and Agents", () => {
         pausedUntil: null,
         triggers: [],
         managedAgents: null,
+        budgetPerRun: null,
+        costThisMonth: [],
         createdAt: expect.any(String),
       },
     ]);

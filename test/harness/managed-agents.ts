@@ -6,8 +6,8 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
  *
  * Only API keys it is given with `apiKey(key)` are accepted (`x-api-key`); any other answers 401. As the real
  * service does, a vault holds one active credential per MCP server URL (a second answers 409), and a session made
- * with `initial_events` starts running. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, and
- * stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
+ * with `initial_events` starts running. A test drives a session with `idle(id, stopReason)` and `terminate(id)`, has
+ * it spend with `charge(id, cents)`, and stages a rate limit with `rateLimitNext(retryAfter)` or another failure with `failNext(method, path, status)`.
  */
 
 export interface StandInSession {
@@ -19,6 +19,8 @@ export interface StandInSession {
   events: Record<string, unknown>[];
   archived: boolean;
   deleted: boolean;
+  /** What the session has cost so far at list prices, in US cents, as its `usage.list_cost` reports it. */
+  listCost: number;
 }
 
 export interface StandInCredential {
@@ -63,6 +65,8 @@ export interface StandInManagedAgents {
   idle(id: string, stopReason: string): void;
   /** The session terminated, recording a `session.status_terminated` event. */
   terminate(id: string): void;
+  /** The session spent this many more US cents at list prices, adding to its `usage.list_cost`. */
+  charge(id: string, cents: number): void;
   stop(): Promise<void>;
 }
 
@@ -87,6 +91,8 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
     archived_at: s.archived ? new Date().toISOString() : null,
     environment_id: s.body.environment_id,
     vault_ids: s.body.vault_ids ?? [],
+    budget: s.body.budget ?? null,
+    usage: { list_cost: { amount: String(s.listCost), currency: "USD" } },
   });
 
   const server: Server = createServer(async (request, response) => {
@@ -189,6 +195,7 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
         events: [],
         archived: false,
         deleted: false,
+        listCost: 0,
       };
       for (const event of initial) emit(session, event);
       sessions.push(session);
@@ -273,6 +280,9 @@ export async function startStandInManagedAgents(): Promise<StandInManagedAgents>
       const s = session(id);
       s.status = "terminated";
       emit(s, { type: "session.status_terminated" });
+    },
+    charge(id, cents) {
+      session(id).listCost += cents;
     },
     stop: () =>
       new Promise((resolve) => {

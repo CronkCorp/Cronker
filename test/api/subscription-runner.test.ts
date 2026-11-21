@@ -129,6 +129,20 @@ describe("starting a Run", () => {
   });
 });
 
+describe("cost", () => {
+  test("a subscription Run reports no cost: the Run, its Ticket and its Runner show none", async () => {
+    const { ada, ticket, agent, agentToken, status } = await adaWithSubscriptionRunner();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+
+    await ok("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${agentToken}` } }, { outcome: "ready" });
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).cost).toBeNull();
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([]);
+    expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([]);
+  });
+});
+
 describe("Runner settings", () => {
   test("list the triggers per model and Project override, never their tokens", async () => {
     const { ada, project, runner } = await adaWithSubscriptionRunner();

@@ -73,7 +73,7 @@ export async function createCronk({
     };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
-    context.runners.managed_agents = managedAgentsRunner(context);
+    context.runners.managed_agents = managedAgentsRunner(context, reports);
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
     log = app.log;

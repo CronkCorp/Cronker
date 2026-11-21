@@ -208,6 +208,8 @@ export interface TicketSummary {
 
 export interface Ticket extends TicketSummary {
   mentions: Mention[];
+  /** What its Runs cost in all, one total per currency; empty when none reported a cost. */
+  cost: Cost[];
 }
 
 export interface TicketEdit {
@@ -301,6 +303,12 @@ export interface StartedSetup {
   };
 }
 
+/** What something cost: an amount in the currency's minor units, such as US cents. */
+export interface Cost {
+  amount: number;
+  currency: string;
+}
+
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
 export interface Runner {
   id: string;
@@ -314,6 +322,10 @@ export interface Runner {
   triggers: Trigger[];
   /** For a `managed_agents` Runner, the agent definition and cloud environment Cronk created with its API key. */
   managedAgents: { agentId: string; environmentId: string } | null;
+  /** For a `managed_agents` Runner, the most each Run may cost, passed as each session's budget; null for none. */
+  budgetPerRun: Cost | null;
+  /** What its Runs that ended this calendar month cost, one total per currency. */
+  costThisMonth: Cost[];
   createdAt: string;
 }
 
@@ -451,6 +463,8 @@ export interface Run {
   questionBy: "agent" | "cronk" | null;
   endReason: string | null;
   sessionUrl: string | null;
+  /** What it cost, once it ended, where its Runner reports it; null for subscription Runs. */
+  cost: Cost | null;
   /** Its Transcript, once one was uploaded for its session. */
   transcriptId: string | null;
   /** Its Transcript's readable form, for its address. */
@@ -1007,6 +1021,7 @@ export const api = {
   runners: () => call<Runner[]>("GET", "/api/runners"),
   createRunner: (input: { name: string; kind: string; apiKey?: string }) => call<Runner>("POST", "/api/runners", input),
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
+  setBudgetPerRun: (id: string, budgetPerRun: Cost | null) => call<Runner>("PATCH", runner(id), { budgetPerRun }),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
   saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token: string }) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
