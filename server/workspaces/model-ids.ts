@@ -21,7 +21,7 @@ export async function modelIdsOf(db: Db, workspaceId: string): Promise<ModelId[]
   return rows;
 }
 
-/** A model label, as Steps use it, such as `haiku`; the same as a trigger's. */
+/** A model label, as Steps use it, such as `haiku`: what a trigger and a model id are saved under. */
 export const ModelLabel = Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, such as `haiku`." });
 
 export const ModelIdValue = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S", description: "The exact model id, such as `claude-opus-5-5`." });
