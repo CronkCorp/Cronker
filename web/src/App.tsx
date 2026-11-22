@@ -365,7 +365,7 @@ function SignedIn({
       </Resolve>
     );
   } else if (routed && route?.kind === "agent") {
-    page = <AgentScreen key={`${routed.id} ${route.agentId}`} workspace={routed} agentId={route.agentId} />;
+    page = <AgentScreen key={`${routed.id} ${route.agentId}`} user={user} workspace={routed} agentId={route.agentId} />;
   } else if (routed && route?.kind === "workspace") {
     const workspace = routed;
     switch (route.page) {

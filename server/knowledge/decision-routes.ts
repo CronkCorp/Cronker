@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
+import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import {
@@ -31,6 +32,9 @@ const statusRules =
   "Only a User changes a Decision's status; an Agent's change is refused with `agent_not_allowed`. Superseded needs " +
   "`supersededById`, another Decision of the same Project, or of the Workspace for one of the Workspace's " +
   "(`superseding_decision_needed`, `superseding_decision_outside_scope`); other statuses take none.";
+
+const avoidedNote =
+  " An Agent's save answers with `avoidedWords`: the words the glossary avoids that the title and body it gives use.";
 
 export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
@@ -63,17 +67,18 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
             summary: `Record one of ${place.name} Decisions`,
             description:
               "Records the Decision numbered next in order of creation, at Version 1 by its Actor, as proposed unless " +
-              `a status is given. ${statusRules}`,
+              `a status is given. ${statusRules}${avoidedNote}`,
             params,
             body: DecisionCreate,
-            response: { 201: Decision, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+            response: { 201: withAvoidedWords(Decision), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
           },
         },
         async (request, reply) => {
           const caller = await requireCaller(context, request);
           const { body = "", ...input } = request.body;
           const created = await createDecision(context, caller, await place.find(request, caller), { ...input, body });
-          return reply.code(201).send(created);
+          const texts = { plain: [input.title], markdown: [body] };
+          return reply.code(201).send(await warnAgent(db, caller, created, texts, created));
         },
       );
     }
@@ -105,13 +110,18 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Saves a new title, body or status as the Decision's next Version, by the caller, based on the Version named " +
             "as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying the " +
-            `current Version as \`current\`. Accepted Decisions stay editable. ${statusRules}`,
+            `current Version as \`current\`. Accepted Decisions stay editable. ${statusRules}${avoidedNote}`,
           params: DecisionParams,
           body: DecisionEdit,
-          response: { 200: Decision, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Decision", DecisionVersionWithBody) },
+          response: { 200: withAvoidedWords(Decision), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Decision", DecisionVersionWithBody) },
         },
       },
-      async (request) => editDecision(context, await requireCaller(context, request), request.params.decisionId, request.body),
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const saved = await editDecision(context, caller, request.params.decisionId, request.body);
+        const { title, body } = request.body;
+        return warnAgent(db, caller, saved, given({ plain: [title], markdown: [body] }), saved);
+      },
     );
 
     app.delete(

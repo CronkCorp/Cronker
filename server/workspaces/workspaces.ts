@@ -42,11 +42,19 @@ export async function findWorkspace(db: Db, viewer: Viewer, workspaceId: string)
 }
 
 /** Creates a Workspace with the User as its first Admin, under the slug they chose or one made from its name. */
+/** The create-a-Workspace route's body: its slug is made from its name unless given. */
+export const WorkspaceCreate = Type.Object({ name: WorkspaceName, slug: Type.Optional(WorkspaceSlug) });
+export type WorkspaceCreate = Static<typeof WorkspaceCreate>;
+
+/** The rename-a-Workspace route's body. */
+export const WorkspaceRename = Type.Object({ name: WorkspaceName });
+export type WorkspaceRename = Static<typeof WorkspaceRename>;
+
 export async function createWorkspace(
   db: Db,
   clock: Clock,
   userId: string,
-  input: { name: string; slug?: string },
+  input: WorkspaceCreate,
 ): Promise<Membership> {
   return transaction(db, async (tx) => {
     const now = clock.now();
@@ -136,7 +144,11 @@ export function modelIdOf(settings: Pick<WorkspaceSettings, "modelIds">, label: 
   return settings.modelIds.find((m) => m.label.toLowerCase() === label.toLowerCase())?.modelId;
 }
 
-export async function changeSettings(db: Db, workspaceId: string, change: Partial<WorkspaceSettings>): Promise<WorkspaceSettings> {
+/** The change-settings route's body: whichever settings are given change. */
+export const WorkspaceSettingsEdit = Type.Partial(WorkspaceSettings);
+export type WorkspaceSettingsEdit = Static<typeof WorkspaceSettingsEdit>;
+
+export async function changeSettings(db: Db, workspaceId: string, change: WorkspaceSettingsEdit): Promise<WorkspaceSettings> {
   const modelIds = change.modelIds?.map((m) => ({ label: m.label.trim(), modelId: m.modelId.trim() }));
   if (modelIds) {
     const seen = new Set<string>();

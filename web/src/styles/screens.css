@@ -108,7 +108,11 @@
   width: auto;
   min-width: 140px;
 }
-/* A filter's button looks like the Label box beside it; an active filter has an --accent border. */
+/* The Filter box, while it holds text, is marked as an active filter like a FilterPicker. */
+.filter input.filter-on {
+  border-color: var(--accent);
+}
+/* A filter's button opens its list; an active filter has an --accent border. */
 .filter-trigger {
   display: inline-flex;
   align-items: center;
@@ -1257,6 +1261,11 @@
   flex: none;
 }
 /* An Agent's own Transcripts on its page: session, the Tickets it named, then its size and upload, a row each. */
+/* The Agent Record is a timeline inside a panel, so its gutter takes the panel's background. */
+.agent-record .gutter,
+.agent-record .ring {
+  background: var(--surface);
+}
 .agent-transcripts {
   display: grid;
   margin: 0;
@@ -1774,6 +1783,19 @@
   flex-wrap: wrap;
 }
 
+/* Reopen dialog: the Tickets it blocks that moved on */
+.moved-on {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.moved-on-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 /* Webhooks (Account settings): each webhook a bordered block with its last deliveries under it. */
 .webhook {
   border: 1px solid var(--border);
@@ -1810,6 +1832,12 @@
 
 .delivery-pending {
   color: var(--muted);
+}
+
+.delivery-attempts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 /* An Artifact's Comments, under the Artifact, as Comments show on a Ticket's timeline. */

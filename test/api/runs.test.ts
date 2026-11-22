@@ -537,7 +537,7 @@ describe("removing a Runner", () => {
     const { ada, ticket, agent, asAgent, runner, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
     const [run] = await runsOf(ticket.id, ada);
-    const finished = await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    const { avoidedWords: _, ...finished } = await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
 
     await ok("DELETE", `/api/runners/${runner.id}`, ada);
 

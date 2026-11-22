@@ -23,6 +23,7 @@ import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { PullRequestRows } from "./pull-requests.js";
+import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, CommentButton, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
@@ -547,6 +548,7 @@ function Reopen({
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={`Reopen ${ticketKey}`} description="It goes back to the Step that completed it, with your Comment.">
       <form onSubmit={onSubmit}>
+        <MovedOnDependents ticketId={ticketId} open={open} />
         <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
         <FormError error={error} />
         <DialogActions>

@@ -97,6 +97,7 @@ export interface Subscriber {
  */
 export class Live {
   private readonly subscribers = new Set<Subscriber>();
+  private readonly listeners = new Set<(workspaceId: string, event: LiveEvent) => void>();
   private isClosed = false;
 
   /** Whether the server is closing, so no stream may stay open. */
@@ -115,6 +116,15 @@ export class Live {
     }
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
+  }
+
+  /**
+   * Adds an in-process listener, told about every event published to a Workspace once it commits, whoever it goes to,
+   * such as the notifier that sends Inbox items to webhooks. A listener that throws doesn't stop the others.
+   */
+  listen(listener: (workspaceId: string, event: LiveEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   /** Ends every stream, and every stream subscribed from now on, as the server closes. */
@@ -152,6 +162,15 @@ export class Live {
         subscriber.workspaceId === workspaceId && (recipients === "all" || recipients.has(subscriber.userId)),
       event,
     );
+    afterCommit(tx, () => {
+      for (const listener of this.listeners) {
+        try {
+          listener(workspaceId, event);
+        } catch {
+          // A listener's failure is its own; the change has committed.
+        }
+      }
+    });
   }
 
   /** Tells the Runner's Owner's Runners streams about the event once the transaction commits. */

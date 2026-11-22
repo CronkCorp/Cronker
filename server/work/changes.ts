@@ -9,7 +9,7 @@ export const ChangedBy = ActorOrCronk;
 
 /**
  * What a Change changed. `created` marks the Ticket's creation; for one imported from a GitHub issue it goes to
- * `{ source: "github", url }`, the issue's address. `parent` is this Ticket's parent; `subTicket`,
+ * `{ source: "github", url, author }`, the issue's address and who opened it. `parent` is this Ticket's parent; `subTicket`,
  * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null). `stepSkipped`
  * marks Cronk passing the Ticket on past a Step it didn't pass, by its Label rule or as a Merge Step skipping itself,
  * before the `status` Change moving it. `dismissed` marks a
@@ -60,8 +60,9 @@ export const Change = Type.Object({
     description:
       "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `created` Change goes " +
-      "from null to null, or for a Ticket imported from a GitHub issue to `{ source: \"github\", url }`, the issue's " +
-      "address. A `stepSkipped` Change goes " +
+      "from null to null, or for a Ticket imported from a GitHub issue to `{ source: \"github\", url, author }`, the issue's " +
+      "address and who opened it: a User `{ id, name }` as named then, or `{ login }` for a GitHub account no User of the " +
+      "Workspace had linked (absent for imports before authors were kept). A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
       "and the default Outcome the Ticket moved on by. A Merge Step that skipped itself records `labelRule` null and " +
       "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, " +

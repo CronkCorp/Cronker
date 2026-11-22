@@ -497,7 +497,7 @@ describe("a Run's Transcript", () => {
     // Reading a Ticket needs the conflict that last set its Merge Queue entry aside.
     await cronk.applyAhead("0065_merge_queue_conflicts.sql");
     // Writing a Ticket clears its undelegated mark.
-    await cronk.applyAhead("0068_agent_access_undelegated.sql");
+    await cronk.applyAhead("0070_agent_access_undelegated.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
