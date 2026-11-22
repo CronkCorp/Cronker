@@ -184,14 +184,26 @@ export const priorities: { priority: Priority; label: string }[] = [
   { priority: "none", label: "None" },
 ];
 
-/** A Ticket key written in Markdown that names a Ticket of the Workspace, outside code and links. */
-export interface Mention {
-  kind: "ticket";
-  /** The key as written, such as `cronk-12`. */
-  text: string;
-  key: string;
-  ticketId: string;
-}
+/** A Ticket or Decision key written in Markdown that names one of the Workspace, outside code and links. */
+export type Mention =
+  | {
+      kind: "ticket";
+      /** The key as written, such as `cronk-12`. */
+      text: string;
+      key: string;
+      ticketId: string;
+    }
+  | {
+      kind: "decision";
+      /** The key as written, such as `web-d7`, or `d7` for one of the Workspace's own. */
+      text: string;
+      /** `WEB-D7`, or `D7` for one of the Workspace's own. */
+      key: string;
+      decisionId: string;
+      /** Null for one of the Workspace's own. */
+      projectId: string | null;
+      number: number;
+    };
 
 export interface TicketSummary {
   id: string;
@@ -922,6 +934,8 @@ export interface DecisionSummary {
 export interface Decision extends DecisionSummary {
   body: string;
   mentions: Mention[];
+  /** The other texts mentioning it that the User may read, most recently saved first. */
+  mentionedIn: MentioningText[];
 }
 
 export interface DecisionEdit {

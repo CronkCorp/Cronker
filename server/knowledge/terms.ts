@@ -42,7 +42,7 @@ export const Term = Type.Object({
     },
     { description: "The current Version, which a save names as its base." },
   ),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its definition mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its definition mentions that the caller may read." }),
 });
 export type Term = Static<typeof Term>;
 
@@ -77,7 +77,7 @@ export async function findTerm(db: Db | Tx, viewer: Viewer, termId: string): Pro
   return rows[0] && (await withMentions(db, viewer, [present(rows[0])]))[0];
 }
 
-/** Terms with the Ticket keys their definitions mention that the Viewer may read. */
+/** Terms with the Ticket and Decision keys their definitions mention that the Viewer may read. */
 export async function withMentions(db: Db | Tx, viewer: Viewer, terms: TermRecord[]): Promise<Term[]> {
   const mentions = await mentionsOf(db, viewer, "term", terms.map((term) => term.id));
   return terms.map((term) => ({ ...term, mentions: mentions.get(term.id)! }));

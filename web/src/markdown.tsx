@@ -11,20 +11,42 @@ interface Node {
   children?: Node[];
 }
 
-/** Turns each mentioned Ticket key in the text into a link to its Ticket. */
+/** The page a Mention leads to: its Ticket's or its Decision's. */
+function mentionedPage(to: Addresses, mention: Mention): string {
+  return mention.kind === "ticket"
+    ? to.ticket(mention)
+    : to.decision({ id: mention.decisionId, projectId: mention.projectId, number: mention.number });
+}
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Turns each mentioned Ticket or Decision key in the text into a link to it, with the server's boundaries: a
+ * Decision key never inside a longer word or key, so `D7` doesn't link inside `WEB-D7`, nor before `-3`, where
+ * `D7-3` is a Ticket key.
+ */
 function linkMentions(mentions: Mention[], to: Addresses) {
   const byText = new Map(mentions.map((m) => [m.text, m]));
-  const escaped = mentions.map((m) => m.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
+  const alternation = (kind: Mention["kind"]) =>
+    mentions
+      .filter((m) => m.kind === kind)
+      .map((m) => m.text)
+      .sort((a, b) => b.length - a.length)
+      .map(escape)
+      .join("|") || "(?!)";
+  const pattern = new RegExp(
+    `\\b(${alternation("ticket")})\\b|(?<![\\w-])(${alternation("decision")})(?!\\w|-[1-9])`,
+    "g",
+  );
 
   const split = (text: string): Node[] =>
     text
       .split(pattern)
-      .filter((part) => part !== "")
+      .filter((part): part is string => part !== undefined && part !== "")
       .map((part) => {
         const mention = byText.get(part);
         return mention
-          ? { type: "link", url: to.ticket(mention), children: [{ type: "text", value: part }] }
+          ? { type: "link", url: mentionedPage(to, mention), children: [{ type: "text", value: part }] }
           : { type: "text", value: part };
       });
 

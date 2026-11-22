@@ -24,6 +24,7 @@ import { Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, 
 import { DecisionStatusPill, decisionStatusLabel } from "./ui/labels.js";
 import { ReadOnlyNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
+import { MentionedIn } from "./mentioned-in.js";
 
 /** A Decision's number as it is written, such as 0007. */
 const numbered = (number: number) => String(number).padStart(4, "0");
@@ -409,6 +410,7 @@ export function DecisionScreen({
                 </div>
               )}
             </Panel>
+            <MentionedIn texts={decision.mentionedIn} />
             <Versions
               key={versionsShown}
               current={decision.version.number}
