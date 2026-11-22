@@ -1311,13 +1311,32 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
-/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
+/**
+ * What a `created` Change records for a Ticket imported from a GitHub issue: the issue's address and its author, a
+ * User as named then or, when no User has linked their account, their GitHub login. Imports before authors were
+ * kept record none.
+ */
+interface ImportedFrom {
+  source?: string;
+  url?: string;
+  author?: { id: string; name: string } | { login: string };
+}
+
+/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked, and its author. */
 export function describedWithLink(change: Change): ReactNode {
-  const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
+  const imported = change.field === "created" ? (change.to as ImportedFrom | null) : null;
   if (imported?.source === "github" && typeof imported.url === "string") {
+    const author = imported.author;
     return (
       <>
         imported the Ticket from <ExternalLink url={imported.url}>its GitHub issue</ExternalLink>
+        {author && (
+          <>
+            {" "}
+            opened by{" "}
+            <Actor actor={"login" in author ? { kind: "github", name: `@${author.login} on GitHub` } : { kind: "user", name: author.name }} avatar={false} />
+          </>
+        )}
       </>
     );
   }

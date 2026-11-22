@@ -184,6 +184,11 @@ function IssuesImport({ project, repository, isAdmin }: { project: Project; repo
           : latest.state === "done"
             ? `Imported ${issues(latest.imported)}; skipped ${latest.skipped} already imported.`
             : `The import stopped after ${issues(latest.imported)}: ${latest.error ?? "it failed."}`;
+  // The authors no User has linked, once the import has ended.
+  const unmatched =
+    latest && latest.state !== "running" && latest.unmatchedAuthors.length > 0
+      ? `Authors with no User: ${latest.unmatchedAuthors.map((login) => `@${login}`).join(", ")}.`
+      : null;
   return (
     <div className="repository-import">
       {isAdmin && (
@@ -200,6 +205,7 @@ function IssuesImport({ project, repository, isAdmin }: { project: Project; repo
       {status && (
         <span className="muted small" role="status">
           {status}
+          {unmatched && ` ${unmatched}`}
         </span>
       )}
       <FormError error={error} />
