@@ -1,5 +1,5 @@
 import { useAddresses, useCanonicalAddress } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   api,
   ApiError,
@@ -16,7 +16,7 @@ import {
   type VersionWithBody,
   type Workspace,
 } from "./api.js";
-import { Attachments, markdownReference } from "./attachments.js";
+import { Attachments } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
@@ -27,6 +27,9 @@ import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
+
+/** The rich editor, with ProseMirror and its Markdown parsers, loads only once something is edited. */
+const RichEditor = lazy(() => import("./ui/rich-editor.js").then((module) => ({ default: module.RichEditor })));
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
 function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSummary[]> {
@@ -56,8 +59,8 @@ export const versionLine = (version: { number: number; actor: { name: string } }
   `Version ${version.number} by ${version.actor.name}`;
 
 /**
- * A Document's, Decision's or Term's body as it reads: Markdown in a panel, 15px at a 720px measure. The read view, the
- * editor's preview and a Version's dialog all draw it this way, so the preview shows what saving will look like.
+ * A Document's, Decision's or Term's body as it reads: Markdown in a panel, 15px at a 720px measure. The read view, a
+ * Term editor's preview and a Version's dialog all draw it this way; the rich editor edits at the same size.
  */
 export function DocumentBody({
   body,
@@ -184,7 +187,7 @@ export function ProjectDocuments({ workspace, project }: { workspace: Workspace;
 }
 
 /**
- * A Document: read it, edit it as Markdown with a preview, move it in its page tree, and browse its Versions. A
+ * A Document: read it, edit it in the rich editor, move it in its page tree, and browse its Versions. A
  * Report is listed with its Ticket instead, so it leads back there and doesn't move.
  */
 export function DocumentScreen({
@@ -326,7 +329,7 @@ export function DocumentScreen({
               owner={{ kind: "document", id: document.id }}
               attachments={attachments}
               label="Attachments"
-              dropHint="or, while editing, drop or paste them into the Markdown"
+              dropHint="or, while editing, drop or paste them into the text"
               onChanged={loadAttachments}
             />
           </div>
@@ -361,7 +364,7 @@ export function DocumentScreen({
 }
 
 /**
- * The Markdown source beside its preview, for a Document or a Decision. A save names the Version it's based on; one
+ * The title and the rich editor, for a Document or a Decision. A save names the Version it's based on; one
  * based on an outdated Version is refused with the current one, shown as a Diff against the draft so its changes
  * can be folded in by hand.
  */
@@ -377,7 +380,7 @@ export function Editor<T>({
   /** What is edited, as last saved. */
   saved: { title: string; body: string; version: { number: number } };
   save: (edit: { baseVersion: number; title: string; body: string }) => Promise<T>;
-  /** Where files dropped or pasted into the source are attached, if anywhere. */
+  /** Where files dropped or pasted into the text are attached, if anywhere. */
   attachTo?: AttachmentOwner;
   onAttached?: () => void;
   onSaved: (next: T) => void;
@@ -389,8 +392,6 @@ export function Editor<T>({
   const [body, setBody] = useState(saved.body);
   const [base, setBase] = useState(saved.version.number);
   const [current, setCurrent] = useState<VersionWithBody | null>(null);
-  const [attachError, setAttachError] = useState<string | null>(null);
-  const source = useRef<HTMLTextAreaElement>(null);
   const { error, busy, onSubmit } = useSubmit(async () => {
     try {
       onSaved(await save({ baseVersion: base, title, body }));
@@ -399,32 +400,6 @@ export function Editor<T>({
       throw e;
     }
   });
-
-  /** Attaches each file and puts a reference to it at the cursor. */
-  const attachFiles = async (files: File[]) => {
-    if (!attachTo || files.length === 0) return;
-    setAttachError(null);
-    const at = source.current?.selectionStart ?? body.length;
-    try {
-      const references: string[] = [];
-      for (const file of files) references.push(markdownReference(await api.attach(attachTo, file)));
-      setBody((text) => `${text.slice(0, at)}${references.join("\n")}${text.slice(at)}`);
-      onAttached?.();
-    } catch (e) {
-      setAttachError(e instanceof Error ? e.message : String(e));
-    }
-  };
-  const onDrop = (event: DragEvent<HTMLTextAreaElement>) => {
-    if (!attachTo || event.dataTransfer.files.length === 0) return;
-    event.preventDefault();
-    void attachFiles([...event.dataTransfer.files]);
-  };
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    // A paste carrying text pastes the text and attaches nothing.
-    if (!attachTo || event.clipboardData.files.length === 0 || event.clipboardData.getData("text")) return;
-    event.preventDefault();
-    void attachFiles([...event.clipboardData.files]);
-  };
 
   return (
     <form onSubmit={onSubmit} className="editor">
@@ -451,24 +426,15 @@ export function Editor<T>({
       <Field label="Title">
         <input value={title} required maxLength={300} onChange={(e) => setTitle(e.target.value)} className="title-input" />
       </Field>
-      <div className="editor-panes">
-        <Field label="Markdown" hint={attachTo ? "Drop or paste files here to attach them." : undefined}>
-          <textarea
-            ref={source}
-            className="markdown-source"
-            value={body}
-            rows={20}
-            onChange={(e) => setBody(e.target.value)}
-            onDrop={onDrop}
-            onPaste={onPaste}
-          />
-        </Field>
-        <section aria-label="Preview" className="editor-preview">
-          <span className="field-label">Preview</span>
-          <DocumentBody body={body} />
-        </section>
-      </div>
-      <FormError error={attachError} />
+      <Suspense fallback={<p className="muted">Loading the editor…</p>}>
+        <RichEditor
+          value={body}
+          onChange={setBody}
+          hint={attachTo ? "Drop or paste files here to attach them." : undefined}
+          attachTo={attachTo}
+          onAttached={onAttached}
+        />
+      </Suspense>
       {!current && <FormError error={error} />}
       <Actions>
         {/* Until the draft is based on the Version saved meanwhile, a save would only be refused again. */}

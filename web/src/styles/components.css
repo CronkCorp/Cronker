@@ -1112,3 +1112,214 @@ textarea.markdown-source {
   font-weight: 400;
   opacity: 0.75;
 }
+
+/* Rich editor: the toolbar and mode switch over the text, which reads as a Document reads (15px at 1.65, 720px). */
+.rich-editor-frame {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+.rich-editor-frame:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.rich-editor-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  background: var(--surface);
+}
+.rich-editor-tools {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.rich-editor-group {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.rich-editor-separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 var(--space-1);
+  background: var(--border);
+}
+.rich-editor-tool {
+  flex: none;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rich-editor-tool:hover {
+  background: var(--surface-2);
+}
+.rich-editor-tool[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.rich-editor-tool[aria-disabled="true"] {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.55;
+}
+.rich-editor-tool.tool-bold {
+  font-weight: 700;
+}
+.rich-editor-tool.tool-italic {
+  font-style: italic;
+}
+.rich-editor-tool.tool-strike {
+  text-decoration: line-through;
+}
+.rich-editor-tool.tool-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.rich-editor-mode {
+  flex: none;
+}
+.rich-editor-mode .segmented-item {
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.rich-editor-mode .segmented-item[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.rich-editor-surface {
+  position: relative;
+}
+.rich-editor-text {
+  position: relative;
+  max-width: 720px;
+  min-height: 320px;
+  padding: var(--space-4) var(--space-5);
+  outline: none;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.65;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  font-variant-ligatures: none;
+}
+.rich-editor-text pre {
+  white-space: pre-wrap;
+}
+.rich-editor-text li {
+  position: relative;
+}
+.rich-editor-text a {
+  cursor: text;
+}
+.rich-editor-text .ProseMirror-selectednode {
+  outline: 2px solid var(--accent);
+}
+.rich-editor-text li.ProseMirror-selectednode {
+  outline: none;
+  background: var(--accent-soft);
+}
+.rich-editor-text.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
+.rich-editor-text.ProseMirror-hideselection {
+  caret-color: transparent;
+}
+.rich-editor-text [draggable][contenteditable="false"] {
+  user-select: text;
+}
+.rich-editor-text img.ProseMirror-separator {
+  display: inline !important;
+  margin: 0 !important;
+  border: none !important;
+}
+.rich-editor-text .selectedCell {
+  background: var(--accent-soft);
+}
+.rich-editor-text li.task-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-left: -1.4em;
+  list-style: none;
+}
+.rich-editor-text .task-text {
+  flex: 1;
+  min-width: 0;
+}
+.rich-editor-text .task-box input {
+  cursor: pointer;
+}
+/* Markdown the editor can't show as formatted text: kept as its source, labelled so it reads as deliberate. */
+.rich-editor-text pre[data-source] {
+  position: relative;
+  padding-top: 22px;
+  border: 1px dashed var(--border);
+  background: var(--surface-2);
+}
+.rich-editor-text pre[data-source]::before {
+  content: "Markdown source";
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.ProseMirror-gapcursor {
+  display: none;
+  position: absolute;
+  pointer-events: none;
+}
+.ProseMirror-gapcursor::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid var(--text);
+}
+.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}
+.rich-editor-drop {
+  background: var(--accent);
+}
+.rich-editor-source {
+  min-height: 320px;
+  border: 0 !important;
+  border-radius: 0 0 var(--radius-control) var(--radius-control) !important;
+  box-shadow: none !important;
+}
+@media (max-width: 760px) {
+  .rich-editor-tool {
+    min-width: 40px;
+    height: 40px;
+  }
+  .rich-editor-text {
+    padding: var(--space-3);
+  }
+}
+.rich-editor,
+.rich-editor-frame {
+  min-width: 0;
+}
