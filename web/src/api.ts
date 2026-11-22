@@ -174,8 +174,12 @@ export interface ProjectSummary {
   name: string;
   key: string;
   visibility: Visibility;
-  /** What the signed-in User may do in the Project. */
+  /** What the signed-in User may do in the Project; Read for everyone while it is archived. */
   access: "write" | "read";
+  /** When an Admin archived it, making it read-only for everyone until unarchived; null if it isn't. */
+  archivedAt: string | null;
+  /** The Admin who archived it. */
+  archivedBy: string | null;
 }
 
 /** Who may see a Project: open or private, and the Users it lists. Only Admins read and set it. */
@@ -879,6 +883,8 @@ export const api = {
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: ProjectEdit) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
+  archiveProject: (id: string) => call<Project>("POST", `/api/projects/${encodeURIComponent(id)}/archive`),
+  unarchiveProject: (id: string) => call<Project>("POST", `/api/projects/${encodeURIComponent(id)}/unarchive`),
   projectAccess: (id: string) => call<ProjectAccess>("GET", `/api/projects/${encodeURIComponent(id)}/access`),
   setProjectAccess: (id: string, access: ProjectAccess) =>
     call<ProjectAccess>("PUT", `/api/projects/${encodeURIComponent(id)}/access`, access),

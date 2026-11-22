@@ -21,7 +21,7 @@ import {
 } from "./ui/controls.js";
 import { Diff } from "./ui/diff.js";
 import { Chip, type Tone } from "./ui/labels.js";
-import { ReadOnlyNote } from "./write-access.js";
+import { ProjectNote } from "./write-access.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
@@ -186,7 +186,7 @@ export function ArtifactScreen({
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       {gone && <DeletedElsewhere back={{ to: list, label: "Back to Artifacts" }}>this Artifact is no longer kept.</DeletedElsewhere>}
       {artifact.description && <p className="artifact-description">{artifact.description}</p>}
       <div className="page-split">

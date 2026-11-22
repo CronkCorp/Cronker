@@ -1,6 +1,7 @@
 import { ownerName } from "../agents/tokens.js";
 import type { Db, Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
+import { archivedRefusal } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import type { Project } from "./projects.js";
 
@@ -13,6 +14,7 @@ import type { Project } from "./projects.js";
 
 /** Refuses a caller without Write in the Project: for an Agent, the least of its Agent Access, its Owner's and its token's. */
 export function requireBoardWrite(caller: Caller, project: Project): void {
+  if (project.archivedAt !== null) throw archivedRefusal();
   if (project.access === "write") return;
   throw new ApiError(403, "read_access", `${caller.kind === "agent" ? caller.name : "You"} may only read ${project.key}.`, {
     rule:
