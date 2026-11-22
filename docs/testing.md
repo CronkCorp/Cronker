@@ -19,7 +19,7 @@ These are the seams from the milestone 1 spec (#1). Tests live only at them.
    - `e2e/board.spec.ts` (`@every-browser`): a card dragged onto another column, onto its own and refused, and to the board's edges.
    - `e2e/card-menu.spec.ts`: a card's menu by keyboard, Move to starting a Run as a drop does.
    - `e2e/read-access.spec.ts`: an Admin making a Project private and listing a User with Read, whose board offers no New Ticket and whose cards neither drag nor open their menu, while another User doesn't see the Project.
-   - `e2e/comments.spec.ts`: `C` reaching the Comment box of a long Ticket, never while typing or with a modifier, and Ctrl+Enter placing a Comment.
+   - `e2e/comments.spec.ts`: `C` reaching the Comment box of a long Ticket, never while typing or with a modifier, and Ctrl+Enter placing a Comment from the rich editor and from its Markdown source.
    - `e2e/inbox-keys.spec.ts`: the Inbox's keys.
    - `e2e/live.spec.ts`: the board and a Ticket following another member's change, and the Live indicator turning to Reconnecting… and back; with it, Cronk stopping at once while a browser holds an idle or in-flight connection.
    - `e2e/attachments.spec.ts`: files dropped or pasted on a Ticket.

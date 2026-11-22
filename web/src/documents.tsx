@@ -1,5 +1,5 @@
 import { useAddresses, useCanonicalAddress } from "./addresses.js";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   api,
   ApiError,
@@ -28,9 +28,7 @@ import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { ReadOnlyNote } from "./write-access.js";
-
-/** The rich editor, with ProseMirror and its Markdown parsers, loads only once something is edited. */
-const RichEditor = lazy(() => import("./ui/rich-editor.js").then((module) => ({ default: module.RichEditor })));
+import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
 function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSummary[]> {
@@ -440,15 +438,13 @@ export function Editor<T>({
       <Field label="Title">
         <input value={title} required maxLength={300} onChange={(e) => setTitle(e.target.value)} className="title-input" />
       </Field>
-      <Suspense fallback={<p className="muted">Loading the editor…</p>}>
-        <RichEditor
-          value={body}
-          onChange={setBody}
-          hint={attachTo ? "Drop or paste files here to attach them." : undefined}
-          attachTo={attachTo}
-          onAttached={onAttached}
-        />
-      </Suspense>
+      <RichEditor
+        value={body}
+        onChange={setBody}
+        hint={attachTo ? "Drop or paste files here to attach them." : undefined}
+        attachTo={attachTo}
+        onAttached={onAttached}
+      />
       {!current && <FormError error={error} />}
       <Actions>
         {/* Until the draft is based on the Version saved meanwhile, a save would only be refused again. */}

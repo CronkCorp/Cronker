@@ -14,6 +14,7 @@ import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
 import { ReadOnlyNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
+import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Where a glossary is shown: a Project's Terms page, or the Workspace's. */
 
@@ -145,10 +146,11 @@ function Glossary({
 /** A dialog creating a Term in the Project or the Workspace, then showing it. */
 function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; onOpenChange: (open: boolean) => void }) {
   const to = useAddresses();
+  const [definition, setDefinition] = useState("");
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createTerm(place, {
       name: field(form, "name"),
-      definition: field(form, "definition"),
+      definition,
       avoid: wordsToAvoid(field(form, "avoid")),
     });
     navigate(to.term(created));
@@ -159,9 +161,7 @@ function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; o
         <Field label="Name">
           <input name="name" required maxLength={200} autoFocus />
         </Field>
-        <Field label="Definition">
-          <textarea name="definition" rows={4} className="markdown-source" />
-        </Field>
+        <RichEditor label="Definition" compact value={definition} onChange={setDefinition} />
         <Field label="Words to avoid" hint="Separated by commas.">
           <input name="avoid" placeholder="Issue, task" />
         </Field>
@@ -403,15 +403,7 @@ function Editor({
       <Field label="Name">
         <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} className="title-input" />
       </Field>
-      <div className="editor-panes">
-        <Field label="Definition">
-          <textarea value={definition} rows={12} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
-        </Field>
-        <section aria-label="Preview" className="editor-preview">
-          <span className="field-label">Preview</span>
-          <TermBody definition={definition} avoid={wordsToAvoid(avoid)} />
-        </section>
-      </div>
+      <RichEditor label="Definition" value={definition} onChange={setDefinition} />
       <Field label="Words to avoid" hint="Separated by commas.">
         <input value={avoid} onChange={(e) => setAvoid(e.target.value)} />
       </Field>
