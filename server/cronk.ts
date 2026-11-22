@@ -94,7 +94,8 @@ export async function createCronk({
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
     const notifier = new InboxNotifier(context, (error) => app.log.error(error));
-    await notifier.start();
+    // A database migrated only partway, as a test of one migration has it, may have no webhooks yet.
+    if (!migrateBefore) await notifier.start();
     return {
       app,
       async listen() {
