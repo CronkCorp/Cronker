@@ -1,5 +1,5 @@
 import { addresses, useAddresses } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
   nameOf,
@@ -26,6 +26,7 @@ import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate } from "./router.js";
+import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
 import { ProjectArtifacts } from "./artifacts.js";
 import { ProjectDecisions } from "./decisions.js";
 import { ProjectDocuments } from "./documents.js";
@@ -164,6 +165,7 @@ export function ProjectScreen({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
   const [filter, setFilter] = useState<TicketFilter>({});
+  const [group, setGroup] = useState(storedGroupSubTickets);
   const [failure, setFailure] = useState<string | null>(null);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
@@ -284,6 +286,20 @@ export function ProjectScreen({
                 { label: "Board", to: base, current: view === "board" },
               ]}
             />
+            {view === "board" && (
+              <button
+                type="button"
+                className="toggle-button"
+                aria-pressed={group}
+                title="Fold Sub-Tickets into their parent's card"
+                onClick={() => {
+                  keepGroupSubTickets(!group);
+                  setGroup(!group);
+                }}
+              >
+                Group Sub-Tickets
+              </button>
+            )}
           </>
         }
         actions={
@@ -294,7 +310,9 @@ export function ProjectScreen({
         }
       />
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
-      {view === "board" && <Board project={project} members={members} agents={agents} user={user} tickets={tickets} onChanged={ticketEdited} />}
+      {view === "board" && (
+        <Board project={project} members={members} agents={agents} user={user} tickets={tickets} group={group} onChanged={ticketEdited} />
+      )}
       {view === "list" && <List project={project} members={members} agents={agents} tickets={tickets} filtered={filtered} />}
     </div>
   );
@@ -615,6 +633,7 @@ function Card({
   agents,
   own,
   arrived,
+  folded,
   selection,
   onEdit,
   onSelect,
@@ -626,6 +645,8 @@ function Card({
   agents: Agent[];
   own: Agent[];
   arrived: boolean;
+  /** With Group Sub-Tickets on, the Sub-Tickets folded into their parents; none otherwise. */
+  folded: Folded;
   /** How many Tickets are selected, this one among them; 0 when it isn't selected. */
   selection: number;
   onEdit: (edit: TicketEdit) => void;
@@ -646,8 +667,8 @@ function Card({
         data-selected={selected || undefined}
         draggable
         onClick={(event) => {
-          // The Blocked chip's own links open as links do.
-          if ((event.target as HTMLElement).closest(".chip-blocked")) return;
+          // The Blocked chip's and the Sub-Tickets' own links open as links do.
+          if ((event.target as HTMLElement).closest(".chip-blocked, .card-sub-tickets")) return;
           const toggle = event.ctrlKey || event.metaKey;
           if (!toggle && !event.shiftKey) return;
           // Selecting, not opening the Ticket in a new tab or window.
@@ -686,8 +707,86 @@ function Card({
           {selected && <span className="sr-only">, selected</span>}
         </Link>
         <BlockedChip ticket={ticket} />
+        <SubTickets ticket={ticket} project={project} folded={folded} />
       </div>
     </ContextMenu>
+  );
+}
+
+/** Each loaded Ticket's loaded Sub-Tickets, by its id. */
+type Folded = Map<string, TicketSummary[]>;
+const noneFolded: Folded = new Map();
+
+/**
+ * Group Sub-Tickets: a Ticket whose parent is loaded folds into its parent's card, in any Status. One whose parent
+ * isn't loaded, such as one a filter leaves out, keeps its own card. A Sub-Ticket's own Sub-Tickets fold into it, and
+ * so show nested under it when its parent's card unfolds.
+ */
+function foldSubTickets(tickets: TicketSummary[]): { children: Folded; hidden: Set<string> } {
+  const loaded = new Set(tickets.map((ticket) => ticket.id));
+  const children: Folded = new Map();
+  const hidden = new Set<string>();
+  for (const ticket of tickets) {
+    if (ticket.parentId === null || !loaded.has(ticket.parentId)) continue;
+    hidden.add(ticket.id);
+    children.set(ticket.parentId, [...(children.get(ticket.parentId) ?? []), ticket]);
+  }
+  return { children, hidden };
+}
+
+/**
+ * A parent's folded Sub-Tickets on its card: *3 / 8 Sub-Tickets*, counting its direct ones and those of them finished
+ * (in a Done or Canceled Status, Unverified included). It unfolds a list on the card, each by Status dot, key and
+ * title, a link to its Ticket. Like the Blocked chip it holds links of its own, so it sits beside the card's link.
+ * Which cards are unfolded isn't stored.
+ */
+function SubTickets({ ticket, project, folded }: { ticket: TicketSummary; project: Project; folded: Folded }) {
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const subTickets = folded.get(ticket.id);
+  if (!subTickets) return null;
+  const kindOf = (statusId: string) => project.statuses.find((status) => status.id === statusId)?.kind ?? "backlog";
+  const finished = subTickets.filter((sub) => ["done", "canceled"].includes(kindOf(sub.statusId))).length;
+  return (
+    <div className="card-sub-tickets">
+      <button type="button" className="chip chip-sub-tickets" aria-expanded={open} aria-controls={listId} onClick={() => setOpen(!open)}>
+        <svg className="chip-icon" viewBox="0 0 12 12" aria-hidden="true">
+          <path d={open ? "M2.5 4.5 6 8l3.5-3.5" : "M4.5 2.5 8 6l-3.5 3.5"} />
+        </svg>
+        {finished} / {subTickets.length} Sub-Ticket{subTickets.length === 1 ? "" : "s"}
+      </button>
+      {open && <SubTicketList id={listId} subTickets={subTickets} kindOf={kindOf} folded={folded} />}
+    </div>
+  );
+}
+
+/** Unfolded Sub-Tickets, each with its own folded ones nested under it. */
+function SubTicketList({
+  id,
+  subTickets,
+  kindOf,
+  folded,
+}: {
+  id?: string;
+  subTickets: TicketSummary[];
+  kindOf: (statusId: string) => StatusKind;
+  folded: Folded;
+}) {
+  const to = useAddresses();
+  return (
+    <ul id={id} className="sub-ticket-list" aria-label="Sub-Tickets">
+      {subTickets.map((sub) => {
+        const nested = folded.get(sub.id);
+        return (
+          <li key={sub.id}>
+            <Link to={to.ticket(sub)} className="ticket-link" draggable>
+              <StatusDot kind={kindOf(sub.statusId)} /> <Key>{sub.key}</Key> {sub.title}
+            </Link>
+            {nested && <SubTicketList subTickets={nested} kindOf={kindOf} folded={folded} />}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -702,6 +801,7 @@ function Board({
   agents,
   user,
   tickets,
+  group,
   onChanged,
 }: {
   project: Project;
@@ -709,6 +809,8 @@ function Board({
   agents: Agent[];
   user: User;
   tickets: TicketSummary[];
+  /** Group Sub-Tickets: fold Sub-Tickets into their parent's card. */
+  group: boolean;
   /** After a change from the board, with the Ticket as it answered; nothing when it was refused or a selection moved. */
   onChanged: (edited?: TicketSummary) => void;
 }) {
@@ -724,14 +826,18 @@ function Board({
   const edge = useEdgeScroll();
 
   const own = agents.filter((agent) => agent.owner.id === user.id);
+  // With Group Sub-Tickets on, a Ticket folded into its parent's card gets no card of its own.
+  const folded = useMemo(() => (group ? foldSubTickets(tickets) : null), [group, tickets]);
+  const carded = useMemo(() => (folded ? tickets.filter((ticket) => !folded.hidden.has(ticket.id)) : tickets), [folded, tickets]);
 
-  // A Ticket that leaves the board, moved away by someone else, filtered out or deleted, leaves the selection.
+  // A Ticket that leaves the board, moved away by someone else, filtered out, folded into its parent or deleted,
+  // leaves the selection.
   useEffect(() => {
     setSelected((current) => {
-      const shown = new Set(tickets.map((t) => t.id));
+      const shown = new Set(carded.map((t) => t.id));
       return [...current].every((id) => shown.has(id)) ? current : new Set([...current].filter((id) => shown.has(id)));
     });
-  }, [tickets]);
+  }, [carded]);
 
   // Escape clears the selection, unless it belongs to a field, a dialog or an open menu, which close first.
   useEffect(() => {
@@ -751,10 +857,10 @@ function Board({
    * column, as shown. A range from a card of another column, or with no anchor, selects just this one.
    */
   const select = (ticket: TicketSummary, range: boolean) => {
-    const from = range ? tickets.find((t) => t.id === anchor) : undefined;
+    const from = range ? carded.find((t) => t.id === anchor) : undefined;
     const next = new Set(selected);
     if (from && from.statusId === ticket.statusId) {
-      const column = tickets.filter((t) => t.statusId === ticket.statusId);
+      const column = carded.filter((t) => t.statusId === ticket.statusId);
       const [i, j] = [column.indexOf(from), column.indexOf(ticket)];
       for (const t of column.slice(Math.min(i, j), Math.max(i, j) + 1)) next.add(t.id);
     } else if (range || !next.has(ticket.id)) {
@@ -859,7 +965,7 @@ function Board({
         onDragEnd={edge.stop}
       >
         {project.statuses.map((status) => {
-          const inStatus = tickets.filter((ticket) => ticket.statusId === status.id);
+          const inStatus = carded.filter((ticket) => ticket.statusId === status.id);
           const isCollapsed = collapsed(status);
           return (
             <section
@@ -918,6 +1024,7 @@ function Board({
                       agents={agents}
                       own={own}
                       arrived={arrived.has(`${ticket.id} ${ticket.statusId}`)}
+                      folded={folded?.children ?? noneFolded}
                       selection={selected.has(ticket.id) ? selected.size : 0}
                       onEdit={(change) => void edit(ticket.id, change)}
                       onSelect={(range) => select(ticket, range)}
