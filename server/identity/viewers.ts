@@ -98,3 +98,18 @@ export async function accessOf(db: Db | Tx, viewer: Viewer, place: { workspaceId
   ]);
   return rows[0]!.access;
 }
+
+/**
+ * The Users of a Workspace who may at least read every one of the places given: Projects by id, or null for the
+ * Workspace's own knowledge. With no places, every User of the Workspace. By the same rule as {@link accessIn}.
+ */
+export async function readersIn(db: Db | Tx, workspaceId: string, projectIds: (string | null)[]): Promise<Set<string>> {
+  const access = userAccess("readers.user_id", { project: "places.id", workspace: "$1::uuid" });
+  const { rows } = await db.query<{ userId: string }>(
+    `select readers.user_id as "userId" from memberships readers
+     where readers.workspace_id = $1
+       and not exists (select 1 from unnest($2::uuid[]) as places(id) where ${access} = 'none')`,
+    [workspaceId, projectIds],
+  );
+  return new Set(rows.map((row) => row.userId));
+}

@@ -78,21 +78,26 @@ export type Tx = pg.PoolClient;
 
 type OnCommit = () => void | Promise<void>;
 const committed = new WeakMap<Tx, OnCommit[]>();
+const committing = new WeakMap<Tx, OnCommit[]>();
 
 export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   const client = await db.connect();
   const onCommit: OnCommit[] = [];
+  const beforeCommits: OnCommit[] = [];
   committed.set(client, onCommit);
+  committing.set(client, beforeCommits);
   let result: T;
   try {
     await client.query("begin");
     result = await fn(client);
+    for (const callback of beforeCommits) await callback();
     await client.query("commit");
   } catch (error) {
     await client.query("rollback");
     throw error;
   } finally {
     committed.delete(client);
+    committing.delete(client);
     client.release();
   }
   // Every callback runs, even after one fails, since the change has committed regardless.
@@ -116,4 +121,15 @@ export function afterCommit(tx: Tx, callback: OnCommit): void {
   const onCommit = committed.get(tx);
   if (!onCommit) throw new Error("afterCommit called outside a transaction");
   onCommit.push(callback);
+}
+
+/**
+ * Runs `callback` inside the transaction once its work is done, just before it commits, in the order they were added;
+ * one that fails rolls the transaction back. For reads that need the transaction's final state, such as who an event
+ * goes to.
+ */
+export function beforeCommit(tx: Tx, callback: OnCommit): void {
+  const callbacks = committing.get(tx);
+  if (!callbacks) throw new Error("beforeCommit called outside a transaction");
+  callbacks.push(callback);
 }

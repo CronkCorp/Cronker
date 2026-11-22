@@ -287,7 +287,7 @@ describe("Artifacts", () => {
     expect(await ok("GET", `/api/workspaces/${workspace.id}/artifacts`, ada)).toEqual([summary(report)]);
   });
 
-  test("an Artifact outside the caller's Workspace answers as not found, and a read-only token can't create or save one", async () => {
+  test("refused, changing nothing: another Workspace's Agent reading, listing, comparing or saving, and a read-only token creating or saving", async () => {
     const { ada, agent, workspace } = await workspaceWithProject();
     const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
       title: "Board prototype",
@@ -297,21 +297,38 @@ describe("Artifacts", () => {
     const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
     const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "laptop", access: "full" });
     const asStranger = { headers: { authorization: `Bearer ${secret}` } };
-
-    expect((await call("GET", `/api/artifacts/${artifact.id}`, asStranger)).status).toBe(404);
-    expect((await call("PATCH", `/api/artifacts/${artifact.id}`, asStranger, { baseVersion: 1, title: "Mine" })).status).toBe(404);
-    expect((await call("GET", `/api/workspaces/${workspace.id}/artifacts`, asStranger)).status).toBe(404);
-
     const readOnly = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
     const asReader = { headers: { authorization: `Bearer ${readOnly.secret}` } };
+    // A read-only token reads Artifacts.
     expect((await call("GET", `/api/artifacts/${artifact.id}`, asReader)).status).toBe(200);
-    const refused = await call("PATCH", `/api/artifacts/${artifact.id}`, asReader, { baseVersion: 1, title: "Mine" });
-    expect(refused.json.error.code).toBe("read_only_token");
-    const create = await call("POST", `/api/workspaces/${workspace.id}/artifacts`, asReader, {
-      title: "Mine",
-      files: [file("index.html", page)],
-    });
-    expect(create.json.error.code).toBe("read_only_token");
+
+    const refusals: [string, As, string, string, unknown, number, string?][] = [
+      // An Artifact outside the caller's Workspace answers as not found.
+      ["a stranger", asStranger, "GET", `/api/artifacts/${artifact.id}`, undefined, 404],
+      ["a stranger", asStranger, "PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, title: "Mine" }, 404],
+      ["a stranger", asStranger, "GET", `/api/workspaces/${workspace.id}/artifacts`, undefined, 404],
+      ["a stranger", asStranger, "GET", `/api/artifacts/${artifact.id}/versions`, undefined, 404],
+      ["a stranger", asStranger, "GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=1`, undefined, 404],
+      ["a read-only token", asReader, "PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, title: "Mine" }, 403, "read_only_token"],
+      [
+        "a read-only token",
+        asReader,
+        "POST",
+        `/api/workspaces/${workspace.id}/artifacts`,
+        { title: "Mine", files: [file("index.html", page)] },
+        403,
+        "read_only_token",
+      ],
+    ];
+    for (const [who, as, method, path, body, status, code] of refusals) {
+      const refused = await call(method, path, as, body);
+      expect(refused.status, `${who}: ${method} ${path}`).toBe(status);
+      if (code) expect(refused.json.error.code, `${who}: ${method} ${path}`).toBe(code);
+    }
+
+    const kept = await ok("GET", `/api/artifacts/${artifact.id}`, ada);
+    expect(kept).toEqual(expect.objectContaining({ title: "Board prototype", version: expect.objectContaining({ number: 1 }) }));
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/artifacts`, ada)).map((a: { id: string }) => a.id)).toEqual([artifact.id]);
   });
 
   test("an Actor reads a file of an Artifact's current Version, its bytes as base64", async () => {
@@ -450,21 +467,6 @@ describe("Artifacts", () => {
       },
       { path: "empty.txt", change: "added", text: true, lines: [] },
     ]);
-  });
-
-  test("an Artifact of another Workspace has no Versions to list or compare for the caller", async () => {
-    const { ada, workspace } = await workspaceWithProject();
-    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
-      title: "Board prototype",
-      files: [file("index.html", page)],
-    });
-    const other = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
-    const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
-    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "laptop", access: "full" });
-    const asStranger = { headers: { authorization: `Bearer ${secret}` } };
-
-    expect((await call("GET", `/api/artifacts/${artifact.id}/versions`, asStranger)).status).toBe(404);
-    expect((await call("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=1`, asStranger)).status).toBe(404);
   });
 
   test("an Agent's delete is refused and changes nothing; a User's removes the Artifact, its Versions and their files", async () => {

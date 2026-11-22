@@ -214,41 +214,6 @@ describe("Decisions", () => {
     expect(unknown.status).toBe(400);
   });
 
-  test("an Agent only proposes Decisions; its status changes are refused, naming the rule", async () => {
-    const { ada, project, asAgent } = await workspaceWithProject();
-    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, asAgent, { title: "Use Postgres", status: "proposed" });
-    const other = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use MySQL" });
-
-    const refusals = [
-      await call("POST", `/api/projects/${project.id}/decisions`, asAgent, { title: "Use Redis", status: "accepted" }),
-      await call("PATCH", `/api/decisions/${decision.id}`, asAgent, { baseVersion: 1, status: "accepted" }),
-      await call("PATCH", `/api/decisions/${decision.id}`, asAgent, { baseVersion: 1, body: "Sure.", status: "rejected" }),
-      await call("PATCH", `/api/decisions/${other.id}`, asAgent, {
-        baseVersion: 1,
-        status: "superseded",
-        supersededById: decision.id,
-      }),
-    ];
-
-    for (const refused of refusals) {
-      expect(refused.status).toBe(403);
-      expect(refused.json.error).toEqual({
-        code: "agent_not_allowed",
-        message: expect.any(String),
-        rule: "Agents propose Decisions and edit their text; only a User changes a Decision's status.",
-        advice: expect.stringContaining("ada@example.com"),
-      });
-    }
-    const unchanged = await ok("GET", `/api/decisions/${decision.id}`, ada);
-    expect(unchanged).toEqual(expect.objectContaining({ status: "proposed", body: "", version: expect.objectContaining({ number: 1 }) }));
-    expect((await ok("GET", `/api/projects/${project.id}/decisions`, ada)).map((d: { title: string }) => d.title)).toEqual([
-      "Use Postgres",
-      "Use MySQL",
-    ]);
-    const keptStatus = await call("PATCH", `/api/decisions/${decision.id}`, asAgent, { baseVersion: 1, status: "proposed", body: "Why." });
-    expect(keptStatus.status).toBe(200);
-  });
-
   test("a User marks a Decision superseded by naming the Decision that replaces it, in the same Project", async () => {
     const { ada, user, project } = await workspaceWithProject();
     const old = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use MySQL", status: "accepted" });
@@ -340,62 +305,6 @@ describe("Decisions", () => {
     expect(inWorkspace.supersededById).toBe(alsoWorkspaceWide.id);
   });
 
-  test("nobody deletes a Decision, User or Agent", async () => {
-    const { ada, project, asAgent } = await workspaceWithProject();
-    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use Postgres" });
-
-    for (const as of [ada, asAgent]) {
-      const refused = await call("DELETE", `/api/decisions/${decision.id}`, as);
-      expect(refused.status).toBe(405);
-      expect(refused.json.error).toEqual({
-        code: "decision_not_deletable",
-        message: expect.any(String),
-        rule: "Decisions are never deleted, so their history stays.",
-        advice: expect.stringContaining("rejected, deprecated or superseded"),
-      });
-    }
-    expect((await call("GET", `/api/decisions/${decision.id}`, ada)).status).toBe(200);
-  });
-
-  test("nothing crosses Workspaces: another Workspace's Decisions answer as not found", async () => {
-    const { ada, workspace, project, asAgent } = await workspaceWithProject();
-    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use Postgres" });
-    await ok("POST", `/api/workspaces/${workspace.id}/decisions`, ada, { title: "Write in English" });
-    const friends = await ok("POST", "/api/workspaces", ada, { name: "Friends" });
-    const party = await ok("POST", `/api/workspaces/${friends.id}/projects`, ada, { name: "Party", key: "PARTY" });
-    const theirs = await ok("POST", `/api/projects/${party.id}/decisions`, ada, { title: "Bring snacks" });
-
-    expect((await ok("GET", `/api/workspaces/${friends.id}/decisions`, ada))).toEqual([]);
-    for (const [method, path, body] of [
-      ["GET", `/api/decisions/${theirs.id}`],
-      ["PATCH", `/api/decisions/${theirs.id}`, { baseVersion: 1, body: "Mine." }],
-      ["GET", `/api/decisions/${theirs.id}/versions`],
-      ["GET", `/api/decisions/${theirs.id}/versions/1`],
-      ["GET", `/api/projects/${party.id}/decisions`],
-      ["POST", `/api/projects/${party.id}/decisions`, { title: "Mine" }],
-      ["GET", `/api/workspaces/${friends.id}/decisions`],
-      ["POST", `/api/workspaces/${friends.id}/decisions`, { title: "Mine" }],
-    ] as [string, string, unknown?][]) {
-      expect((await call(method, path, asAgent, body)).status, `${method} ${path}`).toBe(404);
-    }
-    const bea = await addMember(cronk, ada.cookie, friends.id, "bea@example.com");
-    expect((await call("GET", `/api/decisions/${decision.id}`, { cookie: bea.cookie })).status).toBe(404);
-    expect((await call("GET", `/api/decisions/${theirs.id}`, { cookie: bea.cookie })).status).toBe(200);
-  });
-
-  test("an Agent's read-only token reads Decisions but can't record or save them", async () => {
-    const { ada, project, agent } = await workspaceWithProject();
-    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use Postgres" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
-    const reader = { headers: { authorization: `Bearer ${secret}` } };
-
-    expect((await call("GET", `/api/decisions/${decision.id}`, reader)).status).toBe(200);
-    expect((await call("GET", `/api/projects/${project.id}/decisions`, reader)).status).toBe(200);
-    const recorded = await call("POST", `/api/projects/${project.id}/decisions`, reader, { title: "Mine" });
-    const saved = await call("PATCH", `/api/decisions/${decision.id}`, reader, { baseVersion: 1, body: "Mine." });
-    expect([recorded.json.error.code, saved.json.error.code]).toEqual(["read_only_token", "read_only_token"]);
-  });
-
   test("a save that changes nothing makes no Version", async () => {
     const { ada, project } = await workspaceWithProject();
     const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use Postgres", body: "One." });
@@ -409,5 +318,81 @@ describe("Decisions", () => {
 
     expect(same.version.number).toBe(1);
     expect((await ok("GET", `/api/decisions/${decision.id}/versions`, ada)).length).toBe(1);
+  });
+});
+
+describe("refusals", () => {
+  test("refused, changing nothing: an Agent changing a status, anyone deleting, another Workspace's Decisions, and a read-only token's writes", async () => {
+    const { ada, workspace, project, agent, asAgent } = await workspaceWithProject();
+    // An Agent only proposes Decisions.
+    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, asAgent, { title: "Use Postgres", status: "proposed" });
+    const other = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Use MySQL" });
+    await ok("POST", `/api/workspaces/${workspace.id}/decisions`, ada, { title: "Write in English" });
+    const friends = await ok("POST", "/api/workspaces", ada, { name: "Friends" });
+    const party = await ok("POST", `/api/workspaces/${friends.id}/projects`, ada, { name: "Party", key: "PARTY" });
+    const theirs = await ok("POST", `/api/projects/${party.id}/decisions`, ada, { title: "Bring snacks" });
+    expect(await ok("GET", `/api/workspaces/${friends.id}/decisions`, ada)).toEqual([]);
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
+    const reader = { headers: { authorization: `Bearer ${secret}` } };
+    // A read-only token reads Decisions.
+    expect((await call("GET", `/api/decisions/${decision.id}`, reader)).status).toBe(200);
+    expect((await call("GET", `/api/projects/${project.id}/decisions`, reader)).status).toBe(200);
+
+    const statusRule = {
+      code: "agent_not_allowed",
+      message: expect.any(String),
+      rule: "Agents propose Decisions and edit their text; only a User changes a Decision's status.",
+      advice: expect.stringContaining("ada@example.com"),
+    };
+    const notDeletable = {
+      code: "decision_not_deletable",
+      message: expect.any(String),
+      rule: "Decisions are never deleted, so their history stays.",
+      advice: expect.stringContaining("rejected, deprecated or superseded"),
+    };
+    const readOnly = expect.objectContaining({ code: "read_only_token" });
+    const refusals: [string, As, string, string, unknown, number, unknown?][] = [
+      ["an Agent", asAgent, "POST", `/api/projects/${project.id}/decisions`, { title: "Use Redis", status: "accepted" }, 403, statusRule],
+      ["an Agent", asAgent, "PATCH", `/api/decisions/${decision.id}`, { baseVersion: 1, status: "accepted" }, 403, statusRule],
+      ["an Agent", asAgent, "PATCH", `/api/decisions/${decision.id}`, { baseVersion: 1, body: "Sure.", status: "rejected" }, 403, statusRule],
+      ["an Agent", asAgent, "PATCH", `/api/decisions/${other.id}`, { baseVersion: 1, status: "superseded", supersededById: decision.id }, 403, statusRule],
+      // Nobody deletes a Decision, User or Agent.
+      ["Ada", ada, "DELETE", `/api/decisions/${decision.id}`, undefined, 405, notDeletable],
+      ["an Agent", asAgent, "DELETE", `/api/decisions/${decision.id}`, undefined, 405, notDeletable],
+      ["a read-only token", reader, "POST", `/api/projects/${project.id}/decisions`, { title: "Mine" }, 403, readOnly],
+      ["a read-only token", reader, "PATCH", `/api/decisions/${decision.id}`, { baseVersion: 1, body: "Mine." }, 403, readOnly],
+    ];
+    // Nothing crosses Workspaces: another Workspace's Decisions answer as not found.
+    for (const [method, path, body] of [
+      ["GET", `/api/decisions/${theirs.id}`],
+      ["PATCH", `/api/decisions/${theirs.id}`, { baseVersion: 1, body: "Mine." }],
+      ["GET", `/api/decisions/${theirs.id}/versions`],
+      ["GET", `/api/decisions/${theirs.id}/versions/1`],
+      ["GET", `/api/projects/${party.id}/decisions`],
+      ["POST", `/api/projects/${party.id}/decisions`, { title: "Mine" }],
+      ["GET", `/api/workspaces/${friends.id}/decisions`],
+      ["POST", `/api/workspaces/${friends.id}/decisions`, { title: "Mine" }],
+    ] as [string, string, unknown?][]) {
+      refusals.push(["an Agent of another Workspace", asAgent, method, path, body, 404]);
+    }
+    for (const [who, as, method, path, body, status, error] of refusals) {
+      const refused = await call(method, path, as, body);
+      expect(refused.status, `${who}: ${method} ${path}`).toBe(status);
+      if (error) expect(refused.json.error, `${who}: ${method} ${path}`).toEqual(error);
+    }
+
+    const unchanged = await ok("GET", `/api/decisions/${decision.id}`, ada);
+    expect(unchanged).toEqual(expect.objectContaining({ status: "proposed", body: "", version: expect.objectContaining({ number: 1 }) }));
+    expect((await ok("GET", `/api/projects/${project.id}/decisions`, ada)).map((d: { title: string }) => d.title)).toEqual([
+      "Use Postgres",
+      "Use MySQL",
+    ]);
+    expect((await ok("GET", `/api/projects/${party.id}/decisions`, ada)).map((d: { id: string }) => d.id)).toEqual([theirs.id]);
+    const bea = await addMember(cronk, ada.cookie, friends.id, "bea@example.com");
+    expect((await call("GET", `/api/decisions/${decision.id}`, { cookie: bea.cookie })).status).toBe(404);
+    expect((await call("GET", `/api/decisions/${theirs.id}`, { cookie: bea.cookie })).status).toBe(200);
+    // An Agent's save that keeps the status is no status change.
+    const keptStatus = await call("PATCH", `/api/decisions/${decision.id}`, asAgent, { baseVersion: 1, status: "proposed", body: "Why." });
+    expect(keptStatus.status).toBe(200);
   });
 });

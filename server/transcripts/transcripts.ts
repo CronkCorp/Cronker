@@ -6,7 +6,7 @@ import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import { ownerName, type AgentCaller } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
 import { recordChanges } from "../work/changes.js";
 import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
@@ -141,6 +141,38 @@ const columns = `transcripts.id, ${slugColumn("transcript", "transcripts.id", "a
   transcripts.uploaded_at as "uploadedAt"`;
 const present = ({ uploadedAt, ...row }: Row): Transcript => ({ ...row, uploadedAt: uploadedAt.toISOString() });
 
+/**
+ * A SQL condition that the Viewer may read the Transcript in `transcript` (a `transcripts` row's alias), with the value
+ * to bind to `param`; built from {@link inReach}, not a rule of its own. A Run's Transcript follows its Ticket's Project.
+ * One of no Run holds text from every Ticket it names, so a User reads it as its Agent's Owner, as an Admin, or when
+ * they can read every Ticket it names (and it names at least one); an Agent reads only its own.
+ */
+export function transcriptReadable(viewer: Viewer, transcript: string, param: string): { sql: string; value: string | string[] } {
+  const reach = (tickets: string) => inReach(viewer, { project: `${tickets}.project_id`, workspace: `${tickets}.workspace_id` }, param);
+  const ofRun = `exists (select 1 from runs readable_runs join tickets readable_tickets on readable_tickets.id = readable_runs.ticket_id
+      where readable_runs.id = ${transcript}.run_id and ${reach("readable_tickets").sql})`;
+  if (viewer.kind === "agent") {
+    // The Agent's id goes after the Workspace and Owner that the seam reads from the same array.
+    return {
+      sql: `(${transcript}.run_id is not null and ${ofRun}
+        or ${transcript}.run_id is null and ${transcript}.agent_id = (${param}::uuid[])[3])`,
+      value: [...(reach("t").value as string[]), viewer.id],
+    };
+  }
+  const ownerOrAdmin = `exists (select 1 from memberships readable_memberships
+      where readable_memberships.workspace_id = ${transcript}.workspace_id and readable_memberships.user_id = ${param}
+        and (readable_memberships.is_admin or exists (select 1 from agents readable_agents
+          where readable_agents.id = ${transcript}.agent_id and readable_agents.owner_id = ${param})))`;
+  const everyTicket = `exists (select 1 from transcript_tickets named where named.transcript_id = ${transcript}.id)
+    and not exists (select 1 from transcript_tickets named join tickets named_tickets on named_tickets.id = named.ticket_id
+      where named.transcript_id = ${transcript}.id and not (${reach("named_tickets").sql}))`;
+  return {
+    sql: `(${transcript}.run_id is not null and ${ofRun}
+      or ${transcript}.run_id is null and (${ownerOrAdmin} or ${everyTicket}))`,
+    value: viewer.id,
+  };
+}
+
 export const transcriptNotFound = () => new ApiError(404, "not_found", "No such Transcript.");
 
 async function transcriptRow(db: Context["db"] | Tx, where: string, params: unknown[]): Promise<Row | undefined> {
@@ -217,7 +249,7 @@ export async function uploadTranscript(
     const transcript = present((await transcriptRow(tx, "transcripts.id = $1", [id]))!);
     // A Run that gains its Transcript links it on its Ticket's timeline.
     if (transcript.runId && transcript.runId !== held.rows[0]?.runId) await runTicketChanged(context, tx, transcript.runId);
-    transcriptChanged(context, tx, agent.workspace.id, transcript);
+    await transcriptChanged(context, tx, agent.workspace.id, transcript);
     return { transcript, created };
   });
 }
@@ -335,7 +367,7 @@ export async function appendTranscript(context: Context, tx: Tx, session: RunSes
   ]);
   // A Run that gains its Transcript links it on its Ticket's timeline.
   if (created) await runTicketChanged(context, tx, session.runId);
-  transcriptChanged(context, tx, session.workspaceId, { id, runId: session.runId });
+  await transcriptChanged(context, tx, session.workspaceId, { id, runId: session.runId });
   return true;
 }
 
@@ -545,7 +577,7 @@ function keepStartAndEnd(converted: StoredEntry[]): { kept: StoredEntry[]; gap: 
 
 export async function findTranscript({ db }: Context, viewer: Viewer, transcriptId: string): Promise<Transcript> {
   if (!isUuid(transcriptId)) throw transcriptNotFound();
-  const view = inView(viewer, "transcripts.workspace_id", "$2");
+  const view = transcriptReadable(viewer, "transcripts", "$2");
   const row = await transcriptRow(db, `transcripts.id = $1 and transcripts.deleted_at is null and ${view.sql}`, [
     transcriptId,
     view.value,
@@ -564,11 +596,12 @@ export async function agentTranscripts({ db }: Context, viewer: Viewer, agentId:
     ? await db.query(`select 1 from agents where agents.id = $1 and ${view.sql}`, [agentId, view.value])
     : { rowCount: 0 };
   if (agent.rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
+  const readable = transcriptReadable(viewer, "transcripts", "$2");
   const { rows } = await db.query<Row>(
     `select ${columns} from transcripts join agents on agents.id = transcripts.agent_id
-     where transcripts.agent_id = $1 and transcripts.run_id is null and transcripts.deleted_at is null
+     where transcripts.agent_id = $1 and transcripts.run_id is null and transcripts.deleted_at is null and ${readable.sql}
      order by transcripts.uploaded_at desc, transcripts.id`,
-    [agentId],
+    [agentId, readable.value],
   );
   return rows.map(present);
 }
@@ -577,13 +610,14 @@ export async function agentTranscripts({ db }: Context, viewer: Viewer, agentId:
 export async function ticketTranscripts({ db }: Context, viewer: Viewer, ticketId: string): Promise<TicketTranscript[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
+  const readable = transcriptReadable(viewer, "transcripts", "$2");
   const { rows } = await db.query<Row & { namedAt: Date }>(
     `select ${columns}, transcript_tickets.named_at as "namedAt"
      from transcript_tickets join transcripts on transcripts.id = transcript_tickets.transcript_id
      join agents on agents.id = transcripts.agent_id
-     where transcript_tickets.ticket_id = $1
+     where transcript_tickets.ticket_id = $1 and ${readable.sql}
      order by transcript_tickets.named_at, transcripts.id`,
-    [ticket.id],
+    [ticket.id, readable.value],
   );
   return rows.map(({ namedAt, ...row }) => ({ ...present(row), namedAt: namedAt.toISOString() }));
 }
@@ -646,6 +680,7 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
       const ticket = await runTicketChanged(context, tx, transcript.runId);
       await recordTranscriptDeleted(context, tx, ticket, actor.id, { ...deleted, step: ticket.step });
     }
+    await transcriptChanged(context, tx, rows[0].workspaceId, transcript);
     // A session outside a Run drops out of the Tickets it named, each recording that it was deleted.
     const unlinked = await tx.query<{ id: string; projectId: string; workspaceId: string }>(
       `with unlinked as (delete from transcript_tickets where transcript_id = $1 returning ticket_id)
@@ -657,7 +692,6 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
       await recordTranscriptDeleted(context, tx, ticket, actor.id, deleted);
       context.live.publish(tx, ticket.workspaceId, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
     }
-    transcriptChanged(context, tx, rows[0].workspaceId, transcript);
   });
 }
 
@@ -708,7 +742,30 @@ async function runTicketChanged(context: Context, tx: Tx, runId: string): Promis
   return ticket;
 }
 
-/** Tells the Workspace's streams that a Transcript changed, so an open Transcript page shows it. */
-function transcriptChanged({ live }: Context, tx: Tx, workspaceId: string, transcript: Pick<Transcript, "id" | "runId">): void {
-  live.publish(tx, workspaceId, { type: "transcript.changed", transcriptId: transcript.id, runId: transcript.runId });
+/**
+ * Tells the Workspace's streams that a Transcript changed, so an open Transcript page shows it: a Run's goes to the
+ * readers of its Ticket's Project; a session outside a Run to its Agent's Owner and the Users who can read every
+ * Ticket it names. Call it before a deletion unlinks those Tickets.
+ */
+async function transcriptChanged(
+  { live }: Context,
+  tx: Tx,
+  workspaceId: string,
+  transcript: Pick<Transcript, "id" | "runId">,
+): Promise<void> {
+  const event = { type: "transcript.changed", transcriptId: transcript.id, runId: transcript.runId } as const;
+  if (transcript.runId) {
+    const ticket = await runTicket(tx, transcript.runId);
+    live.publish(tx, workspaceId, event, { readersOf: [ticket.projectId] });
+    return;
+  }
+  const { rows } = await tx.query<{ ownerId: string; projectIds: string[] }>(
+    `select agents.owner_id as "ownerId",
+       array(select distinct tickets.project_id from transcript_tickets join tickets on tickets.id = transcript_tickets.ticket_id
+             where transcript_tickets.transcript_id = transcripts.id) as "projectIds"
+     from transcripts join agents on agents.id = transcripts.agent_id where transcripts.id = $1`,
+    [transcript.id],
+  );
+  const { ownerId, projectIds } = rows[0]!;
+  live.publish(tx, workspaceId, event, { readersOf: projectIds, users: [ownerId] });
 }

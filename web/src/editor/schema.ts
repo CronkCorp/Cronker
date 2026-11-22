@@ -10,6 +10,8 @@ import { schema as commonmark } from "prosemirror-markdown";
 import { Schema, type NodeSpec } from "prosemirror-model";
 
 const block = { block: { default: null } };
+// What prosemirror-tables reads of a cell. Markdown has no spans, so they stay 1.
+const cellAttrs = { align: { default: null }, colspan: { default: 1 }, rowspan: { default: 1 }, colwidth: { default: null } };
 
 function withBlock(name: string): NodeSpec {
   const spec = commonmark.spec.nodes.get(name);
@@ -36,26 +38,30 @@ export const schema = new Schema({
       content: "table_row+",
       isolating: true,
       attrs: block,
+      tableRole: "table",
       parseDOM: [{ tag: "table" }],
       toDOM: () => ["table", ["tbody", 0]],
     })
     .addToEnd("table_row", {
       content: "(table_header | table_cell)+",
+      tableRole: "row",
       parseDOM: [{ tag: "tr" }],
       toDOM: () => ["tr", 0],
     })
     .addToEnd("table_header", {
       content: "(text | image)*",
-      attrs: { align: { default: null } },
+      attrs: cellAttrs,
       isolating: true,
-      parseDOM: [{ tag: "th" }],
+      tableRole: "header_cell",
+      parseDOM: [{ tag: "th", getAttrs: (dom) => ({ align: (dom as HTMLElement).style?.textAlign || null }) }],
       toDOM: (node) => ["th", { style: node.attrs.align ? `text-align: ${node.attrs.align}` : null }, 0],
     })
     .addToEnd("table_cell", {
       content: "(text | image)*",
-      attrs: { align: { default: null } },
+      attrs: cellAttrs,
       isolating: true,
-      parseDOM: [{ tag: "td" }],
+      tableRole: "cell",
+      parseDOM: [{ tag: "td", getAttrs: (dom) => ({ align: (dom as HTMLElement).style?.textAlign || null }) }],
       toDOM: (node) => ["td", { style: node.attrs.align ? `text-align: ${node.attrs.align}` : null }, 0],
     })
     // Markdown the editor can't show, such as raw HTML or a footnote, kept as
@@ -67,7 +73,8 @@ export const schema = new Schema({
       code: true,
       defining: true,
       attrs: block,
-      parseDOM: [{ tag: "pre[data-source]", preserveWhitespace: "full" }],
+      // Before code_block's `pre`, so a copied source block pastes as one.
+      parseDOM: [{ tag: "pre[data-source]", preserveWhitespace: "full", priority: 60 }],
       toDOM: () => ["pre", { "data-source": "" }, ["code", 0]],
     }),
   marks: commonmark.spec.marks.addToEnd("strikethrough", {

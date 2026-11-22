@@ -1,4 +1,5 @@
-import { afterCommit, type Tx } from "../db.js";
+import { afterCommit, beforeCommit, type Tx } from "../db.js";
+import { readersIn } from "../identity/viewers.js";
 
 /**
  * What a Workspace's event stream tells its clients: which record changed, by id. Clients
@@ -7,6 +8,8 @@ import { afterCommit, type Tx } from "../db.js";
 export type LiveEvent =
   | { type: "project.created"; projectId: string }
   | { type: "project.changed"; projectId: string }
+  | { type: "project.gained"; projectId: string }
+  | { type: "project.lost"; projectId: string }
   | { type: "statuses.changed"; projectId: string }
   | { type: "ticket.created"; projectId: string; ticketId: string }
   | { type: "ticket.changed"; projectId: string; ticketId: string }
@@ -26,6 +29,10 @@ export type LiveEvent =
 export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.created": "A Project was created, with its Statuses.",
   "project.changed": "A Project's settings changed.",
+  "project.gained":
+    "A change to a Project's Access let you read it, so it now shows, with everything in it; sent only to the Users who gained it.",
+  "project.lost":
+    "A change to a Project's Access took it away from you, so it and everything in it no longer shows; sent only to the Users who lost it, and the last event about it they get.",
   "statuses.changed": "A Project's Statuses were added, renamed, moved, given another kind or removed, or a Status's Step changed.",
   "ticket.created": "A Ticket was created.",
   "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
@@ -57,6 +64,19 @@ export const runnerEventTypes: Record<RunnerEvent["type"], string> = {
     "A Run started or ended on one of your Runners, changing its count of running Runs, its queue was paused for a rate limit or resumed, or you removed it.",
 };
 
+/** An event that names its Project, or null for the Workspace's own knowledge, and so goes to those who can read it. */
+export type PlacedEvent = Extract<LiveEvent, { projectId: string | null }>;
+
+/**
+ * Who an event goes to, among the Workspace's open streams: the Users who may read every place in `readersOf`
+ * (Projects by id, null for the Workspace's own knowledge; every User for none), and the Users in `users` besides.
+ * Leaving `readersOf` out sends to `users` alone.
+ */
+export interface Audience {
+  readersOf?: (string | null)[];
+  users?: string[];
+}
+
 /** One open stream: whose it is, and how to write to it. */
 export interface Subscriber {
   /** The Workspace whose stream it is; null for its User's own Runners' stream. */
@@ -80,9 +100,32 @@ export class Live {
     return () => this.subscribers.delete(subscriber);
   }
 
-  /** Tells the Workspace's streams about the event once the transaction commits, and never if it rolls back. */
-  publish(tx: Tx, workspaceId: string, event: LiveEvent): void {
-    this.sendAfterCommit(tx, (subscriber) => subscriber.workspaceId === workspaceId, event);
+  /**
+   * Tells the Workspace's streams about the event once the transaction commits, and never if it rolls back: only
+   * those of Users who may read where it happened, as the transaction leaves Access. An event that names its Project
+   * goes to that Project's readers; any other says who it goes to.
+   */
+  publish(tx: Tx, workspaceId: string, event: PlacedEvent): void;
+  publish(tx: Tx, workspaceId: string, event: LiveEvent, audience: Audience): void;
+  publish(tx: Tx, workspaceId: string, event: LiveEvent, audience?: Audience): void {
+    const to = audience ?? { readersOf: [(event as PlacedEvent).projectId] };
+    let recipients: Set<string> | "all" = new Set(to.users);
+    // The Workspace's own knowledge is for every User of it, so that needs no lookup.
+    if (to.readersOf?.every((place) => place === null)) recipients = "all";
+    else if (to.readersOf) {
+      const places = to.readersOf;
+      beforeCommit(tx, async () => {
+        const readers = await readersIn(tx, workspaceId, places);
+        for (const user of to.users ?? []) readers.add(user);
+        recipients = readers;
+      });
+    }
+    this.sendAfterCommit(
+      tx,
+      (subscriber) =>
+        subscriber.workspaceId === workspaceId && (recipients === "all" || recipients.has(subscriber.userId)),
+      event,
+    );
   }
 
   /** Tells the Runner's Owner's Runners streams about the event once the transaction commits. */

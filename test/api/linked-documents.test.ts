@@ -58,37 +58,30 @@ describe("Linked Documents", () => {
     ]);
   });
 
-  test("only a Document of the Ticket's Project or of its Workspace can be linked", async () => {
-    const { workspace, ada, ticket } = await ticketWithDocuments();
+  test("linking is refused, and changes nothing, for a Document of another Project, of another Workspace, of none, or one already linked", async () => {
+    const { workspace, ada, ticket, design } = await ticketWithDocuments();
     const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Board", key: "BOARD" });
     const elsewhere = await ok("POST", `/api/projects/${other.id}/documents`, ada, { title: "Board notes" });
     const away = await ok("POST", "/api/workspaces", ada, { name: "Side project" });
     const outside = await ok("POST", `/api/workspaces/${away.id}/documents`, ada, { title: "Side notes" });
-
-    const fromOtherProject = await call("POST", `/api/tickets/${ticket.id}/documents`, ada, { documentId: elsewhere.id });
-    const fromOtherWorkspace = await call("POST", `/api/tickets/${ticket.id}/documents`, ada, { documentId: outside.id });
-    const noSuchDocument = await call("POST", `/api/tickets/${ticket.id}/documents`, ada, { documentId: "nope" });
-
-    expect(fromOtherProject.status).toBe(400);
-    expect(fromOtherProject.json.error).toEqual(
-      expect.objectContaining({ code: "document_outside_project", rule: expect.any(String), advice: expect.any(String) }),
-    );
-    // A Document of another Workspace answers as unknown, as if it didn't exist.
-    expect(fromOtherWorkspace.status).toBe(400);
-    expect(fromOtherWorkspace.json.error.code).toBe("unknown_document");
-    expect(noSuchDocument.status).toBe(400);
-    expect(noSuchDocument.json.error.code).toBe("unknown_document");
-    expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([]);
-  });
-
-  test("a Document is linked to a Ticket once", async () => {
-    const { ada, ticket, design } = await ticketWithDocuments();
     await ok("POST", `/api/tickets/${ticket.id}/documents`, ada, { documentId: design.id });
 
-    const again = await call("POST", `/api/tickets/${ticket.id}/documents`, ada, { documentId: design.id });
-
-    expect(again.status).toBe(409);
-    expect(again.json.error.code).toBe("document_already_linked");
+    // A Document of another Workspace answers as unknown, as if it didn't exist.
+    const refusals: [string, string, number, string][] = [
+      ["of another Project", elsewhere.id, 400, "document_outside_project"],
+      ["of another Workspace", outside.id, 400, "unknown_document"],
+      ["of none", "nope", 400, "unknown_document"],
+      ["already linked", design.id, 409, "document_already_linked"],
+    ];
+    for (const [name, documentId, status, code] of refusals) {
+      const refused = await call("POST", `/api/tickets/${ticket.id}/documents`, ada, { documentId });
+      expect(refused.status, name).toBe(status);
+      expect(refused.json.error.code, name).toBe(code);
+      if (code === "document_outside_project") {
+        expect(refused.json.error).toEqual(expect.objectContaining({ rule: expect.any(String), advice: expect.any(String) }));
+      }
+    }
+    expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([expect.objectContaining({ id: design.id })]);
   });
 
   test("a User unlinks a Document, which stays in its page tree", async () => {
@@ -256,7 +249,7 @@ describe("Linked Documents", () => {
       ]);
     });
 
-    test("outside a Run, an Agent may not link or unlink on a Ticket it didn't file, or one a User has taken up", async () => {
+    test("outside a Run, an Agent may not link or unlink on a Ticket it didn't file, one a User has taken up, or with a Document of another Project", async () => {
       const { workspace, ada, project, ticket, found, design, asAgent } = await discovered();
       const moved = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found that too" });
       const ready = project.statuses.find((s: { name: string }) => s.name === "Ready").id;
@@ -268,6 +261,9 @@ describe("Linked Documents", () => {
 
       const onAUsersTicket = await call("POST", `/api/tickets/${ticket.id}/documents`, asAgent, { documentId: design.id });
       const byAnotherAgent = await call("DELETE", `/api/tickets/${found.id}/documents/${design.id}`, asOther);
+      const boardProject = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Board", key: "BOARD" });
+      const elsewhere = await ok("POST", `/api/projects/${boardProject.id}/documents`, ada, { title: "Board notes" });
+      const outsideProject = await call("POST", `/api/tickets/${found.id}/documents`, asAgent, { documentId: elsewhere.id });
       await ok("POST", `/api/tickets/${found.id}/dismiss`, ada);
       const afterDismissed = await call("DELETE", `/api/tickets/${found.id}/documents/${design.id}`, asAgent);
       const afterMoved = await call("POST", `/api/tickets/${moved.id}/documents`, asAgent, { documentId: design.id });
@@ -286,6 +282,8 @@ describe("Linked Documents", () => {
           }),
         );
       }
+      expect(outsideProject.status).toBe(400);
+      expect(outsideProject.json.error.code).toBe("document_outside_project");
       expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([]);
       expect(await ok("GET", `/api/tickets/${found.id}/documents`, ada)).toEqual([expect.objectContaining({ id: design.id })]);
       expect(await ok("GET", `/api/tickets/${moved.id}/documents`, ada)).toEqual([]);
@@ -301,17 +299,6 @@ describe("Linked Documents", () => {
       await ok("PATCH", `/api/tickets/${found.id}`, ada, { delegateId: agent.id });
       const settled = await call("DELETE", `/api/tickets/${half.id}/documents/${design.id}`, asAgent);
       expect(settled.json.error.code).toBe("not_your_discovered_ticket");
-    });
-
-    test("an Agent links only Documents of its Discovered Ticket's Project or of the Workspace", async () => {
-      const { workspace, ada, found, asAgent } = await discovered();
-      const board = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Board", key: "BOARD" });
-      const elsewhere = await ok("POST", `/api/projects/${board.id}/documents`, ada, { title: "Board notes" });
-
-      const refused = await call("POST", `/api/tickets/${found.id}/documents`, asAgent, { documentId: elsewhere.id });
-
-      expect(refused.status).toBe(400);
-      expect(refused.json.error.code).toBe("document_outside_project");
     });
   });
 });

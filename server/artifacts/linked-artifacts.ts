@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
-import type { Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { findTicketRow, linkingActor, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findArtifact } from "./artifacts.js";
@@ -31,13 +31,15 @@ const fromLinks = `linked_artifacts
   join artifacts on artifacts.id = linked_artifacts.artifact_id
   join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version`;
 
-/** The Ticket's Linked Artifacts, oldest link first. */
+/** The Ticket's Linked Artifacts the Viewer can read, oldest link first. */
 export async function linkedArtifactsOf(db: Db, viewer: Viewer, ticketId: string): Promise<LinkedArtifact[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
+  // Only those the Viewer can read: one it can't is left off, as if it weren't linked.
+  const reach = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
   const { rows } = await db.query<LinkedArtifact>(
-    `select ${columns} from ${fromLinks} where linked_artifacts.ticket_id = $1 order by linked_artifacts.seq`,
-    [ticket.id],
+    `select ${columns} from ${fromLinks} where linked_artifacts.ticket_id = $1 and ${reach.sql} order by linked_artifacts.seq`,
+    [ticket.id, reach.value],
   );
   return rows;
 }

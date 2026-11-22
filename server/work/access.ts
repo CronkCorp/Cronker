@@ -4,7 +4,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { userViewer } from "../identity/viewers.js";
+import { readersIn, userViewer } from "../identity/viewers.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { findProject, projectNotFound, Visibility } from "./projects.js";
 
@@ -69,6 +69,7 @@ export async function setProjectAccess(
     if (members.length !== ids.length) {
       throw new ApiError(400, "unknown_user", "Only Users of the Project's Workspace can be listed on it.");
     }
+    const before = await readersIn(tx, project.workspaceId, [project.id]);
     await tx.query("update projects set visibility = $2 where id = $1", [project.id, access.visibility]);
     await tx.query("delete from project_members where project_id = $1 and not (user_id = any($2::uuid[]))", [
       project.id,
@@ -82,7 +83,18 @@ export async function setProjectAccess(
         [project.id, project.workspaceId, user.userId, user.level, now],
       );
     }
-    live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+    // Those who keep the Project hear that it changed; those who gain or lose it, so their open pages add or drop it.
+    const after = await readersIn(tx, project.workspaceId, [project.id]);
+    const kept = [...after].filter((user) => before.has(user));
+    const gained = [...after].filter((user) => !before.has(user));
+    const lost = [...before].filter((user) => !after.has(user));
+    live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id }, { users: kept });
+    if (gained.length > 0) {
+      live.publish(tx, project.workspaceId, { type: "project.gained", projectId: project.id }, { users: gained });
+    }
+    if (lost.length > 0) {
+      live.publish(tx, project.workspaceId, { type: "project.lost", projectId: project.id }, { users: lost });
+    }
     return accessOfProject(tx, project.id);
   });
 }

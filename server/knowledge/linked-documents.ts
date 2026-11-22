@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
-import type { Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { findTicketRow, linkingActor, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findDocument } from "./documents.js";
@@ -31,13 +31,15 @@ const fromLinks = `linked_documents
   join documents on documents.id = linked_documents.document_id
   join document_versions versions on versions.document_id = documents.id and versions.number = documents.version`;
 
-/** The Ticket's Linked Documents, oldest link first. */
+/** The Ticket's Linked Documents the Viewer can read, oldest link first. */
 export async function linkedDocumentsOf(db: Db, viewer: Viewer, ticketId: string): Promise<LinkedDocument[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
+  // Only those the Viewer can read: one it can't is left off, as if it weren't linked.
+  const reach = inReach(viewer, { project: "documents.project_id", workspace: "documents.workspace_id" }, "$2");
   const { rows } = await db.query<LinkedDocument>(
-    `select ${columns} from ${fromLinks} where linked_documents.ticket_id = $1 order by linked_documents.seq`,
-    [ticket.id],
+    `select ${columns} from ${fromLinks} where linked_documents.ticket_id = $1 and ${reach.sql} order by linked_documents.seq`,
+    [ticket.id, reach.value],
   );
   return rows;
 }
