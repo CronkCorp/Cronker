@@ -50,7 +50,8 @@ interface WebhookRow {
 /**
  * One pass over a Workspace: queues a delivery for each item in a webhook owner's Inbox that the webhook hasn't heard
  * of, is on, chose the kind of, and that began waiting no earlier than the webhook was added. Every item is recorded as
- * heard of, sent or not, so turning a webhook on or choosing more kinds doesn't send what was already waiting.
+ * heard of, sent or not, so turning a webhook on or choosing more kinds doesn't send what was already waiting. Nothing
+ * of an archived Project is sent, and on unarchiving what waited from before it is recorded without being sent.
  */
 export async function notifyWorkspace(context: Context, workspaceId: string): Promise<void> {
   const { db, clock, config } = context;
@@ -64,17 +65,27 @@ export async function notifyWorkspace(context: Context, workspaceId: string): Pr
   );
   const byUser = new Map<string, WebhookRow[]>();
   for (const webhook of webhooks) byUser.set(webhook.userId, [...(byUser.get(webhook.userId) ?? []), webhook]);
+  if (byUser.size === 0) return;
+  // An archived Project's items are out of the Inbox, so none is sent; those that waited from before it was unarchived
+  // are old news once it is, so they are recorded as heard of without being sent.
+  const { rows: unarchived } = await db.query<{ id: string; unarchivedAt: Date }>(
+    `select id, unarchived_at as "unarchivedAt" from projects where workspace_id = $1 and unarchived_at is not null`,
+    [workspaceId],
+  );
+  const unarchivedAt = new Map(unarchived.map((p) => [p.id, p.unarchivedAt.getTime()]));
   for (const [userId, own] of byUser) {
     const { items } = await inboxOf(db, userId, { id: workspaceId, isAdmin: own[0]!.isAdmin });
     for (const item of items) {
       const key = inboxItemKey(item);
+      const since = Date.parse(item.since);
+      const fromBeforeUnarchiving = since < (unarchivedAt.get(item.ticket.projectId) ?? -Infinity);
       for (const webhook of own) {
-        if (Date.parse(item.since) < webhook.createdAt.getTime()) continue;
+        if (since < webhook.createdAt.getTime()) continue;
         const { rowCount } = await db.query(
           "insert into webhook_inbox_seen (webhook_id, item_key) values ($1, $2) on conflict do nothing",
           [webhook.id, key],
         );
-        if (!rowCount || !webhook.enabled || !webhook.kinds.includes(item.kind)) continue;
+        if (!rowCount || fromBeforeUnarchiving || !webhook.enabled || !webhook.kinds.includes(item.kind)) continue;
         const url = new URL(`/${webhook.slug}/tickets/${item.ticket.key}`, config.publicUrl).href;
         // Never the Ticket's description or Comments: a receiver such as ntfy may be public.
         await queueDelivery(

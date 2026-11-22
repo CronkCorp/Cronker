@@ -185,11 +185,11 @@ export async function archiveProject(
     if (!archived && project.archivedAt === null) {
       throw new ApiError(409, "project_not_archived", `${project.key} isn't archived.`);
     }
-    await tx.query("update projects set archived_at = $2, archived_by = $3 where id = $1", [
-      project.id,
-      archived ? clock.now() : null,
-      archived ? userId : null,
-    ]);
+    // Unarchiving records when, so the notifier doesn't send webhooks for what waited from before it.
+    await tx.query(
+      "update projects set archived_at = $2, archived_by = $3, unarchived_at = coalesce($4, unarchived_at) where id = $1",
+      [project.id, archived ? clock.now() : null, archived ? userId : null, archived ? null : clock.now()],
+    );
     live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     return (await findProject(tx, userViewer(userId), project.id))!;
   });
