@@ -3,7 +3,7 @@ import type { Config } from "../config.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import type { Viewer } from "../identity/viewers.js";
-import { mcpPath } from "../mcp/routes.js";
+import { mcpPath } from "../mcp/paths.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Outcome, Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
