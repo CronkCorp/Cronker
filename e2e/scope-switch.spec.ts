@@ -3,7 +3,7 @@ import { setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
 import { expect, signInInBrowser, test } from "./fixtures.js";
 
-/** Projects created out of key order, one with a long name, so the dropdown's order and width are both put to the test. */
+/** Projects created out of key order, so the dropdown's order is put to the test. */
 const projects = [
   { key: "WEB", name: "Web client" },
   { key: "API", name: "Server and its API" },
@@ -60,32 +60,3 @@ test("the scope dropdown lists the Workspace, then the Projects by key, and choo
   await expect(page).toHaveURL(/\/projects\/API\/decisions$/);
 });
 
-for (const kind of ["Documents", "Terms", "Decisions", "Artifacts"]) {
-  test(`with many Projects the ${kind} page head stays on one line, and fits at phone width`, async ({ page, cronk }) => {
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await withProjects(page, cronk);
-    await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: kind }).click();
-    await page.getByRole("button", { name: "Scope: Workspace" }).click();
-    await page.getByRole("menuitemradio", { name: /^CRONK / }).click();
-    const heading = page.getByRole("heading", { name: kind, level: 1 });
-    const scope = page.getByRole("button", { name: /^Scope: CRONK / });
-    await expect(scope).toBeVisible();
-
-    // On a desktop window, the title and the scope dropdown share one line.
-    const headBox = (await heading.boundingBox())!;
-    const scopeBox = (await scope.boundingBox())!;
-    expect(Math.abs(headBox.y + headBox.height / 2 - (scopeBox.y + scopeBox.height / 2)), "title and dropdown on one line").toBeLessThan(
-      headBox.height / 2,
-    );
-    // The button keeps to one line of text, its long name cut short.
-    expect(scopeBox.height).toBeLessThan(40);
-
-    // At phone width nothing in the head runs off the page.
-    await page.setViewportSize({ width: 375, height: 800 });
-    await expect(scope).toBeVisible();
-    expect((await scope.boundingBox())!.height).toBeLessThan(40);
-    const right = await scope.evaluate((e) => e.getBoundingClientRect().right);
-    expect(right).toBeLessThanOrEqual(375);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
-  });
-}

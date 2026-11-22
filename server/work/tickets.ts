@@ -149,6 +149,14 @@ const blockersColumns = (alias: string, reach: Reach) =>
    (select count(*)::int from ${unfinishedBlockers(alias)} and not ${reach("blockers")}) as "blockedByHidden"`;
 
 /**
+ * SQL ranking the Ticket `alias` within its Status: 0 while a Run on it is running, 1 while an unfinished Ticket
+ * blocks it, 2 otherwise. Running is tested first, so a Ticket both running and blocked ranks as running.
+ */
+const runningFirstThenBlocked = (alias: string) =>
+  `case when exists (select 1 from runs where runs.ticket_id = ${alias}.id and runs.state = 'running') then 0
+     when exists (select 1 from ${unfinishedBlockers(alias)}) then 1 else 2 end`;
+
+/**
  * The columns of a Ticket as the Viewer sees it, for queries joining `tickets` to `projects`, with the value to bind
  * to `param`: a Ticket it names that the Viewer can't read is left out, and a blocker among them only counted.
  */
@@ -525,7 +533,7 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, tickets.number`,
+     order by statuses.position, ${runningFirstThenBlocked("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
