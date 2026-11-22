@@ -1,5 +1,6 @@
 import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
+import { indexMentions } from "./mentions.js";
 
 /*
  * Kept apart from `comments.ts`, whose schema needs `tickets.ts` loaded: Questions write Comments from
@@ -34,6 +35,7 @@ export async function insertComment(
     ],
   );
   const commentId = rows[0]!.id;
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: ticket.workspaceId }, body);
   live.publish(tx, ticket.workspaceId, { type: "comment.added", projectId: ticket.projectId, ticketId: ticket.id, commentId });
   return commentId;
 }

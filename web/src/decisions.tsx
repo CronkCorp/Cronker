@@ -392,6 +392,7 @@ export function DecisionScreen({
         <div className="page-split">
           <DocumentBody
             body={decision.body}
+            mentions={decision.mentions}
             label={decision.title}
             empty={<EmptyState title="Nothing written yet.">Edit records the context, the decision and what follows from it.</EmptyState>}
           />
