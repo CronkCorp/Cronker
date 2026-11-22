@@ -215,6 +215,11 @@ export interface PullRequestOnGitHub {
   merged?: boolean;
   /** Whether it merges cleanly into its base branch: `false` when it conflicts, `null` while GitHub works it out. */
   mergeable: boolean | null;
+  /**
+   * GitHub's fuller answer: `behind` when it merges cleanly but its base branch has commits its head lacks, as well as
+   * `clean`, `dirty`, `blocked`, `unstable` and `unknown`.
+   */
+  mergeable_state?: string;
   head: { sha: string };
   /** Its base branch, and the commit of it GitHub worked mergeability out against. */
   base: { ref: string; sha: string };
@@ -247,7 +252,7 @@ export async function mergeOnGitHub(
   fullName: string,
   number: number,
   { method, sha }: { method: MergeMethod | undefined; sha: string },
-): Promise<{ merged: true } | { merged: false; status: number; message: string }> {
+): Promise<{ merged: true; sha: string | null } | { merged: false; status: number; message: string }> {
   const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/merge`), {
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -257,8 +262,34 @@ export async function mergeOnGitHub(
     const body = (await response.json().catch(() => ({}))) as { message?: unknown };
     return { merged: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
   }
-  await jsonOf<unknown>(response, "The merge");
-  return { merged: true };
+  const merged = await jsonOf<{ sha?: unknown }>(response, "The merge");
+  return { merged: true, sha: typeof merged?.sha === "string" ? merged.sha : null };
+}
+
+/**
+ * Asks GitHub to bring a Pull Request's branch up to date with its base branch, by merging the base into it, only while
+ * its head is still `expectedHeadSha`. GitHub answers 202 and updates it in the background, delivering the push as a
+ * `pull_request` `synchronize`; its refusals (422 when the head moved or the update conflicts, 403 and 405 when it may
+ * not) come back with GitHub's message.
+ */
+export async function updateBranchOnGitHub(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  number: number,
+  expectedHeadSha: string,
+): Promise<{ updated: true } | { updated: false; status: number; message: string }> {
+  const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/update-branch`), {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ expected_head_sha: expectedHeadSha }),
+  });
+  if (response.status === 403 || response.status === 405 || response.status === 409 || response.status === 422) {
+    const body = (await response.json().catch(() => ({}))) as { message?: unknown };
+    return { updated: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
+  }
+  await jsonOf<unknown>(response, "The branch update");
+  return { updated: true };
 }
 
 /** One attempt at one of the App's webhook deliveries, as GitHub's delivery log lists it. */
@@ -283,4 +314,53 @@ export async function redeliver({ github }: Config, jwt: string, attemptId: numb
   const url = under(github.apiUrl, `/app/hook/deliveries/${attemptId}/attempts`);
   const response = await call(url, { method: "POST", headers: { authorization: `Bearer ${jwt}` } });
   if (!response.ok) throw unavailable(`The redelivery request answered ${response.status}`);
+}
+
+/** An issue as GitHub's issues list answers about it; one with `pull_request` is a Pull Request. */
+export interface IssueOnGitHub {
+  node_id: string;
+  number: number;
+  title: string;
+  body: string | null;
+  html_url: string;
+  state: string;
+  /** Why it was closed: `completed`, `not_planned` or `reopened`; null for an open one or one GitHub doesn't say. */
+  state_reason?: string | null;
+  labels: (string | { name?: string | null })[];
+  created_at: string;
+  pull_request?: unknown;
+}
+
+/**
+ * One page of a repository's issues, open and closed, oldest first, as an installation covering it sees them, with
+ * whether GitHub has a page after it. Oldest first keeps the pages steady while new issues are filed, so an import
+ * resumes by page number. A refusal (GitHub's 403, 404 or 410) comes back with its status. GitHub's rate limit comes
+ * back with the headers saying when it lifts: a 429, or a 403 with no requests remaining or a `Retry-After`, as
+ * GitHub documents; any other 403 is a refusal.
+ */
+export async function issuesPage(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  page: number,
+): Promise<
+  | { kind: "page"; issues: IssueOnGitHub[]; more: boolean }
+  | { kind: "refused"; status: number }
+  | { kind: "rate_limited"; retryAfter: string | null; reset: string | null }
+> {
+  const url = under(github.apiUrl, `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/issues`);
+  url.searchParams.set("state", "all");
+  url.searchParams.set("sort", "created");
+  url.searchParams.set("direction", "asc");
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("page", String(page));
+  const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  const retryAfter = response.headers.get("retry-after");
+  if (response.status === 429 || (response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null))) {
+    return { kind: "rate_limited", retryAfter, reset: response.headers.get("x-ratelimit-reset") };
+  }
+  if (response.status === 403 || response.status === 404 || response.status === 410) return { kind: "refused", status: response.status };
+  const issues = await jsonOf<IssueOnGitHub[]>(response, "The issues list");
+  if (!Array.isArray(issues)) throw unavailable("The issues list answered something other than a list");
+  return { kind: "page", issues, more: /rel="next"/.test(response.headers.get("link") ?? "") };
 }

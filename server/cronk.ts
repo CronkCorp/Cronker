@@ -14,8 +14,10 @@ import { issueSetupCode } from "./identity/setup.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Jobs } from "./jobs.js";
+import { runImports } from "./github/importing.js";
 import { Live } from "./live/live.js";
 import { checkMergeability } from "./pipeline/conflicts.js";
+import { queuePass } from "./pipeline/merge-queue.js";
 import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
@@ -44,10 +46,14 @@ export interface Cronk {
   resumePausedRunners(): Promise<void>;
   /** Has GitHub redeliver the App's failed webhook deliveries Cronk hasn't applied. */
   replayFailedDeliveries(): Promise<void>;
-  /** Asks GitHub whether the Pull Requests waiting on a mergeability check conflict, sending conflicting ones' Tickets back. */
+  /** Asks GitHub whether the Pull Requests waiting on a mergeability check conflict, marking conflicting ones. */
   checkMergeability(): Promise<void>;
   /** Resolves once the work done after changes committed, such as indexing texts again after a Term's save, is done. */
   jobsSettled(): Promise<void>;
+  /** Advances the Merge Queue: merges each queue's head that is clean and green, one per queue. */
+  checkQueue(): Promise<void>;
+  /** Reads the next page of issues of each running import of a Repository's GitHub issues. */
+  runImports(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -100,6 +106,8 @@ export async function createCronk({
       replayFailedDeliveries: () => replayFailedDeliveries(context),
       checkMergeability: () => checkMergeability(context),
       jobsSettled: () => context.jobs.settled(),
+      checkQueue: () => queuePass(context),
+      runImports: () => runImports(context),
       async close() {
         await app.close();
         await context.jobs.settled();

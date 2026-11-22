@@ -64,6 +64,10 @@ export interface StartedCronk {
    * Term is created, renamed or removed.
    */
   jobsSettled(): Promise<void>;
+  /** Advances the Merge Queue, as the server does every five seconds: merges each queue's head that is clean and green. */
+  checkQueue(): Promise<void>;
+  /** Reads the next page of issues of each running GitHub issues import, as the server does every five seconds. */
+  runImports(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -216,6 +220,8 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     checkMergeability: () => cronk.checkMergeability(),
     jobsSettled: () => cronk.jobsSettled(),
+    checkQueue: () => cronk.checkQueue(),
+    runImports: () => cronk.runImports(),
     logs,
     setupCode() {
       const line = logs.findLast((l) => typeof l.setupCode === "string");

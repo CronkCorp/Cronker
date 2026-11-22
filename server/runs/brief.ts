@@ -3,7 +3,7 @@ import type { Config } from "../config.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import type { Viewer } from "../identity/viewers.js";
-import { mcpPath } from "../mcp/routes.js";
+import { mcpPath } from "../mcp/paths.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Outcome, Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
@@ -35,7 +35,14 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
       `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a User, and get no Run.`,
     );
   }
-  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, ticket.autonomousDelegation === true);
+  const { rows } = await db.query<{ conciseReports: boolean }>(
+    `select concise_reports as "conciseReports" from projects where id = $1`,
+    [ticket.projectId],
+  );
+  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, {
+    autonomous: ticket.autonomousDelegation === true,
+    conciseReports: rows[0]!.conciseReports,
+  });
 }
 
 /** The Outcomes a Run of the Step may choose: those to a Done Status only on a Ticket under Autonomous Delegation. */
@@ -48,14 +55,19 @@ export function completes(outcome: Outcome, statuses: Status[]): boolean {
   return statuses.find((s) => s.id === outcome.statusId)!.kind === "done";
 }
 
+/** The rule a Brief carries in a Project with Concise Reports on. */
+export const conciseReportsRule =
+  "- This Project keeps Reports concise, even where the Step's brief asks for more: lead with the outcome, then the " +
+  "findings, what you verified and anything the next Run or User needs, in as few lines as you can. Leave out the " +
+  "working, such as a step-by-step log of what you read or tried.";
+
 /** The Brief of a Run of the Status's Step on the Ticket; without a Run id, as a preview. */
 export function buildBrief(
   config: Config,
   ticketKey: string,
   statuses: Status[],
   status: Status & { step: Step },
-  autonomous: boolean,
-  runId?: string,
+  { autonomous, conciseReports, runId }: { autonomous: boolean; conciseReports: boolean; runId?: string },
 ): Brief {
   const step = status.step;
   const nameOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.name;
@@ -65,12 +77,21 @@ export function buildBrief(
       return `${moves}, completing it as Unverified until its Assignee Accepts or Reopens it.`;
     }
     if (o.needsYou) return `${moves} and hands it back to its Assignee. Give a Question saying what you need.`;
+    if (step.kind === "merge" && o.statusId === status.id && !o.default) {
+      return `- **${o.name}**: once you've pushed a resolution of the conflict, leaves ${ticketKey} in ${status.name}, waiting for the new commit's checks to go green, when it rejoins the Merge Queue at the front.`;
+    }
+    if (o.countsAsRound && step.kind === "merge") {
+      return `${moves}. From a Run resolving a conflict it counts as no round; otherwise it counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
+    }
     if (o.countsAsRound) {
       return `${moves}. It counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
     }
     return `${moves}.`;
   };
 
+  // Cronk merges queued Tickets itself (ADR 0011); only a Brief of a Merge Step that still tells its Run to merge
+  // with `merge_pull_request`, as a Project's own copy may, gets the rules for it.
+  const mergesItself = step.kind === "merge" && step.brief.includes("merge_pull_request");
   const preamble = [
     `You are an agent working on the Ticket ${ticketKey} in Cronk, as one Run of its ${status.name} Step.`,
     "",
@@ -79,7 +100,7 @@ export function buildBrief(
     "",
     runId ? `Your Run id is ${runId}.` : "Your Run id is given when the Run starts.",
     "",
-    step.kind === "merge"
+    mergesItself
       ? "End the Run by merging its Pull Request with `merge_pull_request`, or by calling `finish` with your Run id and one of these Outcomes:"
       : "End the Run by calling `finish` with your Run id and one of these Outcomes:",
     "",
@@ -87,17 +108,21 @@ export function buildBrief(
     "",
     "Rules:",
     "",
-    step.kind === "merge"
+    mergesItself
       ? "- Call `finish` exactly once, as the last thing you do, unless you merge: a merge with `merge_pull_request` " +
         "ends this Run, finished as *merged*, so don't call `finish` after it."
       : "- Call `finish` exactly once, as the last thing you do.",
     "- *needs you* takes a Question.",
     `- While this Run is running you may edit ${ticketKey}'s description, Priority, Labels, due date and estimate, ` +
       "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
-    `- File anything you find that isn't part of ${ticketKey}'s work with \`file_ticket\`, giving your Run id: it waits ` +
-      `for ${ticketKey}'s Assignee as a Discovered Ticket.`,
+    `- Before filing anything you find that isn't part of ${ticketKey}'s work, \`search\` for an open Ticket that ` +
+      "already covers it and, for a fault in the code, check it still happens on the Repository's default branch. " +
+      "If an open Ticket covers it, add what you found there as a Comment instead. Otherwise file it with " +
+      `\`file_ticket\`, giving your Run id and naming any related Tickets in its description: it waits for ` +
+      `${ticketKey}'s Assignee as a Discovered Ticket.`,
     `- Give your Run id when you create an Artifact with \`create_artifact\`, so it is linked to ${ticketKey}.`,
     "- Don't merge pull requests on GitHub directly.",
+    ...(conciseReports ? [conciseReportsRule] : []),
   ].join("\n");
 
   return {

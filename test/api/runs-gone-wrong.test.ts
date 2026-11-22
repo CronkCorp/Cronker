@@ -273,7 +273,7 @@ describe("lost Runs", () => {
     );
     // Its session may yet be alive, so Cronk asks the Runner to stop it, keeping a Retry from running beside it.
     expect(cronk.runner.stops).toEqual([
-      { runId: run.id, reference: { sessionId: "session_1", url: "https://claude.ai/code/session_1" } },
+      { runId: run.id, reference: { sessionId: "cse_1", url: "https://claude.ai/code/cse_1" } },
     ]);
     expect((await inbox()).items).toEqual([
       expect.objectContaining({ kind: "run", ticket: expect.objectContaining({ id: ticket.id }), run: expect.objectContaining({ state: "lost" }) }),
@@ -419,7 +419,7 @@ describe("stopped Runs", () => {
       }),
     );
     expect(cronk.runner.stops).toEqual([
-      { runId: run.id, reference: { sessionId: "session_1", url: "https://claude.ai/code/session_1" } },
+      { runId: run.id, reference: { sessionId: "cse_1", url: "https://claude.ai/code/cse_1" } },
     ]);
     // A stopped Run was the User's own doing: nothing waits in the Inbox.
     expect(await inbox()).toEqual({ count: 0, items: [] });
@@ -532,7 +532,7 @@ describe("removing an Agent", () => {
       }),
     );
     expect(cronk.runner.stops).toEqual([
-      { runId: run.id, reference: { sessionId: "session_1", url: "https://claude.ai/code/session_1" } },
+      { runId: run.id, reference: { sessionId: "cse_1", url: "https://claude.ai/code/cse_1" } },
     ]);
     const finish = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
     expect(finish.status).toBe(401);

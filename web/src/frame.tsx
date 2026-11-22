@@ -176,6 +176,13 @@ function Sidebar({
   const [error, setError] = useState<string | null>(null);
   const to = useAddresses();
   const project = projects?.find((p) => p.id === place.projectId) ?? null;
+  const active = projects?.filter((p) => p.archivedAt === null) ?? null;
+  const archived = projects?.filter((p) => p.archivedAt !== null) ?? [];
+  const projectLink = (p: ProjectSummary) => (
+    <SideLink key={p.id} to={to.project(p)} current={area === "project" && place.projectId === p.id}>
+      <span className="sidebar-key">{p.key}</span> {p.name}
+    </SideLink>
+  );
   // On a phone, following a link out of the menu closes it.
   const closing = () => setMenuOpen(false);
   const area = place.area;
@@ -220,13 +227,20 @@ function Sidebar({
         {current && (
           <div className="sidebar-group">
             <h2 className="sidebar-group-label">Projects</h2>
-            {projects?.length === 0 && <p className="sidebar-note">None yet.</p>}
-            {projects?.map((p) => (
-              <SideLink key={p.id} to={to.project(p)} current={area === "project" && place.projectId === p.id}>
-                <span className="sidebar-key">{p.key}</span> {p.name}
-              </SideLink>
-            ))}
+            {active?.length === 0 && <p className="sidebar-note">{archived.length > 0 ? "None but archived ones." : "None yet."}</p>}
+            {active?.map(projectLink)}
           </div>
+        )}
+        {current && archived.length > 0 && (
+          // Folded unless the page on screen is in an archived Project, so it is out of the way but the current item shows.
+          <details
+            key={archived.some((p) => p.id === place.projectId) ? "open" : "folded"}
+            className="sidebar-group sidebar-archived"
+            open={archived.some((p) => p.id === place.projectId)}
+          >
+            <summary className="sidebar-group-label">Archived</summary>
+            {archived.map(projectLink)}
+          </details>
         )}
         <div className="sidebar-group">
           <h2 className="sidebar-group-label">Workspace</h2>
@@ -324,7 +338,7 @@ function WorkspaceSwitcher({ workspaces, current }: { workspaces: WorkspaceSumma
   );
 }
 
-/** The Workspace's Projects, kept current as Projects are created. */
+/** The Workspace's Projects, archived ones included, kept current as Projects are created, changed or archived. */
 export function useProjects(workspaceId: string | null): ProjectSummary[] | null {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const latest = useLatest();

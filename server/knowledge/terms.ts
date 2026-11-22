@@ -43,7 +43,8 @@ export const Term = Type.Object({
     { description: "The current Version, which a save names as its base." },
   ),
   mentions: Type.Array(Mention, {
-    description: "The Ticket keys and other Terms' names its definition mentions that the caller may read.",
+    description:
+      "The Ticket keys and other Terms' names its definition mentions and the Artifacts it embeds that the caller may read.",
   }),
 });
 export type Term = Static<typeof Term>;
@@ -107,6 +108,27 @@ export function termNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Term.");
 }
 
+const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
+const Definition = Type.String({ maxLength: 20_000, description: "Markdown." });
+const Avoid = Type.Array(Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }), {
+  maxItems: 50,
+  description: "Words to avoid in the Term's place, in the order given.",
+});
+
+/** The create-a-Term route's body. */
+export const TermCreate = Type.Object({ name: Name, definition: Type.Optional(Definition), avoid: Type.Optional(Avoid) });
+export type TermCreate = Static<typeof TermCreate>;
+
+/** The save-a-Term route's body. */
+export const TermEdit = Type.Object({
+  baseVersion: Type.Integer({ minimum: 1, description: "The Version the save is based on." }),
+  name: Type.Optional(Name),
+  definition: Type.Optional(Definition),
+  avoid: Type.Optional(Avoid),
+});
+export type TermEdit = Static<typeof TermEdit>;
+
+/** A Term's whole content, as a Version keeps it. */
 export interface TermContent {
   name: string;
   definition: string;
@@ -231,10 +253,6 @@ async function lockTerm(tx: Tx, viewer: Viewer, termId: string): Promise<(Glossa
   return rows[0];
 }
 
-export interface TermEdit extends Partial<TermContent> {
-  /** The number of the Version the save is based on. */
-  baseVersion: number;
-}
 
 /**
  * Saves a Term as its next Version by the Actor, keeping what the edit leaves out; a new name is refused if another

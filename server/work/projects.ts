@@ -3,7 +3,8 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { accessIn, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessIn, archivedRefusal, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
+import { dropAutonomousEntries } from "../pipeline/merge-queue.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
@@ -40,7 +41,16 @@ export const ProjectSummary = Type.Object({
   access: Type.Union([Type.Literal("write"), Type.Literal("read")], {
     description:
       "What the caller may do in the Project: `write`, or `read` to only read it. Admins always have Write; an " +
-      "Agent's is the least of the Project's Agent Access, its Owner's Access and its token's access.",
+      "Agent's is the least of the Project's Agent Access, its Owner's Access and its token's access. In an archived " +
+      "Project it is `read` for everyone.",
+  }),
+  archivedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description:
+      "When an Admin archived the Project, or null. An archived Project is read-only for everyone, Admins and Agents " +
+      "included: every write in it is refused with `project_archived` until an Admin unarchives it.",
+  }),
+  archivedBy: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Admin who archived the Project, or null.",
   }),
 });
 export type ProjectSummary = Static<typeof ProjectSummary>;
@@ -65,6 +75,11 @@ export const Project = Type.Object({
       "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation; off, every Merge Step " +
       "skips itself. Off by default; only an Admin changes it.",
   }),
+  conciseReports: Type.Boolean({
+    description:
+      "Whether the Briefs of Runs in this Project ask them to keep their Reports concise: the outcome, findings, what was " +
+      "verified and what the next Run or User needs, without the working. Off by default; nothing stored is cut.",
+  }),
   statuses: Type.Array(Status),
 });
 export type Project = Static<typeof Project>;
@@ -83,10 +98,24 @@ const defaultStatuses: { name: string; kind: StatusKind }[] = [
   { name: "Canceled", kind: "canceled" },
 ];
 
-/** A Project's summary columns as the Viewer sees them, its own Access included, binding the Viewer's value to `param`. */
+/**
+ * A Project's summary columns as the Viewer sees them, its own Access included, binding the Viewer's value to `param`.
+ * An archived Project's Access shows as Read, with `archivedAt` saying why.
+ */
 const summaryColumns = (viewer: Viewer, param: string) =>
   `projects.id, projects.workspace_id as "workspaceId", projects.name, projects.key, projects.visibility,
-   ${accessIn(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, param).sql} as access`;
+   (select case level when 'archived' then 'read' else level end
+    from (select ${accessIn(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, param).sql} as level) access_level) as access,
+   projects.archived_at as "archivedAt", projects.archived_by as "archivedBy"`;
+
+/**
+ * Refuses a write to the Project unless the caller has Write in it: `project_archived` while it is archived, whoever
+ * asks, otherwise `read_access`.
+ */
+export function requireProjectWrite(project: ProjectSummary): void {
+  if (project.archivedAt !== null) throw archivedRefusal();
+  if (project.access !== "write") throw readAccessRefusal();
+}
 
 /** The Workspace's Projects the Viewer may read. */
 export async function projectsOf(db: Db, viewer: Viewer, workspaceId: string): Promise<ProjectSummary[]> {
@@ -122,7 +151,8 @@ export async function findProject(
   const { rows } = await db.query<Omit<Project, "statuses">>(
     `select ${summaryColumns(viewer, "$2")}, projects.new_tickets_delegated as "newTicketsDelegated",
        projects.autonomous_delegation_default as "autonomousDelegationDefault",
-       projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge"
+       projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge",
+       projects.concise_reports as "conciseReports"
      from projects where projects.id = $1 and ${view.sql}
      ${lock ? "for update of projects" : ""}`,
     [projectId, view.value],
@@ -138,12 +168,15 @@ export async function createProject(
 ): Promise<Project> {
   const name = input.name.trim();
   const key = input.key.toUpperCase();
+  // The creator has Write in the new Project: a User of its Workspace, or an Agent whose Owner is an Admin, with a
+  // full token, in a Project that starts open with Agent Access Write (ADR 0010).
   return transaction(db, async (tx) => {
     const now = clock.now();
     const project = await tx
       .query<ProjectSummary>(
         `insert into projects (workspace_id, name, key, created_at) values ($1, $2, $3, $4)
-         returning id, workspace_id as "workspaceId", name, key, visibility, 'write' as access`,
+         returning id, workspace_id as "workspaceId", name, key, visibility, 'write' as access,
+           null as "archivedAt", null as "archivedBy"`,
         [workspaceId, name, key, now],
       )
       .then(
@@ -187,6 +220,7 @@ export async function createProject(
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
       agentsMayMerge: false,
+      conciseReports: false,
       statuses: await statusesOf(tx, project.id),
     };
   });
@@ -199,6 +233,7 @@ export interface ProjectEdit {
   pullRequestAutomation?: boolean;
   /** Only an Admin of the Project's Workspace may give this, whatever its value. */
   agentsMayMerge?: boolean;
+  conciseReports?: boolean;
 }
 
 /** Changes a Project's settings, as a User. */
@@ -213,7 +248,7 @@ export async function editProject(
     const viewer = userViewer(userId);
     const project = await findProject(tx, viewer, projectId, { lock: true });
     if (!project) throw projectNotFound();
-    if (project.access !== "write") throw readAccessRefusal();
+    requireProjectWrite(project);
     if (edit.agentsMayMerge !== undefined && !(await requireMember(db, userId, project.workspaceId)).isAdmin) {
       throw new ApiError(403, "not_admin", "Only an Admin of this Workspace can change whether agents may merge.");
     }
@@ -222,24 +257,36 @@ export async function editProject(
       autonomousDelegationDefault: edit.autonomousDelegationDefault ?? project.autonomousDelegationDefault,
       pullRequestAutomation: edit.pullRequestAutomation ?? project.pullRequestAutomation,
       agentsMayMerge: edit.agentsMayMerge ?? project.agentsMayMerge,
+      conciseReports: edit.conciseReports ?? project.conciseReports,
     };
     if (
       next.newTicketsDelegated !== project.newTicketsDelegated ||
       next.autonomousDelegationDefault !== project.autonomousDelegationDefault ||
       next.pullRequestAutomation !== project.pullRequestAutomation ||
-      next.agentsMayMerge !== project.agentsMayMerge
+      next.agentsMayMerge !== project.agentsMayMerge ||
+      next.conciseReports !== project.conciseReports
     ) {
       await tx.query(
         `update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3, pull_request_automation = $4,
-           agents_may_merge = $5
+           agents_may_merge = $5, concise_reports = $6
          where id = $1`,
-        [project.id, next.newTicketsDelegated, next.autonomousDelegationDefault, next.pullRequestAutomation, next.agentsMayMerge],
+        [
+          project.id,
+          next.newTicketsDelegated,
+          next.autonomousDelegationDefault,
+          next.pullRequestAutomation,
+          next.agentsMayMerge,
+          next.conciseReports,
+        ],
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     }
-    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now.
+    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now. Turning agents
+    // may merge off also takes the Tickets only Autonomous Delegation queued out of the Merge Queue, to be passed on.
     if (next.agentsMayMerge !== project.agentsMayMerge) {
-      recheckWaiting(context, tx, await waitingTickets(tx, "tickets.project_id = $1", [project.id]));
+      const dropped = next.agentsMayMerge ? [] : await dropAutonomousEntries(context, tx, project.id);
+      const waiting = await waitingTickets(tx, "tickets.project_id = $1", [project.id]);
+      recheckWaiting(context, tx, [...waiting, ...dropped.filter((d) => !waiting.some((w) => w.id === d.id))]);
     }
     return (await findProject(tx, viewer, project.id))!;
   });

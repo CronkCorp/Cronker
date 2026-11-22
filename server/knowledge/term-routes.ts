@@ -19,17 +19,13 @@ import {
   TermDetail,
   termNotFound,
   termsOf,
+  TermCreate,
+  TermEdit,
   withMentions,
   TermVersion,
   versionsOf,
 } from "./terms.js";
 
-const Name = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
-const Definition = Type.String({ maxLength: 20_000, description: "Markdown." });
-const Avoid = Type.Array(Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }), {
-  maxItems: 50,
-  description: "Words to avoid in the Term's place, in the order given.",
-});
 const tags = ["Terms"];
 const TermParams = Type.Object({ termId: Type.String() });
 const VersionNumber = Type.Integer({ minimum: 1 });
@@ -78,7 +74,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
               "Creates the Term at Version 1 by its Actor. Its name is unique ignoring case among the Project's own " +
               "Terms, or the Workspace's: a taken one is refused with `term_name_taken`.",
             params,
-            body: Type.Object({ name: Name, definition: Type.Optional(Definition), avoid: Type.Optional(Avoid) }),
+            body: TermCreate,
             response: { 201: TermDetail, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
           },
         },
@@ -142,12 +138,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             "number of the Version the save is based on. A save based on an outdated Version is refused with " +
             "`outdated_version`, carrying the current Version as `current`.",
           params: TermParams,
-          body: Type.Object({
-            baseVersion: Type.Integer({ minimum: 1, description: "The Version the save is based on." }),
-            name: Type.Optional(Name),
-            definition: Type.Optional(Definition),
-            avoid: Type.Optional(Avoid),
-          }),
+          body: TermEdit,
           response: { 200: TermDetail, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Term", TermVersion) },
         },
       },

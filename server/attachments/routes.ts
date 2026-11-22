@@ -8,6 +8,7 @@ import {
   addAttachment,
   Attachment,
   attachmentContent,
+  AttachmentQuery,
   attachmentsOn,
   attachmentTooLarge,
   mediaTypeOf,
@@ -90,7 +91,7 @@ export function attachmentRoutes(context: Context): FastifyPluginAsyncTypebox {
               "Comments; Agents to a Document, to their own Comments, and to a Ticket during their running Run on " +
               "it or while it is a Discovered Ticket they filed that waits for a User.",
             params,
-            querystring: Type.Object({ name: Type.String({ minLength: 1, maxLength: 255, pattern: "\\S" }) }),
+            querystring: AttachmentQuery,
             consumes: ["*/*"],
             response: {
               201: Attachment,

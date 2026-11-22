@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, fieldPicker, newTicket, openProjectSettings, pick, placeCommentButton, test } from "./fixtures.js";
+import { expect, fieldPicker, newTicket, openProjectSettings, pick, pickFilter, placeCommentButton, test } from "./fixtures.js";
 
 async function signedInWithProject(page: Page, cronk: StartedCronk) {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -97,16 +97,22 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await expect(page.getByRole("heading", { name: "CRONK-1 Drag me" })).toBeVisible();
 
   await page.getByRole("link", { name: "CRONK Cronker" }).click();
-  await page.getByLabel("Filter by Priority").selectOption("High");
+  await pickFilter(page, "Priority", "High");
   await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
-  await page.getByLabel("Filter by Priority").selectOption("Any Priority");
+  await pickFilter(page, "Priority", "Any Priority");
   await page.getByLabel("Filter by Label").fill("ui");
   await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
   await page.getByLabel("Filter by Label").fill("");
-  await page.getByLabel("Filter by Assignee").selectOption("Nobody");
+  await pickFilter(page, "Assignee", "Nobody");
   await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-1 Drag me/]);
-  await page.getByLabel("Filter by Assignee").selectOption("Anyone");
-  await page.getByLabel("Filter by Status").selectOption("Triage");
+  await pickFilter(page, "Assignee", "Anyone");
+  await expect(page.getByRole("button", { name: "Filter by Status Any Status" })).toBeVisible();
+  // From the keyboard: open, type to filter, Enter picks the first match.
+  await page.getByRole("button", { name: /^Filter by Status/ }).focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("tria");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "Filter by Status Triage" })).toBeVisible();
   await page.getByRole("navigation", { name: "Project views" }).getByRole("link", { name: "List" }).click();
   const list = page.getByRole("region", { name: "List" });
   await expect(list.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);

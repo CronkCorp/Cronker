@@ -217,7 +217,7 @@ describe("texts written before Term Mentions", () => {
     const lane = await projectTerm(s, "Lane");
     const plan = await document(s, "A Lane.");
     const ticket = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Then", description: "A Lane." });
-    // As a Cronk before migration 0056 left them: no Term Mentions recorded, with their indexing still to do.
+    // As a Cronk before migration 0066 left them: no Term Mentions recorded, with their indexing still to do.
     await cronk.stage("delete from mentions where target_kind = 'term'");
     await cronk.stage("insert into pending_backfills (name) values ('term-mentions')");
     expect(await plan.read()).toEqual([]);

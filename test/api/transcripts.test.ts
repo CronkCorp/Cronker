@@ -121,13 +121,15 @@ describe("uploading a transcript", () => {
       id: expect.any(String),
       workspaceId: workspace.id,
       slug: `claude-max-${transcript.id.slice(0, 8)}`,
-      sessionId: "session_01ABC",
+      // claude.ai's `session_…` names its `cse_…` session.
+      sessionId: "cse_01ABC",
       agent: { id: agent.id, name: "claude-max" },
       runId: null,
       tickets: [],
       entryCount: 5,
       gap: null,
       uploadedAt: "2026-01-01T09:00:00.000Z",
+      redactions: [],
     });
     expect(await ok("GET", `/api/transcripts/${transcript.id}`, ada)).toEqual(transcript);
     const none = { text: null, toolName: null, toolInput: null, toolResult: null, cut: false, cutParts: [] };
@@ -440,8 +442,9 @@ describe("a Run's Transcript", () => {
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
     const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
-    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/session_1", transcriptId: null, transcriptSlug: null });
+    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/cse_1", transcriptId: null, transcriptSlug: null });
 
+    // claude.ai started it as `cse_1`; the Transcript hook names the same session `session_1`.
     const transcript = await uploaded(
       "session_1",
       [userSays("Triage CRONK-1.", 1), toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-1" }, 2)],
@@ -453,7 +456,7 @@ describe("a Run's Transcript", () => {
     expect(transcript.tickets).toEqual([]);
     expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
     expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({
-      sessionUrl: "https://claude.ai/code/session_1",
+      sessionUrl: "https://claude.ai/code/cse_1",
       transcriptId: transcript.id,
       transcriptSlug: `claude-max-${transcript.id.slice(0, 8)}`,
     });
@@ -471,6 +474,49 @@ describe("a Run's Transcript", () => {
 
     expect(transcript.runId).toBeNull();
     expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: null }]);
+  });
+
+  test("an upload naming the session as claude.ai started it, `cse_…`, is that Run's Transcript too", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+
+    const first = await uploaded("cse_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+    const again = await upload("session_1", [userSays("Triage CRONK-1.", 1), assistantSays("Reading it.", 2)], asAgent);
+
+    expect(first).toMatchObject({ sessionId: "cse_1", runId: run.id });
+    // Both names are one session, so the second upload replaces the first.
+    expect(again.status).toBe(200);
+    expect(again.json).toMatchObject({ id: first.id, sessionId: "cse_1", runId: run.id, entryCount: 2 });
+  });
+
+  test("an upgrade gives each Run the Transcript an earlier Cronk kept as a session of no Run", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ migrateBefore: "0064_claude_session_ids.sql" });
+    // Reading a Ticket needs the conflict that last set its Merge Queue entry aside.
+    await cronk.applyAhead("0065_merge_queue_conflicts.sql");
+    const { workspace, ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    // claude.ai started the Run as `cse_1`, and the hook's uploads, as `session_1`, matched none of its Runs: each
+    // became a Transcript of no Run, linked to the Ticket its calls named.
+    const transcriptId = crypto.randomUUID();
+    await cronk.stage(
+      "insert into transcripts (id, workspace_id, agent_id, session_id, uploaded_at) values ($1, $2, $3, 'session_1', now())",
+      [transcriptId, workspace.id, agent.id],
+    );
+    await cronk.stage(
+      "insert into transcript_tickets (transcript_id, ticket_id, workspace_id, named_at, position) values ($1, $2, $3, now(), 1)",
+      [transcriptId, ticket.id, workspace.id],
+    );
+
+    await cronk.upgrade();
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({ transcriptId });
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({ sessionId: "cse_1", runId: run.id, tickets: [] });
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
   });
 });
 
@@ -658,7 +704,7 @@ describe("deleting a Transcript", () => {
     expect(deleted).toEqual(
       expect.objectContaining({
         field: "transcriptDeleted",
-        from: { runId: run.id, step: "Triage", sessionId: "session_1", agent: { id: agent.id, name: "claude-max" } },
+        from: { runId: run.id, step: "Triage", sessionId: "cse_1", agent: { id: agent.id, name: "claude-max" } },
         to: null,
         actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }),
         runId: null,
@@ -705,6 +751,142 @@ describe("deleting a Transcript of a session outside a Run", () => {
         { type: "transcript.changed", data: { transcriptId: transcript.id, runId: null } },
       ]),
     );
+  });
+});
+
+describe("redacting part of a Transcript", () => {
+  /** A secret the scrubbing doesn't know the shape of. */
+  const secret = "zorblaxquux42";
+
+  test("every appearance in messages, tool inputs and tool results becomes [redacted], and search no longer finds it", async () => {
+    const { workspace, ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded(
+      "laptop-session",
+      [
+        userSays(`The vault code is ${secret}, twice: ${secret}.`, 1),
+        toolCall("t1", "Bash", { command: `unlock --code ${secret}`, [secret]: ["x", secret] }, 2),
+        toolResult("t1", `unlocked with ${secret}`, 3),
+        assistantSays("Nothing secret here.", 4),
+      ],
+      asAgent,
+    );
+    const search = () => ok("GET", `/api/workspaces/${workspace.id}/search?q=${secret}`, ada);
+    expect(await search()).toEqual([expect.objectContaining({ kind: "transcript", id: transcript.id })]);
+
+    const after = await call("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+
+    expect(after.status).toBe(201);
+    expect(after.json.redactions).toEqual([
+      { id: expect.any(String), addedBy: { id: expect.any(String), name: "ada@example.com" }, addedAt: expect.any(String) },
+    ]);
+    expect(await entriesOf(transcript.id, ada)).toMatchObject([
+      { text: "The vault code is [redacted], twice: [redacted]." },
+      { toolInput: { command: "unlock --code [redacted]", "[redacted]": ["x", "[redacted]"] }, toolResult: "unlocked with [redacted]" },
+      { text: "Nothing secret here." },
+    ]);
+    expect(await search()).toEqual([]);
+  });
+
+  test("the string is never returned, only who added each Redaction and when", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
+
+    const redacted = await ok("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+    const read = await ok("GET", `/api/transcripts/${transcript.id}`, ada);
+
+    expect(JSON.stringify(redacted)).not.toContain(secret);
+    expect(JSON.stringify(read)).not.toContain(secret);
+    expect(read.redactions).toHaveLength(1);
+  });
+
+  test("a string shorter than 4 characters is refused, and the Transcript is kept as it was", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays("abc def", 1)], asAgent);
+
+    const refused = await call("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: "abc" });
+
+    expect(refused).toMatchObject({
+      status: 400,
+      json: { error: { code: "redaction_too_short", rule: expect.any(String), advice: expect.any(String) } },
+    });
+    expect(await entriesOf(transcript.id, ada)).toMatchObject([{ text: "abc def" }]);
+    expect((await ok("GET", `/api/transcripts/${transcript.id}`, ada)).redactions).toEqual([]);
+  });
+
+  test("an Agent is refused, its own Transcript included, with a rule and advice", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
+
+    const refused = await call("POST", `/api/transcripts/${transcript.id}/redactions`, asAgent, { text: secret });
+
+    expect(refused).toMatchObject({
+      status: 403,
+      json: { error: { code: "agent_not_allowed", rule: expect.any(String), advice: expect.any(String) } },
+    });
+    expect(await entriesOf(transcript.id, ada)).toMatchObject([{ text: `code ${secret}` }]);
+  });
+
+  test("a User who can't read the Transcript can't redact it", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, ada);
+
+    expect((await call("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret })).status).toBe(404);
+  });
+
+  test("a Redaction can't be removed", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
+    const { redactions } = await ok("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+
+    const removing = await call("DELETE", `/api/transcripts/${transcript.id}/redactions/${redactions[0].id}`, ada);
+
+    expect(removing.status).toBe(404);
+    expect((await ok("GET", `/api/transcripts/${transcript.id}`, ada)).redactions).toHaveLength(1);
+  });
+
+  test("redacting the same string again adds no second Redaction", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
+    await ok("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+
+    const again = await ok("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+
+    expect(again.redactions).toHaveLength(1);
+  });
+
+  test("uploading the session again keeps it redacted, applied after the scrubbing and before the 20 KB cut", async () => {
+    const { ada, asAgent } = await adaWithAgent();
+    const first = [userSays(`code ${secret}`, 1)];
+    const transcript = await uploaded("laptop-session", first, asAgent);
+    await ok("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+    // The secret straddles the 20 KB cut of a tool result: redacted whole before the cut.
+    const long = "x".repeat(20 * 1024 - 5) + secret;
+
+    await uploaded(
+      "laptop-session",
+      [...first, assistantSays(`again ${secret} and ghp_${github}`, 2), toolCall("t1", "Bash", { command: "cat" }, 3), toolResult("t1", long, 4)],
+      asAgent,
+    );
+
+    const entries = await entriesOf(transcript.id, ada);
+    expect(entries).toMatchObject([
+      { text: "code [redacted]" },
+      { text: "again [redacted] and [scrubbed]" },
+      { toolName: "Bash", cut: true },
+    ]);
+    expect(entries[2].toolResult).toMatch(/^x+\[red/);
+    expect(JSON.stringify(entries)).not.toContain("zorb");
+  });
+
+  test("tells the Transcript's viewers, so an open Transcript page shows it redacted", async () => {
+    const { workspace, ada, asAgent } = await adaWithAgent();
+    const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+
+    await ok("POST", `/api/transcripts/${transcript.id}/redactions`, ada, { text: secret });
+
+    expect(await stream.next()).toEqual({ type: "transcript.changed", data: { transcriptId: transcript.id, runId: null } });
   });
 });
 

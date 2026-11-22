@@ -8,6 +8,7 @@ import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import { title } from "../work/fields.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
 import { outdatedVersion } from "./versions.js";
@@ -20,7 +21,13 @@ import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
 
 export const statuses = ["proposed", "accepted", "rejected", "deprecated", "superseded"] as const;
 export const DecisionStatus = Type.Union(
-  statuses.map((status) => Type.Literal(status)),
+  [
+    Type.Literal("proposed"),
+    Type.Literal("accepted"),
+    Type.Literal("rejected"),
+    Type.Literal("deprecated"),
+    Type.Literal("superseded"),
+  ],
   { description: "Agents propose Decisions; only a User changes their status." },
 );
 export type DecisionStatus = (typeof statuses)[number];
@@ -55,7 +62,9 @@ export const Decision = Type.Object({
   status: DecisionStatus,
   supersededById: SupersededById,
   version: Type.Object(DecisionVersion.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys and Term names its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, {
+    description: "The Ticket keys and Term names its body mentions and the Artifacts it embeds that the caller may read.",
+  }),
 });
 export type Decision = Static<typeof Decision>;
 
@@ -231,7 +240,7 @@ export async function createDecision(
   { db, clock, live }: Context,
   actor: Caller,
   scope: Place,
-  input: { title: string; body: string; status?: DecisionStatus; supersededById?: string | null },
+  input: DecisionCreate & { body: string },
 ): Promise<Decision> {
   const asked = statusAsked(null, input);
   requireStatusRight(actor, { status: "proposed", supersededById: null }, asked);
@@ -312,15 +321,29 @@ async function lockDecision(tx: Tx, viewer: Viewer, decisionId: string): Promise
   return rows[0];
 }
 
-export interface DecisionEdit {
-  /** The number of the Version the save is based on. */
-  baseVersion?: number;
-  title?: string;
-  body?: string;
-  status?: DecisionStatus;
-  /** The Decision replacing it, while superseded. */
-  supersededById?: string | null;
-}
+const Body = Type.String({ maxLength: 500_000, description: "Markdown: the choice and its reasoning." });
+const SupersedingDecision = Type.Union([Type.String(), Type.Null()], {
+  description: "With the status superseded: the Decision replacing it, of the same Project, or of the Workspace for one of the Workspace's.",
+});
+
+/** The record-a-Decision route's body. */
+export const DecisionCreate = Type.Object({
+  title: title(),
+  body: Type.Optional(Body),
+  status: Type.Optional(DecisionStatus),
+  supersededById: Type.Optional(SupersedingDecision),
+});
+export type DecisionCreate = Static<typeof DecisionCreate>;
+
+/** The save-a-Decision route's body. */
+export const DecisionEdit = Type.Object({
+  baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
+  title: Type.Optional(title()),
+  body: Type.Optional(Body),
+  status: Type.Optional(DecisionStatus),
+  supersededById: Type.Optional(SupersedingDecision),
+});
+export type DecisionEdit = Static<typeof DecisionEdit>;
 
 /**
  * Saves a Decision as its next Version by the Actor; a save that changes nothing makes no Version. A save must be
