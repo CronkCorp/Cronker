@@ -90,9 +90,48 @@ async function queueSetting() {
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("In Review") });
     return { ticket, ...(await open(ticket.key, Number(ticket.key.split("-")[1]) + 100, options)) };
   };
+  /**
+   * Like `inReview`, but the Pull Request opens while an Implement Run of claude-max, on Ada's fake Runner, works on the
+   * Ticket, so Implement produced it; Ada then moves the Ticket to In Review herself.
+   */
+  let agent: { id: string } | undefined;
+  const produced = async (options: Parameters<typeof inReview>[0] = {}) => {
+    if (!agent) {
+      const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+      const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+      agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
+    }
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent!.id, autonomousDelegation: false, statusId: status("Implement") });
+    const repository = options.repository ?? cronker;
+    const number = Number(ticket.key.split("-")[1]) + 100;
+    const pullRequest = pullRequestOf(number, ticket.key, repository, options.base);
+    await deliver(repository, "pull_request", { action: "opened", pull_request: pullRequest });
+    await deliver(repository, "check_run", {
+      action: "completed",
+      check_run: { id: number, name: "test", head_sha: pullRequest.head.sha, status: "completed", conclusion: "success", html_url: null },
+    });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("In Review") });
+    const onGitHub = cronk.github.pullRequest(repository, number, { headSha: pullRequest.head.sha, mergeable: true, base: options.base ?? "main" });
+    return { ticket, pullRequest, onGitHub, repository, number };
+  };
+  const failCheck = (repository: typeof cronker, number: number, sha: string) =>
+    deliver(repository, "check_run", {
+      action: "completed",
+      check_run: { id: 900 + number, name: "lint", head_sha: sha, status: "completed", conclusion: "failure", html_url: null },
+    });
   const merge = (ticketId: string, as: As = ada) => call("POST", `/api/tickets/${ticketId}/merge`, as);
   const read = (ticketId: string) => ok("GET", `/api/tickets/${ticketId}`, ada);
-  return { workspace, user, ada, project, status, app, installation, cronker, website, deliver, open, inReview, merge, read };
+  const cronkComments = async (ticketId: string) =>
+    ((await ok("GET", `/api/tickets/${ticketId}/comments`, ada)) as { actor: { kind: string }; body: string }[])
+      .filter((c) => c.actor.kind === "cronk")
+      .map((c) => c.body);
+  const runs = async (ticketId: string) =>
+    ((await ok("GET", `/api/tickets/${ticketId}/runs`, ada)) as { step: { name: string } }[]).map((r) => r.step.name);
+  return {
+    workspace, user, ada, project, status, app, installation, cronker, website, deliver, open, inReview, produced, failCheck,
+    merge, read, cronkComments, runs,
+  };
 }
 
 describe("Merge queues a Ticket", () => {
@@ -499,14 +538,14 @@ describe("a Ticket with several Pull Requests", () => {
   });
 
   test("one Pull Request sending it back takes all of its entries out, the merges before it kept", async () => {
-    const { ada, several, merge, read, status } = await severalSetting();
+    const { ada, several, merge, read, status, failCheck, cronker } = await severalSetting();
     await merge(several.ticket.id);
     await cronk.checkQueue();
 
-    // As a failing Pull Request sends the Ticket back out of Merge (Merge Queue 6).
-    await ok("PATCH", `/api/tickets/${several.ticket.id}`, ada, { statusId: status("Implement") });
+    // #102 still waits behind CRONK-1 when its check fails; no Step produced it, so it goes back to In Review.
+    await failCheck(cronker, several.number, several.pullRequest.head.sha);
 
-    expect(await read(several.ticket.id)).toMatchObject({ statusId: status("Implement"), queue: null });
+    expect(await read(several.ticket.id)).toMatchObject({ statusId: status("In Review"), queue: null });
     const timeline = await ok("GET", `/api/tickets/${several.ticket.id}/timeline`, ada);
     expect(mergedNumbers(timeline).sort()).toEqual([201, 202]);
     expect(
@@ -537,5 +576,128 @@ describe("a Ticket with several Pull Requests", () => {
     expect(fields(timeline)).not.toContain("queueLeft");
     await cronk.checkQueue();
     expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
+  });
+});
+
+describe("failures leaving the queue", () => {
+  test("a failing check on the head sends it back to the Step that produced it as a round, with Cronk's Comment, and the queue moves on", async () => {
+    const { inReview, produced, failCheck, merge, read, status, cronker, cronkComments, runs } = await queueSetting();
+    const head = await produced();
+    const next = await inReview();
+    await merge(head.ticket.id);
+    await merge(next.ticket.id);
+    expect(await runs(head.ticket.id)).toEqual(["Implement"]);
+
+    await failCheck(cronker, head.number, head.pullRequest.head.sha);
+
+    expect(await read(head.ticket.id)).toMatchObject({ statusId: status("Implement"), queue: null });
+    expect(await cronkComments(head.ticket.id)).toEqual([
+      "The check **lint** failed on [cronkcorp/cronker#101](https://github.com/cronkcorp/cronker/pull/101)'s latest commit `c101`. Sent CRONK-1 back to Implement.",
+    ]);
+    // Sent back as a round, starting the next Implement Run.
+    expect(await runs(head.ticket.id)).toEqual(["Implement", "Implement"]);
+    expect(await read(next.ticket.id)).toMatchObject({ queue: { position: 1 } });
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
+  });
+
+  test("changes requested on a waiting Ticket take it out of the queue, the head still merging", async () => {
+    const { inReview, produced, merge, read, status, deliver, cronker, cronkComments } = await queueSetting();
+    const head = await inReview();
+    const waiting = await produced();
+    await merge(head.ticket.id);
+    await merge(waiting.ticket.id);
+
+    await deliver(cronker, "pull_request_review", {
+      action: "submitted",
+      review: { id: 71, state: "changes_requested", html_url: null, user: { login: "bea" } },
+      pull_request: { id: waiting.pullRequest.id },
+    });
+
+    expect(await read(waiting.ticket.id)).toMatchObject({ statusId: status("Implement"), queue: null });
+    expect(await cronkComments(waiting.ticket.id)).toEqual([
+      "@bea requested changes on [cronkcorp/cronker#102](https://github.com/cronkcorp/cronker/pull/102). Sent CRONK-2 back to Implement.",
+    ]);
+    await cronk.checkQueue();
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
+  });
+
+  test("a queued Ticket no Step produced goes back to In Review, not as a round, the next one merging", async () => {
+    const { ada, inReview, merge, read, status, cronkComments, runs } = await queueSetting();
+    // A User opened its Pull Request, so its failing check sent nothing back while it waited in In Review.
+    const failing = await inReview({ check: "failure" });
+    const next = await inReview();
+    expect(await read(failing.ticket.id)).toMatchObject({ statusId: status("In Review") });
+    await merge(failing.ticket.id);
+    await merge(next.ticket.id);
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges).toEqual([]);
+    expect(await read(failing.ticket.id)).toMatchObject({ statusId: status("In Review"), queue: null });
+    expect(await cronkComments(failing.ticket.id)).toEqual([
+      "The check **test** failed on [cronkcorp/cronker#101](https://github.com/cronkcorp/cronker/pull/101)'s latest commit `c101`. Sent CRONK-1 back to In Review.",
+    ]);
+    expect(await runs(failing.ticket.id)).toEqual([]);
+    const timeline = await ok("GET", `/api/tickets/${failing.ticket.id}/timeline`, ada);
+    expect(timeline.slice(-3).map(({ actor, field }: Record<string, unknown>) => [(actor as { kind: string }).kind, field])).toEqual([
+      ["cronk", "sentBack"],
+      ["cronk", "queueLeft"],
+      ["cronk", "status"],
+    ]);
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
+  });
+
+  test("a Ticket queued again on the commit that sent it back is sent back again by the pass", async () => {
+    const { ada, produced, failCheck, merge, read, status, cronker, cronkComments } = await queueSetting();
+    const { ticket, number, pullRequest } = await produced();
+    await failCheck(cronker, number, pullRequest.head.sha);
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Implement") });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("In Review") });
+    await merge(ticket.id);
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges).toEqual([]);
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Implement"), queue: null });
+    expect(await cronkComments(ticket.id)).toHaveLength(2);
+  });
+
+  test("a merge GitHub refuses hands the Ticket to its Assignee with GitHub's reason, and the queue moves on", async () => {
+    const { workspace, user, ada, inReview, merge, read, status, cronker, runs } = await queueSetting();
+    const refused = await inReview();
+    await ok("PATCH", `/api/tickets/${refused.ticket.id}`, ada, { assigneeId: user.id });
+    const next = await inReview();
+    await merge(refused.ticket.id);
+    await merge(next.ticket.id);
+    cronker.mergeMethods = { merge: false, squash: false, rebase: false };
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges).toEqual([]);
+    expect(await read(refused.ticket.id)).toMatchObject({ statusId: status("In Review"), queue: null });
+    expect(await runs(refused.ticket.id)).toEqual([]);
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.filter((i: { kind: string }) => i.kind === "needsYou")).toEqual([
+      expect.objectContaining({
+        ticket: expect.objectContaining({ key: "CRONK-1" }),
+        outcome: "needs you",
+        step: { statusId: status("Merge"), name: "Merge" },
+        question: expect.stringContaining(
+          "GitHub refused to merge cronkcorp/cronker#101: “Merge commits are not allowed on this repository.”, so CRONK-1 left the Merge Queue.",
+        ),
+      }),
+    ]);
+    expect(await read(next.ticket.id)).toMatchObject({ queue: { position: 1 } });
+
+    cronker.mergeMethods = { merge: true, squash: true, rebase: true };
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
   });
 });

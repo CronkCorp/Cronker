@@ -78,6 +78,8 @@ export interface CronkMove {
   runId?: string;
   /** Why a Run still running on the Ticket stops, as a User's move stops it; it is left alone without one. */
   stopReason?: string;
+  /** Cronk's own Question, for a move by a *needs you* Outcome; past the round limit Cronk asks its own instead. */
+  question?: string;
   /** How a move to a Done Status completes the Ticket. */
   verification: "unverified" | "verified";
   /** The merged Pull Request completing the Ticket, by GitHub's id, when a merge moves it. */
@@ -103,7 +105,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   const now = context.clock.now();
   const statuses = await statusesOf(tx, ticket.projectId);
   const { target } = move;
-  const decision: CronkMoveDecision = { outcome: target.kind === "outcome" ? target.outcome : null, question: null };
+  const decision: CronkMoveDecision = { outcome: target.kind === "outcome" ? target.outcome : null, question: move.question ?? null };
   if (target.kind === "outcome" || target.kind === "sentBack") {
     const step = statuses.find((s) => s.id === target.step.statusId)?.step;
     // An Outcome counting as a round, or work sent back, adds one for this Ticket and Step, until the count has
