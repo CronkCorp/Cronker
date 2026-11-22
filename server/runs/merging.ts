@@ -4,6 +4,7 @@ import { transaction, type Tx } from "../db.js";
 import { mergeOnGitHub, pullRequestOnGitHub, repositoryById, type MergeMethod, type RepositoryOnGitHub } from "../github/client.js";
 import { installationCovering, tokenFor } from "../github/installations.js";
 import { ApiError } from "../http/errors.js";
+import { archivedRefusal } from "../identity/viewers.js";
 import type { Caller } from "../identity/callers.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
 import { failingCheckOn } from "../pipeline/sending-back.js";
@@ -167,10 +168,13 @@ async function askMerge(context: Context, caller: Caller, runId: string, pullReq
         advice: leaveToUserAdvice(step),
       });
     }
-    const { rows: projects } = await tx.query<{ agentsMayMerge: boolean; automation: boolean }>(
-      `select agents_may_merge as "agentsMayMerge", pull_request_automation as automation from projects where id = $1`,
+    const { rows: projects } = await tx.query<{ agentsMayMerge: boolean; automation: boolean; archived: boolean }>(
+      `select agents_may_merge as "agentsMayMerge", pull_request_automation as automation, archived_at is not null as archived
+       from projects where id = $1`,
       [ticket.projectId],
     );
+    // A merge in an archived Project would complete nothing there, so Cronk doesn't ask GitHub for one.
+    if (projects[0]!.archived) throw archivedRefusal();
     if (!projects[0]!.agentsMayMerge) {
       throw new ApiError(403, "agents_may_not_merge", `${ticket.key}'s Project has agents may merge off, so agents don't merge there.`, {
         rule: rules.agentsMayMerge,

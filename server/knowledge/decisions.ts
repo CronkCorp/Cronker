@@ -55,7 +55,7 @@ export const Decision = Type.Object({
   status: DecisionStatus,
   supersededById: SupersededById,
   version: Type.Object(DecisionVersion.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions and the Artifacts it embeds that the caller may read." }),
 });
 export type Decision = Static<typeof Decision>;
 

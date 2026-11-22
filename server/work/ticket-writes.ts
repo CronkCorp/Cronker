@@ -34,6 +34,13 @@ export interface TicketPatch {
   completedFromStatusId?: string | null;
   /** Whether a Run completed the Ticket without a Step. */
   completedWithoutStep?: boolean;
+  /** The merged Pull Request that completed the Ticket, by GitHub's id. */
+  completedByPullRequestId?: number | null;
+  /**
+   * The User the Ticket remembers as its former Assignee, for the Admins' Inbox. Giving an Assignee forgets it
+   * without this; a caller clearing the Assignee for good, as releasing a member does, gives it.
+   */
+  formerAssigneeId?: string | null;
 }
 
 /**
@@ -62,6 +69,8 @@ export type LockedTicket = Pick<
   waitsForRun?: boolean;
   completedFromStatusId?: string | null;
   completedWithoutStep?: boolean;
+  completedByPullRequestId?: number | null;
+  formerAssigneeId?: string | null;
 };
 
 type Shown = (tx: Tx, workspaceId: string, value: unknown) => Promise<unknown>;
@@ -117,6 +126,8 @@ const columns: { [K in keyof Required<TicketPatch>]: Column } = {
   waitsForRun: { column: "waits_for_run" },
   completedFromStatusId: { column: "completed_from_status_id" },
   completedWithoutStep: { column: "completed_without_step" },
+  completedByPullRequestId: { column: "completed_by_pull_request_id" },
+  formerAssigneeId: { column: "former_assignee_id" },
 };
 
 /** Bookkeeping a LockedTicket may lack, read when a patch gives it. */
@@ -124,6 +135,9 @@ const bookkeeping = {
   waitsForRun: `waits_for_run as "waitsForRun"`,
   completedFromStatusId: `completed_from_status_id as "completedFromStatusId"`,
   completedWithoutStep: `completed_without_step as "completedWithoutStep"`,
+  // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
+  completedByPullRequestId: `completed_by_pull_request_id::float8 as "completedByPullRequestId"`,
+  formerAssigneeId: `former_assignee_id as "formerAssigneeId"`,
 } as const;
 
 /** What a write wrote and recorded. */
@@ -165,7 +179,9 @@ export async function writeTicket(
   for (const key of differs) set(columns[key].column, patch[key], columns[key].cast);
   const statusChanged = differs.includes("statusId");
   if (statusChanged) set("status_entered_at", at);
-  if (differs.includes("assigneeId") && patch.assigneeId !== null) set("former_assignee_id", null);
+  if (differs.includes("assigneeId") && patch.assigneeId !== null && !differs.includes("formerAssigneeId")) {
+    set("former_assignee_id", null);
+  }
   if (differs.includes("verification") && patch.verification === null && !differs.includes("completedFromStatusId")) {
     set("completed_from_status_id", null);
   }

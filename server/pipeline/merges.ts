@@ -1,7 +1,7 @@
 import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
-import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
+import { inUnarchivedProject, listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
  * Pipeline: a merged Pull Request completes the Tickets it links. Each linked Ticket not already in a Done or
@@ -56,7 +56,7 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
      left join runs on runs.id = pull_request_links.producing_run_id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation
        and statuses.kind not in ('done', 'canceled')
-       and ${listsPullRequestsRepository}
+       and ${listsPullRequestsRepository} and ${inUnarchivedProject}
      order by tickets.id
      for update of tickets`,
     [pullRequest.id, mergedBy?.id ?? null],

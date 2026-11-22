@@ -11,6 +11,7 @@ import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, Mani
 import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
 import { addRepository, removeRepository, repositoriesOf, Repository, RepositoryAdd } from "./repositories.js";
+import { Import, latestImport, startImport } from "./importing.js";
 import { PullRequest, pullRequestsOf } from "./pull-requests.js";
 import { linkPullRequest, PullRequestLink, unlinkPullRequest } from "./manual-links.js";
 import { receiveDelivery } from "./webhooks.js";
@@ -223,6 +224,40 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         await removeRepository(context, user.id, request.params.projectId, request.params.repositoryId);
         return reply.code(204).send(null);
       },
+    );
+
+    app.post(
+      "/api/projects/:projectId/repositories/:repositoryId/import",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "Import a Repository's GitHub issues into a Project (Admins only)",
+          description:
+            "Starts importing the issues of a Repository the Project lists, as a background job: each issue becomes an undelegated Ticket created at GitHub's time by the Admin, with its title, body, Labels by name and a link to the issue. Open issues go to the Project's first Backlog Status, issues closed as not planned to its first Canceled Status and other closed ones to its first Done Status as Verified. Pull Requests are left out, and issues imported before are skipped, so an import can run again. `GET` on the same address follows its progress. Refused with `not_admin` for anyone but an Admin of the Project's Workspace, `import_running` while another import runs in the Project, `repository_not_installed` when no installation of the GitHub App covers the Repository, `issues_permission_missing` while that installation can't read issues (see the GitHub page), `github_not_set_up` while there is no App, and `github_unavailable` if GitHub can't be asked.",
+          params: Type.Object({ projectId: Type.String(), repositoryId: Type.Integer({ minimum: 1 }) }),
+          response: { 202: Import, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 502: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        return reply.code(202).send(await startImport(context, user.id, request.params.projectId, request.params.repositoryId));
+      },
+    );
+
+    app.get(
+      "/api/projects/:projectId/repositories/:repositoryId/import",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "The latest import of a Repository's GitHub issues into a Project",
+          description: "Its progress while it runs, and once it ends how many issues it imported and skipped, or why it failed; null if none was started.",
+          params: Type.Object({ projectId: Type.String(), repositoryId: Type.Integer({ minimum: 1 }) }),
+          response: { 200: Type.Object({ import: Type.Union([Import, Type.Null()]) }), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => ({
+        import: await latestImport(context, await requireCaller(context, request), request.params.projectId, request.params.repositoryId),
+      }),
     );
 
     app.get(

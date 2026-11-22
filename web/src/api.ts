@@ -8,7 +8,7 @@ import type { RunState } from "../../server/runs/states.js";
 import type { ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
 import type { Comment, CommentCreate } from "../../server/work/comments.js";
-import type { Mention } from "../../server/work/mentions.js";
+import type { ArtifactMention, Mention, TicketMention } from "../../server/work/mentions.js";
 import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type {
   MentioningText,
@@ -40,7 +40,7 @@ import type { StepPut } from "../../server/work/steps.js";
 import type { MemberAdd, MemberAddByGitHub, MemberEdit } from "../../server/workspaces/members.js";
 import type { WorkspaceCreate, WorkspaceRename, WorkspaceSettingsEdit } from "../../server/workspaces/workspaces.js";
 
-export type { Change, Comment, Cost, Mention, MentioningText, Priority, Relation, RelationKind, Report, RunState };
+export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 export type { ProjectCreate, ProjectEdit, StatusAdd, StatusEdit, StepPut, SetupInput, WorkspaceCreate, WorkspaceSettingsEdit };
@@ -89,6 +89,19 @@ export interface Repository {
   fullName: string;
   /** Whether a Project of another Workspace lists it under the same key, so its Pull Requests link there too. */
   keyClash: boolean;
+}
+
+/** An import of a Repository's GitHub issues into a Project, running as a background job. */
+export interface GitHubImport {
+  id: string;
+  repository: { id: number; fullName: string };
+  state: "running" | "done" | "failed";
+  imported: number;
+  skipped: number;
+  error: string | null;
+  startedBy: string;
+  startedAt: string;
+  finishedAt: string | null;
 }
 
 export interface WorkspaceSummary {
@@ -906,6 +919,10 @@ export const api = {
     call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id } satisfies RepositoryAdd),
   removeRepository: (projectId: string, id: number) =>
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
+  startImport: (projectId: string, repositoryId: number) =>
+    call<GitHubImport>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
+  latestImport: (projectId: string, repositoryId: number) =>
+    call<{ import: GitHubImport | null }>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
   addStatus: (projectId: string, input: StatusAdd) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: StatusEdit) =>
@@ -1019,7 +1036,8 @@ export const api = {
   createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
-  artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
+  artifact: (id: string, version?: number | null) =>
+    call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}${version ? `?version=${version}` : ""}`),
   artifactVersions: (id: string) => call<ArtifactVersion[]>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions`),
   compareArtifactVersions: (id: string, from: number, to: number) =>
     call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),

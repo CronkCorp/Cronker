@@ -79,6 +79,7 @@ export type Tx = pg.PoolClient;
 type OnCommit = () => void | Promise<void>;
 const committed = new WeakMap<Tx, OnCommit[]>();
 const committing = new WeakMap<Tx, OnCommit[]>();
+const seen = new WeakMap<Tx, Set<string>>();
 
 export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {
   const client = await db.connect();
@@ -86,6 +87,7 @@ export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promis
   const beforeCommits: OnCommit[] = [];
   committed.set(client, onCommit);
   committing.set(client, beforeCommits);
+  seen.set(client, new Set());
   let result: T;
   try {
     await client.query("begin");
@@ -98,6 +100,7 @@ export async function transaction<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promis
   } finally {
     committed.delete(client);
     committing.delete(client);
+    seen.delete(client);
     client.release();
   }
   // Every callback runs, even after one fails, since the change has committed regardless.
@@ -121,6 +124,15 @@ export function afterCommit(tx: Tx, callback: OnCommit): void {
   const onCommit = committed.get(tx);
   if (!onCommit) throw new Error("afterCommit called outside a transaction");
   onCommit.push(callback);
+}
+
+/** Whether this is the first time the transaction is asked about `key`: true once, then false until it ends. */
+export function firstInTransaction(tx: Tx, key: string): boolean {
+  const keys = seen.get(tx);
+  if (!keys) throw new Error("firstInTransaction called outside a transaction");
+  if (keys.has(key)) return false;
+  keys.add(key);
+  return true;
 }
 
 /**

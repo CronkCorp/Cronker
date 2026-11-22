@@ -42,7 +42,7 @@ export const Term = Type.Object({
     },
     { description: "The current Version, which a save names as its base." },
   ),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its definition mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its definition mentions and the Artifacts it embeds that the caller may read." }),
 });
 export type Term = Static<typeof Term>;
 

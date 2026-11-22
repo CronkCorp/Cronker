@@ -324,7 +324,7 @@ export function ProjectScreen({
               label: "Delegation defaults",
               children: <DelegationSettings project={project} onChange={setProject} />,
             },
-            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} /> },
+            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} isAdmin={workspace.isAdmin} /> },
             {
               id: "pull-request-automation",
               label: "Pull Request automation",
