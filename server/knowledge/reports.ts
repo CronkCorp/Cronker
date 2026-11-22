@@ -24,7 +24,9 @@ export const Report = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown; its current Version's." }),
   createdAt: Type.String({ format: "date-time" }),
-  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, {
+    description: "The Ticket and Decision keys and Term names its body mentions and the Artifacts it embeds that the caller may read.",
+  }),
 });
 export type Report = Static<typeof Report>;
 

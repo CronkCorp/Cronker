@@ -36,7 +36,7 @@ export async function insertComment(
     ],
   );
   const commentId = rows[0]!.id;
-  await indexMentions(tx, "comment", { id: commentId, workspaceId: ticket.workspaceId }, body);
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: ticket.workspaceId, projectId: ticket.projectId }, body);
   live.publish(tx, ticket.workspaceId, { type: "comment.added", projectId: ticket.projectId, ticketId: ticket.id, commentId });
   return commentId;
 }
@@ -67,7 +67,7 @@ export async function insertArtifactComment(
     ],
   );
   const commentId = rows[0]!.id;
-  await indexMentions(tx, "comment", { id: commentId, workspaceId: artifact.workspaceId }, body);
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: artifact.workspaceId, projectId: artifact.projectId }, body);
   await publishArtifactComments(context, tx, artifact, (ticket) => ({ type: "comment.added", ...ticket, commentId }));
   return commentId;
 }
@@ -95,7 +95,7 @@ export async function insertDocumentComment(
     ],
   );
   const commentId = rows[0]!.id;
-  await indexMentions(tx, "comment", { id: commentId, workspaceId: document.workspaceId }, body);
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: document.workspaceId, projectId: document.projectId }, body);
   context.live.publish(tx, document.workspaceId, {
     type: "comment.added",
     projectId: document.projectId,

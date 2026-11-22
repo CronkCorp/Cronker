@@ -57,7 +57,9 @@ export const Decision = Type.Object({
   status: DecisionStatus,
   supersededById: SupersededById,
   version: Type.Object(DecisionVersion.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, {
+    description: "The Ticket and Decision keys and Term names its body mentions and the Artifacts it embeds that the caller may read.",
+  }),
   mentionedIn: Type.Array(MentioningText, {
     description:
       "Mentioned in: each other text whose Markdown mentions its key, outside code and links, that the caller may " +

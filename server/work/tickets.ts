@@ -176,11 +176,12 @@ export type TicketSummary = Static<typeof TicketSummary>;
 export const TicketList = Type.Array(TicketSummary);
 export type TicketList = Static<typeof TicketList>;
 
-/** A Ticket with the Ticket and Decision keys its description mentions, the texts mentioning it and what its Runs cost. */
+/** A Ticket with the Ticket and Decision keys and Term names its description mentions, the texts mentioning it and what its Runs cost. */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
   mentions: Type.Array(Mention, {
-    description: "The Ticket and Decision keys its description mentions and the Artifacts it embeds that the caller may read.",
+    description:
+      "The Ticket and Decision keys and Term names its description mentions and the Artifacts it embeds that the caller may read.",
   }),
   mentionedIn: Type.Array(MentioningText, {
     description:

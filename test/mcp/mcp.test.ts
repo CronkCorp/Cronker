@@ -1061,6 +1061,13 @@ describe("MCP with an Agent token", () => {
     expect(compared.json.avoid).toEqual([{ change: "added", text: "session" }]);
     const viaApi = await (await cronk.request("GET", `/api/terms/${projectRun.json.id}`, { cookie })).json();
     expect(viaApi.avoid).toEqual(["session"]);
+    // A Term lists the texts mentioning its name.
+    const document = await call(client, "create_document", { title: "Board", body: "Each Ticket has a key." });
+    expect(document.json.mentions).toEqual([
+      { kind: "term", text: "Ticket", termId: ticket.json.id, name: "Ticket", projectId: null },
+    ]);
+    const mentioned = await call(client, "read_term", { term: "Ticket" });
+    expect(mentioned.json.mentionedIn).toEqual([expect.objectContaining({ kind: "document", id: document.json.id })]);
   });
 
   test("an Agent attaches files as base64 to a Document and its own Comment, and reads a Ticket's Attachments", async () => {

@@ -62,6 +62,11 @@ export interface StartedCronk {
    * seconds; a conflicting one sends its Ticket back. Move the clock first to ask again those GitHub was still working out.
    */
   checkMergeability(): Promise<void>;
+  /**
+   * Waits for the work Cronk does after a change commits, without its response waiting: indexing texts again after a
+   * Term is created, renamed or removed.
+   */
+  jobsSettled(): Promise<void>;
   /** Advances the Merge Queue, as the server does every five seconds: merges each queue's head that is clean and green. */
   checkQueue(): Promise<void>;
   /** Reads the next page of issues of each running GitHub issues import, as the server does every five seconds. */
@@ -221,6 +226,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     resumePausedRunners: () => cronk.resumePausedRunners(),
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     checkMergeability: () => cronk.checkMergeability(),
+    jobsSettled: () => cronk.jobsSettled(),
     checkQueue: () => cronk.checkQueue(),
     runImports: () => cronk.runImports(),
     deliverWebhooks: () => cronk.deliverWebhooks(),

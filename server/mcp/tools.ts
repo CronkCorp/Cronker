@@ -146,7 +146,7 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields, the Ticket and Decision keys its description mentions and, as `mentionedIn`, " +
+        "A Ticket of your Workspace with its fields, the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
         "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
@@ -645,8 +645,9 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Term",
       description:
-        "A Term at its current Version, whose number a save names as its `baseVersion`; or, given a Version's " +
-        "number, what that earlier Version said.",
+        "A Term at its current Version, whose number a save names as its `baseVersion`, with `mentionedIn`: the " +
+        "texts of your Workspace that mention its name, with its capitalisation as a whole word, outside code and " +
+        "links; or, given a Version's number, what that earlier Version said.",
       inputSchema: {
         term: termArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),

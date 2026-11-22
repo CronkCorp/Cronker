@@ -3,6 +3,7 @@ import type { Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import type { InstallationListings, InstallationTokens } from "./github/installations.js";
+import type { Jobs } from "./jobs.js";
 import type { Live } from "./live/live.js";
 import type { Runner } from "./runs/runner.js";
 
@@ -21,4 +22,6 @@ export interface Context {
   installationListings: InstallationListings;
   /** Where Attachments' bytes are kept. */
   attachments: AttachmentStorage;
+  /** Work done after a change commits, without the response waiting for it. */
+  jobs: Jobs;
 }

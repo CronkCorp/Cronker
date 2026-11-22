@@ -110,7 +110,7 @@ const kinds = {
   },
   term: {
     async write(s: Setting, markdown: string) {
-      const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Run", definition: markdown });
+      const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Swimlane", definition: markdown });
       return { written: term, read: () => ok("GET", `/api/terms/${term.id}`, s.ada) };
     },
     async edit(s: Setting, id: string, markdown: string) {
