@@ -244,6 +244,8 @@ export interface Agent {
   name: string;
   owner: User;
   runnerId: string | null;
+  /** Whether its Runner runs in the cloud, so a `local-only` Ticket can't be delegated to it. */
+  cloud: boolean;
   createdAt: string;
 }
 
@@ -290,6 +292,8 @@ export interface Runner {
   id: string;
   name: string;
   kind: string;
+  /** Whether its kind runs Runs in the cloud: a `local-only` Ticket gets no Run through it. */
+  cloud: boolean;
   limit: number;
   /** How many of its Runs are running now, counted against its limit. */
   running: number;

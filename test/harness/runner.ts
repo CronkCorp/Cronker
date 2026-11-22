@@ -9,6 +9,8 @@ export class FakeRunner implements Runner {
   readonly starts: RunToStart[] = [];
   /** Every stop Cronk asked of it, in order. */
   readonly stops: RunToStop[] = [];
+  /** Whether it says it runs in the cloud; a test sets it to try `local-only` Tickets against a cloud Runner. */
+  cloud = false;
   private readonly refusals: RunnerRefusal[] = [];
   private reports?: RunReports;
 

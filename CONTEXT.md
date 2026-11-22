@@ -85,7 +85,7 @@ What a Run asks a User when it ends with its *needs you* Outcome. Answering it w
 _Avoid_: Prompt, clarification, blocker
 
 **Label**:
-A free-form tag on a Ticket, matched ignoring case. A Step may require a Label or be skipped by one; a skipped Step sends the Ticket straight on by its default Outcome.
+A free-form tag on a Ticket, matched ignoring case. A Step may require a Label or be skipped by one; a skipped Step sends the Ticket straight on by its default Outcome. One Label means something to Cronk itself: `local-only` marks work that can't run in a cloud session, so the Ticket isn't delegated to an Agent whose Runner runs in the cloud (`subscription` and `managed_agents` do), and gets a refused Run if it reaches one some other way.
 _Avoid_: Tag, category
 
 **Comment**:
