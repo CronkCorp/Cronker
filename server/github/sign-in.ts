@@ -21,7 +21,7 @@ import { exchangeCode, under, userOf, type GitHubUser } from "./client.js";
  */
 
 const stateCookie = "cronk_github_state";
-const stateLifetimeSeconds = 10 * 60;
+export const stateLifetimeSeconds = 10 * 60;
 
 
 function callbackUrl({ config }: Context): string {
@@ -30,9 +30,16 @@ function callbackUrl({ config }: Context): string {
 
 /** Where to send the browser to authorize the App, having set the state cookie. */
 export async function beginSignIn(context: Context, reply: FastifyReply): Promise<string> {
+  return authorize(context, reply, issueSecret("github_sign_in"));
+}
+
+/**
+ * Where to send the browser to authorize the App for the state, having set the state
+ * cookie: the state's prefix tells the one callback whether it signs in or links.
+ */
+export async function authorize(context: Context, reply: FastifyReply, state: string): Promise<string> {
   const app = await appCredentials(context);
   if (!app) throw githubNotSetUp();
-  const state = issueSecret("github_sign_in");
   reply.setCookie(stateCookie, state, {
     path: callbackPath,
     httpOnly: true,
@@ -60,25 +67,37 @@ export interface Callback {
   error?: string;
 }
 
-/** Finishes a sign-in GitHub sent the browser back from, signing the User in. */
-export async function finishSignIn(
-  context: Context,
-  request: FastifyRequest,
-  reply: FastifyReply,
-  { code, state, error }: Callback,
-): Promise<void> {
+/**
+ * The code of a callback whose state is the one this browser's cookie holds, clearing the
+ * cookie; refused if the state doesn't match or GitHub didn't authorize.
+ */
+export function codeOf(request: FastifyRequest, reply: FastifyReply, { code, state, error }: Callback): string {
   const expected = request.cookies[stateCookie];
   reply.clearCookie(stateCookie, { path: callbackPath });
   if (!expected || !state || !sameState(expected, state)) {
     throw new ApiError(400, "invalid_state", "That sign-in with GitHub didn't start in this browser, or took too long.");
   }
   if (error || !code) throw new ApiError(403, "github_denied", "GitHub didn't sign you in.");
+  return code;
+}
 
+/** The GitHub account GitHub's code is for. */
+export async function accountFor(context: Context, code: string): Promise<GitHubUser> {
   const app = await appCredentials(context);
   if (!app) throw githubNotSetUp();
   const token = await exchangeCode(context.config, app, code, callbackUrl(context));
   if (!token) throw new ApiError(403, "github_denied", "GitHub didn't accept the sign-in. Try again.");
-  const account = await userOf(context.config, token);
+  return userOf(context.config, token);
+}
+
+/** Finishes a sign-in GitHub sent the browser back from, signing the User in. */
+export async function finishSignIn(
+  context: Context,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  callback: Callback,
+): Promise<void> {
+  const account = await accountFor(context, codeOf(request, reply, callback));
   const userId = await transaction(context.db, async (tx) => {
     const id = await userFor(tx, account);
     await joinWhereAdded(tx, context.clock.now(), id);
@@ -127,7 +146,7 @@ async function userFor(tx: Tx, account: GitHubUser): Promise<string> {
 }
 
 /** Whether the User is only what adding by GitHub login made: no email, no password, in no Workspace yet. */
-async function isPlaceholder(tx: Tx, userId: string): Promise<boolean> {
+export async function isPlaceholder(tx: Tx, userId: string): Promise<boolean> {
   const { rowCount } = await tx.query(
     `select 1 from users where id = $1 and email is null and password_hash is null
      and not exists (select 1 from memberships where user_id = $1)`,
@@ -141,7 +160,7 @@ async function isPlaceholder(tx: Tx, userId: string): Promise<boolean> {
  * Workspaces to join move to that User, which takes the GitHub account, and the
  * placeholder goes.
  */
-async function mergeInto(tx: Tx, placeholderId: string, userId: string, account: GitHubUser): Promise<string> {
+export async function mergeInto(tx: Tx, placeholderId: string, userId: string, account: GitHubUser): Promise<string> {
   await tx.query(
     `insert into github_joins (workspace_id, user_id, added_by, created_at)
      select workspace_id, $2, added_by, created_at from github_joins where user_id = $1
@@ -166,11 +185,21 @@ async function joinWhereAdded(tx: Tx, now: Date, userId: string): Promise<void> 
      returning workspace_id`,
     [userId, now],
   );
+  await join(tx, now, userId, links.rows);
+  await joinWhereAddedByLogin(tx, now, userId);
+}
+
+/** Joins the User to every Workspace an Admin added them to by GitHub login. */
+export async function joinWhereAddedByLogin(tx: Tx, now: Date, userId: string): Promise<void> {
   const joins = await tx.query<{ workspace_id: string }>(
     "delete from github_joins where user_id = $1 returning workspace_id",
     [userId],
   );
-  for (const { workspace_id } of [...links.rows, ...joins.rows]) {
+  await join(tx, now, userId, joins.rows);
+}
+
+async function join(tx: Tx, now: Date, userId: string, workspaces: { workspace_id: string }[]): Promise<void> {
+  for (const { workspace_id } of workspaces) {
     await tx.query(
       `insert into memberships (workspace_id, user_id, is_admin, created_at) values ($1, $2, false, $3)
        on conflict do nothing`,

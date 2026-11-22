@@ -7,7 +7,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
-import { inView, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
@@ -130,7 +130,11 @@ export async function runsOf(db: Db, viewer: Viewer, ticketId: string): Promise<
 
 async function findRunRow(db: Db | Tx, viewer: Viewer, runId: string, { lock = false } = {}): Promise<Row | undefined> {
   if (!isUuid(runId)) return undefined;
-  const view = inView(viewer, "runs.workspace_id", "$2");
+  const view = inReach(
+    viewer,
+    { project: "(select run_tickets.project_id from tickets run_tickets where run_tickets.id = runs.ticket_id)", workspace: "runs.workspace_id" },
+    "$2",
+  );
   const { rows } = await db.query<Row>(
     `select ${columns} from runs join agents on agents.id = runs.agent_id
      where runs.id = $1 and ${view.sql} ${lock ? "for update of runs" : ""}`,

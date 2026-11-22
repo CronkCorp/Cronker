@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { blockingChanged } from "../runs/runs.js";
@@ -40,8 +40,9 @@ export const TicketRelations = Type.Object({
 export type TicketRelations = Static<typeof TicketRelations>;
 
 /**
- * Relates the Ticket to another of its Workspace. A User adds any Relation; an Agent only blocks from a Discovered
- * Ticket it filed, until a User delegates, moves or dismisses it.
+ * Relates the Ticket to another of its Workspace. A User adds any Relation; an Agent only adds blocks in which one
+ * of the two Tickets is a Discovered Ticket it filed, until a User delegates, moves or dismisses it: its own waiting
+ * Ticket may block any Ticket, or wait on any Ticket, delegated or running included.
  */
 export async function addRelation(
   context: Context,
@@ -52,14 +53,21 @@ export async function addRelation(
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId);
     if (!ticket) throw ticketNotFound();
-    if (caller.kind === "agent") checkAgentRelation(caller, ticket, input.kind);
-    const actor: ChangeActor = caller.kind === "user" ? caller.id : await discoveringAgent(tx, caller, ticket);
     const other =
       "ticketId" in input
         ? await findTicketRef(tx, ticket.workspaceId, input.ticketId)
         : await findTicketRefByKey(tx, ticket.workspaceId, input.ticketKey);
-    if (!other) throw unknownTicket();
+    // A Ticket the caller can't read answers as if it weren't in the Workspace.
+    const otherRow = other && (await findTicketRow(tx, caller, other.id));
+    if (!other || !otherRow) throw unknownTicket();
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
+    let actor: ChangeActor;
+    if (caller.kind === "agent") {
+      const held = checkAgentRelation(caller, ticket, otherRow, input.kind);
+      actor = await discoveringAgent(tx, caller, held);
+    } else {
+      actor = caller.id;
+    }
     const [from, to] = input.kind === "blockedBy" ? [other.id, ticket.id] : [ticket.id, other.id];
     if (input.kind !== "relatesTo" && (await blocksTransitively(tx, ticket.workspaceId, to, from))) {
       throw new ApiError(
@@ -90,22 +98,37 @@ export async function addRelation(
   });
 }
 
-/** Refuses an Agent's Relation unless it blocks from a waiting Discovered Ticket the Agent filed. */
-function checkAgentRelation(agent: AgentCaller, ticket: TicketRow, kind: RelationKind): void {
-  if (!holdsDiscoveredTicket(agent, ticket)) {
-    throw new ApiError(403, "not_your_discovered_ticket", `${agent.name} didn't file ${ticket.key}, or a User has taken it up.`, {
-      rule:
-        "An Agent adds Relations only from a Discovered Ticket it filed, until a User delegates, moves or dismisses it; " +
-        "other Relations are for Users.",
-      advice: `Leave a Comment on ${ticket.key} asking ${ownerName(agent)}, ${agent.name}'s Owner, to relate it.`,
-    });
+/**
+ * Refuses an Agent's Relation unless it is a block in which the Agent holds one of the two Tickets: a Discovered
+ * Ticket it filed that still waits for a User. Answers the held Ticket, the blocked one when it holds both, whose Run
+ * the Change records.
+ */
+function checkAgentRelation(agent: AgentCaller, ticket: TicketRow, other: TicketRow, kind: RelationKind): TicketRow {
+  const [blocker, blocked] = kind === "blockedBy" ? [other, ticket] : [ticket, other];
+  const held = [blocked, blocker].find((t) => holdsDiscoveredTicket(agent, t));
+  if (!held) {
+    throw new ApiError(
+      403,
+      "not_your_discovered_ticket",
+      `Neither ${ticket.key} nor ${other.key} is a Discovered Ticket ${agent.name} filed that still waits for a User.`,
+      {
+        rule:
+          "An Agent adds a block only where one of its two Tickets is a Discovered Ticket the Agent filed, until a " +
+          "User delegates, moves or dismisses it: its own Ticket may block any Ticket, or be blocked by any Ticket. " +
+          "Other Relations are for Users.",
+        advice: `Leave a Comment on ${ticket.key} asking ${ownerName(agent)}, ${agent.name}'s Owner, to relate it.`,
+      },
+    );
   }
-  if (kind !== "blocks") {
+  if (kind === "relatesTo") {
     throw new ApiError(403, "agent_adds_only_blocks", `${agent.name} is an Agent, and Agents add only blocks.`, {
-      rule: "From a Discovered Ticket it filed, an Agent adds blocks from it to other Tickets; other Relations are for Users.",
-      advice: `Add \`blocks\` from ${ticket.key} to the Ticket that waits on it, or leave a Comment instead.`,
+      rule:
+        "An Agent adds blocks to or from a Discovered Ticket it filed, until a User takes it up; other Relations are " +
+        "for Users.",
+      advice: `Add \`blocks\` or \`blockedBy\` between ${held.key} and the other Ticket, or leave a Comment instead.`,
     });
   }
+  return held;
 }
 
 /** How a Relation is stored: a block always from the blocking Ticket to the blocked one. */
@@ -135,6 +158,9 @@ export async function removeRelation(
     );
     const removed = rows[0];
     if (!removed) throw relationNotFound();
+    // A Relation with a Ticket the User can't read isn't listed for them, so it answers as if it didn't exist.
+    const otherId = removed.ticketId === ticket.id ? removed.otherTicketId : removed.ticketId;
+    if (!(await findTicketRow(tx, userViewer(userId), otherId))) throw relationNotFound();
     const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
@@ -194,9 +220,14 @@ async function blocksTransitively(tx: Tx, workspaceId: string, blocker: string, 
   return (rowCount ?? 0) > 0;
 }
 
+/**
+ * The Ticket's parent, Sub-Tickets and Relations, leaving out the Tickets the Viewer can't read, as if they didn't
+ * exist. Its parent and Sub-Tickets are of its own Project, so the Viewer reads them whenever it reads the Ticket.
+ */
 export async function relationsOf(db: Db, viewer: Viewer, ticketId: string): Promise<TicketRelations> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
+  const reach = inReach(viewer, { project: "others.project_id", workspace: "others.workspace_id" }, "$2");
   const { rows } = await db.query<Relation>(
     `select relations.id,
        case when relations.kind = 'relates' then 'relatesTo'
@@ -206,9 +237,9 @@ export async function relationsOf(db: Db, viewer: Viewer, ticketId: string): Pro
      join tickets others on others.id =
        case when relations.ticket_id = $1 then relations.other_ticket_id else relations.ticket_id end
      join projects on projects.id = others.project_id
-     where $1 in (relations.ticket_id, relations.other_ticket_id)
+     where $1 in (relations.ticket_id, relations.other_ticket_id) and ${reach.sql}
      order by relations.seq`,
-    [ticket.id],
+    [ticket.id, reach.value],
   );
   const parent = ticket.parentId === null ? null : (await findTicketRef(db, ticket.workspaceId, ticket.parentId))!;
   const subTickets = await db.query<{ ref: TicketRef }>(

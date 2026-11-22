@@ -392,8 +392,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Relate a Ticket to another",
           description:
             "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace, " +
-            "named by its id or its key. An Agent adds only blocks (`agent_adds_only_blocks`), and only from a " +
-            "Discovered Ticket it filed that still waits for a User (`not_your_discovered_ticket`).",
+            "named by its id or its key. An Agent adds only blocks (`agent_adds_only_blocks`), and only where " +
+            "one of the two Tickets is a Discovered Ticket it filed that still waits for a User " +
+            "(`not_your_discovered_ticket`): from it to any Ticket, or to it from any Ticket.",
           params: Type.Object({ ticketId: Type.String() }),
           body: Type.Union([
             Type.Object({ kind: RelationKind, ticketId: Type.String({ description: "The other Ticket." }) }),
@@ -446,7 +447,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         const caller = await requireCaller(context, request);
         const ticket = await findTicketRow(db, caller, request.params.ticketId);
         if (!ticket) throw ticketNotFound();
-        return changesOf(db, ticket.id);
+        return changesOf(db, caller, ticket.id);
       },
     );
   };
