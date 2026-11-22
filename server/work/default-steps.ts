@@ -47,15 +47,13 @@ const codeReview = `Review the pull request this Ticket's implementation opened.
 
 Finish with **approve** when it is ready for a User to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a User. Finish with **needs you** and a Question when you can't judge it.`;
 
-const merge = `Merge the pull request this Ticket's implementation opened, if it is ready.
+const merge = `Cronk merges this Ticket itself through the Merge Queue. This Run started because its Pull Request conflicts with its base branch, so it stepped aside in the queue; or, for a Ticket that joined on its own, because it had no Pull Request to queue.
 
-- Read the Ticket, its Comments and Reports, and its Pull Request's state, checks and reviews.
-- It is ready when it is open, its checks on the latest commit all passed with none still running, and no review still requests changes.
-- Merge it with \`merge_pull_request\`, giving your Run id and the Pull Request's id. Cronk merges it on GitHub and checks the same rules first, refusing with the rule and what to do instead; a merge ends your Run as *merged*, so don't call \`finish\` after it.
-- While a check is still running, wait for it and read the Ticket again before merging.
-- Never resolve a merge conflict or change code yourself: that is Implement's work.
+- Read the Ticket, its Comments and Reports, and its Pull Requests. Its queue entry names the merge that caused the conflict.
+- For a conflict: merge the base branch into the open Pull Request's branch and resolve the conflict, changing nothing beyond the conflicting hunks. Run what the resolution touches, then push to that branch. Never open another pull request, and never merge it yourself.
+- With no Pull Request to queue: find out why, such as none was opened or linked, it is still a draft or closed, or it is in a Repository the Project doesn't list.
 
-Finish with **send back** when it has a merge conflict, a failing check or a review requesting changes, first leaving a Comment saying which: it goes back to Implement, as a round. Finish with **needs you** and a Question when you can't tell, or Cronk refuses the merge for a reason Implement can't fix.`;
+Finish with **resolved** once you've pushed the resolution: the Ticket waits in Merge for its checks, then rejoins the queue at the front. Finish with **send back** when the resolution isn't mechanical, such as when both sides changed the same logic, or when Implement can fix a missing, closed or draft Pull Request, first leaving a Comment saying why: it goes back to Implement. Finish with **needs you** and a Question when only a User can help.`;
 
 export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {
@@ -93,13 +91,16 @@ export const defaultSteps: Record<string, DefaultStep> = {
       { name: "needs you", status: "In Review", needsYou: true },
     ],
   },
-  // ADR 0005: skipped, passing the Ticket on to In Review, unless an agent may merge it.
+  // ADR 0005, ADR 0011: skipped, passing the Ticket on to In Review, unless an agent may merge it, when it joins the
+  // Merge Queue instead, or a User queued it. Its Runs resolve a queued Ticket's conflicts: *resolved* leaves it in
+  // Merge, and sending it back from such a Run counts as no round.
   Merge: {
     kind: "merge",
     brief: merge,
     model: "haiku",
     outcomes: [
       { name: "review", status: "In Review", default: true },
+      { name: "resolved", status: "Merge" },
       { name: "send back", status: "Implement", countsAsRound: true },
       { name: "needs you", status: "In Review", needsYou: true },
     ],

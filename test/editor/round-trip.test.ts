@@ -197,7 +197,9 @@ describe("edited blocks", () => {
       // Touch every block, so all of them go through the serialiser.
       let doc = opened.doc;
       for (let i = 0; i < doc.childCount; i++) {
-        const pos = insideBlock(doc, i)!;
+        const pos = insideBlock(doc, i);
+        // An Embed has no text to touch; its own suite moves and removes it.
+        if (pos === null) continue;
         doc = edit(doc, (state) => state.tr.insertText("x", pos).delete(pos, pos + 1));
       }
       const saved = opened.save(doc);

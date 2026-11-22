@@ -15,6 +15,8 @@ import {
   entriesOf,
   EntryPage,
   findTranscript,
+  redactionMaxLength,
+  redactTranscript,
   TicketTranscript,
   ticketTranscripts,
   Transcript,
@@ -184,6 +186,29 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         await deleteTranscript(context, await requireCaller(context, request), request.params.transcriptId);
         return reply.code(204).send(null);
+      },
+    );
+
+    app.post(
+      "/api/transcripts/:transcriptId/redactions",
+      {
+        schema: {
+          tags: ["Transcripts"],
+          summary: "Redact a string from a Transcript",
+          description:
+            "For when the scrubbing missed a secret: every appearance of the string in the Transcript's messages, tool " +
+            "inputs and tool results becomes `[redacted]`, and so it does in every later upload or fetch of its " +
+            "session. Only a User who can read the Transcript may; Agents are refused with `agent_not_allowed`, and a " +
+            "string shorter than 4 characters with `redaction_too_short`. The string is never returned, and a " +
+            "Redaction can't be removed. Answers with the Transcript.",
+          params: TranscriptParams,
+          body: Type.Object({ text: Type.String({ minLength: 1, maxLength: redactionMaxLength }) }),
+          response: { 201: Transcript, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const viewer = await requireCaller(context, request);
+        return reply.code(201).send(await redactTranscript(context, viewer, request.params.transcriptId, request.body.text));
       },
     );
 

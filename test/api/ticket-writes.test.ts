@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { hours } from "../harness/clock.js";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
-import { openStream, type OpenStream } from "../harness/stream.js";
+import { openStream, type LiveEvent, type OpenStream } from "../harness/stream.js";
 
 let cronk: StartedCronk;
 const streams: OpenStream[] = [];
@@ -47,6 +47,28 @@ async function adaWithAgent() {
 }
 
 const changed = (projectId: string, ticketId: string) => ({ type: "ticket.changed", data: { projectId, ticketId } });
+
+/** The events the stream receives until it falls quiet. */
+async function received(events: OpenStream): Promise<LiveEvent[]> {
+  const all: LiveEvent[] = [];
+  for (;;) {
+    try {
+      all.push(await events.next(300));
+    } catch {
+      return all;
+    }
+  }
+}
+
+/** The `ticket.changed` events for the Ticket among those received. */
+const changesTo = (all: LiveEvent[], ticketId: string) =>
+  all.filter((event) => event.type === "ticket.changed" && event.data.ticketId === ticketId);
+
+/** The `ticket.changed` events for the Ticket the stream receives until it falls quiet. */
+const changesOf = async (events: OpenStream, ticketId: string) => changesTo(await received(events), ticketId);
+
+type Change = { field: string; actor: { kind: string; name: string }; from: unknown; to: unknown };
+const timelineOf = (ticketId: string, as: Request): Promise<Change[]> => ok("GET", `/api/tickets/${ticketId}/timeline`, as);
 
 describe("a Ticket edit, through the Ticket write module", () => {
   test("a Status change moves the time it entered its Status and takes a needs you Ticket out of the Inbox", async () => {
@@ -123,5 +145,163 @@ describe("passing Autonomous Delegation down", () => {
         expect.objectContaining({ field: "autonomousDelegation", from: null, to: true }),
       ]);
     }
+  });
+});
+
+describe("the other Ticket writes, through the Ticket write module", () => {
+  test("a Run's Outcome moves its Ticket as Cronk's move: one event, the move recorded and timed, and needs you in the Inbox", async () => {
+    const { workspace, ada, project, ticket, agent, asAgent, status, stream } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Investigate") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    const events = await stream();
+    cronk.clock.advance(hours(2));
+
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question: "Blue or green?" });
+
+    expect(await changesOf(events, ticket.id)).toEqual([changed(project.id, ticket.id)]);
+    const moved = await ok("GET", `/api/tickets/${ticket.id}`, ada);
+    const [last] = (await timelineOf(ticket.id, ada)).slice(-1);
+    expect(last).toEqual(
+      expect.objectContaining({
+        field: "status",
+        actor: expect.objectContaining({ kind: "agent", name: "claude-max" }),
+        from: { id: status("Investigate"), name: "Investigate" },
+        to: { id: moved.statusId, name: expect.any(String) },
+      }),
+    );
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items).toContainEqual(expect.objectContaining({ kind: "needsYou", since: "2026-01-01T11:00:00.000Z" }));
+  });
+
+  test("a skipped Step moves the Ticket as Cronk, recording the skip before the move, in the one event of the edit", async () => {
+    const { workspace, ada, project, ticket, agent, status, stream } = await adaWithAgent();
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Code review");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Code review")}/step`, ada, {
+      ...step,
+      labelRule: { kind: "skippedBy", label: "no-review" },
+    });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, labels: ["no-review"] });
+    const events = await stream();
+    cronk.clock.advance(hours(1));
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+
+    expect(await changesOf(events, ticket.id)).toEqual([changed(project.id, ticket.id)]);
+    const timeline = await timelineOf(ticket.id, ada);
+    // Code review skips itself by its Label rule, then the default board's Merge Step skips itself too.
+    expect(timeline.slice(-5).map((c) => [c.actor.kind, c.field])).toEqual([
+      ["user", "status"],
+      ["cronk", "stepSkipped"],
+      ["cronk", "status"],
+      ["cronk", "stepSkipped"],
+      ["cronk", "status"],
+    ]);
+    expect(timeline.at(-1)).toEqual(
+      expect.objectContaining({ actor: { kind: "cronk", name: "Cronk" }, field: "status", to: { id: status("In Review"), name: "In Review" } }),
+    );
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items).toContainEqual(expect.objectContaining({ kind: "review", since: "2026-01-01T10:00:00.000Z" }));
+  });
+
+  test("a Runner's rate limit marks the Ticket waiting for a Run: told live, with no Change", async () => {
+    const { ada, project, ticket, agent, status, stream } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    const before = await timelineOf(ticket.id, ada);
+    const events = await stream();
+    cronk.runner.refuseNext({ kind: "rate_limited", message: "Too many fires.", retryAt: new Date("2026-01-01T10:00:00Z") });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+
+    // One for the edit, and one for the wait the refused start leaves, after the edit committed.
+    expect(await changesOf(events, ticket.id)).toEqual([changed(project.id, ticket.id), changed(project.id, ticket.id)]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).waiting).toBe("runnerPaused");
+    expect((await timelineOf(ticket.id, ada)).slice(before.length).map((c) => c.field)).toEqual(["status"]);
+  });
+
+  test("answering a Question moves the Ticket back to the Step that asked, in one event", async () => {
+    const { ada, project, ticket, agent, asAgent, status, stream } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Investigate") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question: "Blue or green?" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+    const comments = await ok("GET", `/api/tickets/${ticket.id}/comments`, ada);
+    const events = await stream();
+
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Green.", replyToId: comments.at(-1).id });
+
+    expect(await changesOf(events, ticket.id)).toEqual([changed(project.id, ticket.id)]);
+    expect((await timelineOf(ticket.id, ada)).at(-1)).toEqual(
+      expect.objectContaining({ field: "status", actor: expect.objectContaining({ kind: "user" }), to: { id: status("Investigate"), name: "Investigate" } }),
+    );
+  });
+
+  /** Ada's Ticket completed Unverified by its Code review Run, then undelegated so Reopen starts no Run. */
+  async function completed() {
+    const setup = await adaWithAgent();
+    const { ada, ticket, agent, asAgent, status } = setup;
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: true, delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Code review") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "complete" });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+    return setup;
+  }
+
+  test("a Run completing its Ticket records the move, then Unverified", async () => {
+    const { ada, ticket, status } = await completed();
+    const timeline = await timelineOf(ticket.id, ada);
+    expect(timeline.slice(-3, -1).map((c) => [c.actor.kind, c.field, c.from, c.to])).toEqual([
+      ["agent", "status", { id: status("Code review"), name: "Code review" }, { id: status("Done"), name: "Done" }],
+      ["agent", "verification", null, "unverified"],
+    ]);
+  });
+
+  test("Accept sends one event and records Verified", async () => {
+    const { ada, project, ticket, stream } = await completed();
+    const events = await stream();
+
+    await ok("POST", `/api/tickets/${ticket.id}/accept`, ada);
+
+    expect(await changesOf(events, ticket.id)).toEqual([changed(project.id, ticket.id)]);
+    expect((await timelineOf(ticket.id, ada)).at(-1)).toEqual(
+      expect.objectContaining({ field: "verification", from: "unverified", to: "verified" }),
+    );
+  });
+
+  test("Reopen sends one event and records the move and verification after its Comment", async () => {
+    const { ada, project, ticket, status, stream } = await completed();
+    const events = await stream();
+
+    await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Not yet." });
+
+    expect(await changesOf(events, ticket.id)).toEqual([changed(project.id, ticket.id)]);
+    expect((await timelineOf(ticket.id, ada)).slice(-2).map((c) => [c.field, c.to])).toEqual([
+      ["status", { id: status("Code review"), name: "Code review" }],
+      ["verification", null],
+    ]);
+    const comments = await ok("GET", `/api/tickets/${ticket.id}/comments`, ada);
+    expect(comments.at(-1)).toEqual(expect.objectContaining({ body: "Not yet." }));
+  });
+
+  test("a member leaving is taken off their Tickets one at a time: one event each, recorded as the Admin's", async () => {
+    const { workspace, ada, project, stream } = await adaWithAgent();
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    const first = await ok("POST", `/api/projects/${project.id}/tickets`, { cookie: bea.cookie }, { title: "Bea's first" });
+    const second = await ok("POST", `/api/projects/${project.id}/tickets`, { cookie: bea.cookie }, { title: "Bea's second" });
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { assigneeId: bea.user.id });
+    await ok("PATCH", `/api/tickets/${second.id}`, ada, { assigneeId: bea.user.id });
+    const events = await stream();
+
+    await ok("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, ada);
+
+    const all = await received(events);
+    for (const ticket of [first, second]) expect(changesTo(all, ticket.id)).toEqual([changed(project.id, ticket.id)]);
+    for (const ticket of [first, second]) {
+      expect((await timelineOf(ticket.id, ada)).at(-1)).toEqual(
+        expect.objectContaining({ field: "assignee", actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }), to: null }),
+      );
+    }
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.filter((i: { kind: string }) => i.kind === "reassign")).toHaveLength(2);
   });
 });

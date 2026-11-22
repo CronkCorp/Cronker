@@ -4,9 +4,9 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { readersIn, userViewer, writersIn } from "../identity/viewers.js";
+import { archivedRefusal, readersIn, userViewer, writersIn } from "../identity/viewers.js";
 import { requireAdmin } from "../workspaces/members.js";
-import { findProject, projectNotFound, Visibility } from "./projects.js";
+import { findProject, Project, projectNotFound, Visibility } from "./projects.js";
 import { countHeld, nameOf, releaseTickets } from "./releasing.js";
 
 /** A User listed on a Project, with their level there: Read to follow its work without changing it, or Write. */
@@ -109,6 +109,7 @@ export async function setProjectAccess(
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const project = await projectForAdmin(db, tx, userId, projectId, { lock: true });
+    if (project.archivedAt !== null) throw archivedRefusal();
     const before = await readersIn(tx, project.workspaceId, [project.id]);
     const now = clock.now();
     const losing = await writeAccess(tx, project, access, now);
@@ -150,6 +151,7 @@ export async function previewProjectAccess(
   try {
     await transaction(db, async (tx) => {
       const project = await projectForAdmin(db, tx, userId, projectId);
+      if (project.archivedAt !== null) throw archivedRefusal();
       const losing = await writeAccess(tx, project, access, clock.now());
       let tickets = 0;
       for (const loser of losing) {
@@ -162,6 +164,35 @@ export async function previewProjectAccess(
     throw error;
   }
   throw new Error("unreachable");
+}
+
+/**
+ * Archives a Project, or unarchives it, as an Admin of its Workspace. While archived, every write in it is refused
+ * with `project_archived`, for Users, Admins included, and Agents alike; reads keep working. Refused with 409 when it
+ * already is as asked.
+ */
+export async function archiveProject(
+  { db, clock, live }: Context,
+  userId: string,
+  projectId: string,
+  archived: boolean,
+): Promise<Project> {
+  return transaction(db, async (tx) => {
+    const project = await projectForAdmin(db, tx, userId, projectId, { lock: true });
+    if (archived && project.archivedAt !== null) {
+      throw new ApiError(409, "project_already_archived", `${project.key} is archived already.`);
+    }
+    if (!archived && project.archivedAt === null) {
+      throw new ApiError(409, "project_not_archived", `${project.key} isn't archived.`);
+    }
+    await tx.query("update projects set archived_at = $2, archived_by = $3 where id = $1", [
+      project.id,
+      archived ? clock.now() : null,
+      archived ? userId : null,
+    ]);
+    live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
+    return (await findProject(tx, userViewer(userId), project.id))!;
+  });
 }
 
 export function accessRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -229,6 +260,45 @@ export function accessRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return previewProjectAccess(context, user.id, request.params.projectId, request.body);
+      },
+    );
+
+    app.post(
+      "/api/projects/:projectId/archive",
+      {
+        schema: {
+          tags: ["Projects"],
+          summary: "Archive a Project",
+          description:
+            "Makes the Project read-only and moves it out of the way: every write in it is then refused with " +
+            "`project_archived`, for Users, Admins included, and Agents alike, while reads, its key and its addresses " +
+            "keep working. Refused with `project_already_archived` if it is. Only an Admin of its Workspace archives it.",
+          params,
+          response: { 200: Project, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return archiveProject(context, user.id, request.params.projectId, true);
+      },
+    );
+
+    app.post(
+      "/api/projects/:projectId/unarchive",
+      {
+        schema: {
+          tags: ["Projects"],
+          summary: "Unarchive a Project",
+          description:
+            "Lets the Project be changed again, as before it was archived. Refused with `project_not_archived` if it " +
+            "isn't. Only an Admin of its Workspace unarchives it.",
+          params,
+          response: { 200: Project, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return archiveProject(context, user.id, request.params.projectId, false);
       },
     );
   };

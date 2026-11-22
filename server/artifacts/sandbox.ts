@@ -8,7 +8,33 @@ import { sandboxPath, servedFile } from "./artifacts.js";
  * an opaque origin and without `allow-same-origin`, so a page can't read Cronk's cookies or call its API as the
  * signed-in User, in an iframe or opened directly (ADR 0004).
  */
-export const sandboxPolicy = "sandbox allow-scripts";
+/** The CDNs a page may load scripts, styles, images, media and fonts from; Google Fonts serves its fonts from gstatic. */
+export const sandboxCdns = [
+  "https://cdnjs.cloudflare.com",
+  "https://cdn.jsdelivr.net",
+  "https://unpkg.com",
+  "https://fonts.googleapis.com",
+  "https://fonts.gstatic.com",
+].join(" ");
+
+/**
+ * On top of the sandbox, a page loads only its Version's own files, inline code and the CDNs, and fetches only its
+ * own files, so a page can't send what it shows anywhere. `'self'` is the address the page was served from, Cronk's
+ * own, not the page's opaque origin. `form-action` and `base-uri` don't fall back to `default-src`, so they are named.
+ */
+export const sandboxPolicy = [
+  "sandbox allow-scripts",
+  "default-src 'none'",
+  `script-src 'self' 'unsafe-inline' ${sandboxCdns}`,
+  `style-src 'self' 'unsafe-inline' ${sandboxCdns}`,
+  `img-src 'self' data: blob: ${sandboxCdns}`,
+  `media-src 'self' data: blob: ${sandboxCdns}`,
+  `font-src 'self' data: blob: ${sandboxCdns}`,
+  "connect-src 'self'",
+  "frame-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+].join("; ");
 
 /** Media types read as text, served as UTF-8. */
 const textual = (mediaType: string) =>
@@ -20,6 +46,9 @@ export function sandboxRoutes(context: Context): FastifyPluginAsync {
     app.addHook("onSend", async (_request, reply, payload) => {
       reply.header("content-security-policy", sandboxPolicy);
       reply.header("x-content-type-options", "nosniff");
+      // The sandboxed page's origin is opaque, so its own `fetch` of a file is cross-origin: let any origin read
+      // these files, without credentials. The key in the address is what guards a Version, as it already was.
+      reply.header("access-control-allow-origin", "*");
       // The address is the key to the Version, so it is never sent on to the hosts a page loads from.
       reply.header("referrer-policy", "no-referrer");
       return payload;

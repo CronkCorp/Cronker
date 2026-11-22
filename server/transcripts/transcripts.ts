@@ -8,8 +8,10 @@ import { ownerName, type AgentCaller } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
+import { userName } from "../identity/user.js";
 import { recordChanges } from "../work/changes.js";
 import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
+import { sessionIdOf } from "../runs/session-ids.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
 
 /**
@@ -56,7 +58,9 @@ export const Transcript = Type.Object({
       "short id. The name is only for reading; the short id finds it.",
   }),
   workspaceId: Type.String({ format: "uuid" }),
-  sessionId: Type.String({ description: "The session it records, as its uploader named it." }),
+  sessionId: Type.String({
+    description: "The session it records, as its uploader named it, except that a claude.ai `session_…` id reads `cse_…`.",
+  }),
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Run whose Runner returned this session when starting it; null for a session of no Run.",
@@ -85,6 +89,18 @@ export const Transcript = Type.Object({
     },
   ),
   uploadedAt: Type.String({ format: "date-time", description: "When it was last uploaded." }),
+  redactions: Type.Array(
+    Type.Object({
+      id: Type.String({ format: "uuid" }),
+      addedBy: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
+      addedAt: Type.String({ format: "date-time" }),
+    }),
+    {
+      description:
+        "The Redactions Users added, oldest first: who added each and when, never the string redacted, which Cronk " +
+        "keeps only to apply again to every later upload or fetch of the session.",
+    },
+  ),
 });
 export type Transcript = Static<typeof Transcript>;
 
@@ -138,7 +154,13 @@ const columns = `transcripts.id, ${slugColumn("transcript", "transcripts.id", "a
   (select count(*)::int from transcript_entries where transcript_id = transcripts.id) as "entryCount",
   case when transcripts.gap_after is null then null else json_build_object('after', transcripts.gap_after,
     'entries', transcripts.gap_entries, 'bytes', transcripts.gap_bytes) end as gap,
-  transcripts.uploaded_at as "uploadedAt"`;
+  transcripts.uploaded_at as "uploadedAt",
+  coalesce((select json_agg(json_build_object('id', transcript_redactions.id,
+      'addedBy', json_build_object('id', redacting_users.id, 'name', ${userName("redacting_users")}),
+      'addedAt', to_char(transcript_redactions.added_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+      order by transcript_redactions.added_at, transcript_redactions.id)
+    from transcript_redactions join users redacting_users on redacting_users.id = transcript_redactions.added_by
+    where transcript_redactions.transcript_id = transcripts.id), '[]') as redactions`;
 const present = ({ uploadedAt, ...row }: Row): Transcript => ({ ...row, uploadedAt: uploadedAt.toISOString() });
 
 /**
@@ -190,11 +212,12 @@ async function transcriptRow(db: Context["db"] | Tx, where: string, params: unkn
 export async function uploadTranscript(
   context: Context,
   agent: AgentCaller,
-  sessionId: string,
+  named: string,
   converted: ConvertedEntry[],
 ): Promise<{ transcript: Transcript; created: boolean }> {
+  const sessionId = sessionIdOf(named);
   const now = context.clock.now();
-  const { kept: entries, gap } = keepStartAndEnd(converted.map(scrub).map(cutToolParts));
+  const scrubbed = converted.map(scrub);
   return transaction(context.db, async (tx) => {
     // The Run whose Runner returned this session when starting it, as one of this Agent's Runs.
     const run = await tx.query<{ id: string }>(
@@ -212,6 +235,9 @@ export async function uploadTranscript(
         advice: "Nothing to do: later turns of this session aren't recorded.",
       });
     }
+    // Read under the lock, so a Redaction added meanwhile is either applied here or applied to what this stores.
+    const redactions = await redactionsOf(tx, "transcripts.agent_id = $1 and transcripts.session_id = $2", [agent.id, sessionId]);
+    const { kept: entries, gap } = keepStartAndEnd(scrubbed.map((entry) => redact(entry, redactions)).map(cutToolParts));
     const { rows } = await tx.query<{ id: string; created: boolean }>(
       `insert into transcripts (workspace_id, agent_id, session_id, uploaded_at, gap_after, gap_entries, gap_bytes, run_id)
        values ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -333,14 +359,16 @@ export async function appendTranscript(context: Context, tx: Tx, session: RunSes
     [id],
   );
   const after = Math.max(last[0]!.last, gap ? gap.after + gap.entries : 0);
-  const entries = appended.entries.map(scrub).map((entry, index) => {
+  const redactions = await redactionsOf(tx, "transcripts.id = $1", [id]);
+  const prepare = <Entry extends ConvertedEntry>(entry: Entry): Entry => redact(scrub(entry), redactions);
+  const entries = appended.entries.map(prepare).map((entry, index) => {
     const prepared = cutToolParts(entry, index);
     return { ...prepared, position: after + prepared.position };
   });
   await insertEntries(tx, id, entries);
   const results = appended.results.map(({ callId, toolResult }) => ({
     callId,
-    ...cutToolParts(scrub({ role: "assistant", text: null, toolName: null, toolInput: null, toolResult, at: null }), 0),
+    ...cutToolParts(prepare({ role: "assistant", text: null, toolName: null, toolInput: null, toolResult, at: null }), 0),
   }));
   if (results.length > 0) {
     await tx.query(
@@ -491,6 +519,53 @@ function scrub<Entry extends ConvertedEntry>(entry: Entry): Entry {
   };
 }
 
+/** The strings redacted from the Transcript the condition picks (on `transcripts`), oldest first. */
+async function redactionsOf(tx: Tx, where: string, params: unknown[]): Promise<string[]> {
+  const { rows } = await tx.query<{ text: string }>(
+    `select transcript_redactions.text from transcript_redactions
+     join transcripts on transcripts.id = transcript_redactions.transcript_id
+     where ${where} order by transcript_redactions.added_at, transcript_redactions.id`,
+    params,
+  );
+  return rows.map((row) => row.text);
+}
+
+/** What a Redaction leaves in place of the string it redacts. */
+export const redacted = "[redacted]";
+
+/** The text with every appearance of each redacted string replaced by `[redacted]`. */
+function redactText(text: string, redactions: string[]): string {
+  let result = text;
+  for (const redaction of redactions) result = result.split(redaction).join(redacted);
+  return result;
+}
+
+/** A JSON value with each redacted string replaced in every string in it, keys included, as the scrubbing does. */
+function redactValue(value: unknown, redactions: string[]): unknown {
+  if (typeof value === "string") return redactText(value, redactions);
+  if (Array.isArray(value)) return value.map((inner) => redactValue(inner, redactions));
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [redactText(key, redactions), redactValue(inner, redactions)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * The entry with each redacted string replaced in its text, tool input and tool result. Applied after the scrubbing
+ * and before the 20 KB cut, so a cut can't split a string and leave its start behind.
+ */
+function redact<Entry extends Pick<ConvertedEntry, "text" | "toolInput" | "toolResult">>(entry: Entry, redactions: string[]): Entry {
+  if (redactions.length === 0) return entry;
+  return {
+    ...entry,
+    text: entry.text === null ? null : redactText(entry.text, redactions),
+    toolInput: redactValue(entry.toolInput, redactions),
+    toolResult: entry.toolResult === null ? null : redactText(entry.toolResult, redactions),
+  };
+}
+
 /**
  * The entry, placed, with its tool call's input and result each cut to its first 20 KB, never splitting a character,
  * and marked if they were. An input is cut as its JSON, which a cut leaves invalid, so it is kept as a JSON string of
@@ -536,7 +611,7 @@ const toolInputJson = (entry: Pick<ConvertedEntry, "toolName" | "toolInput">): s
   entry.toolName === null ? null : JSON.stringify(entry.toolInput ?? null);
 
 /** How much an entry takes up: its text, tool name, tool input and tool result, in bytes. */
-function sizeOf(entry: StoredEntry): number {
+function sizeOf(entry: Pick<StoredEntry, "text" | "toolName" | "toolInput" | "toolResult">): number {
   return (
     Buffer.byteLength(entry.text ?? "") +
     Buffer.byteLength(entry.toolName ?? "") +
@@ -693,6 +768,87 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
       context.live.publish(tx, ticket.workspaceId, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
     }
   });
+}
+
+/** The shortest string a Redaction takes: anything shorter would redact ordinary words. */
+export const redactionMinLength = 4;
+/** The longest string a Redaction takes. */
+export const redactionMaxLength = 10_000;
+/** How many entries a Redaction rewrites at a time. */
+const redactBatch = 500;
+
+/**
+ * Adds a Redaction, for when the scrubbing missed a secret; only a User who can read the Transcript may. Every
+ * appearance of the string in its messages, tool inputs and tool results becomes `[redacted]`, its search words with
+ * them, in one transaction; the string is kept only so every later upload or fetch of the session is redacted too.
+ * Redacting a string already redacted adds nothing.
+ */
+export async function redactTranscript(context: Context, actor: Caller, transcriptId: string, text: string): Promise<Transcript> {
+  const transcript = await findTranscript(context, actor, transcriptId);
+  if (actor.kind === "agent") {
+    throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can redact a Transcript.`, {
+      rule: "Only a User redacts a Transcript, so an agent can't rewrite the record of what it did.",
+      advice: `Leave the Transcript as it is; ask ${ownerName(actor)}, ${actor.name}'s Owner, if something in it should be redacted.`,
+    });
+  }
+  if ([...text].length < redactionMinLength) {
+    throw new ApiError(400, "redaction_too_short", `A Redaction takes at least ${redactionMinLength} characters.`, {
+      rule: `A string shorter than ${redactionMinLength} characters would redact ordinary words across the Transcript, so it is refused.`,
+      advice: "Select the whole secret, not a part of it.",
+    });
+  }
+  return transaction(context.db, async (tx) => {
+    const held = await tx.query("select 1 from transcripts where id = $1 and deleted_at is null for update", [transcript.id]);
+    // A User deleted it meanwhile.
+    if (held.rowCount === 0) throw transcriptNotFound();
+    const known = await tx.query("select 1 from transcript_redactions where transcript_id = $1 and text = $2", [transcript.id, text]);
+    if (known.rowCount === 0) {
+      await tx.query("insert into transcript_redactions (transcript_id, text, added_by, added_at) values ($1, $2, $3, $4)", [
+        transcript.id,
+        text,
+        actor.id,
+        context.clock.now(),
+      ]);
+    }
+    await redactEntries(tx, transcript.id, text);
+    const redactedTranscript = present((await transcriptRow(tx, "transcripts.id = $1", [transcript.id]))!);
+    await transcriptChanged(context, tx, redactedTranscript.workspaceId, redactedTranscript);
+    return redactedTranscript;
+  });
+}
+
+/** Rewrites the stored entries the string appears in, a batch at a time, with their sizes. */
+async function redactEntries(tx: Tx, transcriptId: string, text: string): Promise<void> {
+  for (let after = 0; ; ) {
+    const { rows } = await tx.query<Omit<StoredEntry, "at">>(
+      `select position, text, tool_name as "toolName", tool_input as "toolInput",
+         tool_result as "toolResult", cut, tool_input_cut as "toolInputCut"
+       from transcript_entries where transcript_id = $1 and position > $2 order by position limit $3`,
+      [transcriptId, after, redactBatch],
+    );
+    if (rows.length === 0) return;
+    after = rows.at(-1)!.position;
+    const changed = rows
+      .map((entry) => ({ before: entry, after: redact(entry, [text]) }))
+      .filter(({ before, after }) => JSON.stringify(after) !== JSON.stringify(before))
+      .map(({ after }) => after);
+    if (changed.length === 0) continue;
+    await tx.query(
+      `update transcript_entries set text = changed.text, tool_input = changed.tool_input, tool_result = changed.tool_result,
+         bytes = changed.bytes
+       from unnest($2::int[], $3::text[], $4::jsonb[], $5::text[], $6::bigint[])
+         as changed (position, text, tool_input, tool_result, bytes)
+       where transcript_entries.transcript_id = $1 and transcript_entries.position = changed.position`,
+      [
+        transcriptId,
+        changed.map((entry) => entry.position),
+        changed.map((entry) => entry.text),
+        changed.map(toolInputJson),
+        changed.map((entry) => entry.toolResult),
+        changed.map(sizeOf),
+      ],
+    );
+  }
 }
 
 /**

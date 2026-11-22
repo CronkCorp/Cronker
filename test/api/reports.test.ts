@@ -51,7 +51,7 @@ async function runningRun(options: StartCronkOptions = {}) {
   // Step's columns and the Repositories a Project lists; setting up a Runner needs the columns of a Managed Agents
   // Runner's setup; reading a Ticket or a Runner needs the columns of Runs' costs; finding a Project or a Ticket
   // needs Access; any User read needs display names; writing a Ticket's description or a Comment needs the Mention index; finding a
-  // Project and starting a Run need Concise Reports.
+  // Project and starting a Run need Concise Reports; any Access needs archived Projects; reading a Ticket needs Pull Requests' conflict markers.
   if (options.migrateBefore !== undefined) {
     await cronk.applyAhead("0022_repositories.sql");
     await cronk.applyAhead("0033_merge_step.sql");
@@ -63,6 +63,12 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0053_display_name.sql");
     await cronk.applyAhead("0055_mentions.sql");
     await cronk.applyAhead("0056_concise_reports.sql");
+    await cronk.applyAhead("0057_archived_projects.sql");
+    await cronk.applyAhead("0027_pull_requests.sql");
+    await cronk.applyAhead("0059_conflict_markers.sql");
+    await cronk.applyAhead("0042_merge_conflicts.sql");
+    await cronk.applyAhead("0061_merge_queue.sql");
+    await cronk.applyAhead("0065_merge_queue_conflicts.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

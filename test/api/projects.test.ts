@@ -51,6 +51,8 @@ describe("creating a Project", () => {
       key: "CRONK",
       visibility: "open",
       access: "write",
+      archivedAt: null,
+      archivedBy: null,
       newTicketsDelegated: false,
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
@@ -69,7 +71,7 @@ describe("creating a Project", () => {
 
     const listed = await cronk.request("GET", `/api/workspaces/${workspace.id}/projects`, { cookie });
     expect(listed.status).toBe(200);
-    expect(await listed.json()).toEqual([{ id: project.id, workspaceId: workspace.id, name: "Cronker", key: "CRONK", visibility: "open", access: "write" }]);
+    expect(await listed.json()).toEqual([{ id: project.id, workspaceId: workspace.id, name: "Cronker", key: "CRONK", visibility: "open", access: "write", archivedAt: null, archivedBy: null }]);
   });
 });
 
