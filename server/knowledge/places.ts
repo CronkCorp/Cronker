@@ -12,6 +12,25 @@ export interface Place {
   projectId: string | null;
 }
 
+/** Where a Ticket's texts are kept: its Project. */
+export async function placeOfTicket(db: Db, ticketId: string): Promise<Place> {
+  const { rows } = await db.query<Place>(
+    `select workspace_id as "workspaceId", project_id as "projectId" from tickets where id = $1`,
+    [ticketId],
+  );
+  return rows[0]!;
+}
+
+/** Where a Comment is kept: its Ticket's Project, or its Artifact's Project or Workspace. */
+export async function placeOfComment(db: Db, comment: { ticketId: string | null; artifactId: string | null }): Promise<Place> {
+  if (comment.ticketId !== null) return placeOfTicket(db, comment.ticketId);
+  const { rows } = await db.query<Place>(
+    `select workspace_id as "workspaceId", project_id as "projectId" from artifacts where id = $1`,
+    [comment.artifactId],
+  );
+  return rows[0]!;
+}
+
 /** A Place with what Users call it: the Project's key, or the Workspace's name. */
 export interface NamedPlace extends Place {
   label: string;
