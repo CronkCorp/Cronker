@@ -2,7 +2,7 @@
 
 // Every response type is the server's own, from its schemas: type-only, so no server code reaches the browser bundle
 // (the build refuses any that does). Screens import them from here. What this module holds itself is the `fetch`
-// plumbing, the error type, the request shapes the screens send, and the calls.
+// plumbing, the error type, the request shapes the server has no schema for, and the calls.
 import type { Agent } from "../../server/agents/agents.js";
 import type { AgentToken, IssuedToken, TokenAccess } from "../../server/agents/tokens.js";
 import type {
@@ -49,18 +49,28 @@ import type { EntryPage, TicketTranscript, Transcript, TranscriptEntry } from ".
 import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work/access.js";
 import type { Actor, ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
-import type { Comment } from "../../server/work/comments.js";
+import type { Comment, CommentCreate } from "../../server/work/comments.js";
 import type { Mention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
-import type { Relation, RelationKind, TicketRelations } from "../../server/work/relations.js";
+import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type { LabelRule, Outcome, Step, StepKind } from "../../server/work/steps.js";
-import type { MentioningText, Priority, Ticket, TicketList, TicketRef, TicketSummary } from "../../server/work/tickets.js";
-import type { Completion } from "../../server/work/verification.js";
+import type {
+  MentioningText,
+  Priority,
+  Ticket,
+  TicketCreate,
+  TicketEdit,
+  TicketList,
+  TicketRef,
+  TicketSummary,
+} from "../../server/work/tickets.js";
+import type { Completion, TicketReopen } from "../../server/work/verification.js";
 import type { AddedMember, Member, PendingAdd } from "../../server/workspaces/members.js";
 import type { Membership as WorkspaceSummary, Workspace, WorkspaceSettings } from "../../server/workspaces/workspaces.js";
 
 export type { Change, Comment, Cost, Mention, MentioningText, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
+export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 export type { Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
 export type { LabelRule, ListedUser, Outcome, Project, ProjectAccess, ProjectSummary, Status, StatusKind, Step, StepKind, Visibility };
 export type { Agent, AgentToken, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
@@ -109,20 +119,6 @@ export const priorities: { priority: Priority; label: string }[] = [
   { priority: "low", label: "Low" },
   { priority: "none", label: "None" },
 ];
-
-export interface TicketEdit {
-  title?: string;
-  description?: string;
-  statusId?: string;
-  priority?: Priority;
-  labels?: string[];
-  assigneeId?: string | null;
-  delegateId?: string | null;
-  autonomousDelegation?: boolean;
-  dueDate?: string | null;
-  estimate?: number | null;
-  parentId?: string | null;
-}
 
 export interface TicketFilter {
   statusId?: string;
@@ -294,15 +290,15 @@ export const api = {
     const search = query.size ? `?${query}` : "";
     return call<TicketList>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
   },
-  createTicket: (projectId: string, input: { title: string; description?: string }) =>
+  createTicket: (projectId: string, input: TicketCreate) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
   acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
   reopenTicket: (id: string, comment: string) =>
-    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment }),
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment } satisfies TicketReopen),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
-  comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
+  comment: (ticketId: string, input: CommentCreate) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
@@ -334,7 +330,7 @@ export const api = {
     call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
   relations: (ticketId: string) =>
     call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
-  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
+  relate: (ticketId: string, input: RelationCreate) =>
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),

@@ -1,10 +1,13 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { setUp, signIn } from "../test/harness/flows.js";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
 import { expect, signInInBrowser, test } from "./fixtures.js";
 
-/** Ada signed in, on a Ticket whose timeline runs far past the window: 25 Comments, oldest first. */
-async function longTicket(page: Page, cronk: StartedCronk) {
+/**
+ * Ada signed in, on a Ticket whose timeline runs far past the window: 25 Comments, oldest first. With `editorLoading`,
+ * the shared editor is held back, so its box isn't waited for.
+ */
+async function longTicket(page: Page, cronk: StartedCronk, { editorLoading = false } = {}) {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
@@ -17,6 +20,7 @@ async function longTicket(page: Page, cronk: StartedCronk) {
   await expect(page.getByRole("heading", { name: /^CRONK-1 / })).toBeVisible();
   await expect(page.getByText("Comment number 25")).toBeAttached();
   const box = page.getByRole("textbox", { name: "New Comment" });
+  if (editorLoading) return box;
   // The box is the shared editor, loaded once the Ticket shows; it waits at the end, out of view.
   await expect(box).toBeAttached();
   await expect(box).not.toBeInViewport();
@@ -62,6 +66,28 @@ test("C takes the User to the Comment box without typing a c, and does nothing w
   await expect(replyBox).toBeFocused();
   await expect(replyBox).toHaveText("c");
   await expect(box).toHaveText("cc");
+});
+
+test("C pressed while the editor still loads takes the User to the Comment box once it is in", async ({ page, cronk }) => {
+  // The rich editor is loaded the first time a screen shows one: hold it back until C has been pressed.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/assets/rich-editor-*.js", async (route: Route) => {
+    await held;
+    await route.continue();
+  });
+  const box = await longTicket(page, cronk, { editorLoading: true });
+  await expect(page.getByText("Loading the editor…")).toBeAttached();
+  await expect(page.getByText("C writes a Comment")).toBeVisible();
+
+  await page.keyboard.press("c");
+  release();
+  await expect(box).toBeFocused();
+  await expect(box).toBeInViewport();
+  // The C took the User there and typed nothing; what they type next lands in the box.
+  await expect(box).toHaveText("");
+  await page.keyboard.type("x");
+  await expect(box).toHaveText("x");
 });
 
 test("Ctrl+Enter places a Comment from the rich editor and from its Markdown source, while Enter and Shift+Enter add new lines", async ({ page, cronk }) => {

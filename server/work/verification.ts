@@ -7,6 +7,7 @@ import type { User } from "../identity/user.js";
 import { startRunIfNeeded, blockingChanged } from "../runs/runs.js";
 import { recordChanges } from "./changes.js";
 import { insertComment } from "./comment-writes.js";
+import { markdown } from "./fields.js";
 import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "./tickets.js";
 
 /**
@@ -26,6 +27,12 @@ export async function acceptTicket(context: Context, user: User, ticketId: strin
   });
   return (await findTicket(db, userViewer(user.id), ticketId))!;
 }
+
+/** The reopen route's body. */
+export const TicketReopen = Type.Object({
+  comment: markdown(100_000, "Why it is reopened, in Markdown; added to the Ticket's Comments."),
+});
+export type TicketReopen = Static<typeof TicketReopen>;
 
 /**
  * A User Reopens an Unverified Ticket with a Comment saying why: it goes back to the Status of the Step

@@ -39,6 +39,16 @@ export const TicketRelations = Type.Object({
 });
 export type TicketRelations = Static<typeof TicketRelations>;
 
+/** The relate route's body: the Relation's kind, and the other Ticket by its id or its key. */
+export const RelationCreate = Type.Union([
+  Type.Object({ kind: RelationKind, ticketId: Type.String({ description: "The other Ticket." }) }),
+  Type.Object({
+    kind: RelationKind,
+    ticketKey: Type.String({ description: "The other Ticket's key, such as `CRONK-12`, matched ignoring case." }),
+  }),
+]);
+export type RelationCreate = Static<typeof RelationCreate>;
+
 /**
  * Relates the Ticket to another of its Workspace. A User adds any Relation; an Agent only adds blocks in which one
  * of the two Tickets is a Discovered Ticket it filed, until a User delegates, moves or dismisses it: its own waiting
@@ -48,7 +58,7 @@ export async function addRelation(
   context: Context,
   caller: Caller,
   ticketId: string,
-  input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string }),
+  input: RelationCreate,
 ): Promise<Relation> {
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId);
