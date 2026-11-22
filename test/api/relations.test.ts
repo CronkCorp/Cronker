@@ -135,47 +135,41 @@ describe("Relations", () => {
     }
   });
 
-  test("a Ticket of another Workspace, or none at all, is refused", async () => {
-    const { cookie, tickets } = await withTickets("Board");
+  test("a Relation is refused, and changes nothing, when it is to another Workspace's Ticket or none, to itself, already there or closing a block cycle", async () => {
+    const { cookie, tickets } = await withTickets("Sign in", "Board", "List");
+    const [signInTicket, board, list] = tickets as [TicketRef, TicketRef, TicketRef];
     const created = await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Elsewhere" } });
     const elsewhere = await createProject(cookie, (await created.json()).id, "Elsewhere", "ELSE");
     const foreign = await createTicket(cookie, elsewhere.id, "Not here");
-
-    for (const otherId of [foreign.id, "00000000-0000-4000-8000-000000000000", "not-a-uuid"]) {
-      const response = await relate(cookie, tickets[0]!.id, "blocks", otherId);
-      expect(response.status).toBe(400);
-      expect((await response.json()).error.code).toBe("unknown_ticket");
-    }
-    expect((await relationsOf(cookie, tickets[0]!.id)).relations).toEqual([]);
-  });
-
-  test("a Ticket can't be related to itself", async () => {
-    const { cookie, tickets } = await withTickets("Board");
-
-    for (const kind of ["blocks", "blockedBy", "relatesTo"]) {
-      const response = await relate(cookie, tickets[0]!.id, kind, tickets[0]!.id);
-      expect(response.status).toBe(400);
-      expect((await response.json()).error.code).toBe("relation_to_itself");
-    }
-  });
-
-  test("the same Relation twice is refused, whichever side it is made from", async () => {
-    const { cookie, tickets } = await withTickets("Board", "List");
-    const [board, list] = tickets as [TicketRef, TicketRef];
-    expect((await relate(cookie, board.id, "relatesTo", list.id)).status).toBe(201);
+    expect((await relate(cookie, signInTicket.id, "blocks", board.id)).status).toBe(201);
     expect((await relate(cookie, board.id, "blocks", list.id)).status).toBe(201);
+    expect((await relate(cookie, board.id, "relatesTo", list.id)).status).toBe(201);
+    const before = await Promise.all(tickets.map((ticket) => relationsOf(cookie, ticket.id)));
 
-    for (const [from, kind, to] of [
-      [board, "relatesTo", list],
-      [list, "relatesTo", board],
-      [board, "blocks", list],
-      [list, "blockedBy", board],
-    ] as const) {
-      const response = await relate(cookie, from.id, kind, to.id);
-      expect(response.status).toBe(409);
-      expect((await response.json()).error.code).toBe("relation_exists");
+    const refusals: [string, string, string, string, number, string][] = [
+      ["another Workspace's Ticket", signInTicket.id, "blocks", foreign.id, 400, "unknown_ticket"],
+      ["no Ticket", signInTicket.id, "blocks", "00000000-0000-4000-8000-000000000000", 400, "unknown_ticket"],
+      ["not an id", signInTicket.id, "blocks", "not-a-uuid", 400, "unknown_ticket"],
+      ["blocking itself", signInTicket.id, "blocks", signInTicket.id, 400, "relation_to_itself"],
+      ["blocked by itself", signInTicket.id, "blockedBy", signInTicket.id, 400, "relation_to_itself"],
+      ["related to itself", signInTicket.id, "relatesTo", signInTicket.id, 400, "relation_to_itself"],
+      ["the same relating", board.id, "relatesTo", list.id, 409, "relation_exists"],
+      ["the same relating from the other side", list.id, "relatesTo", board.id, 409, "relation_exists"],
+      ["the same block", board.id, "blocks", list.id, 409, "relation_exists"],
+      ["the same block from the blocked side", list.id, "blockedBy", board.id, 409, "relation_exists"],
+      ["a two-Ticket cycle", board.id, "blocks", signInTicket.id, 400, "blocking_cycle"],
+      ["a two-Ticket cycle from the blocked side", signInTicket.id, "blockedBy", board.id, 400, "blocking_cycle"],
+      ["a longer cycle", list.id, "blocks", signInTicket.id, 400, "blocking_cycle"],
+      ["a longer cycle from the blocked side", signInTicket.id, "blockedBy", list.id, 400, "blocking_cycle"],
+    ];
+    for (const [name, from, kind, to, status, code] of refusals) {
+      const response = await relate(cookie, from, kind, to);
+      expect(response.status, name).toBe(status);
+      expect((await response.json()).error.code, name).toBe(code);
     }
-    expect((await relationsOf(cookie, board.id)).relations).toHaveLength(2);
+
+    expect(await Promise.all(tickets.map((ticket) => relationsOf(cookie, ticket.id)))).toEqual(before);
+    expect(before[0].relations).toEqual([{ id: expect.any(String), kind: "blocks", ticket: board }]);
   });
 
   test("Relations of a Ticket the User can't see answer 404", async () => {
@@ -185,27 +179,7 @@ describe("Relations", () => {
       expect((await cronk.request("GET", `/api/tickets/${id}/relations`, { cookie })).status).toBe(404);
       expect((await relate(cookie, id, "blocks", tickets[0]!.id)).status).toBe(404);
     }
-  });
-
-  test("a block that would form a cycle is refused, however long the cycle", async () => {
-    const { cookie, tickets } = await withTickets("Sign in", "Board", "List");
-    const [signInTicket, board, list] = tickets as [TicketRef, TicketRef, TicketRef];
-    expect((await relate(cookie, signInTicket.id, "blocks", board.id)).status).toBe(201);
-    expect((await relate(cookie, board.id, "blocks", list.id)).status).toBe(201);
-
-    for (const [from, kind, to] of [
-      [board, "blocks", signInTicket],
-      [signInTicket, "blockedBy", board],
-      [list, "blocks", signInTicket],
-      [signInTicket, "blockedBy", list],
-    ] as const) {
-      const response = await relate(cookie, from.id, kind, to.id);
-      expect(response.status).toBe(400);
-      expect((await response.json()).error.code).toBe("blocking_cycle");
-    }
-    expect((await relationsOf(cookie, signInTicket.id)).relations).toEqual([
-      { id: expect.any(String), kind: "blocks", ticket: board },
-    ]);
+    expect((await relationsOf(cookie, tickets[0]!.id)).relations).toEqual([]);
   });
 
   test("blocks that don't close a loop are allowed, and relating never forms a cycle", async () => {
@@ -282,47 +256,34 @@ describe("Sub-Tickets", () => {
     expect((await relationsOf(cookie, view.id)).parent).toBeNull();
   });
 
-  test("a parent in another Project is refused", async () => {
-    const { cookie, workspace, tickets } = await withTickets("Ticket view");
+  test("a parent is refused, and changes nothing, in another Project, outside the Workspace, or closing a cycle", async () => {
+    const { cookie, workspace, tickets } = await withTickets("Relations", "Ticket view", "Lists");
+    const [relations, view, lists] = tickets as [TicketRef, TicketRef, TicketRef];
     const ops = await createProject(cookie, workspace.id, "Operations", "OPS");
     const deploy = await createTicket(cookie, ops.id, "Deploy");
-
-    const response = await setParent(cookie, tickets[0]!.id, deploy.id);
-
-    expect(response.status).toBe(400);
-    expect((await response.json()).error.code).toBe("parent_in_other_project");
-    expect((await relationsOf(cookie, tickets[0]!.id)).parent).toBeNull();
-  });
-
-  test("a parent that isn't a Ticket of the Workspace is refused", async () => {
-    const { cookie, tickets } = await withTickets("Ticket view");
     const created = await cronk.request("POST", "/api/workspaces", { cookie, body: { name: "Elsewhere" } });
     const elsewhere = await createProject(cookie, (await created.json()).id, "Elsewhere", "ELSE");
     const foreign = await createTicket(cookie, elsewhere.id, "Not here");
-
-    for (const parentId of [foreign.id, "00000000-0000-4000-8000-000000000000"]) {
-      const response = await setParent(cookie, tickets[0]!.id, parentId);
-      expect(response.status).toBe(400);
-      expect((await response.json()).error.code).toBe("unknown_ticket");
-    }
-  });
-
-  test("a parent cycle is refused: a Ticket can't sit under itself or under its own Sub-Tickets", async () => {
-    const { cookie, tickets } = await withTickets("Relations", "Ticket view", "Lists");
-    const [relations, view, lists] = tickets as [TicketRef, TicketRef, TicketRef];
     expect((await setParent(cookie, view.id, relations.id)).status).toBe(200);
     expect((await setParent(cookie, lists.id, view.id)).status).toBe(200);
+    const before = await Promise.all(tickets.map((ticket) => relationsOf(cookie, ticket.id)));
 
-    for (const [ticket, parent] of [
-      [relations, relations],
-      [relations, view],
-      [relations, lists],
-    ] as const) {
-      const response = await setParent(cookie, ticket.id, parent.id);
-      expect(response.status).toBe(400);
-      expect((await response.json()).error.code).toBe("parent_cycle");
+    const refusals: [string, string, string][] = [
+      ["a parent in another Project", deploy.id, "parent_in_other_project"],
+      ["another Workspace's Ticket", foreign.id, "unknown_ticket"],
+      ["no Ticket", "00000000-0000-4000-8000-000000000000", "unknown_ticket"],
+      ["itself", relations.id, "parent_cycle"],
+      ["its Sub-Ticket", view.id, "parent_cycle"],
+      ["its Sub-Ticket's Sub-Ticket", lists.id, "parent_cycle"],
+    ];
+    for (const [name, parentId, code] of refusals) {
+      const response = await setParent(cookie, relations.id, parentId);
+      expect(response.status, name).toBe(400);
+      expect((await response.json()).error.code, name).toBe(code);
     }
-    expect((await relationsOf(cookie, relations.id)).parent).toBeNull();
+
+    expect(await Promise.all(tickets.map((ticket) => relationsOf(cookie, ticket.id)))).toEqual(before);
+    expect(before[0].parent).toBeNull();
   });
 });
 

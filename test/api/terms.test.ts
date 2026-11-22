@@ -183,19 +183,6 @@ describe("Terms", () => {
     ]);
   });
 
-  test("a Version the Term doesn't have is refused, read alone or compared", async () => {
-    const { ada, project } = await workspaceWithProject();
-    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Brief" });
-
-    const read = await call("GET", `/api/terms/${term.id}/versions/2`, ada);
-    const compared = await call("GET", `/api/terms/${term.id}/versions/compare?from=1&to=2`, ada);
-
-    expect(read.status).toBe(404);
-    expect(read.json.error).toEqual(expect.objectContaining({ code: "not_found", message: "The Term Brief has no Version 2." }));
-    expect(compared.status).toBe(404);
-    expect(compared.json.error.message).toBe("The Term Brief has no Version 2.");
-    expect((await call("GET", `/api/terms/${term.id}/versions/0`, ada)).status).toBe(400);
-  });
 });
 
 describe("Project and Workspace Terms", () => {
@@ -281,38 +268,31 @@ describe("deleting a Term", () => {
     expect((await ok("GET", terms, ada)).map((t: { name: string }) => t.name)).toEqual(["Run"]);
     expect((await call("POST", terms, ada, { name: "draft" })).status).toBe(201);
   });
-
-  test("an Agent creates and edits Terms but can't delete one", async () => {
-    const { ada, workspace, project, asAgent } = await workspaceWithProject();
-    const projectTerm = await ok("POST", `/api/projects/${project.id}/terms`, asAgent, { name: "Finding" });
-    const workspaceTerm = await ok("POST", `/api/workspaces/${workspace.id}/terms`, asAgent, { name: "Run" });
-    await ok("PATCH", `/api/terms/${workspaceTerm.id}`, asAgent, { baseVersion: 1, definition: "One agent execution." });
-
-    for (const term of [projectTerm, workspaceTerm]) {
-      const refused = await call("DELETE", `/api/terms/${term.id}`, asAgent);
-
-      expect(refused.status).toBe(403);
-      expect(refused.json.error).toEqual(
-        expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Term") }),
-      );
-      expect((await call("GET", `/api/terms/${term.id}`, ada)).status).toBe(200);
-    }
-  });
 });
 
-describe("Terms and Workspaces", () => {
-  test("nothing crosses Workspaces: another Workspace's Terms answer as not found", async () => {
-    const { ada, workspace, project } = await workspaceWithProject();
-    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Secret" });
-    await ok("POST", `/api/workspaces/${workspace.id}/terms`, ada, { name: "Run" });
+describe("refusals", () => {
+  test("refused, changing nothing: another Workspace's member or Agent, an Agent's delete, a read-only token's writes, and a Version the Term doesn't have", async () => {
+    const { ada, workspace, project, agent, asAgent } = await workspaceWithProject();
+    // An Agent creates and edits Terms.
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, asAgent, { name: "Brief" });
+    const workspaceTerm = await ok("POST", `/api/workspaces/${workspace.id}/terms`, asAgent, { name: "Run" });
+    await ok("PATCH", `/api/terms/${workspaceTerm.id}`, asAgent, { baseVersion: 1, definition: "One agent execution." });
     const second = await ok("POST", "/api/workspaces", ada, { name: "Bob's Workspace" });
     const bob = await addMember(cronk, ada.cookie, second.id, "bob@example.com");
-    const theirs = await ok("POST", `/api/workspaces/${second.id}/terms`, bob, { name: "Secret" });
+    const theirs = await ok("POST", `/api/workspaces/${second.id}/terms`, bob, { name: "Brief" });
     const bobsAgent = await ok("POST", `/api/workspaces/${second.id}/agents`, bob, { name: "bob-bot" });
-    const { secret } = await ok("POST", `/api/agents/${bobsAgent.id}/tokens`, bob, { name: "laptop", access: "full" });
-    const asBobsAgent = { headers: { authorization: `Bearer ${secret}` } };
+    const { secret: bobsSecret } = await ok("POST", `/api/agents/${bobsAgent.id}/tokens`, bob, { name: "laptop", access: "full" });
+    const asBobsAgent = { headers: { authorization: `Bearer ${bobsSecret}` } };
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
+    const reader = { headers: { authorization: `Bearer ${secret}` } };
+    // A read-only token reads Terms.
+    expect((await ok("GET", `/api/terms/${term.id}`, reader)).name).toBe("Brief");
+    expect((await ok("GET", `/api/projects/${project.id}/glossary`, reader)).length).toBe(2);
 
-    for (const as of [{ cookie: bob.cookie }, asBobsAgent]) {
+    const noVersion2 = expect.objectContaining({ code: "not_found", message: "The Term Brief has no Version 2." });
+    const refusals: [string, As, string, string, unknown, number, unknown?][] = [];
+    // Nothing crosses Workspaces: another Workspace's Terms answer as not found.
+    for (const [who, as] of [["Bob", { cookie: bob.cookie }], ["Bob's Agent", asBobsAgent]] as const) {
       for (const [method, path, body] of [
         ["GET", `/api/terms/${term.id}`],
         ["GET", `/api/terms/${term.id}/versions`],
@@ -326,29 +306,31 @@ describe("Terms and Workspaces", () => {
         ["GET", `/api/workspaces/${workspace.id}/terms`],
         ["POST", `/api/workspaces/${workspace.id}/terms`, { name: "Planted" }],
       ] as const) {
-        const response = await call(method, path, as, body);
-        expect(response.status, `${method} ${path}`).toBe(404);
+        refusals.push([who, as, method, path, body, 404]);
       }
     }
-    const versions = await ok("GET", `/api/terms/${term.id}/versions`, ada);
-    expect(versions.map((v: { number: number }) => v.number)).toEqual([1]);
-    expect((await ok("GET", `/api/workspaces/${second.id}/terms`, bob)).map((t: { id: string }) => t.id)).toEqual([theirs.id]);
-  });
-
-  test("an Agent's read-only token reads Terms but can't create or save them", async () => {
-    const { ada, project, agent } = await workspaceWithProject();
-    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Run" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
-    const reader = { headers: { authorization: `Bearer ${secret}` } };
-
-    expect((await ok("GET", `/api/terms/${term.id}`, reader)).name).toBe("Run");
-    expect((await ok("GET", `/api/projects/${project.id}/glossary`, reader)).length).toBe(1);
-    for (const [method, path, body] of [
-      ["POST", `/api/projects/${project.id}/terms`, { name: "Mine" }],
-      ["PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "Mine." }],
-    ] as const) {
-      const refused = await call(method, path, reader, body);
-      expect([refused.status, refused.json.error.code], `${method} ${path}`).toEqual([403, "read_only_token"]);
+    const agentDelete = expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Term") });
+    refusals.push(
+      ["an Agent", asAgent, "DELETE", `/api/terms/${term.id}`, undefined, 403, agentDelete],
+      ["an Agent", asAgent, "DELETE", `/api/terms/${workspaceTerm.id}`, undefined, 403, agentDelete],
+      ["a read-only token", reader, "POST", `/api/projects/${project.id}/terms`, { name: "Mine" }, 403, expect.objectContaining({ code: "read_only_token" })],
+      ["a read-only token", reader, "PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "Mine." }, 403, expect.objectContaining({ code: "read_only_token" })],
+      ["Ada", ada, "GET", `/api/terms/${term.id}/versions/2`, undefined, 404, noVersion2],
+      ["Ada", ada, "GET", `/api/terms/${term.id}/versions/compare?from=1&to=2`, undefined, 404, noVersion2],
+      ["Ada", ada, "GET", `/api/terms/${term.id}/versions/0`, undefined, 400],
+    );
+    for (const [who, as, method, path, body, status, error] of refusals) {
+      const refused = await call(method, path, as, body);
+      expect(refused.status, `${who}: ${method} ${path}`).toBe(status);
+      if (error) expect(refused.json.error, `${who}: ${method} ${path}`).toEqual(error);
     }
+
+    const versions = async (id: string) => (await ok("GET", `/api/terms/${id}/versions`, ada)).map((v: { number: number }) => v.number);
+    expect(await versions(term.id)).toEqual([1]);
+    expect(await versions(workspaceTerm.id)).toEqual([1, 2]);
+    const ids = (terms: { id: string }[]) => terms.map((t) => t.id);
+    expect(ids(await ok("GET", `/api/projects/${project.id}/terms`, ada))).toEqual([term.id]);
+    expect(ids(await ok("GET", `/api/workspaces/${workspace.id}/terms`, ada))).toEqual([workspaceTerm.id]);
+    expect(ids(await ok("GET", `/api/workspaces/${second.id}/terms`, bob))).toEqual([theirs.id]);
   });
 });

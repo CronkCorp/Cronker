@@ -4,6 +4,14 @@ import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
 
+/*
+ * What an Agent may file, edit and block: Sub-Tickets of its running Run's Ticket, and Discovered Tickets
+ * that wait for a User until one delegates, moves or dismisses them. No other spec tests these, so the file
+ * stays apart from `agent-work` (edits and Reports inside a Run), `relations` (the Relation and parent rules
+ * for anyone) and `agent-rights` (what an Agent may never do). Where a case here meets one of those rules,
+ * such as a block closing a cycle, it checks the rule holds through an Agent's own routes, not the rule itself.
+ */
+
 let cronk: StartedCronk;
 beforeEach(async () => {
   cronk = await startCronk();
@@ -267,8 +275,8 @@ describe("the filing Agent and its Discovered Ticket", () => {
     expect(blockedBy).toEqual(expect.objectContaining({ field: "blockedBy", actor: expect.objectContaining({ id: agent.id }), runId: null }));
   });
 
-  test("adds only blocks with it: no other Relation, and none between two Tickets it doesn't hold", async () => {
-    const { ticket, other, found, asAgent } = await discovered();
+  test("adds only blocks with it: no other Relation, none between two Tickets it doesn't hold, and none forming a cycle", async () => {
+    const { ada, ticket, other, found, asAgent } = await discovered();
 
     for (const path of [found.id, ticket.id]) {
       const refused = await call("POST", `/api/tickets/${path}/relations`, asAgent, {
@@ -285,6 +293,12 @@ describe("the filing Agent and its Discovered Ticket", () => {
         expect.objectContaining({ code: "not_your_discovered_ticket", rule: expect.any(String), advice: expect.any(String) }),
       );
     }
+    // The block rules hold on an Agent's blocks as on a User's: one closing a cycle is still refused.
+    await ok("POST", `/api/tickets/${ticket.id}/relations`, ada, { kind: "blocks", ticketId: found.id });
+    const cycle = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketId: ticket.id });
+    expect(cycle.json.error.code).toBe("blocking_cycle");
+    const { relations } = await ok("GET", `/api/tickets/${found.id}/relations`, ada);
+    expect(relations.map((r: { kind: string; ticket: { key: string } }) => [r.kind, r.ticket.key])).toEqual([["blockedBy", "CRONK-1"]]);
   });
 
   test("makes it blocked by a delegated Ticket with a running Run, said either way round", async () => {
@@ -331,15 +345,6 @@ describe("the filing Agent and its Discovered Ticket", () => {
     expect(refused.status).toBe(403);
     expect(refused.json.error.code).toBe("not_your_discovered_ticket");
     expect((await ok("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketId: theirs.id })).kind).toBe("blocks");
-  });
-
-  test("a block that would form a cycle is still refused", async () => {
-    const { ada, ticket, found, asAgent } = await discovered();
-    await ok("POST", `/api/tickets/${ticket.id}/relations`, ada, { kind: "blocks", ticketId: found.id });
-
-    const refused = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketId: ticket.id });
-
-    expect(refused.json.error.code).toBe("blocking_cycle");
   });
 
   test("another Agent doesn't edit it", async () => {

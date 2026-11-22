@@ -131,123 +131,95 @@ describe("a Workspace's event stream", () => {
     }
   });
 
-  test("tells about a Status added, edited or removed", async () => {
-    const { workspace, cookie, project } = await newProject();
-    const stream = await openStream(cookie, workspace.id);
-    const statuses = `/api/projects/${project.id}/statuses`;
-
-    const added = await cronk.request("POST", statuses, { cookie, body: { name: "Waiting", kind: "backlog" } });
-    expect(added.status).toBe(201);
-    const waiting = ((await added.json()) as Project).statuses.find((s) => s.name === "Waiting")!;
-    const edited = await cronk.request("PATCH", `${statuses}/${waiting.id}`, { cookie, body: { position: 0 } });
-    expect(edited.status).toBe(200);
-    expect((await cronk.request("DELETE", `${statuses}/${waiting.id}`, { cookie })).status).toBe(200);
-
-    for (let i = 0; i < 3; i++) {
-      expect(await stream.next()).toEqual({ type: "statuses.changed", data: { projectId: project.id } });
-    }
-  });
-
-  test("tells about a Project created with its Statuses", async () => {
-    const { workspace, cookie } = await newProject();
-    const stream = await openStream(cookie, workspace.id);
-
-    const response = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, {
-      cookie,
-      body: { name: "Operations", key: "OPS" },
-    });
+  type Setting = Awaited<ReturnType<typeof newProject>>;
+  type Event = { type: string; data: Record<string, unknown> };
+  const created = async (path: string, cookie: string, body: object) => {
+    const response = await cronk.request("POST", path, { cookie, body });
     expect(response.status).toBe(201);
+    return (await response.json()) as { id: string };
+  };
+  const ok = async (method: string, path: string, cookie: string, body?: object) => {
+    expect((await cronk.request(method, path, { cookie, body })).status).toBeLessThan(300);
+  };
 
-    const project = (await response.json()) as Project;
-    expect(await stream.next()).toEqual({ type: "project.created", data: { projectId: project.id } });
-  });
+  // Each case makes its changes, after the stream is open, and gives the events the stream
+  // tells of them, in order; nothing more may follow.
+  const resources: [string, (setting: Setting) => Promise<Event[]>][] = [
+    [
+      "a Status added, edited or removed",
+      async ({ cookie, project }) => {
+        const statuses = `/api/projects/${project.id}/statuses`;
+        const added = await cronk.request("POST", statuses, { cookie, body: { name: "Waiting", kind: "backlog" } });
+        expect(added.status).toBe(201);
+        const waiting = ((await added.json()) as Project).statuses.find((s) => s.name === "Waiting")!;
+        await ok("PATCH", `${statuses}/${waiting.id}`, cookie, { position: 0 });
+        await ok("DELETE", `${statuses}/${waiting.id}`, cookie);
+        const changed = { type: "statuses.changed", data: { projectId: project.id } };
+        return [changed, changed, changed];
+      },
+    ],
+    [
+      "a Project created with its Statuses",
+      async ({ cookie, workspace }) => {
+        const project = await created(`/api/workspaces/${workspace.id}/projects`, cookie, { name: "Operations", key: "OPS" });
+        return [{ type: "project.created", data: { projectId: project.id } }];
+      },
+    ],
+    [
+      "a Document created, saved, moved or deleted, in the Workspace's page tree or a Project's",
+      async ({ cookie, workspace, project }) => {
+        const guide = await created(`/api/workspaces/${workspace.id}/documents`, cookie, { title: "Guide", body: "Draft" });
+        const plan = await created(`/api/projects/${project.id}/documents`, cookie, { title: "Plan", body: "Draft" });
+        await ok("PATCH", `/api/documents/${guide.id}`, cookie, { baseVersion: 1, body: "Done" });
+        await ok("PATCH", `/api/documents/${plan.id}`, cookie, { position: 0 });
+        await ok("DELETE", `/api/documents/${guide.id}`, cookie);
+        const inWorkspace = { type: "document.changed", data: { projectId: null, documentId: guide.id } };
+        const inProject = { type: "document.changed", data: { projectId: project.id, documentId: plan.id } };
+        return [inWorkspace, inProject, inWorkspace, inProject, inWorkspace];
+      },
+    ],
+    [
+      "an Artifact created or saved, in the Workspace or a Project",
+      async ({ cookie, workspace, project }) => {
+        const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+        const report = await created(`/api/workspaces/${workspace.id}/artifacts`, cookie, { title: "Weekly report", files });
+        const board = await created(`/api/projects/${project.id}/artifacts`, cookie, { title: "Board", files });
+        await ok("PATCH", `/api/artifacts/${board.id}`, cookie, { baseVersion: 1, title: "Board, take two" });
+        const inWorkspace = { type: "artifact.changed", data: { projectId: null, artifactId: report.id } };
+        const inProject = { type: "artifact.changed", data: { projectId: project.id, artifactId: board.id } };
+        return [inWorkspace, inProject, inProject];
+      },
+    ],
+    [
+      "a Term created, saved or deleted, in the Workspace's glossary or a Project's",
+      async ({ cookie, workspace, project }) => {
+        const ticket = await created(`/api/workspaces/${workspace.id}/terms`, cookie, { name: "Ticket", definition: "What it means." });
+        const run = await created(`/api/projects/${project.id}/terms`, cookie, { name: "Run", definition: "What it means." });
+        await ok("PATCH", `/api/terms/${run.id}`, cookie, { baseVersion: 1, definition: "One go." });
+        await ok("DELETE", `/api/terms/${ticket.id}`, cookie);
+        const inWorkspace = { type: "term.changed", data: { projectId: null, termId: ticket.id } };
+        const inProject = { type: "term.changed", data: { projectId: project.id, termId: run.id } };
+        return [inWorkspace, inProject, inProject, inWorkspace];
+      },
+    ],
+    [
+      "a Decision recorded or saved, in the Workspace's register or a Project's, and not a save that changes nothing",
+      async ({ cookie, workspace, project }) => {
+        const postgres = await created(`/api/workspaces/${workspace.id}/decisions`, cookie, { title: "Use Postgres", body: "Why." });
+        const events = await created(`/api/projects/${project.id}/decisions`, cookie, { title: "Server-sent events", body: "Why." });
+        await ok("PATCH", `/api/decisions/${events.id}`, cookie, { baseVersion: 1, status: "accepted" });
+        await ok("PATCH", `/api/decisions/${events.id}`, cookie, { baseVersion: 2, status: "accepted" });
+        const inWorkspace = { type: "decision.changed", data: { projectId: null, decisionId: postgres.id } };
+        const inProject = { type: "decision.changed", data: { projectId: project.id, decisionId: events.id } };
+        return [inWorkspace, inProject, inProject];
+      },
+    ],
+  ];
 
-  test("tells about a Document created, saved, moved or deleted, in the Workspace's page tree or a Project's", async () => {
-    const { workspace, cookie, project } = await newProject();
-    const stream = await openStream(cookie, workspace.id);
-    const create = async (path: string, title: string) => {
-      const response = await cronk.request("POST", path, { cookie, body: { title, body: "Draft" } });
-      expect(response.status).toBe(201);
-      return (await response.json()) as { id: string };
-    };
-
-    const guide = await create(`/api/workspaces/${workspace.id}/documents`, "Guide");
-    const plan = await create(`/api/projects/${project.id}/documents`, "Plan");
-    const saved = await cronk.request("PATCH", `/api/documents/${guide.id}`, { cookie, body: { baseVersion: 1, body: "Done" } });
-    expect(saved.status).toBe(200);
-    const moved = await cronk.request("PATCH", `/api/documents/${plan.id}`, { cookie, body: { position: 0 } });
-    expect(moved.status).toBe(200);
-    expect((await cronk.request("DELETE", `/api/documents/${guide.id}`, { cookie })).status).toBe(204);
-
-    const inWorkspace = { type: "document.changed", data: { projectId: null, documentId: guide.id } };
-    const inProject = { type: "document.changed", data: { projectId: project.id, documentId: plan.id } };
-    for (const expected of [inWorkspace, inProject, inWorkspace, inProject, inWorkspace]) {
-      expect(await stream.next()).toEqual(expected);
-    }
-  });
-
-  test("tells about an Artifact created or saved, in the Workspace or a Project", async () => {
-    const { workspace, cookie, project } = await newProject();
-    const stream = await openStream(cookie, workspace.id);
-    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
-    const create = async (path: string, title: string) => {
-      const response = await cronk.request("POST", path, { cookie, body: { title, files } });
-      expect(response.status).toBe(201);
-      return (await response.json()) as { id: string };
-    };
-
-    const report = await create(`/api/workspaces/${workspace.id}/artifacts`, "Weekly report");
-    const board = await create(`/api/projects/${project.id}/artifacts`, "Board");
-    const saved = await cronk.request("PATCH", `/api/artifacts/${board.id}`, { cookie, body: { baseVersion: 1, title: "Board, take two" } });
-    expect(saved.status).toBe(200);
-
-    const inWorkspace = { type: "artifact.changed", data: { projectId: null, artifactId: report.id } };
-    const inProject = { type: "artifact.changed", data: { projectId: project.id, artifactId: board.id } };
-    for (const expected of [inWorkspace, inProject, inProject]) {
-      expect(await stream.next()).toEqual(expected);
-    }
-  });
-
-  test("tells about a Term created, saved or deleted, in the Workspace's glossary or a Project's", async () => {
-    const { workspace, cookie, project } = await newProject();
-    const stream = await openStream(cookie, workspace.id);
-    const create = async (path: string, name: string) => {
-      const response = await cronk.request("POST", path, { cookie, body: { name, definition: "What it means." } });
-      expect(response.status).toBe(201);
-      return (await response.json()) as { id: string };
-    };
-
-    const ticket = await create(`/api/workspaces/${workspace.id}/terms`, "Ticket");
-    const run = await create(`/api/projects/${project.id}/terms`, "Run");
-    const saved = await cronk.request("PATCH", `/api/terms/${run.id}`, { cookie, body: { baseVersion: 1, definition: "One go." } });
-    expect(saved.status).toBe(200);
-    expect((await cronk.request("DELETE", `/api/terms/${ticket.id}`, { cookie })).status).toBe(204);
-
-    const inWorkspace = { type: "term.changed", data: { projectId: null, termId: ticket.id } };
-    const inProject = { type: "term.changed", data: { projectId: project.id, termId: run.id } };
-    for (const expected of [inWorkspace, inProject, inProject, inWorkspace]) {
-      expect(await stream.next()).toEqual(expected);
-    }
-  });
-
-  test("tells about a Decision recorded or saved, in the Workspace's register or a Project's, and not about a save that changes nothing", async () => {
-    const { workspace, cookie, project } = await newProject();
-    const stream = await openStream(cookie, workspace.id);
-    const record = async (path: string, title: string) => {
-      const response = await cronk.request("POST", path, { cookie, body: { title, body: "Why." } });
-      expect(response.status).toBe(201);
-      return (await response.json()) as { id: string };
-    };
-
-    const postgres = await record(`/api/workspaces/${workspace.id}/decisions`, "Use Postgres");
-    const events = await record(`/api/projects/${project.id}/decisions`, "Server-sent events");
-    for (const body of [{ baseVersion: 1, status: "accepted" }, { baseVersion: 2, status: "accepted" }]) {
-      expect((await cronk.request("PATCH", `/api/decisions/${events.id}`, { cookie, body })).status).toBe(200);
-    }
-
-    const inWorkspace = { type: "decision.changed", data: { projectId: null, decisionId: postgres.id } };
-    const inProject = { type: "decision.changed", data: { projectId: project.id, decisionId: events.id } };
-    for (const expected of [inWorkspace, inProject, inProject]) {
+  test.each(resources)("tells about %s", async (_name, act) => {
+    const setting = await newProject();
+    const stream = await openStream(setting.cookie, setting.workspace.id);
+    for (const expected of await act(setting)) {
       expect(await stream.next()).toEqual(expected);
     }
     await stream.expectQuiet();
