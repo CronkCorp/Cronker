@@ -1,7 +1,8 @@
 import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
-import { recordChanges, type ChangeActor } from "../work/changes.js";
+import type { ChangeActor } from "../work/changes.js";
+import { lockTickets, writeTicket, type TicketPatch } from "../work/ticket-writes.js";
 import { statusesOf } from "../work/projects.js";
 import type { Outcome } from "../work/steps.js";
 import { sendBackOnEnteringReview } from "./conflicts.js";
@@ -131,10 +132,24 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   const to =
     decision.outcome?.statusId ??
     (target.kind === "status" ? target.statusId : target.kind === "sentBack" ? target.step.statusId : ticket.statusId);
+  const done = statuses.find((s) => s.id === to)!.kind === "done";
+  // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.
+  const completion: TicketPatch = done
+    ? {
+        verification: move.verification,
+        completedFromStatusId: target.kind === "status" ? target.completedFrom : target.step.statusId,
+        completedWithoutStep: target.kind === "status" && target.withoutStep === true,
+        completedByPullRequestId: move.pullRequestId ?? null,
+      }
+    : {};
+  const [locked] = await lockTickets(tx, [ticket.id]);
+  const { written } = await writeTicket(context, tx, locked!, move.by, { statusId: to, ...completion }, { at: now });
+  // A move that changes nothing on the Ticket still tells the Workspace, as the Run that moved it ended.
+  if (!written) {
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  }
   if (to !== ticket.statusId) {
-    await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticket.id, to, now]);
     // A Ticket moved by needs you waits in its Assignee's Inbox until it moves again.
-    await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
     if (decision.outcome?.needsYou && target.kind !== "status") {
       await tx.query(
         `insert into needs_you (ticket_id, workspace_id, run_id, outcome, step_status_id, step_status_name, question)
@@ -142,28 +157,13 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
         [ticket.id, ticket.workspaceId, move.runId ?? null, decision.outcome.name, target.step.statusId, target.step.name, decision.question],
       );
     }
-    const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
-    await recordChanges(tx, ticket, move.by, now, [{ field: "status", from: named(ticket.statusId), to: named(to) }]);
     await blockingChanged(context, tx, [ticket.id]);
     // A failure known before an Outcome moved it into a Review Status sends it back, before a Run starts there:
-    // that move tells the Workspace and starts the next Run. Otherwise Cronk asks GitHub whether it conflicts.
+    // that move starts the next Run. Otherwise Cronk asks GitHub whether it conflicts.
     if (target.kind === "outcome" && statuses.find((s) => s.id === to)!.kind === "review") {
       if (await sendBackOnEnteringReview(context, tx, ticket.id)) return decision;
     }
   }
-  if (statuses.find((s) => s.id === to)!.kind === "done") {
-    // A completion by Cronk is Unverified until a User Accepts or Reopens it, unless it comes Verified.
-    const completedFrom = target.kind === "status" ? target.completedFrom : target.step.statusId;
-    const withoutStep = target.kind === "status" && target.withoutStep === true;
-    await tx.query(
-      `update tickets set verification = $2, completed_from_status_id = $3, completed_without_step = $4,
-         completed_by_pull_request_id = $5
-       where id = $1`,
-      [ticket.id, move.verification, completedFrom, withoutStep, move.pullRequestId ?? null],
-    );
-    await recordChanges(tx, ticket, move.by, now, [{ field: "verification", from: ticket.verification, to: move.verification }]);
-  }
-  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   // Moving into a Status counts as entering it.
   await startRunIfNeeded(context, tx, ticket.id, now);
   return decision;

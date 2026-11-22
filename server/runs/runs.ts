@@ -8,7 +8,7 @@ import { isUuid } from "../http/ids.js";
 import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
-import { recordChanges } from "../work/changes.js";
+import { lockTickets, writeTicket } from "../work/ticket-writes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
 import { recordReport } from "../knowledge/reports.js";
@@ -219,8 +219,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   /** Marks whether the Ticket waits for a Run, telling the Workspace's streams if that changed its card. */
   const waitForRun = async (waits: boolean) => {
     if (ticket.waits === waits) return;
-    await tx.query("update tickets set waits_for_run = $2 where id = $1", [ticketId, waits]);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
+    const [locked] = await lockTickets(tx, [ticketId]);
+    await writeTicket(context, tx, locked!, { kind: "cronk" }, { waitsForRun: waits }, { at: now });
   };
   const needsNone = async () => {
     await waitForRun(false);
@@ -240,23 +240,20 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
     skipped.add(status.id);
     const target = statuses.find((s) => s.id === outcome.statusId)!;
-    await tx.query(
-      "update tickets set status_id = $2, status_entered_at = $3 where id = $1",
-      [ticketId, target.id, now],
-    );
-    await tx.query("delete from needs_you where ticket_id = $1", [ticketId]);
     const named = ({ id, name }: Status) => ({ id, name });
-    await recordChanges(tx, { id: ticketId, workspaceId: ticket.workspaceId }, { kind: "cronk" }, now, [
-      {
-        field: "stepSkipped",
-        from: null,
-        to: mergeRule
-          ? { status: named(status), labelRule: null, mergeRule, outcome: outcome.name }
-          : { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name },
-      },
-      { field: "status", from: named(status), to: named(target) },
-    ]);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId });
+    const [locked] = await lockTickets(tx, [ticketId]);
+    await writeTicket(context, tx, locked!, { kind: "cronk" }, { statusId: target.id }, {
+      at: now,
+      changes: [
+        {
+          field: "stepSkipped",
+          from: null,
+          to: mergeRule
+            ? { status: named(status), labelRule: null, mergeRule, outcome: outcome.name }
+            : { status: named(status), labelRule: status.step.labelRule, outcome: outcome.name },
+        },
+      ],
+    });
     // A failure known before the default Outcome moved it into a Review Status sends it back, and Runs start from there;
     // otherwise Cronk asks GitHub whether its Pull Requests conflict.
     if (target.kind === "review") await sendBackOnEnteringReview(context, tx, ticketId);
@@ -351,7 +348,10 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
         // the same limit meanwhile; the periodic check resumes it then (`resumePausedRunners`).
         const slot = await lockSlotOf(tx, runId);
         const { rowCount } = await tx.query("delete from runs where id = $1 and state = 'running'", [runId]);
-        if (rowCount) await tx.query("update tickets set waits_for_run = true where id = $1", [ticketId]);
+        if (rowCount) {
+          const [locked] = await lockTickets(tx, [ticketId]);
+          if (locked) await writeTicket(context, tx, locked, { kind: "cronk" }, { waitsForRun: true }, { at: context.clock.now() });
+        }
         if (slot) {
           await tx.query("update runners set paused_until = greatest(paused_until, $2) where id = $1", [
             slot.runnerId,
