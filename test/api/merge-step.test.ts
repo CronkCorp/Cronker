@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
-// ADR 0005: merging is a Step of its own, skipped unless an agent may merge.
+// ADR 0005, ADR 0011: merging is a Step of its own, skipped unless an agent may merge, when the Ticket joins the Merge
+// Queue if it has a Pull Request to queue.
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -176,7 +177,23 @@ describe("the Merge Step skips itself unless an agent may merge", () => {
     ]);
   });
 
-  test("with Autonomous Delegation and agents may merge on, the Ticket gets a Run on the Merge Step's model", async () => {
+  test("in a Project with Pull Request automation off, where there is no Merge Queue, an Autonomous Delegation Ticket is passed on too", async () => {
+    const { ada, project, ticket, status, shipIt } = await delegatedNextToMerge({ autonomous: true, agentsMayMerge: true });
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { pullRequestAutomation: false });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: shipIt });
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("In Review"));
+    expect(await runsOf(ticket.id, ada)).toEqual([]);
+    expect((await cronksChanges(ticket.id, ada))[0]).toEqual({
+      field: "stepSkipped",
+      from: null,
+      to: { status: { id: shipIt, name: "Ship it" }, labelRule: null, mergeRule: "pullRequestAutomationOff", outcome: "review" },
+    });
+  });
+
+  // One with an open Pull Request joins the Merge Queue instead (merge-queue.test.ts).
+  test("with Autonomous Delegation and agents may merge on but no Pull Request to queue, the Ticket gets a Run on the Merge Step's model", async () => {
     const { ada, ticket, shipIt } = await delegatedNextToMerge({ autonomous: true, agentsMayMerge: true });
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: shipIt });
