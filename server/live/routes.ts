@@ -36,6 +36,8 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
             "(`projectId`, and `ticketId` and `commentId` where they apply), so clients fetch them again. " +
             "Events are sent only for changes in this Workspace, and only while the client belongs to it: " +
             "the stream ends when its sign-in ends or its User is removed from the Workspace. " +
+            "Events about a Project go only to Users who can read it; `project.gained` and `project.lost` tell a " +
+            "User when an Access change gives them a Project or takes one away. " +
             "Nothing is replayed after a reconnect, so a client fetches what it shows again then.\n\n" +
             eventList,
           params: Type.Object({ workspaceId: Type.String() }),
