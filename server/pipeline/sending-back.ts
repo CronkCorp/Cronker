@@ -2,14 +2,17 @@ import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
 import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
+import { statusesOf } from "../work/projects.js";
 import { inUnarchivedProject, listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
  * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit
  * (a check run, a commit status, or a check suite, which fails too when its workflow fails before running any check run),
- * or a review requesting changes, whoever wrote it, sends each linked Ticket that is in a Review Status, has a producing Step and is in a Project with Pull Request automation on that still lists the Pull Request's Repository,
+ * or a review requesting changes, whoever wrote it, sends each linked Ticket that is in a Review Status and has a producing Step, or that waits
+ * in the Merge Queue with the Pull Request, in a Project with Pull Request automation on that still lists the Pull Request's Repository,
  * back to that Step's Status as a move by Cronk. It counts as a round for the Step: past its round limit the Step's *needs you* Outcome applies instead, with
- * Cronk's own Question. Cronk writes a Comment linking the failure. Each head commit and each review sends a
+ * Cronk's own Question. A queued Ticket with no producing Step goes to its Project's first Review Status instead, not as a
+ * round; either move takes it out of the queue. Cronk writes a Comment linking the failure. Each head commit and each review sends a
  * Ticket back at most once, so many failing checks on one commit send it back once. A failure that arrived before
  * the Ticket was in a Review Status, such as while its Code review Run was still working, sends it back once an
  * Outcome moves it into one. A conflict with the base branch sends nothing back: it only marks the Pull Request (see
@@ -74,16 +77,17 @@ function describe(failure: Failure, pullRequest: FailedPullRequest): string {
 
 /**
  * Sends the Tickets the Pull Request links back for the failure, and says whether it sent any. Call it in the
- * transaction that recorded the failure. With `ticketId`, only that Ticket is sent back.
+ * transaction that recorded the failure. With `ticketId`, only that Ticket is sent back; with `again`, even when this
+ * failure sent it back before, as when a User queued it again on the same commit.
  */
 export async function sendBackForFailure(
   context: Context,
   tx: Tx,
   pullRequest: FailedPullRequest,
   failure: Failure,
-  ticketId?: string,
+  { ticketId, again = false }: { ticketId?: string; again?: boolean } = {},
 ): Promise<boolean> {
-  const { rows: tickets } = await tx.query<MovedTicket & { stepStatusId: string; stepName: string }>(
+  const { rows: tickets } = await tx.query<MovedTicket & { stepStatusId: string | null; stepName: string | null }>(
     `select tickets.id, projects.key || '-' || tickets.number as key, tickets.workspace_id as "workspaceId",
        tickets.project_id as "projectId", tickets.status_id as "statusId", tickets.verification,
        producing.id as "stepStatusId", producing.name as "stepName"
@@ -91,11 +95,15 @@ export async function sendBackForFailure(
      join tickets on tickets.id = pull_request_links.ticket_id
      join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
-     join runs on runs.id = pull_request_links.producing_run_id
-     join statuses producing on producing.id = runs.status_id
      -- A Status that has lost its Step since produces nothing to send back to.
-     join steps on steps.status_id = producing.id
-     where pull_request_links.pull_request_id = $1 and projects.pull_request_automation and statuses.kind = 'review'
+     left join (runs join statuses producing on producing.id = runs.status_id join steps on steps.status_id = producing.id)
+       on runs.id = pull_request_links.producing_run_id
+     where pull_request_links.pull_request_id = $1 and projects.pull_request_automation
+       and ((statuses.kind = 'review' and producing.id is not null)
+         -- A queued Ticket leaves the queue, waiting or waiting for its updated branch's checks, unless Cronk is asking
+         -- GitHub to merge it or update its branch already.
+         or exists (select from merge_queue where merge_queue.pull_request_id = $1 and merge_queue.ticket_id = tickets.id
+           and merge_queue.state in ('queued', 'waiting-for-checks')))
        and ${listsPullRequestsRepository} and ${inUnarchivedProject} and ($2::uuid is null or tickets.id = $2::uuid)
      order by tickets.id
      for update of tickets`,
@@ -111,16 +119,22 @@ export async function sendBackForFailure(
     // Each head commit, each review and each base commit sends a Ticket back once.
     const { rowCount: first } = await tx.query(
       `insert into sent_back (pull_request_id, ticket_id, workspace_id, cause, failure, sent_at) values ($1, $2, $3, $4, $5, $6)
-       on conflict do nothing`,
+       on conflict (pull_request_id, ticket_id, cause) do ${again ? "update set failure = excluded.failure, sent_at = excluded.sent_at" : "nothing"}`,
       [pullRequest.id, ticket.id, ticket.workspaceId, causeOf(failure), JSON.stringify(shown(failure)), context.clock.now()],
     );
     if (!first) continue;
     sent = true;
     let movedAt = context.clock.now();
+    // A queued Ticket no Step produced goes to its Project's first Review Status, not as a round.
+    const review = stepStatusId === null ? (await statusesOf(tx, ticket.projectId)).find((s) => s.kind === "review")! : null;
+    const toName = stepName ?? review!.name;
     const decision = await moveByCronk(context, tx, ticket, {
-      target: { kind: "sentBack", step: { statusId: stepStatusId, name: stepName } },
+      target:
+        stepStatusId !== null
+          ? { kind: "sentBack", step: { statusId: stepStatusId, name: toName } }
+          : { kind: "status", statusId: review!.id, completedFrom: null, withoutStep: true },
       by: { kind: "cronk" },
-      stopReason: `${stopsFor[failure.kind]} sent ${ticket.key} back to ${stepName}.`,
+      stopReason: `${stopsFor[failure.kind]} sent ${ticket.key} back to ${toName}.`,
       verification: "unverified",
       // Recorded at the move's time, ahead of the Change moving it.
       beforeMove: async (_decision, now) => {
@@ -129,8 +143,8 @@ export async function sendBackForFailure(
       },
     });
     const sentWhere = decision.outcome?.needsYou
-      ? `That is past ${stepName}'s round limit, so ${ticket.key} comes to its Assignee instead.`
-      : `Sent ${ticket.key} back to ${stepName}.`;
+      ? `That is past ${toName}'s round limit, so ${ticket.key} comes to its Assignee instead.`
+      : `Sent ${ticket.key} back to ${toName}.`;
     await insertComment(context, tx, ticket, { kind: "cronk" }, `${failed} ${sentWhere}`, null, { at: movedAt });
   }
   return sent;
@@ -193,7 +207,7 @@ export async function sendBackForKnownFailures(context: Context, tx: Tx, ticketI
     );
     for (const review of reviews) failures.push({ kind: "review", id: Number(review.id), reviewer: review.reviewer, url: review.url });
     for (const failure of failures) {
-      if (await sendBackForFailure(context, tx, pullRequest, failure, ticketId)) {
+      if (await sendBackForFailure(context, tx, pullRequest, failure, { ticketId })) {
         // What last sent the Ticket back shows on its Pull Request.
         context.live.publish(tx, workspaceId, { type: "pull_requests.changed", projectId, ticketId });
         return true;
