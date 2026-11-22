@@ -21,8 +21,9 @@ const runnerEventList = list(runnerEventTypes);
 export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, live } = context;
   return async (app) => {
-    // Open streams would otherwise keep the server from closing.
-    app.addHook("preClose", async () => live.end(() => true));
+    // Open streams would otherwise keep the server from closing, and so would one subscribed later by a request
+    // already under way.
+    app.addHook("preClose", async () => live.close());
 
     app.get(
       "/api/workspaces/:workspaceId/events",
@@ -46,6 +47,7 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
             200: Type.String({ description: "The event stream." }),
             401: ErrorBody,
             404: ErrorBody,
+            503: ErrorBody,
           },
         },
       },
@@ -75,6 +77,7 @@ export function liveRoutes(context: Context): FastifyPluginAsyncTypebox {
           response: {
             200: Type.String({ description: "The event stream." }),
             401: ErrorBody,
+            503: ErrorBody,
           },
         },
       },
@@ -129,6 +132,7 @@ async function streamEvents(
     throw error;
   }
   if (!open) {
+    if (live.closed) throw new ApiError(503, "closing", "Cronk is shutting down; connect again shortly.");
     throw workspaceId === null ? new ApiError(401, "not_signed_in", "Sign in first.") : new ApiError(404, "not_found", "No such Workspace.");
   }
 

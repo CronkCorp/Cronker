@@ -94,10 +94,30 @@ export interface Subscriber {
  */
 export class Live {
   private readonly subscribers = new Set<Subscriber>();
+  private isClosed = false;
 
+  /** Whether the server is closing, so no stream may stay open. */
+  get closed(): boolean {
+    return this.isClosed;
+  }
+
+  /**
+   * Adds a stream. Once closed, the stream is ended as soon as the caller's code has run, rather than kept: a request
+   * that was still checking its sign-in as the server began closing would otherwise hold the server open.
+   */
   subscribe(subscriber: Subscriber): () => void {
+    if (this.isClosed) {
+      queueMicrotask(() => subscriber.end());
+      return () => {};
+    }
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
+  }
+
+  /** Ends every stream, and every stream subscribed from now on, as the server closes. */
+  close(): void {
+    this.isClosed = true;
+    this.end(() => true);
   }
 
   /**
