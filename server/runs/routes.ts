@@ -3,7 +3,9 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { authenticateAgent } from "../agents/tokens.js";
 import { deliveryRoute } from "../http/deliveries.js";
+import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
+import { placeOfTicket } from "../knowledge/places.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
@@ -98,7 +100,8 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Ends the caller's own running Run with one of the Outcomes its Brief offers, and moves its Ticket to the " +
             "Outcome's Status in the same transaction; a Status with a Step starts the next Run. Only the Run's Agent " +
-            "may finish it, once, and only while its Ticket is still in the Status the Run started in.",
+            "may finish it, once, and only while its Ticket is still in the Status the Run started in. It answers with " +
+            "`avoidedWords`: the words the Project's glossary avoids that the Report and Question use.",
           params: RunParams,
           body: Type.Object({
             outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
@@ -112,10 +115,15 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
               }),
             ),
           }),
-          response: { 200: Run, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: { 200: withAvoidedWords(Run), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
-      async (request) => finishRun(context, await requireCaller(context, request), request.params.runId, request.body),
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const run = await finishRun(context, caller, request.params.runId, request.body);
+        const texts = given({ markdown: [request.body.report, request.body.question] });
+        return warnAgent(context.db, caller, await placeOfTicket(context.db, run.ticketId), texts, run);
+      },
     );
 
     app.post(

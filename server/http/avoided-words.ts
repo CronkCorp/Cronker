@@ -19,6 +19,12 @@ export function withAvoidedWords<P extends TProperties>(schema: TObject<P>) {
   return Type.Object({ ...schema.properties, avoidedWords: Type.Optional(Type.Array(AvoidedWord, { description })) });
 }
 
+/** The texts a save writes, leaving out those it doesn't set, such as the fields an edit leaves as they were. */
+export function given(texts: { plain?: (string | null | undefined)[]; markdown?: (string | null | undefined)[] }): SavedTexts {
+  const set = (list: (string | null | undefined)[] = []) => list.filter((text): text is string => typeof text === "string");
+  return { plain: set(texts.plain), markdown: set(texts.markdown) };
+}
+
 /**
  * What a save answers: what it saved, with `avoidedWords` for an Agent's save, by the glossary of the place the texts
  * were saved in. Run it after the save is committed, so the check never holds a save back.

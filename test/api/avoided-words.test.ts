@@ -195,6 +195,121 @@ describe("avoided-word warnings on an Agent's saves", () => {
     ]);
   });
 
+  test("every other text an Agent saves warns by the glossary of its place; the same save by a User never does", async () => {
+    const { workspace, ada, project, ticket, agent, asAgent } = await workspaceWithGlossary();
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    const page = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const projectTerm = { name: "Project", readable: "Project" };
+    const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Lane" });
+    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Lanes" });
+    const artifact = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, { title: "Board", files: page });
+    const current = async (path: string) => ({ baseVersion: (await ok("GET", path, ada)).version.number as number });
+
+    type Save = { name: string; save: (as: As, agent: boolean) => Promise<{ avoidedWords?: unknown }>; expected: unknown[] };
+    const saves: Save[] = [
+      {
+        name: "filing a Ticket, title and description together",
+        save: (as, agent) =>
+          ok("POST", `/api/projects/${project.id}/tickets`, as, {
+            title: "Task",
+            description: "On the kanban, another task.",
+            ...(agent ? { runId: run.id } : {}),
+          }),
+        expected: [
+          { word: "Task", term: ticketTerm },
+          { word: "kanban", term: boardTerm },
+        ],
+      },
+      {
+        name: "creating a Sub-Ticket",
+        save: (as) => ok("POST", `/api/projects/${project.id}/tickets`, as, { title: "Repo cleanup", parentId: ticket.id }),
+        expected: [{ word: "Repo", term: projectTerm }],
+      },
+      {
+        name: "editing a Ticket checks only what it gives",
+        save: (as) => ok("PATCH", `/api/tickets/${ticket.id}`, as, { description: "Move it along the kanban." }),
+        expected: [{ word: "kanban", term: boardTerm }],
+      },
+      {
+        name: "commenting on a Ticket",
+        save: (as) => ok("POST", `/api/tickets/${ticket.id}/comments`, as, { body: "A task." }),
+        expected: [{ word: "task", term: ticketTerm }],
+      },
+      {
+        name: "commenting on an Artifact",
+        save: (as) => ok("POST", `/api/artifacts/${artifact.id}/comments`, as, { body: "The kanban." }),
+        expected: [{ word: "kanban", term: boardTerm }],
+      },
+      {
+        name: "creating a Project Term",
+        save: (as, agent) =>
+          ok("POST", `/api/projects/${project.id}/terms`, as, { name: agent ? "Column" : "Row", definition: "On the kanban." }),
+        expected: [{ word: "kanban", term: boardTerm }],
+      },
+      {
+        name: "creating a Workspace Term uses only the Workspace's glossary",
+        save: (as, agent) =>
+          ok("POST", `/api/workspaces/${workspace.id}/terms`, as, {
+            name: agent ? "Column" : "Row",
+            definition: "A kanban column, not a task.",
+          }),
+        expected: [{ word: "task", term: ticketTerm }],
+      },
+      {
+        name: "editing a Term",
+        save: async (as) =>
+          ok("PATCH", `/api/terms/${term.id}`, as, { ...(await current(`/api/terms/${term.id}`)), definition: "A repo." }),
+        expected: [{ word: "repo", term: projectTerm }],
+      },
+      {
+        name: "proposing a Decision",
+        save: (as) => ok("POST", `/api/projects/${project.id}/decisions`, as, { title: "Use a kanban", body: "Each task." }),
+        expected: [
+          { word: "kanban", term: boardTerm },
+          { word: "task", term: ticketTerm },
+        ],
+      },
+      {
+        name: "editing a Decision",
+        save: async (as) =>
+          ok("PATCH", `/api/decisions/${decision.id}`, as, { ...(await current(`/api/decisions/${decision.id}`)), body: "In the repo." }),
+        expected: [{ word: "repo", term: projectTerm }],
+      },
+      {
+        name: "creating an Artifact",
+        save: (as) =>
+          ok("POST", `/api/projects/${project.id}/artifacts`, as, { title: "Kanban", description: "Each task.", files: page }),
+        expected: [
+          { word: "Kanban", term: boardTerm },
+          { word: "task", term: ticketTerm },
+        ],
+      },
+      {
+        name: "saving an Artifact",
+        save: async (as) =>
+          ok("PATCH", `/api/artifacts/${artifact.id}`, as, { ...(await current(`/api/artifacts/${artifact.id}`)), title: "Repo board" }),
+        expected: [{ word: "Repo", term: projectTerm }],
+      },
+    ];
+
+    for (const { name, save, expected } of saves) {
+      expect((await save(asAgent, true)).avoidedWords, name).toEqual(expected);
+      expect(await save(ada, false), name).not.toHaveProperty("avoidedWords");
+    }
+
+    const finished = await ok("POST", `/api/runs/${run.id}/finish`, asAgent, {
+      outcome: "needs you",
+      report: "The repo is fine.",
+      question: "Which kanban?",
+    });
+    expect(finished.avoidedWords).toEqual([
+      { word: "repo", term: projectTerm },
+      { word: "kanban", term: boardTerm },
+    ]);
+  });
+
   test("a User's saves never warn", async () => {
     const { project, ada } = await workspaceWithGlossary();
 

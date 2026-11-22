@@ -82,6 +82,11 @@ type BodyFields<B> = {
 };
 
 export function buildMcpServer(api: Api): McpServer {
+  const avoidedWordsNote =
+    " The answer's `avoidedWords` lists each word the glossary avoids that your text uses, with the Term to use " +
+    "instead, ignoring code, block quotes and link targets: the save goes through anyway, so fix the wording in a " +
+    "next save.";
+
   // Built here rather than when this module loads: a module importing it may sit in an import cycle with the routes'
   // bodies, which are then not yet defined.
   /** A new Ticket's own fields; the tools name its parent or source their own way. */
@@ -291,7 +296,7 @@ export function buildMcpServer(api: Api): McpServer {
         "its Comments: give exactly one of `ticket` and `artifact`. A Comment on an Artifact also shows on the " +
         "Tickets linking it. Refused for a read-only token; a Ticket or Artifact outside your Workspace answers as " +
         "not found, and a reply only goes to a Comment on the same Ticket or Artifact: reply to a Comment on a " +
-        "Linked Artifact, as `read_ticket` shows it, by its `artifactId`.",
+        "Linked Artifact, as `read_ticket` shows it, by its `artifactId`." + avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument.optional(),
         artifact: z
@@ -329,7 +334,7 @@ export function buildMcpServer(api: Api): McpServer {
         "estimate are given; `null` clears a due date or estimate, and Labels replace the Ticket's Labels. Each Change " +
         "records your Run. A Discovered Ticket you filed you may also edit outside a Run, its title included, until a " +
         "User delegates, moves or dismisses it. Refused for any other Ticket, outside a running Run, and for any other " +
-        "field: a Ticket's Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`.",
+        "field: a Ticket's Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`." + avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument,
         ...bodyFields(AgentTicketEdit),
@@ -353,7 +358,7 @@ export function buildMcpServer(api: Api): McpServer {
         "parent with its slices under it: each Sub-Ticket is a Discovered Ticket of yours with the same source, which " +
         "you may edit and add blocks from (between slices, say), but only the parent waits in the Inbox. When a User " +
         "delegates, moves or dismisses the parent, its Sub-Tickets are settled with it; delegating it hands them the " +
-        "Delegation. Refused for any other parent, such as a Ticket you didn't file or one a User has taken up.",
+        "Delegation. Refused for any other parent, such as a Ticket you didn't file or one a User has taken up." + avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument.describe(
           "The parent: your Run's Ticket, or a waiting Discovered Ticket you filed. Its key, such as `CRONK-12`, or its id.",
@@ -380,7 +385,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead. " +
         "File only what isn't tracked yet: `search` first, and if an open Ticket already covers it, `comment` on that " +
         "one instead; check a fault in the code still happens on the Repository's default branch, not only on your " +
-        "own branch; and name any related Tickets in the description.",
+        "own branch; and name any related Tickets in the description." + avoidedWordsNote,
       inputSchema: {
         project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
         ...newTicketFields,
@@ -428,11 +433,6 @@ export function buildMcpServer(api: Api): McpServer {
         return send("POST", `/api/tickets/${found.id}/relations`, { kind: blocks ? "blocks" : "blockedBy", ...other });
       }),
   );
-
-  const avoidedWordsNote =
-    " The answer's `avoidedWords` lists each word the glossary avoids that your text uses, with the Term to use " +
-    "instead, ignoring code, block quotes and link targets: the save goes through anyway, so fix the wording in a " +
-    "next save.";
 
   server.registerTool(
     "write_report",
@@ -692,7 +692,7 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Creates a Term in a Project, or in the Workspace when no Project is given, at Version 1 by your Agent. Its " +
         "name is unique ignoring case among the Project's own Terms, or the Workspace's: a taken one is refused with " +
-        "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary.",
+        "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary." + avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
         ...bodyFields(TermCreate),
@@ -710,7 +710,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Saves a Term as its next Version, by your Agent, keeping what you leave out, based on the Version you read: " +
         "give its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, " +
         "carrying the current Version as `current`: merge your change into it and save again based on it. Only Users " +
-        "delete Terms.",
+        "delete Terms." + avoidedWordsNote,
       inputSchema: {
         term: termArgument,
         ...bodyFields(TermEdit),
@@ -868,7 +868,7 @@ export function buildMcpServer(api: Api): McpServer {
         " Name your running Run to " +
         "link it to the Run's Ticket, where its Users find it; it is then kept in that Ticket's Project or the " +
         "Workspace. " +
-        sizeLimit,
+        sizeLimit + avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
         ...bodyFields(Type.Omit(ArtifactCreate, ["runId"])),
@@ -925,7 +925,7 @@ export function buildMcpServer(api: Api): McpServer {
         "outdated Version is refused with the current one. " +
         artifactPolicy +
         " " +
-        sizeLimit,
+        sizeLimit + avoidedWordsNote,
       inputSchema: {
         artifact: artifactArgument,
         ...saveFields,
@@ -1007,7 +1007,7 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Records a choice and its reasoning as a proposed Decision of a Project, or of the Workspace when no Project " +
         "is given, numbered next there, at Version 1 by your Agent. Only a User accepts, rejects or otherwise changes " +
-        "its status.",
+        "its status." + avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
         ...bodyFields(Type.Pick(DecisionCreate, ["title", "body"])),
@@ -1024,7 +1024,7 @@ export function buildMcpServer(api: Api): McpServer {
         "A new title or body saves a Decision as its next Version, by your Agent, based on the Version you read: give " +
         "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
         "the current Version as `current`: merge your change into it and save again based on it. Accepted Decisions " +
-        "stay editable. Only Users change a Decision's status, and nobody deletes one.",
+        "stay editable. Only Users change a Decision's status, and nobody deletes one." + avoidedWordsNote,
       inputSchema: {
         decision: decisionArgument,
         ...decisionTextFields,
@@ -1262,7 +1262,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Refused for another Agent's Run, a Run that isn't running, a Run a User stopped by moving, undelegating " +
         "or re-delegating its Ticket, " +
         "and an Outcome the Run isn't offered. " +
-        "This is the only way an Agent moves a Ticket: Agents never set a Status.",
+        "This is the only way an Agent moves a Ticket: Agents never set a Status." + avoidedWordsNote,
       inputSchema: {
         run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
         outcome: z.string().min(1).describe("The Outcome's name, such as `ready`, ignoring case."),

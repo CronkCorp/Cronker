@@ -10,7 +10,8 @@ import { joinQueue, leaveQueue } from "../pipeline/merge-queue.js";
 import { addComment, Comment, CommentCreate, commentsOn } from "./comments.js";
 import { Report, ReportCreate, reportsOn, writeReport } from "../knowledge/reports.js";
 import { placeOfDocument } from "../knowledge/documents.js";
-import { warnAgent, withAvoidedWords } from "../http/avoided-words.js";
+import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
+import { placeOfComment, placeOfTicket } from "../knowledge/places.js";
 import { acceptTicket, Completion, completionOf, reopenTicket, TicketReopen } from "./verification.js";
 import { addRelation, Relation, RelationCreate, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
@@ -46,15 +47,18 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "(or, naming none, to the Agent's Owner), and waiting in their Inbox until a User delegates, moves or " +
             "dismisses it. Until then the Agent may also split it, in or outside a Run: its Sub-Tickets are " +
             "Discovered Tickets of the same Agent and source, waiting with their parent rather than in the Inbox, " +
-            "and settled along with it. An Agent gets `not_your_discovered_ticket` for any other Discovered Ticket as parent, and `no_running_run` for any other parent.",
+            "and settled along with it. An Agent gets `not_your_discovered_ticket` for any other Discovered Ticket as parent, and `no_running_run` for any other parent. " +
+            "An Agent's save answers with `avoidedWords`: the words the Project's glossary avoids that its title and description use.",
           params: Type.Object({ projectId: Type.String() }),
           body: TicketCreate,
-          response: { 201: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          response: { 201: withAvoidedWords(Ticket), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
         const caller = await requireCaller(context, request);
-        return reply.code(201).send(await createTicket(context, caller, request.params.projectId, request.body));
+        const ticket = await createTicket(context, caller, request.params.projectId, request.body);
+        const texts = given({ plain: [request.body.title], markdown: [request.body.description] });
+        return reply.code(201).send(await warnAgent(db, caller, await placeOfTicket(db, ticket.id), texts, ticket));
       },
     );
 
@@ -131,10 +135,11 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Changes whichever fields are given; `null` clears a field. Labels that differ only in case are kept once, " +
             "as first written. An Assignee must be a member of the Ticket's Workspace. A delegated Ticket entering a Status " +
             "with a Step, or delegated where it is, gets a Run. Agents never set a Status (`agent_sets_no_status`): " +
-            "their Runs move Tickets with `finish`.",
+            "their Runs move Tickets with `finish`. An Agent's save answers with `avoidedWords`: the words the " +
+            "Project's glossary avoids that the title and description it gives use.",
           params: Type.Object({ ticketId: Type.String() }),
           body: TicketEdit,
-          response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: { 200: withAvoidedWords(Ticket), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
@@ -147,7 +152,10 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
               "the Outcome moves the Ticket.",
           });
         }
-        return editTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId, request.body);
+        const caller = agent ?? (await requireCaller(context, request));
+        const ticket = await editTicket(context, caller, request.params.ticketId, request.body);
+        const texts = given({ plain: [request.body.title], markdown: [request.body.description] });
+        return warnAgent(db, caller, await placeOfTicket(db, ticket.id), texts, ticket);
       },
     );
 
@@ -298,15 +306,20 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "Comment on a Ticket, or reply to a Comment",
-          description: "Users and Agents with a full token may comment on any Ticket of their Workspace.",
+          description:
+            "Users and Agents with a full token may comment on any Ticket of their Workspace. An Agent's Comment " +
+            "answers with `avoidedWords`: the words the glossary avoids that its body uses, by the Project of the " +
+            "Ticket, or of the Artifact a reply goes to.",
           params: Type.Object({ ticketId: Type.String() }),
           body: CommentCreate,
-          response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          response: { 201: withAvoidedWords(Comment), 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
         const caller = await requireCaller(context, request);
-        return reply.code(201).send(await addComment(context, caller, request.params.ticketId, request.body));
+        const comment = await addComment(context, caller, request.params.ticketId, request.body);
+        const place = await placeOfComment(db, comment);
+        return reply.code(201).send(await warnAgent(db, caller, place, { markdown: [request.body.body] }, comment));
       },
     );
 

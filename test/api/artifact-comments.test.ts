@@ -95,9 +95,10 @@ describe("Comments on an Artifact", () => {
     expect(reply).toEqual(
       expect.objectContaining({ replyToId: posted.json.id, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
     );
-    expect(await ok("GET", `/api/artifacts/${board.id}/comments`, ada)).toEqual([posted.json, reply]);
+    const { avoidedWords: _, ...replied } = reply;
+    expect(await ok("GET", `/api/artifacts/${board.id}/comments`, ada)).toEqual([posted.json, replied]);
     // A slug names the Artifact as its id does.
-    expect(await ok("GET", `/api/artifacts/${board.slug}/comments`, ada)).toEqual([posted.json, reply]);
+    expect(await ok("GET", `/api/artifacts/${board.slug}/comments`, ada)).toEqual([posted.json, replied]);
   });
 
   test("a Workspace's own Artifact takes Comments too", async () => {
