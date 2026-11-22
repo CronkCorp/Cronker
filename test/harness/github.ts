@@ -183,6 +183,14 @@ export interface StandInGitHub {
   linkRequests: string[];
   /** When set, the asks for an issue's links it picks, as `linkRequests` writes them, answer 502. */
   linksFail: ((asked: string) => boolean) | null;
+  /**
+   * Rate-limits the issues list until `until` by the clock, as GitHub does once the App has used up its requests: a
+   * 403 (by default) or 429 with no requests remaining and `X-RateLimit-Reset`, or with `Retry-After` in seconds
+   * instead when `header` says so.
+   */
+  rateLimitIssues(until: Date, options?: { status?: 403 | 429; header?: "reset" | "retry-after" }): void;
+  /** Rate-limits the asks for an issue's sub-issues and blockers until `until`, as `rateLimitIssues` does the list. */
+  rateLimitLinks(until: Date, options?: { status?: 403 | 429; header?: "reset" | "retry-after" }): void;
   /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
   merges: StandInMerge[];
   /**
@@ -280,6 +288,18 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   const installationTokens = new Map<string, IssuedToken>();
   let refuseRedelivery = false;
   const pullRequests = new Map<string, StandInPullRequest>();
+  type Limit = { until: Date; status: 403 | 429; header: "reset" | "retry-after" };
+  let issuesLimit: Limit | undefined;
+  let linksLimit: Limit | undefined;
+  const rateLimited = (response: ServerResponse, limit: Limit) => {
+    const resetSeconds = Math.ceil(limit.until.getTime() / 1000);
+    const headers: Record<string, string> =
+      limit.header === "reset"
+        ? { "x-ratelimit-limit": "5000", "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetSeconds) }
+        : { "retry-after": String(Math.max(0, resetSeconds - Math.floor(clock.now().getTime() / 1000))) };
+    const message = { message: "API rate limit exceeded for installation.", documentation_url: "https://docs.github.com/rest/rate-limit" };
+    json(response, limit.status, message, headers);
+  };
 
   const github: StandInGitHub = {
     url: "",
@@ -355,6 +375,12 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     issues: [],
     linkRequests: [],
     linksFail: null,
+    rateLimitIssues(until, { status = 403, header = "reset" } = {}) {
+      issuesLimit = { until, status, header };
+    },
+    rateLimitLinks(until, { status = 403, header = "reset" } = {}) {
+      linksLimit = { until, status, header };
+    },
     merges: [],
     onMerge: null,
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
@@ -656,6 +682,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       if (!repository) return json(response, 404, { message: "Not Found" });
       const access = installation.permissions.issues;
       if (access !== "read" && access !== "write") return json(response, 403, { message: "Resource not accessible by integration" });
+      if (issuesLimit && clock.now() < issuesLimit.until) return rateLimited(response, issuesLimit);
       const state = url.searchParams.get("state") ?? "open";
       const listed = github.issues
         .filter((i) => i.repository === repository && (state === "all" || i.state === state))
@@ -703,6 +730,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       if (!repository || !issue) return json(response, 404, { message: "Not Found" });
       const access = installation.permissions.issues;
       if (access !== "read" && access !== "write") return json(response, 403, { message: "Resource not accessible by integration" });
+      if (linksLimit && clock.now() < linksLimit.until) return rateLimited(response, linksLimit);
       const listed = linked[3] === "sub_issues" ? github.issues.filter((i) => i.parent === issue) : issue.blockedBy;
       const { items, link } = page(url, listed);
       return json(

@@ -19,7 +19,7 @@ What a web address, the HTTP API and the MCP tools name a thing by in place of i
 _Avoid_: Alias, handle, permalink
 
 **Project**:
-The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it.
+The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived.
 _Avoid_: Board, space, repo
 
 ### Work
@@ -85,7 +85,7 @@ What a Run asks a User when it ends with its *needs you* Outcome. Answering it w
 _Avoid_: Prompt, clarification, blocker
 
 **Label**:
-A free-form tag on a Ticket, matched ignoring case. A Step may require a Label or be skipped by one; a skipped Step sends the Ticket straight on by its default Outcome.
+A free-form tag on a Ticket, matched ignoring case. A Step may require a Label or be skipped by one; a skipped Step sends the Ticket straight on by its default Outcome. One Label means something to Cronk itself: `local-only` marks work that can't run in a cloud session, so the Ticket isn't delegated to an Agent whose Runner runs in the cloud (`subscription` and `managed_agents` do), and gets a refused Run if it reaches one some other way.
 _Avoid_: Tag, category
 
 **Comment**:

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { minutes } from "../harness/clock.js";
 import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
@@ -248,6 +249,50 @@ describe("importing a Repository's GitHub issues", () => {
 
     expect(await runImportsToEnd(cookie, project.id, repository.id)).toMatchObject({ state: "done", imported: 1 });
   });
+
+  const issuesCalls = () => cronk.github.apiCalls.filter((call) => /^GET \/repos\/.+\/issues$/.test(call)).length;
+
+  test("an import GitHub rate-limits waits until the limit lifts, shows it, then carries on where it left off", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    for (let n = 1; n <= 250; n++) cronk.github.issue(repository, { title: `Issue ${n}`, createdAt: new Date(Date.UTC(2024, 0, 1, 0, n)) });
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ imported: 100, waitingUntil: null });
+
+    const lifts = new Date(cronk.clock.now().getTime() + minutes(20));
+    cronk.github.rateLimitIssues(lifts);
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({
+      state: "running",
+      imported: 100,
+      waitingUntil: lifts.toISOString(),
+    });
+    const callsWhileWaiting = issuesCalls();
+    cronk.clock.advance(minutes(19));
+    await cronk.runImports();
+    expect(issuesCalls()).toBe(callsWhileWaiting);
+
+    cronk.clock.advance(minutes(1));
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", imported: 250, skipped: 0, waitingUntil: null });
+    const titles = (await ticketsOf(cookie, project.id)).map((t: { title: string }) => t.title).sort();
+    expect(titles).toEqual(Array.from({ length: 250 }, (_, i) => `Issue ${i + 1}`).sort());
+  });
+
+  test("a 429 with Retry-After waits that long", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, { title: "An issue" });
+    await startImport(cookie, project.id, repository.id);
+
+    const lifts = new Date(cronk.clock.now().getTime() + minutes(2));
+    cronk.github.rateLimitIssues(lifts, { status: 429, header: "retry-after" });
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ state: "running", imported: 0, waitingUntil: lifts.toISOString() });
+
+    cronk.clock.advance(minutes(2));
+    expect(await runImportsToEnd(cookie, project.id, repository.id)).toMatchObject({ state: "done", imported: 1, waitingUntil: null });
+  });
 });
 
 async function relationsOf(cookie: string, ticketId: string) {
@@ -402,6 +447,44 @@ describe("an import keeps the issues' structure", () => {
     const ended = await runImportsToEnd(cookie, project.id, repository.id);
 
     expect(ended).toMatchObject({ state: "done" });
+    const byTitle = await ticketsByTitle(cookie, project.id);
+    expect(byTitle["Child"].parentId).toBe(byTitle["Parent"].id);
+    expect((await relationsOf(cookie, byTitle["Child"].id)).relations).toHaveLength(1);
+    expect((await timelineOf(cookie, byTitle["Child"].id)).map((c: { field: string }) => c.field)).toEqual(["created", "parent", "blockedBy"]);
+    expect((await timelineOf(cookie, byTitle["Parent"].id)).map((c: { field: string }) => c.field)).toEqual(["created", "subTicket"]);
+  });
+
+  test("a linking pass GitHub rate-limits waits until the limit lifts, then links the rest, making nothing twice", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const parent = cronk.github.issue(repository, { title: "Parent", createdAt: new Date("2024-01-01T00:00:00Z") });
+    const blocker = cronk.github.issue(repository, { title: "Blocker", createdAt: new Date("2024-01-02T00:00:00Z") });
+    cronk.github.issue(repository, { title: "Child", parent, blockedBy: [blocker], createdAt: new Date("2024-01-03T00:00:00Z") });
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+
+    // GitHub answers the parent's sub-issues, then runs out of requests as the pass asks for the child's blockers.
+    const lifts = new Date(cronk.clock.now().getTime() + minutes(10));
+    cronk.github.linksFail = (asked) => {
+      if (asked.endsWith("/dependencies/blocked_by")) cronk.github.rateLimitLinks(lifts);
+      return false;
+    };
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({
+      state: "running",
+      phase: "linking",
+      waitingUntil: lifts.toISOString(),
+    });
+    expect((await ticketsByTitle(cookie, project.id))["Child"].parentId).not.toBeNull();
+    cronk.github.linksFail = null;
+    const asked = cronk.github.linkRequests.length;
+    cronk.clock.advance(minutes(9));
+    await cronk.runImports();
+    expect(cronk.github.linkRequests).toHaveLength(asked);
+
+    cronk.clock.advance(minutes(1));
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", waitingUntil: null });
     const byTitle = await ticketsByTitle(cookie, project.id);
     expect(byTitle["Child"].parentId).toBe(byTitle["Parent"].id);
     expect((await relationsOf(cookie, byTitle["Child"].id)).relations).toHaveLength(1);

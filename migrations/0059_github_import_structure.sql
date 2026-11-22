@@ -10,8 +10,8 @@ alter table tickets add column github_import_id uuid references github_imports (
 create index tickets_github_issue_number_idx on tickets (project_id, github_repository_id, github_issue_number)
   where github_issue_number is not null;
 
--- The issues an import still has to link: every one it made a Ticket of, whose text it rewrites, and any one it
--- skipped that GitHub says has sub-issues or is blocked, which may now link to a Ticket it made.
+-- The issues an import still has to link: any one GitHub says has sub-issues or is blocked, and any one it made a
+-- Ticket of whose title or body refers to `#123`, which it rewrites.
 create table github_import_links (
   import_id uuid not null references github_imports (id) on delete cascade,
   ticket_id uuid not null references tickets (id) on delete cascade,

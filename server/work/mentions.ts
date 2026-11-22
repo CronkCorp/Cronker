@@ -70,6 +70,9 @@ export interface EmbedAddress {
 }
 
 /**
+ * The rich editor keeps a copy of these rules (`web/src/editor/embed-address.ts`), as the web client can't import
+ * server modules; `test/editor/embeds.test.ts` checks the two agree.
+ *
  * An Artifact's address: `/<workspace>/artifacts/<slug>`, or the older `/artifacts/<id>`, either after Cronk's origin
  * or alone, with `?version=N` naming a Version. Nothing else, so not with any other query or a fragment.
  */

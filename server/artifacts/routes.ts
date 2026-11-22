@@ -4,25 +4,11 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "../knowledge/places.js";
-import { Artifact, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, deleteArtifactVersion, readArtifactVersion, ArtifactVersionRead, findArtifact, saveArtifact } from "./artifacts.js";
+import { Artifact, ArtifactCreate, ArtifactSave, FilePath, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, deleteArtifactVersion, readArtifactVersion, ArtifactVersionRead, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
-import { linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
+import { ArtifactLink, linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
 
 const tags = ["Artifacts"];
-const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
-const Description = Type.String({ maxLength: 10_000 });
-const FilePath = Type.String({
-  minLength: 1,
-  maxLength: 500,
-  description: "A path relative to the Version, such as `index.html` or `scripts/app.js`.",
-});
-const FileInput = Type.Object({
-  path: FilePath,
-  contentBase64: Type.String({ description: "The file's bytes, in standard base64." }),
-  mediaType: Type.Optional(
-    Type.String({ description: "The media type to serve it with; from its extension when left out, such as `text/html` for `.html`." }),
-  ),
-});
 const ArtifactParams = Type.Object({ artifactId: Type.String() });
 
 export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -70,19 +56,7 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
               "(`index.html` when left out); the page refers to the others by relative paths. An Agent names its " +
               "running Run as `runId` to link the Artifact to the Run's Ticket (`no_running_run` when it isn't one).",
             params: place.params,
-            body: Type.Object({
-              title: Title,
-              description: Type.Optional(Description),
-              page: Type.Optional(FilePath),
-              files: Type.Array(FileInput, { maxItems: 1000 }),
-              runId: Type.Optional(
-                Type.String({
-                  description:
-                    "For an Agent, its running Run the Artifact is made in: the Artifact is linked to the Run's " +
-                    "Ticket, so it must be kept in that Ticket's Project or the Workspace (`artifact_outside_project`).",
-                }),
-              ),
-            }),
+            body: ArtifactCreate,
             response: { 201: Artifact, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 413: ErrorBody },
           },
         },
@@ -227,14 +201,7 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
             "current Version as `current`. Each Version is served from its own address, so earlier ones stay as they " +
             "were.",
           params: ArtifactParams,
-          body: Type.Object({
-            baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
-            title: Type.Optional(Title),
-            description: Type.Optional(Description),
-            page: Type.Optional(FilePath),
-            files: Type.Optional(Type.Array(FileInput, { maxItems: 1000, description: "Files to add, or to replace at their paths." })),
-            remove: Type.Optional(Type.Array(FilePath, { maxItems: 1000, description: "Paths of files to remove." })),
-          }),
+          body: ArtifactSave,
           response: {
             200: Artifact,
             400: ErrorBody,
@@ -297,7 +264,7 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
             "for a User (`no_running_run`; `not_your_discovered_ticket` for another Agent's or a settled one). A " +
             "deleted Artifact drops out of its links.",
           params: TicketParams,
-          body: Type.Object({ artifactId: Type.String({ description: "An Artifact of the Ticket's Project or Workspace." }) }),
+          body: ArtifactLink,
           response: { 201: LinkedArtifact, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

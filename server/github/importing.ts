@@ -6,12 +6,13 @@ import { userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { indexMentions } from "../work/mentions.js";
 import { findProject, projectNotFound, statusesOf } from "../work/projects.js";
+import { retryAt } from "../runs/subscription.js";
 import { blocksTransitively, recordRelationChanges } from "../work/relations.js";
 import { lockTickets, writeTicket } from "../work/ticket-writes.js";
 import { distinctLabels, findTicketRef } from "../work/tickets.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { appToken } from "./app.js";
-import { appInstallations, issuesPage, linkedIssues, type IssueLinks, type IssueOnGitHub } from "./client.js";
+import { appInstallations, issuesPage, linkedIssues, type IssueLinks, type IssueOnGitHub, type RateLimited } from "./client.js";
 import { installationCovering, tokenFor } from "./installations.js";
 import { referencedNumbers, rewriteMarkdown, rewritePlain } from "./issue-references.js";
 
@@ -24,7 +25,8 @@ import { referencedNumbers, rewriteMarkdown, rewritePlain } from "./issue-refere
  * left out, and an issue imported before, known by its node id, is skipped, so an import can run again.
  *
  * Each page's Tickets are written in one transaction with the page the next pass reads, so a pass cut short is read
- * again whole. Later passes may add to a page's work (Comments, waiting out rate limits) in `importIssue` and
+ * again whole. A page GitHub rate-limits is read again once the limit lifts: until then the import waits, saying
+ * until when, and passes leave it be. Later passes may add to a page's work (Comments) in `importIssue` and
  * `importNextPage` without changing how a job runs.
  *
  * Once every page is read the import keeps the issues' structure in a second phase, `linking`, when every issue of
@@ -32,7 +34,8 @@ import { referencedNumbers, rewriteMarkdown, rewritePlain } from "./issue-refere
  * queued: a sub-issue becomes a Sub-Ticket of its parent's Ticket, an issue blocked by another is blocked by its
  * Ticket, and `#123` in a Ticket's title and description becomes the key of the Ticket issue 123 became, in this run
  * or an earlier one. Each structure links at least one Ticket this run made, so a later run links new issues to old
- * ones but leaves the old ones' structure as their Users keep it. The import is done when nothing is left to link.
+ * ones but leaves the old ones' structure as their Users keep it. A batch GitHub rate-limits waits too, keeping what
+ * it linked, and is linked again whole after the wait. The import is done when nothing is left to link.
  */
 
 export const Import = Type.Object({
@@ -48,6 +51,9 @@ export const Import = Type.Object({
   imported: Type.Integer({ minimum: 0, description: "How many issues became Tickets so far." }),
   skipped: Type.Integer({ minimum: 0, description: "How many issues were skipped, having been imported before." }),
   error: Type.Union([Type.String(), Type.Null()], { description: "Why a failed import stopped; null otherwise." }),
+  waitingUntil: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description: "While a running import waits out GitHub's rate limit, when it carries on; null otherwise.",
+  }),
   startedBy: Type.String({ format: "uuid", description: "The Admin who started it, whose Changes create its Tickets." }),
   startedAt: Type.String({ format: "date-time" }),
   finishedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
@@ -67,13 +73,14 @@ interface ImportRow {
   imported: number;
   skipped: number;
   error: string | null;
+  pausedUntil: Date | null;
   startedAt: Date;
   finishedAt: Date | null;
 }
 
 const importColumns = `id, project_id as "projectId", workspace_id as "workspaceId", repository_id as "repositoryId",
   repository_full_name as "repositoryFullName", started_by as "startedBy", state, phase, next_page as "nextPage", imported,
-  skipped, error, started_at as "startedAt", finished_at as "finishedAt"`;
+  skipped, error, paused_until as "pausedUntil", started_at as "startedAt", finished_at as "finishedAt"`;
 
 const importOf = (row: ImportRow): Import => ({
   id: row.id,
@@ -84,6 +91,7 @@ const importOf = (row: ImportRow): Import => ({
   imported: row.imported,
   skipped: row.skipped,
   error: row.error,
+  waitingUntil: row.state === "running" ? (row.pausedUntil?.toISOString() ?? null) : null,
   startedBy: row.startedBy,
   startedAt: row.startedAt.toISOString(),
   finishedAt: row.finishedAt?.toISOString() ?? null,
@@ -158,11 +166,15 @@ export async function latestImport(context: Context, viewer: Viewer, projectId: 
 }
 
 /**
- * One pass over the running imports: each reads its next page of issues. An import GitHub refuses fails, saying why;
- * one GitHub can't answer is read again on the next pass. The first error is thrown once every import has had its pass.
+ * One pass over the running imports: each reads its next page of issues, except one waiting out GitHub's rate limit.
+ * An import GitHub refuses fails, saying why; one GitHub can't answer is read again on the next pass. The first error
+ * is thrown once every import has had its pass.
  */
 export async function runImports(context: Context): Promise<void> {
-  const { rows } = await context.db.query<{ id: string }>("select id from github_imports where state = 'running' order by seq");
+  const { rows } = await context.db.query<{ id: string }>(
+    "select id from github_imports where state = 'running' and (paused_until is null or paused_until <= $1) order by seq",
+    [context.clock.now()],
+  );
   let failure: unknown;
   for (const { id } of rows) {
     try {
@@ -179,8 +191,9 @@ async function importNextPage(context: Context, importId: string): Promise<void>
   const { config, clock } = context;
   await transaction(context.db, async (tx) => {
     const { rows } = await tx.query<ImportRow>(
-      `select ${importColumns} from github_imports where id = $1 and state = 'running' for update skip locked`,
-      [importId],
+      `select ${importColumns} from github_imports
+       where id = $1 and state = 'running' and (paused_until is null or paused_until <= $2) for update skip locked`,
+      [importId, clock.now()],
     );
     const job = rows[0];
     if (!job) return;
@@ -200,15 +213,23 @@ async function importNextPage(context: Context, importId: string): Promise<void>
           ? `GitHub refused to list ${fullName}'s issues to the App. ${permissionAdvice}`
           : `GitHub no longer shows ${fullName}'s issues to the App.`,
       );
+    const wait = (limit: RateLimited) =>
+      tx.query("update github_imports set paused_until = $2 where id = $1", [job.id, limitLifts(clock.now(), limit)]);
     if (job.phase === "linking") {
       const linked = await linkNextBatch(context, tx, job, (number, links) => linkedIssues(config, token, fullName, number, links));
       if (linked === "refused") return void (await refused(403));
-      if (linked === "none left") {
-        await tx.query("update github_imports set state = 'done', finished_at = $2 where id = $1", [job.id, clock.now()]);
-      }
+      // What the batch linked stays; it is linked again whole after the wait, which makes nothing twice.
+      if (typeof linked === "object") return void (await wait(linked));
+      await tx.query(
+        `update github_imports set paused_until = null, state = case when $3 then 'done' else state end,
+           finished_at = case when $3 then $2::timestamptz end where id = $1`,
+        [job.id, clock.now(), linked === "none left"],
+      );
       return;
     }
     const page = await issuesPage(config, token, fullName, job.nextPage);
+    // Nothing of the page is written, so the pass after the wait reads it again from its first issue.
+    if (page.kind === "rate_limited") return void (await wait(page));
     if (page.kind === "refused") return void (await refused(page.status));
     const statuses = await statusesOf(tx, job.projectId);
     const first = (kind: string) => statuses.find((s) => s.kind === kind)!.id;
@@ -228,13 +249,26 @@ async function importNextPage(context: Context, importId: string): Promise<void>
       : await tx.query("select 1 from github_import_links where import_id = $1 limit 1", [job.id]);
     const ends = !page.more && queued === 0;
     await tx.query(
-      `update github_imports set imported = imported + $2, skipped = skipped + $3, next_page = next_page + 1,
+      `update github_imports set imported = imported + $2, skipped = skipped + $3, next_page = next_page + 1, paused_until = null,
          phase = case when $4 or $5 then 'issues' else 'linking' end,
          state = case when $5 then 'done' else 'running' end, finished_at = case when $5 then $6::timestamptz end
        where id = $1`,
       [job.id, imported, skipped, page.more, ends, clock.now()],
     );
   });
+}
+
+/** The longest wait for GitHub's rate limit to lift, as for `Retry-After`: a day. */
+const longestPauseMs = 24 * 60 * 60 * 1000;
+
+/**
+ * When GitHub's rate limit lifts: its `Retry-After` when it gives one, else its `X-RateLimit-Reset` (seconds since the
+ * epoch), else a minute from now; never in the past, and a day at most.
+ */
+function limitLifts(now: Date, limit: { retryAfter: string | null; reset: string | null }): Date {
+  const reset = limit.reset?.trim() ?? "";
+  if (limit.retryAfter !== null || !/^\d+$/.test(reset)) return retryAt(now, limit.retryAfter);
+  return new Date(Math.min(Math.max(Number(reset) * 1000, now.getTime()), now.getTime() + longestPauseMs));
 }
 
 /** Where an issue goes by its state: open, closed as completed, or closed as not planned. */
@@ -343,14 +377,14 @@ type ListLinks = (number: number, links: IssueLinks) => ReturnType<typeof linked
 /**
  * Links the next batch of the issues the import queued, in one transaction with taking them off the queue, so a pass
  * cut short links them again whole and, as each link is made only once, makes no Relation or Change twice. Answers
- * whether there were none left, or GitHub refused to list an issue's links.
+ * whether there were none left, or GitHub refused to list an issue's links or rate-limited the asking.
  */
 async function linkNextBatch(
   context: Context,
   tx: Tx,
   job: ImportRow,
   list: ListLinks,
-): Promise<"linked" | "none left" | "refused"> {
+): Promise<"linked" | "none left" | "refused" | RateLimited> {
   const { rows: batch } = await tx.query<{ ticketId: string; number: number; subIssues: boolean; blockedBy: boolean }>(
     `select ticket_id as "ticketId", issue_number as number, sub_issues as "subIssues", blocked_by as "blockedBy"
      from github_import_links where import_id = $1 order by issue_number, ticket_id limit ${linkBatch}`,
@@ -367,6 +401,7 @@ async function linkNextBatch(
       if (!wanted) continue;
       const listed = await list(queued.number, links);
       if (listed.kind === "refused") return "refused";
+      if (listed.kind === "rate_limited") return listed;
       const others = await linkables(tx, job, "github_issue_node_id = any($3::text[])", [listed.issues.map((i) => i.node_id)]);
       for (const other of others) {
         if (links === "sub_issues") await linkSubTicket(context, tx, job, self, other);

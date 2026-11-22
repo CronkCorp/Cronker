@@ -305,17 +305,42 @@ export interface IssueOnGitHub {
   issue_dependencies_summary?: { blocked_by?: number; total_blocked_by?: number } | null;
 }
 
+/** GitHub's rate limit, when it answers with one. */
+export interface RateLimited {
+  kind: "rate_limited";
+  retryAfter: string | null;
+  reset: string | null;
+}
+
+/**
+ * GitHub's rate limit, with the headers saying when it lifts, if a response is one: a 429, or a 403 with no requests
+ * remaining or a `Retry-After`, as GitHub documents; any other 403 is a refusal.
+ */
+function rateLimitOf(response: Response): RateLimited | null {
+  const retryAfter = response.headers.get("retry-after");
+  if (response.status === 429 || (response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null))) {
+    return { kind: "rate_limited", retryAfter, reset: response.headers.get("x-ratelimit-reset") };
+  }
+  return null;
+}
+
 /**
  * One page of a repository's issues, open and closed, oldest first, as an installation covering it sees them, with
  * whether GitHub has a page after it. Oldest first keeps the pages steady while new issues are filed, so an import
- * resumes by page number. A refusal (GitHub's 403, 404 or 410) comes back with its status.
+ * resumes by page number. A refusal (GitHub's 403, 404 or 410) comes back with its status. GitHub's rate limit comes
+ * back with the headers saying when it lifts: a 429, or a 403 with no requests remaining or a `Retry-After`, as
+ * GitHub documents; any other 403 is a refusal.
  */
 export async function issuesPage(
   { github }: Config,
   token: string,
   fullName: string,
   page: number,
-): Promise<{ kind: "page"; issues: IssueOnGitHub[]; more: boolean } | { kind: "refused"; status: number }> {
+): Promise<
+  | { kind: "page"; issues: IssueOnGitHub[]; more: boolean }
+  | { kind: "refused"; status: number }
+  | RateLimited
+> {
   const url = under(github.apiUrl, `${repoPath(fullName)}/issues`);
   url.searchParams.set("state", "all");
   url.searchParams.set("sort", "created");
@@ -323,6 +348,8 @@ export async function issuesPage(
   url.searchParams.set("per_page", "100");
   url.searchParams.set("page", String(page));
   const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  const limited = rateLimitOf(response);
+  if (limited) return limited;
   if (response.status === 403 || response.status === 404 || response.status === 410) return { kind: "refused", status: response.status };
   const issues = await jsonOf<IssueOnGitHub[]>(response, "The issues list");
   if (!Array.isArray(issues)) throw unavailable("The issues list answered something other than a list");
@@ -340,8 +367,8 @@ export interface LinkedIssueOnGitHub {
 
 /**
  * Every issue an issue lists as linked to it, as an installation covering its repository sees them, following GitHub's
- * pages. An issue GitHub no longer has (404 or 410) lists none; a refusal (403) comes back with its status, as
- * `issuesPage` answers one.
+ * pages. An issue GitHub no longer has (404 or 410) lists none; a refusal (403) and GitHub's rate limit come back as
+ * `issuesPage` answers them.
  */
 export async function linkedIssues(
   { github }: Config,
@@ -349,7 +376,7 @@ export async function linkedIssues(
   fullName: string,
   number: number,
   links: IssueLinks,
-): Promise<{ kind: "list"; issues: LinkedIssueOnGitHub[] } | { kind: "refused"; status: number }> {
+): Promise<{ kind: "list"; issues: LinkedIssueOnGitHub[] } | { kind: "refused"; status: number } | RateLimited> {
   const first = under(github.apiUrl, `${repoPath(fullName)}/issues/${number}/${links}`);
   first.searchParams.set("per_page", "100");
   const issues: LinkedIssueOnGitHub[] = [];
@@ -357,6 +384,8 @@ export async function linkedIssues(
   // GitHub caps sub-issues at 100 an issue; ten pages is well beyond what it lists.
   for (let pages = 0; url && pages < 10; pages++) {
     const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+    const limited = rateLimitOf(response);
+    if (limited) return limited;
     if (response.status === 404 || response.status === 410) return { kind: "list", issues };
     if (response.status === 403) return { kind: "refused", status: response.status };
     const page = await jsonOf<LinkedIssueOnGitHub[]>(response, `The issue's ${links.replace("dependencies/", "")} list`);

@@ -426,6 +426,7 @@ describe("Runners and Agents", () => {
         id: agent.runnerId,
         name: "Fake",
         kind: "fake",
+        cloud: false,
         limit: 2,
         running: 0,
         pausedUntil: null,
