@@ -125,6 +125,20 @@ const unknownCommit = (name: string) =>
     advice: "Wait for GitHub to report the push and its checks, reading the Ticket again, then merge.",
   });
 
+/**
+ * GitHub's own refusal of a merge Cronk's rules allowed, such as one branch protection, required approvals, a ruleset
+ * or GitHub's own merge queue forbids, with the reason GitHub gave, if any.
+ */
+export class GitHubRefusedMerge extends ApiError {
+  constructor(
+    message: string,
+    advice: string,
+    readonly reason: string | null,
+  ) {
+    super(409, "not_mergeable", message, { rule: rules.mergeable, advice });
+  }
+}
+
 /** What the marker on a Pull Request asked for, held until Cronk records the merge or GitHub refuses it. */
 interface MergeAsked {
   actor: MergeActor;
@@ -228,9 +242,10 @@ async function askGitHub(context: Context, { ticketKey, pullRequest, advice }: A
   if (merged.merged) return;
   if (merged.status === 409) throw unknownCommit(name);
   // Such as branch protection or the Repository's settings, which the work's author can't change.
-  throw notMergeable(
+  throw new GitHubRefusedMerge(
     `GitHub refused to merge ${name}${merged.message ? `: ${merged.message}` : "."}`,
     advice.needsYou(`what GitHub needs before ${name} can be merged`),
+    merged.message || null,
   );
 }
 
