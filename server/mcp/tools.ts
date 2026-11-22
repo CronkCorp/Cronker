@@ -143,7 +143,7 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "A Ticket of your Workspace with its fields, the Ticket keys its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
-        "its Comments (oldest first), its Relations: " +
+        "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
@@ -180,7 +180,7 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Search",
       description:
         "Finds Tickets, Documents, Reports, Terms, Decisions, Artifacts (by title and description) and Transcripts of " +
-        "your Workspace that you can read, best first with Transcripts last, each with its kind, id, title, Project, " +
+        "your Workspace that you can read, leaving out an archived Project's unless `project` names it, best first with Transcripts last, each with its kind, id, title, Project, " +
         "Ticket key (a Ticket's own, or the Ticket a Report is on or a Transcript's Run was on) and a snippet whose " +
         "matching words are marked. Words match by their stem in English (`merging` finds `merged`); write `\"a phrase\"` for words " +
         "in order, `or` between alternatives and `-word` to leave out what has it. Search before filing a Ticket or " +
@@ -274,19 +274,37 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "comment",
     {
-      title: "Comment on a Ticket",
+      title: "Comment on a Ticket or an Artifact",
       description:
-        "Adds a Markdown Comment to a Ticket of your Workspace, as your Agent, or a reply to one of its Comments. " +
-        "Refused for a read-only token; a Ticket outside your Workspace answers as not found, and a reply only goes " +
-        "to a Comment on the same Ticket.",
+        "Adds a Markdown Comment to a Ticket or an Artifact of your Workspace, as your Agent, or a reply to one of " +
+        "its Comments: give exactly one of `ticket` and `artifact`. A Comment on an Artifact also shows on the " +
+        "Tickets linking it. Refused for a read-only token; a Ticket or Artifact outside your Workspace answers as " +
+        "not found, and a reply only goes to a Comment on the same Ticket or Artifact: reply to a Comment on a " +
+        "Linked Artifact, as `read_ticket` shows it, by its `artifactId`.",
       inputSchema: {
-        ticket: ticketArgument,
+        ticket: ticketArgument.optional(),
+        artifact: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("The Artifact's slug, such as `board-prototype-3f9a1b2c` (its words may be stale), or its id."),
         ...bodyFields(CommentCreate),
       },
     },
-    ({ ticket, body, replyToId }) =>
+    ({ ticket, artifact, body, replyToId }) =>
       answer(async () => {
-        const found = await ticketByKeyOrId(ticket);
+        if ((ticket === undefined) === (artifact === undefined)) {
+          throw new Refused({
+            code: "one_target",
+            message: "A Comment is on exactly one Ticket or Artifact.",
+            rule: "Each Comment belongs to one Ticket or one Artifact.",
+            advice: "Give exactly one of `ticket` and `artifact`; comment again for another.",
+          });
+        }
+        if (artifact !== undefined) {
+          return send("POST", `/api/artifacts/${encodeURIComponent(artifact)}/comments`, { body, replyToId });
+        }
+        const found = await ticketByKeyOrId(ticket!);
         return send("POST", `/api/tickets/${found.id}/comments`, { body, replyToId });
       }),
   );
@@ -400,6 +418,11 @@ export function buildMcpServer(api: Api): McpServer {
       }),
   );
 
+  const avoidedWordsNote =
+    " The answer's `avoidedWords` lists each word the glossary avoids that your text uses, with the Term to use " +
+    "instead, ignoring code, block quotes and link targets: the save goes through anyway, so fix the wording in a " +
+    "next save.";
+
   server.registerTool(
     "write_report",
     {
@@ -408,7 +431,8 @@ export function buildMcpServer(api: Api): McpServer {
         "During your running Run on a Ticket, adds a Report to it: Markdown such as an investigation's findings, " +
         "listed with the Ticket for its Users and read by later Runs on it. Refused for any other Ticket and outside " +
         "a running Run. A Report can also be given to `finish`. A Report is a Document with Versions: " +
-        "`read_document` and `edit_document` take its id.",
+        "`read_document` and `edit_document` take its id." +
+        avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument,
         ...bodyFields(ReportCreate),
@@ -504,7 +528,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Create a Document",
       description:
         "Creates a Markdown Document in a Project's page tree, or the Workspace's when no Project is given, at Version " +
-        "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed.",
+        "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed." +
+        avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
         ...bodyFields(Type.Omit(DocumentCreate, ["parentId"])),
@@ -523,7 +548,8 @@ export function buildMcpServer(api: Api): McpServer {
         "A new title or body saves a Document as its next Version, by your Agent, based on the Version you read: give " +
         "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
         "the current Version as `current`: merge your change into it and save again based on it. A new parent or place " +
-        "moves the Document within its page tree, making no Version. Only Users delete Documents.",
+        "moves the Document within its page tree, making no Version. Only Users delete Documents." +
+        avoidedWordsNote,
       inputSchema: {
         document: documentArgument,
         ...bodyFields(Type.Omit(DocumentEdit, ["parentId"])),
@@ -569,7 +595,8 @@ export function buildMcpServer(api: Api): McpServer {
         "rest stays as it was. The new body starts with a heading of the Section's own level, whose text may change, " +
         "and holds no other heading of that level or a higher one (`section_heading_level`). Give the number of the " +
         "Version you read as `baseVersion`: a replace based on an outdated Version is refused with `outdated_version`, " +
-        `carrying the current Version as \`current\`. ${sectionRules}`,
+        `carrying the current Version as \`current\`. ${sectionRules}` +
+        avoidedWordsNote,
       inputSchema: {
         document: documentArgument,
         ...bodyFields(SectionReplace),
@@ -801,8 +828,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read an Artifact",
       description:
         "An Artifact of your Workspace at its current Version, whose number a save names as its `baseVersion`: its " +
-        "title, description, page, files (path, media type and size) and the address its page is served at; or, given " +
-        "a path, that file with its bytes as base64.",
+        "title, description, page, files (path, media type and size), the address its page is served at and its " +
+        "Comments, oldest first; or, given a path, that file with its bytes as base64.",
       inputSchema: {
         artifact: artifactArgument,
         path: artifactPathArgument.optional(),
@@ -810,9 +837,11 @@ export function buildMcpServer(api: Api): McpServer {
       annotations: { readOnlyHint: true },
     },
     ({ artifact, path }) =>
-      answer(() =>
-        get(path === undefined ? artifactPath(artifact) : `${artifactPath(artifact)}/file?path=${encodeURIComponent(path)}`),
-      ),
+      answer(async () => {
+        if (path !== undefined) return get(`${artifactPath(artifact)}/file?path=${encodeURIComponent(path)}`);
+        const found = (await get(artifactPath(artifact))) as { id: string };
+        return { ...found, comments: await get(`/api/artifacts/${found.id}/comments`) };
+      }),
   );
 
   server.registerTool(

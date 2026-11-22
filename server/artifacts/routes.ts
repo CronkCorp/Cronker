@@ -6,6 +6,7 @@ import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "../knowledge/places.js";
 import { Artifact, ArtifactCreate, ArtifactSave, FilePath, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, deleteArtifactVersion, readArtifactVersion, ArtifactVersionRead, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
+import { addArtifactComment, Comment, CommentCreate, commentsOnArtifact } from "../work/comments.js";
 import { ArtifactLink, linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
 
 const tags = ["Artifacts"];
@@ -90,6 +91,41 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
         const artifact = await findArtifact(db, caller, request.params.artifactId, request.query.version);
         if (!artifact) throw artifactNotFound();
         return artifact;
+      },
+    );
+
+    app.get(
+      "/api/artifacts/:artifactId/comments",
+      {
+        schema: {
+          tags,
+          summary: "An Artifact's Comments",
+          description:
+            "Oldest first. A reply names the Comment it answers. They show on the Tickets linking the Artifact too.",
+          params: ArtifactParams,
+          response: { 200: Type.Array(Comment), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => commentsOnArtifact(db, await requireCaller(context, request), request.params.artifactId),
+    );
+
+    app.post(
+      "/api/artifacts/:artifactId/comments",
+      {
+        schema: {
+          tags,
+          summary: "Comment on an Artifact, or reply to one of its Comments",
+          description:
+            "Users and Agents with a full token may comment on an Artifact they can change, as on a Ticket. The " +
+            "Comment also shows on the Tickets linking the Artifact; nobody is notified of it.",
+          params: ArtifactParams,
+          body: CommentCreate,
+          response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await addArtifactComment(context, caller, request.params.artifactId, request.body));
       },
     );
 

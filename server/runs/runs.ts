@@ -706,10 +706,6 @@ export async function presentRun(tx: Tx, viewer: Viewer, runId: string): Promise
   return present((await findRunRow(tx, viewer, runId))!);
 }
 
-/**
- * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
- * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
- */
 /** The finish route's body: the Outcome, and for *needs you* the Question, with an optional Report. */
 export const RunFinish = Type.Object({
   outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
@@ -725,6 +721,10 @@ export const RunFinish = Type.Object({
 });
 export type RunFinish = Static<typeof RunFinish>;
 
+/**
+ * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
+ * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
+ */
 export async function finishRun(
   context: Context,
   caller: Caller,

@@ -95,6 +95,41 @@ test("an Artifact's page shows it in a sandboxed iframe, where its scripts run b
   expect(workspaces.map((w: { name: string }) => w.name)).toEqual([workspace.name]);
 });
 
+test("Comments on an Artifact show on its page and, marked with the Artifact, on the Ticket linking it, live", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Try drag and drop" });
+  const artifact = await call("POST", `/api/projects/${project.id}/artifacts`, {
+    title: "Board prototype",
+    files: [{ path: "index.html", contentBase64: base64("<p>Board</p>") }],
+  });
+  await call("POST", `/api/tickets/${ticket.id}/artifacts`, { artifactId: artifact.id });
+  await signInInBrowser(page, cronk);
+
+  await page.goto(`${cronk.url}/artifacts/${artifact.id}`);
+  const comments = page.getByRole("region", { name: "Comments" });
+  await expect(comments.getByText("No Comments yet.")).toBeVisible();
+  const box = comments.getByRole("textbox", { name: "New Comment" });
+  await box.click();
+  await page.keyboard.type("The columns are too narrow.");
+  await comments.getByRole("button", { name: /^Comment/ }).click();
+  await expect(comments.getByRole("article", { name: "Comment by ada@example.com" })).toContainText("The columns are too narrow.");
+
+  // Another's Comment arrives live.
+  await call("POST", `/api/artifacts/${artifact.id}/comments`, { body: "Widen them in CRONK-1." });
+  await expect(comments.getByText("Widen them in")).toBeVisible();
+
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const onArtifact = timeline.getByRole("article", { name: "Comment by ada@example.com" }).first();
+  await expect(onArtifact).toContainText("The columns are too narrow.");
+  await expect(onArtifact.getByRole("link", { name: "Board prototype" })).toBeVisible();
+  await call("POST", `/api/artifacts/${artifact.id}/comments`, { body: "Done in Version 2." });
+  await expect(timeline.getByText("Done in Version 2.")).toBeVisible();
+});
+
 test("an Artifact's page loads its own data file but can't fetch from any other origin, in its iframe or opened directly", async ({
   page,
   cronk,

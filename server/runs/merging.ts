@@ -116,16 +116,16 @@ async function askMergeByRun(context: Context, caller: Caller, runId: string, pu
   });
 }
 
-/**
- * Merges the Pull Request, by GitHub's id, for the Agent's running Merge Run, as the module says, and returns the
- * Run, finished with *merged*.
- */
 /** The merge route's body: which of the Ticket's Pull Requests to merge. */
 export const RunMerge = Type.Object({
   pullRequestId: Type.Integer({ description: "GitHub's id for the Pull Request, as the Ticket's Pull Requests list it." }),
 });
 export type RunMerge = Static<typeof RunMerge>;
 
+/**
+ * Merges the Pull Request, by GitHub's id, for the Agent's running Merge Run, as the module says, and returns the
+ * Run, finished with *merged*.
+ */
 export async function mergePullRequest(context: Context, caller: Caller, runId: string, pullRequestId: number): Promise<Run> {
   const asked = await askMergeByRun(context, caller, runId, pullRequestId);
   return mergeAsAsked(context, asked, (tx) => presentRun(tx, caller, runId));

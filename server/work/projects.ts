@@ -30,6 +30,7 @@ export const Visibility = Type.Union([Type.Literal("open"), Type.Literal("privat
     "`open`: every User of the Workspace has Write unless listed otherwise. `private`: only the Users it lists, and " +
     "the Workspace's Admins, see it; to anyone else it answers as if it didn't exist.",
 });
+export type Visibility = Static<typeof Visibility>;
 
 export const ProjectSummary = Type.Object({
   id: Type.String({ format: "uuid" }),
