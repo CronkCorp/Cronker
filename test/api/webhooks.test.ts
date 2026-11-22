@@ -395,7 +395,7 @@ describe("Send test", () => {
 });
 
 describe("Inbox items", () => {
-  const allKinds = ["question", "needsYou", "run", "review", "unverified", "discovered", "reassign"];
+  const allKinds = ["question", "needsYou", "run", "review", "unverified", "discovered", "reassign", "undelegated"];
 
   /** Ada's Workspace with a Project, Bea as a member, and Ada's Agent on the fake Runner. */
   async function withProject() {
@@ -440,6 +440,10 @@ describe("Inbox items", () => {
     const discovered = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found on the way" });
     const beas = await ticket("Bea's", { assigneeId: bea.user.id });
     await ok("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, ada);
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const dropped = await ok("POST", `/api/projects/${other.id}/tickets`, ada, { title: "Agents lose Write" });
+    await ok("PATCH", `/api/tickets/${dropped.id}`, ada, { assigneeId: adaId, delegateId: agent.id });
+    await ok("PUT", `/api/projects/${other.id}/access`, ada, { visibility: "open", users: [], agentAccess: "read" });
     await cronk.deliverWebhooks();
 
     const all = receivedAt("/all");
@@ -452,6 +456,7 @@ describe("Inbox items", () => {
         ["unverified", completed.key],
         ["discovered", discovered.key],
         ["reassign", beas.key],
+        ["undelegated", dropped.key],
       ].sort(),
     );
     expect(all.find((d) => d.kind === "review")).toEqual({

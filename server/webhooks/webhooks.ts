@@ -18,7 +18,7 @@ import type { Workspace } from "../workspaces/workspaces.js";
  */
 
 /** The Inbox kinds a webhook may get. */
-export const webhookKinds = ["question", "needsYou", "run", "review", "unverified", "discovered", "reassign"] as const;
+export const webhookKinds = ["question", "needsYou", "run", "review", "unverified", "discovered", "reassign", "undelegated"] as const;
 export const WebhookKind = literals(webhookKinds);
 export type WebhookKind = (typeof webhookKinds)[number];
 
