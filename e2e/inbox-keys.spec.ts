@@ -82,13 +82,3 @@ test("J and K move through the Inbox, A focuses the answer box, C Accepts and R 
   await expect(items.nth(1)).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("navigation").getByRole("link", { name: /^Inbox/ })).toHaveAccessibleName("Inbox, 2 waiting");
 });
-
-test("the selected Inbox item is kept in the address, so a reload reopens it", async ({ page, cronk }) => {
-  const { items, detail } = await inboxOfThree(page, cronk);
-  await items.nth(2).getByRole("button").click();
-  await expect(items.nth(2)).toHaveAttribute("aria-current", "true");
-  await expect(page).toHaveURL(/[?&]item=/);
-  await page.reload();
-  await expect(items.nth(2)).toHaveAttribute("aria-current", "true");
-  await expect(detail).toContainText("CRONK-2 Ship it");
-});

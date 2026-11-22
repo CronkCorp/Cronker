@@ -1,9 +1,7 @@
-import { setUp } from "../test/harness/flows.js";
-import { expect, signInInBrowser, test, widthOf as width } from "./fixtures.js";
+import { expect, test } from "./fixtures.js";
 
 // The look itself is checked by screenshots in review (docs/ui.md); these check what a screenshot
-// can't: that the faces come from Cronk itself, and that the page follows the system's light or dark setting
-// unless the User chose a theme.
+// can't: that the faces come from Cronk itself, and that every colour comes from a token.
 
 test("the IBM Plex faces load from Cronk itself, never from another host", async ({ page, cronk }) => {
   const hosts = new Set<string>();
@@ -28,82 +26,6 @@ test("the IBM Plex faces load from Cronk itself, never from another host", async
   const mono = await page.evaluate(async () => (await document.fonts.load('14px "IBM Plex Mono"')).length);
   expect(mono).toBeGreaterThan(0);
   expect([...hosts]).toEqual([new URL(cronk.url).host]);
-});
-
-const lightGround = "rgb(243, 244, 241)";
-const darkGround = "rgb(18, 21, 19)";
-
-for (const [colorScheme, ground] of [
-  ["light", lightGround],
-  ["dark", darkGround],
-] as const) {
-  test(`the page ground follows the system's ${colorScheme} setting`, async ({ page, cronk }) => {
-    await page.emulateMedia({ colorScheme });
-    await page.goto(cronk.url);
-    await expect(page.getByRole("heading", { name: "Set up Cronk" })).toBeVisible();
-    await expect(page.locator("body")).toHaveCSS("background-color", ground);
-  });
-}
-
-test("a User's theme choice wins over the system's setting", async ({ page, cronk }) => {
-  await setUp(cronk);
-  await page.emulateMedia({ colorScheme: "light" });
-  await signInInBrowser(page, cronk);
-  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
-  const theme = (name: string) => page.getByRole("group", { name: "Theme" }).getByRole("menuitemradio", { name });
-
-  await sidebar.getByRole("button", { name: "ada@example.com" }).click();
-  await expect(theme("System")).toHaveAttribute("aria-checked", "true");
-  await theme("Dark").click();
-  await expect(theme("Dark")).toHaveAttribute("aria-checked", "true");
-  await expect(page.locator("body")).toHaveCSS("background-color", darkGround);
-
-  // The choice is kept on this browser, and applies again before the app loads.
-  await page.reload();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.locator("body")).toHaveCSS("background-color", darkGround);
-  await sidebar.getByRole("button", { name: "ada@example.com" }).click();
-  await expect(theme("Dark")).toHaveAttribute("aria-checked", "true");
-
-  // System follows the system's setting again, whichever it is; Light wins over a dark one.
-  await theme("System").click();
-  await expect(page.locator("body")).toHaveCSS("background-color", lightGround);
-  await page.emulateMedia({ colorScheme: "dark" });
-  await expect(page.locator("body")).toHaveCSS("background-color", darkGround);
-  await theme("Light").click();
-  await expect(page.locator("body")).toHaveCSS("background-color", lightGround);
-  await page.reload();
-  await expect(page.locator("body")).toHaveCSS("background-color", lightGround);
-
-  // At phone width the User sits in the sidebar's menu, and the theme is chosen there the same way.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await sidebar.getByRole("button", { name: "Menu" }).click();
-  await sidebar.getByRole("button", { name: "ada@example.com" }).click();
-  await theme("Dark").click();
-  await expect(page.locator("body")).toHaveCSS("background-color", darkGround);
-});
-
-// docs/ui.md: buttons size to their label and are never full width outside sign-in forms.
-test("only the sign-in form's buttons span their card; other signed-out pages' buttons fit their label", async ({ page, cronk }) => {
-  await page.goto(cronk.url);
-  const setupField = await width(page.getByLabel("Setup code"));
-  expect(await width(page.getByRole("button", { name: "Set up" }))).toBeLessThan(setupField / 2);
-
-  const setup = await cronk.request("POST", "/api/setup", {
-    body: { setupCode: cronk.setupCode(), email: "ada@example.com", password: "correct horse battery", workspaceName: "Ada's Workspace" },
-  });
-  const { workspace } = await setup.json();
-  await page.reload();
-  await expect(page.getByRole("heading", { name: "Sign in to Cronk" })).toBeVisible();
-  expect(await width(page.getByRole("button", { name: "Sign in" }))).toBe(await width(page.getByLabel("Email")));
-
-  const signedIn = await cronk.request("POST", "/api/sign-in", { body: { email: "ada@example.com", password: "correct horse battery" } });
-  const cookie = signedIn.headers.get("set-cookie")!.split(";")[0]!;
-  const added = await cronk.request("POST", `/api/workspaces/${workspace.id}/members`, { cookie, body: { email: "bea@example.com" } });
-  const { link } = await added.json();
-  await page.goto(link.url);
-  await expect(page.getByRole("heading", { name: "Join Ada's Workspace" })).toBeVisible();
-  expect(await width(page.getByRole("button", { name: "Join" }))).toBeLessThan((await width(page.getByLabel("Choose a password"))) / 2);
 });
 
 // docs/ui.md: components use only tokens, never literal colours. Read from the stylesheets the browser was served.

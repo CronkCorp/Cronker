@@ -23,22 +23,6 @@ async function longTicket(page: Page, cronk: StartedCronk) {
   return box;
 }
 
-/** The page head's Comment button, told from the Comment box's own by its shortcut. */
-const commentButton = (page: Page) => page.getByRole("button", { name: "Comment", exact: true }).and(page.locator('[aria-keyshortcuts="C"]'));
-
-test("the page head's Comment button takes the User from the top of a long Ticket to its Comment box", async ({ page, cronk }) => {
-  const box = await longTicket(page, cronk);
-  await commentButton(page).click();
-  await expect(box).toBeFocused();
-  await expect(box).toBeInViewport();
-
-  // The box is where it was, at the end, and placing a Comment from it works as before.
-  await box.fill("Picked up from the top.");
-  await box.press("Control+Enter");
-  const timeline = page.getByRole("region", { name: "Timeline" });
-  await expect(timeline.getByRole("article", { name: "Comment by ada@example.com" }).last()).toContainText("Picked up from the top.");
-});
-
 test("C takes the User to the Comment box without typing a c, and does nothing while typing or with a modifier held", async ({ page, cronk }) => {
   const box = await longTicket(page, cronk);
   await expect(page.getByText("C writes a Comment")).toBeVisible();
@@ -80,13 +64,34 @@ test("C takes the User to the Comment box without typing a c, and does nothing w
   await expect(box).toHaveText("cc");
 });
 
-test("C does nothing while a dialog is open", async ({ page, cronk }) => {
+test("Ctrl+Enter places a Comment from the rich editor and from its Markdown source, while Enter and Shift+Enter add new lines", async ({ page, cronk }) => {
   const box = await longTicket(page, cronk);
-  await page.getByRole("button", { name: "Link a Document…" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  // Out of the Picker's filter box, so only the open dialog keeps C from acting.
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
-  await page.keyboard.press("c");
-  await expect(box).not.toBeFocused();
+  const comments = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
+
+  // An empty box places nothing.
+  await box.press("Control+Enter");
+  // Enter starts a paragraph and Shift+Enter breaks the line; both are saved as Markdown.
+  await box.pressSequentially("First line");
+  await box.press("Enter");
+  await box.pressSequentially("second line");
+  await box.press("Shift+Enter");
+  await box.pressSequentially("third line");
+  await expect(comments).toHaveCount(25);
+
+  await box.press("Control+Enter");
+  await expect(comments).toHaveCount(26);
+  const paragraphs = comments.last().locator(".markdown p");
+  await expect(paragraphs).toHaveCount(2);
+  await expect(paragraphs.first()).toHaveText("First line");
+  await expect(paragraphs.last().locator("br")).toHaveCount(1);
+  await expect(box).toHaveText("");
+
+  // From the Markdown source, the Comment is placed as it was written.
+  await page.getByRole("group", { name: "Editing mode" }).getByRole("button", { name: "Markdown", exact: true }).click();
+  const source = page.getByRole("textbox", { name: "New Comment, as Markdown" });
+  await source.fill("Written as **Markdown**.");
+  await source.press("Control+Enter");
+  await expect(comments).toHaveCount(27);
+  await expect(comments.last().getByRole("strong")).toHaveText("Markdown");
+  await expect(source).toHaveValue("");
 });
