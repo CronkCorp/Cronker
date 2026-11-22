@@ -17,6 +17,7 @@ import {
   requireOwnAgent,
   setAgentRunner,
 } from "./agents.js";
+import { AgentRecord, agentRecord, defaultRecordLimit, maxRecordLimit } from "./record.js";
 import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, tokensOf } from "./tokens.js";
 
 export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
@@ -107,6 +108,34 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
         const agent = await requireOwnAgent(context, user.id, request.params.agentId);
         await removeAgent(context, agent);
         return reply.code(204).send(null);
+      },
+    );
+
+    app.get(
+      "/api/agents/:agentId/record",
+      {
+        schema: {
+          tags: ["Agents"],
+          summary: "An Agent's Record",
+          description:
+            "Everything the Agent did across its Workspace, newest first, in pages: its Runs, the Changes recorded as its, " +
+            "its Comments on Tickets and Artifacts, the Versions it saved of Documents, Reports, Terms, Decisions and " +
+            "Artifacts, and its Transcripts of sessions outside a Run. Any member sees any Agent's Record, each entry " +
+            "left out unless they can read where it is; it stays after the Agent is removed. Pass `next` as `before` " +
+            "for the next, older page.",
+          params: AgentParams,
+          querystring: Type.Object({
+            before: Type.Optional(Type.String({ minLength: 1, description: "The `next` of the page before." })),
+            limit: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: maxRecordLimit, default: defaultRecordLimit, description: "Entries per page." }),
+            ),
+          }),
+          response: { 200: AgentRecord, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        return agentRecord(context, caller, request.params.agentId, request.query);
       },
     );
 

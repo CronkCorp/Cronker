@@ -4,6 +4,7 @@
 // (the build refuses any that does). Screens import them from here. What this module holds itself is the `fetch`
 // plumbing, the error type, the request shapes the server has no schema for, and the calls.
 import type { Agent } from "../../server/agents/agents.js";
+import type { AgentRecord, RecordEntry } from "../../server/agents/record.js";
 import type { AgentToken, IssuedToken, TokenAccess } from "../../server/agents/tokens.js";
 import type {
   Artifact,
@@ -86,7 +87,7 @@ export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReo
 export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
 export type { Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
 export type { LabelRule, ListedUser, Outcome, Project, ProjectAccess, ProjectSummary, Status, StatusKind, Step, StepKind, Visibility };
-export type { Agent, AgentToken, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
+export type { Agent, AgentRecord, AgentToken, RecordEntry, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
 export type { TicketTranscript, Transcript, TranscriptEntry, TranscriptHook };
 export type { Actor, Attachment, AttachmentOwner };
 export type { ComparedLine, Comparison, Document, DocumentSummary, LinkedDocument, ReportRef, Version, VersionWithBody };
@@ -352,6 +353,11 @@ export const api = {
   run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
   transcriptHook: () => call<TranscriptHook>("GET", "/api/transcript-hook"),
   transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
+  agentRecord: (agentId: string, before?: string) =>
+    call<AgentRecord>(
+      "GET",
+      `/api/agents/${encodeURIComponent(agentId)}/record${before === undefined ? "" : `?before=${encodeURIComponent(before)}`}`,
+    ),
   agentTranscripts: (agentId: string) =>
     call<Transcript[]>("GET", `/api/agents/${encodeURIComponent(agentId)}/transcripts`),
   ticketTranscripts: (ticketId: string) =>

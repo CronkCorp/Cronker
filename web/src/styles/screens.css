@@ -1257,6 +1257,11 @@
   flex: none;
 }
 /* An Agent's own Transcripts on its page: session, the Tickets it named, then its size and upload, a row each. */
+/* The Agent Record is a timeline inside a panel, so its gutter takes the panel's background. */
+.agent-record .gutter,
+.agent-record .ring {
+  background: var(--surface);
+}
 .agent-transcripts {
   display: grid;
   margin: 0;
