@@ -162,7 +162,7 @@ export async function lookUpRequest(context: Context, user: User, requestId: str
 /** Approves a request as one of the User's own Agents: the browser goes back to the client with a one-time code. */
 export async function approveRequest(context: Context, user: User, requestId: string, agentId: string): Promise<string> {
   const request = await pendingRequest(context, requestId);
-  const agent = await requireOwnAgent(context.db, user.id, agentId);
+  const agent = await requireOwnAgent(context, user.id, agentId);
   const code = issueSecret("oauth_code");
   const now = context.clock.now();
   const { rowCount } = await context.db.query(
