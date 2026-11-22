@@ -67,3 +67,18 @@ export function storedGroupSubTickets(): boolean {
 export function keepGroupSubTickets(group: boolean): void {
   safely(() => (group ? localStorage.setItem(groupSubTicketsKey, "true") : localStorage.removeItem(groupSubTicketsKey)));
 }
+
+/** How the rich editor edits Markdown: as formatted text, or as its Markdown source. */
+export type EditorMode = "rich" | "source";
+
+const editorModeKey = "cronk_editor_mode";
+
+/** The editor mode last chosen on this browser; formatted text when none was, or storage can't be read. */
+export function storedEditorMode(): EditorMode {
+  return safely(() => localStorage.getItem(editorModeKey)) === "source" ? "source" : "rich";
+}
+
+/** Keeps the editor mode on this browser, for every editor opened after. */
+export function chooseEditorMode(mode: EditorMode): void {
+  safely(() => (mode === "source" ? localStorage.setItem(editorModeKey, "source") : localStorage.removeItem(editorModeKey)));
+}

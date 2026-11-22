@@ -157,15 +157,6 @@ describe("Documents", () => {
     });
   });
 
-  test("a save must name the Version it's based on", async () => {
-    const { ada, project } = await workspaceWithProject();
-    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan" });
-
-    const refused = await call("PATCH", `/api/documents/${document.id}`, ada, { body: "No base." });
-
-    expect(refused.status).toBe(400);
-    expect(refused.json.error.code).toBe("base_version_needed");
-  });
 });
 
 /** A page tree as `title` lines, each indented two spaces per level below the top, in tree order. */
@@ -257,19 +248,6 @@ describe("deleting a Document", () => {
     ]);
   });
 
-  test("an Agent can't delete a Document", async () => {
-    const { ada, project, asAgent } = await workspaceWithProject();
-    const document = await ok("POST", `/api/projects/${project.id}/documents`, asAgent, { title: "Findings" });
-
-    const refused = await call("DELETE", `/api/documents/${document.id}`, asAgent);
-
-    expect(refused.status).toBe(403);
-    expect(refused.json.error).toEqual(
-      expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Document") }),
-    );
-    expect((await call("GET", `/api/documents/${document.id}`, ada)).status).toBe(200);
-  });
-
   test("deleting a Document with children is refused until they're moved or deleted", async () => {
     const { ada, project } = await workspaceWithProject();
     const tree = `/api/projects/${project.id}/documents`;
@@ -316,19 +294,43 @@ describe("Project and Workspace page trees", () => {
       expect([refused.status, refused.json.error.code]).toEqual([409, "parent_outside_tree"]);
     }
   });
+});
 
-  test("nothing crosses Workspaces: another Workspace's Documents answer as not found", async () => {
-    const { ada, workspace, project, asAgent } = await workspaceWithProject();
-    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Secret plan" });
+describe("refusals", () => {
+  test("refused, changing nothing: another Workspace's member or Agent, an Agent's delete, a read-only token's writes, and a save naming no Version", async () => {
+    const { ada, workspace, project, agent, asAgent } = await workspaceWithProject();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, asAgent, { title: "Secret plan" });
     const handbook = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Handbook" });
     const second = await ok("POST", "/api/workspaces", ada, { name: "Bob's Workspace" });
     const bob = await addMember(cronk, ada.cookie, second.id, "bob@example.com");
     const theirs = await ok("POST", `/api/workspaces/${second.id}/documents`, bob, { title: "Bob's notes" });
     const bobsAgent = await ok("POST", `/api/workspaces/${second.id}/agents`, bob, { name: "bob-bot" });
-    const { secret } = await ok("POST", `/api/agents/${bobsAgent.id}/tokens`, bob, { name: "laptop", access: "full" });
-    const asBobsAgent = { headers: { authorization: `Bearer ${secret}` } };
+    const { secret: bobsSecret } = await ok("POST", `/api/agents/${bobsAgent.id}/tokens`, bob, { name: "laptop", access: "full" });
+    const asBobsAgent = { headers: { authorization: `Bearer ${bobsSecret}` } };
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
+    const reader = { headers: { authorization: `Bearer ${secret}` } };
+    // A read-only token reads Documents.
+    expect((await ok("GET", `/api/documents/${document.id}`, reader)).title).toBe("Secret plan");
 
-    for (const as of [{ cookie: bob.cookie }, asBobsAgent]) {
+    const readOnly = expect.objectContaining({ code: "read_only_token" });
+    const refusals: [string, As, string, string, unknown, number, unknown?][] = [
+      [
+        "an Agent",
+        asAgent,
+        "DELETE",
+        `/api/documents/${document.id}`,
+        undefined,
+        403,
+        expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Document") }),
+      ],
+      ["a read-only token", reader, "POST", `/api/projects/${project.id}/documents`, { title: "Mine" }, 403, readOnly],
+      ["a read-only token", reader, "PATCH", `/api/documents/${document.id}`, { baseVersion: 1, body: "Mine." }, 403, readOnly],
+      ["a read-only token", reader, "PATCH", `/api/documents/${document.id}`, { position: 0 }, 403, readOnly],
+      // A save must name the Version it's based on.
+      ["Ada", ada, "PATCH", `/api/documents/${document.id}`, { body: "No base." }, 400, expect.objectContaining({ code: "base_version_needed" })],
+    ];
+    // Nothing crosses Workspaces: another Workspace's Documents answer as not found.
+    for (const [who, as] of [["Bob", { cookie: bob.cookie }], ["Bob's Agent", asBobsAgent]] as const) {
       for (const [method, path, body] of [
         ["GET", `/api/documents/${document.id}`],
         ["GET", `/api/documents/${document.id}/versions`],
@@ -343,33 +345,21 @@ describe("Project and Workspace page trees", () => {
         ["GET", `/api/workspaces/${workspace.id}/documents`],
         ["POST", `/api/workspaces/${workspace.id}/documents`, { title: "Planted" }],
       ] as const) {
-        const response = await call(method, path, as, body);
-        expect(response.status, `${method} ${path}`).toBe(404);
+        refusals.push([who, as, method, path, body, 404]);
       }
+    }
+    for (const [who, as, method, path, body, status, error] of refusals) {
+      const refused = await call(method, path, as, body);
+      expect(refused.status, `${who}: ${method} ${path}`).toBe(status);
+      if (error) expect(refused.json.error, `${who}: ${method} ${path}`).toEqual(error);
     }
     const intoTheirs = await call("PATCH", `/api/documents/${theirs.id}`, bob, { parentId: handbook.id });
     expect(intoTheirs.status).toBe(409);
+
     expect(await treeOf(`/api/projects/${project.id}/documents`, asAgent)).toEqual(["Secret plan"]);
+    expect(await treeOf(`/api/workspaces/${workspace.id}/documents`, ada)).toEqual(["Handbook"]);
+    expect(await treeOf(`/api/workspaces/${second.id}/documents`, bob)).toEqual(["Bob's notes"]);
     expect((await ok("GET", `/api/documents/${document.id}`, ada)).version.number).toBe(1);
-  });
-});
-
-describe("Agents and Documents", () => {
-  test("an Agent's read-only token reads Documents but can't create, save or move them", async () => {
-    const { ada, project, agent } = await workspaceWithProject();
-    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
-    const reader = { headers: { authorization: `Bearer ${secret}` } };
-
-    expect((await ok("GET", `/api/documents/${document.id}`, reader)).title).toBe("Plan");
-    for (const [method, path, body] of [
-      ["POST", `/api/projects/${project.id}/documents`, { title: "Mine" }],
-      ["PATCH", `/api/documents/${document.id}`, { baseVersion: 1, body: "Mine." }],
-      ["PATCH", `/api/documents/${document.id}`, { position: 0 }],
-    ] as const) {
-      const refused = await call(method, path, reader, body);
-      expect([refused.status, refused.json.error.code], `${method} ${path}`).toEqual([403, "read_only_token"]);
-    }
   });
 });
 

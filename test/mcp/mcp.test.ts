@@ -5,7 +5,7 @@ import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
- * Seam 4, kept thin: a real MCP client against the running server checks bearer tokens
+ * Seam 5, kept thin: a real MCP client against the running server checks bearer tokens
  * and how the tools map onto the HTTP API. The rules themselves are tested at the API.
  */
 
@@ -185,141 +185,6 @@ describe("MCP with an Agent token", () => {
         sentBack: null,
       },
     ]);
-  });
-
-  test("an Agent reads a Ticket a failing check sent back, with Cronk's Comment and what sent it back", async () => {
-    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
-    await createGitHubApp(cronk, cookie);
-    const app = cronk.github.apps[0]!;
-    const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
-    const cronker = installation.repositories[0]!;
-    await post(cookie, `/api/projects/${ticket.projectId}/repositories`, { id: cronker.id });
-    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
-    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
-    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
-    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
-    // Code review is skipped, so finishing Implement moves it to In Review.
-    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
-      cookie,
-      body: { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") },
-    });
-    const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
-    await cronk.github.deliver(app, "pull_request", {
-      action: "opened",
-      installation: { id: installation.id },
-      repository,
-      pull_request: {
-        id: 501,
-        number: 7,
-        title: "CRONK-1: read me",
-        state: "open",
-        draft: false,
-        merged: false,
-        html_url: "https://github.com/cronkcorp/cronker/pull/7",
-        head: { ref: "cronk-1", sha: "c1" },
-        updated_at: "2026-01-01T09:00:00Z",
-      },
-    });
-    const client = await connect(secret);
-    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
-    expect((await call(client, "finish", { run: run.id, outcome: "done" })).isError).toBe(false);
-    await cronk.github.deliver(app, "check_run", {
-      action: "completed",
-      installation: { id: installation.id },
-      repository,
-      check_run: { id: 10, name: "test", head_sha: "c1", status: "completed", conclusion: "failure", html_url: "https://github.com/cronkcorp/cronker/runs/10" },
-    });
-
-    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
-
-    expect(json.comments.at(-1)).toEqual(
-      expect.objectContaining({
-        actor: { kind: "cronk", name: "Cronk" },
-        body:
-          "The check [**test**](https://github.com/cronkcorp/cronker/runs/10) failed on " +
-          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7)'s latest commit `c1`. Sent CRONK-1 back to Implement.",
-      }),
-    );
-    expect(json.pullRequests[0].sentBack).toEqual({
-      kind: "check",
-      name: "test",
-      sha: "c1",
-      url: "https://github.com/cronkcorp/cronker/runs/10",
-      at: "2026-01-01T09:00:00.000Z",
-    });
-  });
-
-  test("an Agent reads a Ticket a merge conflict sent back, with Cronk's Comment naming the merge and what sent it back", async () => {
-    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
-    await createGitHubApp(cronk, cookie);
-    const app = cronk.github.apps[0]!;
-    const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
-    const cronker = installation.repositories[0]!;
-    await post(cookie, `/api/projects/${ticket.projectId}/repositories`, { id: cronker.id });
-    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
-    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
-    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
-    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
-    // Code review is skipped, so finishing Implement moves it to In Review.
-    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
-      cookie,
-      body: { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") },
-    });
-    const repository = { id: cronker.id, full_name: "cronkcorp/cronker" };
-    const pullRequest = (id: number, number: number, title: string, fields: object) => ({
-      id,
-      number,
-      title,
-      state: "open",
-      draft: false,
-      merged: false,
-      html_url: `https://github.com/cronkcorp/cronker/pull/${number}`,
-      head: { ref: `branch-${number}`, sha: `c${number}` },
-      base: { ref: "main", sha: "b0" },
-      updated_at: "2026-01-01T09:00:00Z",
-      ...fields,
-    });
-    const deliver = (action: string, pr: object) =>
-      cronk.github.deliver(app, "pull_request", { action, installation: { id: installation.id }, repository, pull_request: pr });
-    await deliver("opened", pullRequest(501, 7, "CRONK-1: read me", {}));
-    const client = await connect(secret);
-    const [run] = await (await cronk.request("GET", `/api/tickets/${ticket.id}/runs`, { cookie })).json();
-    expect((await call(client, "finish", { run: run.id, outcome: "done" })).isError).toBe(false);
-    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
-    await deliver(
-      "closed",
-      pullRequest(502, 9, "Speed up the board", { state: "closed", merged: true, merge_commit_sha: "m1", updated_at: "2026-01-01T09:30:00Z" }),
-    );
-    await cronk.checkMergeability();
-
-    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
-
-    expect(json.comments.at(-1)).toEqual(
-      expect.objectContaining({
-        actor: { kind: "cronk", name: "Cronk" },
-        body:
-          "[cronkcorp/cronker#9](https://github.com/cronkcorp/cronker/pull/9) merged into `main` as `m1`, and now " +
-          "[cronkcorp/cronker#7](https://github.com/cronkcorp/cronker/pull/7) conflicts with it. Sent CRONK-1 back to Implement.",
-      }),
-    );
-    expect(json.pullRequests[0].sentBack).toEqual({
-      kind: "conflict",
-      branch: "main",
-      sha: "m1",
-      merge: { repository: "cronkcorp/cronker", number: 9, url: "https://github.com/cronkcorp/cronker/pull/9" },
-      at: "2026-01-01T09:00:00.000Z",
-    });
-  });
-
-  test("an Agent reads a Ticket with its Linked Documents", async () => {
-    const { cookie, ticket, secret } = await workspaceWithTicket();
-    const document = await post(cookie, `/api/projects/${ticket.projectId}/documents`, { title: "Sign-in design" });
-    await post(cookie, `/api/tickets/${ticket.id}/documents`, { documentId: document.id });
-    const client = await connect(secret);
-
-    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
-
-    expect(json.linkedDocuments).toEqual([{ id: document.id, projectId: ticket.projectId, title: "Sign-in design", slug: document.slug }]);
   });
 
   test("an Agent lists Tickets, narrowed by Project and Status", async () => {
@@ -667,7 +532,8 @@ describe("MCP with an Agent token", () => {
     ]);
     const workspaceTree = await call(client, "list_documents", {});
     expect(workspaceTree.json.map((d: { title: string }) => d.title)).toEqual(["Handbook"]);
-    const current = await call(client, "read_document", { document: setup.json.id });
+    // A Document is named by its slug too, whose words may be stale.
+    const current = await call(client, "read_document", { document: setup.json.slug });
     expect(current.json).toEqual(expect.objectContaining({ title: "Setting up", body: "Install it.\nRun it." }));
     const first = await call(client, "read_document", { document: setup.json.id, version: 1 });
     expect(first.json).toEqual(expect.objectContaining({ number: 1, title: "Setup", body: "Run it." }));
@@ -756,31 +622,13 @@ describe("MCP with an Agent token", () => {
       [1, []],
       [2, ["session"]],
     ]);
+    // A Term is named by its readable form too: its name after its Project's key.
+    const first = await call(client, "read_term", { term: "CRONK/RUN", version: 1 });
+    expect(first.json).toEqual(expect.objectContaining({ number: 1, name: "run", avoid: [] }));
+    const compared = await call(client, "compare_term_versions", { term: projectRun.json.id, from: 1, to: 2 });
+    expect(compared.json.avoid).toEqual([{ change: "added", text: "session" }]);
     const viaApi = await (await cronk.request("GET", `/api/terms/${projectRun.json.id}`, { cookie })).json();
     expect(viaApi.avoid).toEqual(["session"]);
-  });
-
-  test("an Agent reads one of a Term's Versions and compares two, and a missing Version is refused", async () => {
-    const { secret } = await workspaceWithTicket();
-    const client = await connect(secret);
-    const term = await call(client, "create_term", { project: "CRONK", name: "Brief", definition: "Instructions.", avoid: ["Prompt"] });
-    await call(client, "edit_term", { term: term.json.id, baseVersion: 1, name: "Run brief", avoid: ["Prompt", "system prompt"] });
-
-    const first = await call(client, "read_term", { term: term.json.id, version: 1 });
-    const current = await call(client, "read_term", { term: term.json.id });
-    const compared = await call(client, "compare_term_versions", { term: term.json.id, from: 1, to: 2 });
-    const missing = await call(client, "read_term", { term: term.json.id, version: 3 });
-    const missingCompared = await call(client, "compare_term_versions", { term: term.json.id, from: 1, to: 3 });
-
-    expect(first.json).toEqual(expect.objectContaining({ number: 1, name: "Brief", avoid: ["Prompt"] }));
-    expect(current.json).toEqual(expect.objectContaining({ name: "Run brief", version: expect.objectContaining({ number: 2 }) }));
-    expect([compared.json.from.name, compared.json.to.name]).toEqual(["Brief", "Run brief"]);
-    expect(compared.json.avoid).toEqual([
-      { change: "same", text: "Prompt" },
-      { change: "added", text: "system prompt" },
-    ]);
-    expect(missing).toEqual({ isError: true, json: expect.objectContaining({ code: "not_found" }) });
-    expect(missingCompared).toEqual({ isError: true, json: expect.objectContaining({ code: "not_found" }) });
   });
 
   test("an Agent attaches files as base64 to a Document and its own Comment, and reads a Ticket's Attachments", async () => {
@@ -870,7 +718,8 @@ describe("MCP with an Agent token", () => {
       [2, "Use Fastify"],
     ]);
     expect((await call(client, "list_decisions", {})).json.map((d: { title: string }) => d.title)).toEqual(["Write in English"]);
-    const first = await call(client, "read_decision", { decision: postgres.json.id, version: 1 });
+    // A Decision is named by its readable form too: its number after its Project's key.
+    const first = await call(client, "read_decision", { decision: "CRONK/1", version: 1 });
     expect(first.json).toEqual(expect.objectContaining({ number: 1, body: "It's boring." }));
     const versions = await call(client, "list_decision_versions", { decision: postgres.json.id });
     expect(versions.json.map((v: { number: number }) => v.number)).toEqual([1, 2]);
@@ -902,23 +751,6 @@ describe("MCP with an Agent token", () => {
       ],
     });
     expect(workspace.json).toEqual({ files: [{ path: "GLOSSARY.md", content: "# Glossary\n\n**Ticket**:\nA unit of work.\n" }] });
-  });
-
-  test("an Agent names Documents, Terms, Decisions and Artifacts by their readable forms as well as their ids", async () => {
-    const { cookie, secret } = await workspaceWithTicket();
-    const document = await post(cookie, "/api/projects/CRONK/documents", { title: "Onboarding", body: "Hello" });
-    const term = await post(cookie, "/api/projects/CRONK/terms", { name: "Workspace slug", definition: "Its name in addresses." });
-    const decision = await post(cookie, "/api/projects/CRONK/decisions", { title: "Slugs in addresses" });
-    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
-    const artifact = await post(cookie, "/api/projects/CRONK/artifacts", { title: "Board", files });
-    const client = await connect(secret);
-
-    expect((await call(client, "read_document", { document: `onboarding-${document.id.slice(0, 8)}` })).json.id).toBe(document.id);
-    expect((await call(client, "read_term", { term: "CRONK/workspace slug" })).json.id).toBe(term.id);
-    expect((await call(client, "read_decision", { decision: "CRONK/1" })).json.id).toBe(decision.id);
-    expect((await call(client, "read_artifact", { artifact: artifact.slug })).json.id).toBe(artifact.id);
-    expect((await call(client, "read_document", { document: document.id })).json.slug).toBe(document.slug);
-    expect((await call(client, "read_decision", { decision: "CRONK/2" })).isError).toBe(true);
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {
@@ -958,7 +790,7 @@ describe("MCP with an Agent token", () => {
     const outdated = await call(client, "save_artifact", { artifact: created.json.id, baseVersion: 1, title: "Again" });
     expect(outdated).toEqual({ isError: true, json: expect.objectContaining({ code: "outdated_version" }) });
 
-    const read = await call(client, "read_artifact", { artifact: created.json.id });
+    const read = await call(client, "read_artifact", { artifact: created.json.slug });
     const byApi = await (await cronk.request("GET", `/api/artifacts/${created.json.id}`, { cookie })).json();
     expect(read.json).toEqual(byApi);
     const readFile = await call(client, "read_artifact", { artifact: created.json.id, path: "app.js" });

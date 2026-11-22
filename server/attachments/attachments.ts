@@ -66,6 +66,8 @@ interface FoundOwner extends Owner {
   workspaceId: string;
   /** The Ticket, and its Project, a Ticket or Comment Attachment shows with; none for a Document. */
   ticket: { id: string; projectId: string } | null;
+  /** The Project it is in: its Ticket's or its Document's; null for a Document of the Workspace's own. */
+  projectId: string | null;
   /** A Comment's author. */
   author?: { kind: "user" | "agent"; id: string };
 }
@@ -79,16 +81,22 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
   if (owner.kind === "ticket") {
     const ticket = await findTicketRow(db, viewer, owner.id);
     if (!ticket) throw ticketNotFound();
-    return { ...owner, workspaceId: ticket.workspaceId, ticket: { id: ticket.id, projectId: ticket.projectId } };
+    return {
+      ...owner,
+      workspaceId: ticket.workspaceId,
+      ticket: { id: ticket.id, projectId: ticket.projectId },
+      projectId: ticket.projectId,
+    };
   }
   if (owner.kind === "document") {
     const view = inReach(viewer, { project: "documents.project_id", workspace: "documents.workspace_id" }, "$2");
-    const { rows } = await db.query<{ workspaceId: string }>(
-      `select documents.workspace_id as "workspaceId" from documents where documents.id = $1 and ${view.sql}`,
+    const { rows } = await db.query<{ workspaceId: string; projectId: string | null }>(
+      `select documents.workspace_id as "workspaceId", documents.project_id as "projectId"
+       from documents where documents.id = $1 and ${view.sql}`,
       [owner.id, view.value],
     );
     if (!rows[0]) throw notFound;
-    return { ...owner, workspaceId: rows[0].workspaceId, ticket: null };
+    return { ...owner, workspaceId: rows[0].workspaceId, ticket: null, projectId: rows[0].projectId };
   }
   const view = inReach(viewer, { project: "tickets.project_id", workspace: "comments.workspace_id" }, "$2");
   const { rows } = await db.query<{ workspaceId: string; ticketId: string; projectId: string; author: FoundOwner["author"] }>(
@@ -105,6 +113,7 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
     ...owner,
     workspaceId: comment.workspaceId,
     ticket: { id: comment.ticketId, projectId: comment.projectId },
+    projectId: comment.projectId,
     author: comment.author,
   };
 }
@@ -194,13 +203,11 @@ export async function addAttachment(
 }
 
 function publishChange({ live }: Context, tx: Tx, owner: FoundOwner): void {
-  live.publish(
-    tx,
-    owner.workspaceId,
-    owner.ticket
-      ? { type: "attachments.changed", projectId: owner.ticket.projectId, ticketId: owner.ticket.id }
-      : { type: "attachments.changed", documentId: owner.id },
-  );
+  if (owner.ticket) {
+    live.publish(tx, owner.workspaceId, { type: "attachments.changed", projectId: owner.ticket.projectId, ticketId: owner.ticket.id });
+  } else {
+    live.publish(tx, owner.workspaceId, { type: "attachments.changed", documentId: owner.id }, { readersOf: [owner.projectId] });
+  }
 }
 
 /** The Project an Attachment is in, as SQL: its Ticket's, its Comment's Ticket's or its Document's; none for the Workspace's own. */
