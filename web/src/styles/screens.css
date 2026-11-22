@@ -1037,24 +1037,6 @@
   font-size: 16px !important;
   font-weight: 600;
 }
-.editor-panes {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: start;
-}
-.editor-preview {
-  display: grid;
-  gap: var(--space-1);
-}
-.editor-preview .panel {
-  min-height: 200px;
-}
-@media (max-width: 760px) {
-  .editor-panes {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 .glossary .term {
   display: grid;
   gap: 6px;
