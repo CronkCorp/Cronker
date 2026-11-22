@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
-import { User, userColumns, type User as UserRecord } from "../identity/user.js";
+import { User, userColumns, userName, type User as UserRecord } from "../identity/user.js";
 import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
@@ -228,7 +228,7 @@ export async function removeMember(context: Context, adminId: string, workspaceI
       delegate: { id: string; name: string } | null;
     }>(
       `select tickets.id, tickets.project_id as "projectId",
-         case when tickets.assignee_id = $2 then json_build_object('id', users.id, 'name', users.email) end as assignee,
+         case when tickets.assignee_id = $2 then json_build_object('id', users.id, 'name', ${userName()}) end as assignee,
          case when agents.owner_id = $2 then json_build_object('id', agents.id, 'name', agents.name) end as delegate
        from tickets left join users on users.id = tickets.assignee_id
        left join agents on agents.id = tickets.delegate_id
@@ -256,10 +256,10 @@ export async function removeMember(context: Context, adminId: string, workspaceI
   });
 }
 
-/** How Cronk names a User in what it writes: by email, or by GitHub login until their email is known. */
+/** How Cronk names a User in what it writes, as `userName` says. */
 async function nameOf(tx: Tx, userId: string): Promise<string> {
   const { rows } = await tx.query<{ name: string }>(
-    "select coalesce(email, '@' || github_login) as name from users where id = $1",
+    `select ${userName()} as name from users where id = $1`,
     [userId],
   );
   return rows[0]!.name;

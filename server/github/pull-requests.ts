@@ -11,10 +11,11 @@ import type { EventHandler } from "./webhooks.js";
 
 /**
  * Pull Requests in the Repositories Projects list, and the Tickets they link to: those whose
- * key their branch or title contains, in the Projects listing the Pull Request's Repository.
- * Projects sharing a key there, always of different Workspaces, all get the link. Links are
- * only added, as a title or branch comes to name another key, never removed. Only a merge moves
- * Tickets, which Pipeline applies.
+ * key their branch or title contains, in the Projects listing the Pull Request's Repository,
+ * and those a User linked by hand. Projects sharing a key there, always of different
+ * Workspaces, all get the link. Links by key are only added, as a title or branch comes to name
+ * another key, never removed; a User removes only the links they made by hand. Whichever way a
+ * Pull Request links, its merge moves the Ticket the same, which Pipeline applies.
  */
 
 export const pullRequestStates = ["open", "draft", "merged", "closed"] as const;
@@ -128,11 +129,15 @@ export const PullRequest = Type.Object({
     description: "Null until someone approves it or requests changes, whatever the Ticket's Status and whoever opened it, and again once each such review is dismissed.",
   }),
   sentBack: Type.Union([SentBack, Type.Null()], { description: "Null until a failure on it sends the Ticket back." }),
+  manual: Type.Boolean({
+    description:
+      "Whether a User linked it to the Ticket by hand. Its branch or title may name the Ticket's key as well; only a link by hand can be unlinked.",
+  }),
 });
 export type PullRequest = Static<typeof PullRequest>;
 
 /** The Ticket's Pull Requests, oldest link first. */
-export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): Promise<PullRequest[]> {
+export async function pullRequestsOf(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<PullRequest[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
   const { rows } = await db.query<Omit<PullRequest, "id" | "checks" | "sentBack"> & {
@@ -153,7 +158,8 @@ export async function pullRequestsOf(db: Db, viewer: Viewer, ticketId: string): 
         order by reviews.state = 'changes_requested' desc, reviews.review_id desc limit 1) as "reviewState",
        (select sent_back.failure || jsonb_build_object('at', sent_back.sent_at) from sent_back
         where sent_back.pull_request_id = pull_requests.id and sent_back.ticket_id = pull_request_links.ticket_id
-        order by sent_back.seq desc limit 1) as "sentBack"
+        order by sent_back.seq desc limit 1) as "sentBack",
+       pull_request_links.manual_at is not null as manual
      from pull_request_links
      join pull_requests on pull_requests.id = pull_request_links.pull_request_id
      left join runs on runs.id = pull_request_links.producing_run_id
@@ -242,7 +248,7 @@ async function isListed(tx: Tx, repositoryId: number): Promise<boolean> {
 }
 
 /** Tells each Workspace with a Ticket the Pull Request links to that its Pull Requests changed. */
-async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Promise<void> {
+export async function announce({ live }: Context, tx: Tx, pullRequestIds: number[]): Promise<void> {
   if (pullRequestIds.length === 0) return;
   const { rows } = await tx.query<{ ticketId: string; projectId: string; workspaceId: string }>(
     `select distinct tickets.id as "ticketId", tickets.project_id as "projectId", tickets.workspace_id as "workspaceId"
@@ -309,7 +315,7 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
   if (keys.length > 0) {
     const opened = action === "opened";
     await tx.query(
-      `insert into pull_request_links (pull_request_id, ticket_id, workspace_id, producing_run_id, linked_at)
+      `insert into pull_request_links (pull_request_id, ticket_id, workspace_id, producing_run_id, linked_at, by_key)
        select distinct $1::bigint, tickets.id, tickets.workspace_id,
          case when $4 then (
            select runs.id from runs
@@ -317,14 +323,14 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
              and runs.started_at <= $6::timestamptz and (runs.ended_at is null or runs.ended_at > $6::timestamptz)
            order by runs.started_at desc, runs.seq desc limit 1
          ) end,
-         $5::timestamptz
+         $5::timestamptz, true
        from unnest($3::text[]) as written (text)
        join project_repositories on project_repositories.repository_id = $2
        join projects on projects.id = project_repositories.project_id
          and lower(projects.key) = lower(split_part(written.text, '-', 1))
        join tickets on tickets.project_id = projects.id and tickets.number = split_part(written.text, '-', 2)::integer
        on conflict (pull_request_id, ticket_id) do update
-         set producing_run_id = coalesce(pull_request_links.producing_run_id, excluded.producing_run_id)`,
+         set producing_run_id = coalesce(pull_request_links.producing_run_id, excluded.producing_run_id), by_key = true`,
       [pr.id, repository.id, keys, opened, context.clock.now(), openedAt(pr) ?? context.clock.now()],
     );
   }

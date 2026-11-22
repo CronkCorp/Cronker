@@ -21,6 +21,7 @@ import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
+import { userName } from "../identity/user.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -761,7 +762,7 @@ export async function retryRun(context: Context, userId: string, ticketId: strin
       });
     }
     const { rows: owners } = await tx.query<{ ownerId: string; agentName: string; ownerName: string }>(
-      `select agents.owner_id as "ownerId", agents.name as "agentName", coalesce(users.email, '@' || users.github_login) as "ownerName"
+      `select agents.owner_id as "ownerId", agents.name as "agentName", ${userName()} as "ownerName"
        from agents join users on users.id = agents.owner_id where agents.id = $1`,
       [ticket.delegateId],
     );

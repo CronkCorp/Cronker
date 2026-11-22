@@ -16,7 +16,7 @@ These are the seams from the milestone 1 spec (#1). Tests live only at them.
    - `e2e/main-path.spec.ts` walks the whole of it with the fake Runner and the stand-in GitHub, from setup through the Merge Step's Run merging the Pull Request, moving the card to Done, to Accepting that Unverified completion; `e2e/smoke.spec.ts` sets up a fresh installation without GitHub, signs in and out.
    - `e2e/connect.spec.ts`: the OAuth consent screen connecting a claude.ai connector.
    - `e2e/tickets.spec.ts`: creating Tickets, dragging one across the board, editing, commenting, a key link and filtering.
-   - `e2e/board.spec.ts` (`@every-browser`): a card dragged onto another column, onto its own and refused, and to the board's edges.
+   - `e2e/board.spec.ts` (`@every-browser`): a card dragged onto another column, onto its own and refused, from anywhere on it (its link, Labels, avatars and empty space), and to the board's edges.
    - `e2e/card-menu.spec.ts`: a card's menu by keyboard, Move to starting a Run as a drop does.
    - `e2e/board-selection.spec.ts`: several cards selected by Ctrl/Cmd+click, Shift+click, Space and Shift+Space, Escape clearing them, a selection dragged and moved with Move to, and its refused moves listed per Ticket.
    - `e2e/comments.spec.ts`: `C` reaching the Comment box of a long Ticket, never while typing or with a modifier, and Ctrl+Enter placing a Comment from the rich editor and from its Markdown source.

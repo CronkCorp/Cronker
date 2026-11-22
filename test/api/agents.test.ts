@@ -40,7 +40,7 @@ describe("Agents", () => {
       id: expect.any(String),
       workspaceId: workspace.id,
       name: "claude-max",
-      owner: { id: user.id, email: "ada@example.com", githubLogin: null },
+      owner: { id: user.id, email: "ada@example.com", githubLogin: null, displayName: null },
       runnerId: null,
       createdAt: expect.any(String),
     });

@@ -231,10 +231,12 @@
 /* A card is its link (key, Priority, title, meta) and, for a blocked Ticket, its Blocked chip under it: the chip holds
    links of its own, so it can't sit inside the card's. Priority follows the key on the first line, wrapping under it
    in a narrow column; title and meta take a line each. It drags from anywhere on it, so none of its text is
-   selectable: pressing on its title and moving drags the card rather than selecting the words. */
+   selectable: pressing on its title and moving drags the card rather than selecting the words. Its link and what is
+   in it are never dragged themselves (the link is draggable="false"), so every drag is the card's. */
 .card {
   -webkit-user-select: none;
   user-select: none;
+  -webkit-user-drag: element;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -299,6 +301,10 @@
   color: var(--text);
   text-decoration: none;
   cursor: inherit;
+}
+.card-link,
+.card-link * {
+  -webkit-user-drag: none;
 }
 .card-link:hover {
   text-decoration: none;
