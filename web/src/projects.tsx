@@ -572,7 +572,8 @@ function CardMenu({
 /**
  * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
  * which holds links of its own and so sits beside the card's link rather than in it. Pressing anywhere on it and
- * moving drags it, the link included, and its text is never selected; a click on the link still opens the Ticket.
+ * moving drags it, the link included: the card is the only drag source in it, so the drag is the same wherever it
+ * starts, and its text is never selected; a click on the link still opens the Ticket.
  * Right-clicking it, long-pressing it or ContextMenu / Shift+F10 on its focused link opens its CardMenu.
  */
 function Card({
@@ -599,15 +600,16 @@ function Card({
         className={`card${arrived ? " arrived" : ""}`}
         draggable
         onDragStart={(event: DragEvent<HTMLDivElement>) => {
-          // A drag picked up on the card's link starts on the link, a link's own drag: show the whole card under the
-          // pointer rather than the browser's picture of a link, held where it was pressed.
+          // Show the whole card under the pointer, held where it was pressed.
           const card = event.currentTarget.getBoundingClientRect();
           event.dataTransfer.setDragImage(event.currentTarget, event.clientX - card.left, event.clientY - card.top);
           event.dataTransfer.setData(ticketDrag, ticket.id);
           event.dataTransfer.effectAllowed = "move";
         }}
       >
-        <Link to={to.ticket(ticket)} className="card-link">
+        {/* Not draggable itself: a press on the link starts the card's drag, not the browser's own drag of a link,
+            which browsers start differently from an element's and which would carry the link's address. */}
+        <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
           <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
           <span className="card-priority">
             <PriorityTag priority={ticket.priority} />
