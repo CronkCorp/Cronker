@@ -557,10 +557,20 @@ function BodiesCompared({ comparison }: { comparison: Comparison }) {
 export function Versions<V extends VersionWithBody, C = Comparison<V>>({
   source,
   current,
+  revision,
+  deleting,
 }: {
   source: VersionSource<V, C>;
   /** The current Version's number; the list is read again when it changes. */
   current: number;
+  /** Changes when the Versions may have changed other than by a new current one, such as one deleted elsewhere. */
+  revision?: number;
+  /** Offers to delete each Version, in its own "…" menu, while more than one is left; left out, none is offered. */
+  deleting?: {
+    run: (number: number) => Promise<void>;
+    /** What deleting a Version does, said when asking first. */
+    note: ReactNode;
+  };
 }) {
   const [versions, setVersions] = useState<ListedVersion[] | null>(null);
   const [shown, setShown] = useState<V | null>(null);
@@ -569,6 +579,9 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
   const [failure, setFailure] = useState<string | null>(null);
   // Kept apart from the others so the next list read clears it.
   const [listFailure, setListFailure] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<number | null>(null);
+  // Bumped after a delete here, so the list is read again.
+  const [deleted, setDeleted] = useState(0);
   const latest = useLatest();
   const latestList = useLatest();
   // A new source each render reads the same Versions; the latest one is used.
@@ -584,7 +597,11 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
       },
       (e) => setListFailure(e.message),
     );
-  }, [current, latestList]);
+  }, [current, revision, deleted, latestList]);
+  // A Version that went drops out of the picks.
+  useEffect(() => {
+    if (versions) setPicked((picks) => picks.filter((n) => versions.some((version) => version.number === n)));
+  }, [versions]);
 
   const pick = (number: number, on: boolean) => {
     const next = on ? [...picked.filter((n) => n !== number), number].slice(-2) : picked.filter((n) => n !== number);
@@ -626,10 +643,42 @@ export function Versions<V extends VersionWithBody, C = Comparison<V>>({
                 <Actor actor={version.actor} /> <RelativeTime at={version.savedAt} />
               </span>
             </span>
+            {deleting && versions.length > 1 && (
+              <span className="version-actions">
+                <Menu
+                  label={`More of Version ${version.number}`}
+                  trigger={
+                    <Button variant="ghost" size="small" aria-label={`More of Version ${version.number}`} title={`More of Version ${version.number}`}>
+                      …
+                    </Button>
+                  }
+                >
+                  <MenuItem tone="danger" onSelect={() => setToDelete(version.number)}>
+                    Delete Version
+                  </MenuItem>
+                </Menu>
+              </span>
+            )}
           </li>
         ))}
       </ol>
       <FormError error={failure ?? listFailure} />
+      {deleting && (
+        <ConfirmDialog
+          open={toDelete !== null}
+          onOpenChange={(open) => !open && setToDelete(null)}
+          title={`Delete Version ${toDelete ?? ""}?`}
+          confirm="Delete"
+          onConfirm={async () => {
+            if (toDelete === null) return;
+            await deleting.run(toDelete);
+            setToDelete(null);
+            setDeleted((n) => n + 1);
+          }}
+        >
+          {deleting.note}
+        </ConfirmDialog>
+      )}
       <Dialog open={shown !== null} onOpenChange={(open) => !open && setShown(null)} title={shown ? `Version ${shown.number}: ${shown.title}` : ""} wide>
         {shown && (
           <>
