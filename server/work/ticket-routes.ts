@@ -279,7 +279,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "A Ticket's Comments",
-          description: "Oldest first. A reply names the Comment it answers.",
+          description:
+            "Oldest first. A reply names the Comment it answers. The Comments on the Ticket's Linked Artifacts the " +
+            "caller can read are among them, each naming its Artifact; replies to those go to the Artifact.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Type.Array(Comment), 401: ErrorBody, 404: ErrorBody },
         },

@@ -298,6 +298,10 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: CommentCreate) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  artifactComments: (artifactId: string) =>
+    call<Comment[]>("GET", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`),
+  commentOnArtifact: (artifactId: string, input: { body: string; replyToId?: string }) =>
+    call<Comment>("POST", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),

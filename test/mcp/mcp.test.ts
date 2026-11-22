@@ -259,6 +259,38 @@ describe("MCP with an Agent token", () => {
     expect(comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts.", "On it."]);
   });
 
+  test("an Agent comments on an Artifact, sees the Comments with read_artifact and on the linking Ticket with read_ticket", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Board</p>").toString("base64") }];
+    const artifact = await (
+      await cronk.request("POST", `/api/projects/${ticket.projectId}/artifacts`, { cookie, body: { title: "Board", files } })
+    ).json();
+    await cronk.request("POST", `/api/tickets/${ticket.id}/artifacts`, { cookie, body: { artifactId: artifact.id } });
+    const byAda = await (
+      await cronk.request("POST", `/api/artifacts/${artifact.id}/comments`, { cookie, body: { body: "Too narrow." } })
+    ).json();
+
+    const reply = await call(client, "comment", { artifact: artifact.slug, body: "Widened.", replyToId: byAda.id });
+    const neither = await call(client, "comment", { body: "Where?" });
+    const both = await call(client, "comment", { ticket: "CRONK-1", artifact: artifact.id, body: "Both?" });
+
+    expect(reply.isError).toBe(false);
+    expect(reply.json).toEqual(
+      expect.objectContaining({ artifactId: artifact.id, replyToId: byAda.id, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
+    );
+    expect(neither).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
+    expect(both).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
+    const read = await call(client, "read_artifact", { artifact: artifact.id });
+    expect(read.json.comments).toEqual([byAda, reply.json]);
+    const readTicket = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(readTicket.json.comments.map((c: { body: string; artifact: { title: string } | null }) => [c.body, c.artifact?.title ?? null])).toEqual([
+      ["First thoughts.", null],
+      ["Too narrow.", "Board"],
+      ["Widened.", "Board"],
+    ]);
+  });
+
   test("a refusal reaches the Agent with its code, rule and advice", async () => {
     const { secret } = await workspaceWithTicket("read");
     const client = await connect(secret);
@@ -1111,7 +1143,7 @@ describe("MCP with an Agent token", () => {
 
     const read = await call(client, "read_artifact", { artifact: created.json.slug });
     const byApi = await (await cronk.request("GET", `/api/artifacts/${created.json.id}`, { cookie })).json();
-    expect(read.json).toEqual(byApi);
+    expect(read.json).toEqual({ ...byApi, comments: [] });
     const readFile = await call(client, "read_artifact", { artifact: created.json.id, path: "app.js" });
     expect(readFile.json).toEqual({ path: "app.js", mediaType: "text/javascript", size: 1, contentBase64: base64("2") });
 
