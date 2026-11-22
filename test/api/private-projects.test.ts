@@ -6,7 +6,8 @@ import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
  * Private Projects (ADR 0010): an Admin makes a Project private and lists who may see it, and everyone else, with
- * their Agents, finds nothing of its board and Tickets, as if it were a record of another Workspace.
+ * their Agents, finds nothing of its board, Tickets, knowledge and Artifacts, as if they were records of another
+ * Workspace.
  */
 
 let cronk: StartedCronk;
@@ -335,5 +336,257 @@ describe("a private Project's board and Tickets", () => {
     expect(JSON.parse(blocked.text).ticket).toMatchObject({ blockedBy: [], blockedByHidden: 1 });
     expect(JSON.stringify({ ...JSON.parse(blocked.text), ticket: { description: "" } })).not.toMatch(/SECRET-|Hidden plans/);
     expect(JSON.stringify({ ...JSON.parse(blocked.text).ticket, description: "" })).not.toMatch(/SECRET-|Hidden plans/);
+  });
+});
+
+const base64 = (text: string) => Buffer.from(text).toString("base64");
+const page = (path: string, text: string) => ({ path, contentBase64: base64(text) });
+
+/** Attaches a small text file to the owner at `path`, as the web client does. */
+async function attach(path: string, as: As, name: string) {
+  const response = await fetch(new URL(`${path}?name=${encodeURIComponent(name)}`, cronk.url), {
+    method: "POST",
+    headers: { ...as.headers, ...(as.cookie ? { cookie: as.cookie } : {}), "content-type": "text/plain" },
+    body: "secret bytes",
+  });
+  const json = await response.json();
+  expect(response.status, `POST ${path}: ${JSON.stringify(json)}`).toBe(201);
+  return json as { id: string };
+}
+
+/**
+ * The two Projects with knowledge in each place. SECRET holds a Document Plan at Version 2 with a Goals Section, a
+ * Term Run, a Decision 1, an Artifact Board and a Report on SECRET-3, written by Ada's Agent during its Run there;
+ * SECRET-1 links Plan and Board, and Plan, SECRET-1 and its Comment carry Attachments. The Workspace holds its own
+ * Document, Term, Decision and Artifact.
+ */
+async function twoProjectsWithKnowledge() {
+  const setting = await twoProjects();
+  const { ada, secret, workspace, hidden, comment, adasAgent } = setting;
+  const document = await ok("POST", `/api/projects/${secret.id}/documents`, ada, {
+    title: "Plan",
+    body: "# Plan\n\n## Goals\n\nSecret goals.",
+  });
+  await ok("PATCH", `/api/documents/${document.id}`, ada, { baseVersion: 1, body: "# Plan\n\n## Goals\n\nSecret goals, revised." });
+  const term = await ok("POST", `/api/projects/${secret.id}/terms`, ada, { name: "Run", definition: "A secret run." });
+  const decision = await ok("POST", `/api/projects/${secret.id}/decisions`, ada, { title: "Keep it hidden", body: "Why." });
+  const artifact = await ok("POST", `/api/projects/${secret.id}/artifacts`, ada, {
+    title: "Board",
+    files: [page("index.html", "<!doctype html><title>Board</title>")],
+  });
+  await ok("POST", `/api/tickets/${hidden.id}/documents`, ada, { documentId: document.id });
+  await ok("POST", `/api/tickets/${hidden.id}/artifacts`, ada, { artifactId: artifact.id });
+  const attachments = {
+    document: await attach(`/api/documents/${document.id}/attachments`, ada, "plan.txt"),
+    ticket: await attach(`/api/tickets/${hidden.id}/attachments`, ada, "ticket.txt"),
+    comment: await attach(`/api/comments/${comment.id}/attachments`, ada, "comment.txt"),
+  };
+
+  // A Report, written during a Run of Ada's Agent on SECRET-3.
+  const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+  await ok("PATCH", `/api/agents/${adasAgent.id}`, ada, { runnerId: runner.id });
+  const reported = await ok("POST", `/api/projects/${secret.id}/tickets`, ada, { title: "Investigated" });
+  const triage = secret.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  await ok("PATCH", `/api/tickets/${reported.id}`, ada, { delegateId: adasAgent.id, statusId: triage });
+  const report = await ok("POST", `/api/tickets/${reported.id}/reports`, adasAgent.as, { title: "Findings", body: "Secret findings." });
+
+  const own = {
+    document: await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Handbook", body: "Open." }),
+    term: await ok("POST", `/api/workspaces/${workspace.id}/terms`, ada, { name: "Ticket", definition: "Work." }),
+    decision: await ok("POST", `/api/workspaces/${workspace.id}/decisions`, ada, { title: "Use Postgres", body: "Why." }),
+    artifact: await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Logo",
+      files: [page("index.html", "<!doctype html><title>Logo</title>")],
+    }),
+  };
+  return { ...setting, document, term, decision, artifact, attachments, reported, report, own };
+}
+
+type Knowing = Awaited<ReturnType<typeof twoProjectsWithKnowledge>>;
+
+/** Every read of the private Project's knowledge, Artifacts and Attachments, by id and by readable form. */
+function knowledgeReads({ secret, document, term, decision, artifact, attachments, reported, report }: Knowing): string[] {
+  return [
+    `/api/projects/${secret.id}/documents`,
+    `/api/documents/${document.id}`,
+    `/api/documents/${document.slug}`,
+    `/api/documents/${document.id}/versions`,
+    `/api/documents/${document.id}/versions/1`,
+    `/api/documents/${document.id}/versions/compare?from=1&to=2`,
+    `/api/documents/${document.id}/sections?section=Goals`,
+    `/api/documents/${document.id}/attachments`,
+    `/api/tickets/${reported.id}/reports`,
+    `/api/documents/${report.id}`,
+    `/api/documents/${report.id}/versions`,
+    `/api/projects/${secret.id}/terms`,
+    `/api/projects/${secret.id}/glossary`,
+    `/api/terms/${term.id}`,
+    `/api/terms/SECRET%2FRun`,
+    `/api/terms/${term.id}/versions`,
+    `/api/terms/${term.id}/versions/1`,
+    `/api/projects/${secret.id}/decisions`,
+    `/api/decisions/${decision.id}`,
+    `/api/decisions/SECRET%2F1`,
+    `/api/decisions/${decision.id}/versions`,
+    `/api/decisions/${decision.id}/versions/1`,
+    `/api/projects/${secret.id}/artifacts`,
+    `/api/artifacts/${artifact.id}`,
+    `/api/artifacts/${artifact.slug}`,
+    `/api/artifacts/${artifact.id}/file?path=index.html`,
+    `/api/artifacts/${artifact.id}/versions`,
+    `/api/tickets/SECRET-1/documents`,
+    `/api/tickets/SECRET-1/artifacts`,
+    `/api/tickets/SECRET-1/attachments`,
+    ...Object.values(attachments).map(({ id }) => `/api/attachments/${id}/content`),
+    `/api/projects/${secret.id}/export`,
+    `/api/projects/${secret.id}/export.zip`,
+  ];
+}
+
+async function expectKnowledge(setting: Knowing, as: As, status: 200 | 404) {
+  for (const path of knowledgeReads(setting)) {
+    const response = await cronk.request("GET", path, as);
+    expect(response.status, path).toBe(status);
+  }
+}
+
+/** Every write into the private Project's knowledge places and records. */
+function knowledgeWrites({ secret, document, term, decision, artifact }: Knowing): [string, string, unknown][] {
+  return [
+    ["POST", `/api/projects/${secret.id}/documents`, { title: "Leak" }],
+    ["PATCH", `/api/documents/${document.id}`, { baseVersion: 2, body: "Overwritten." }],
+    ["POST", `/api/projects/${secret.id}/terms`, { name: "Leak", definition: "No." }],
+    ["PATCH", `/api/terms/${term.id}`, { baseVersion: 1, definition: "Overwritten." }],
+    ["POST", `/api/projects/${secret.id}/decisions`, { title: "Leak", body: "No." }],
+    ["PATCH", `/api/decisions/${decision.id}`, { baseVersion: 1, body: "Overwritten." }],
+    ["POST", `/api/projects/${secret.id}/artifacts`, { title: "Leak", files: [page("index.html", "<title>x</title>")] }],
+    ["PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, title: "Overwritten" }],
+  ];
+}
+
+describe("a private Project's knowledge and Artifacts", () => {
+  test("answer as not found to a User it doesn't list, and to their Agents, over the HTTP API", async () => {
+    const setting = await twoProjectsWithKnowledge();
+    await expectKnowledge(setting, setting.grace.as, 200);
+    await setting.makePrivate();
+
+    for (const as of [setting.grace.as, setting.gracesAgent.as]) {
+      await expectKnowledge(setting, as, 404);
+      for (const [method, path, body] of knowledgeWrites(setting)) {
+        expect((await call(method, path, as, body)).status, `${method} ${path}`).toBe(404);
+      }
+      expect((await call("DELETE", `/api/attachments/${setting.attachments.document.id}`, as)).status).toBe(404);
+    }
+    expect((await ok("GET", `/api/documents/${setting.document.id}`, setting.ada)).version.number).toBe(2);
+    expect((await ok("GET", `/api/terms/${setting.term.id}`, setting.ada)).definition).toBe("A secret run.");
+  });
+
+  test("stay readable and writable for Admins, the Users it lists and their Agents", async () => {
+    const setting = await twoProjectsWithKnowledge();
+    await setting.makePrivate();
+
+    for (const as of [setting.ada, setting.adasAgent.as, setting.linus.as, setting.linusesAgent.as]) {
+      await expectKnowledge(setting, as, 200);
+    }
+    const saved = await ok("PATCH", `/api/terms/${setting.term.id}`, setting.linusesAgent.as, {
+      baseVersion: 1,
+      definition: "A listed run.",
+    });
+    expect(saved.version.number).toBe(2);
+    await ok("POST", `/api/projects/${setting.secret.id}/documents`, setting.linus.as, { title: "Notes" });
+  });
+
+  test("leave the Workspace's own knowledge readable and writable to every User and their Agents", async () => {
+    const setting = await twoProjectsWithKnowledge();
+    const { workspace, own, grace, gracesAgent } = setting;
+    await setting.makePrivate();
+
+    for (const as of [grace.as, gracesAgent.as]) {
+      for (const path of [
+        `/api/workspaces/${workspace.id}/documents`,
+        `/api/documents/${own.document.id}`,
+        `/api/workspaces/${workspace.id}/terms`,
+        `/api/terms/Ticket`,
+        `/api/workspaces/${workspace.id}/decisions`,
+        `/api/decisions/1`,
+        `/api/workspaces/${workspace.id}/artifacts`,
+        `/api/artifacts/${own.artifact.id}`,
+        `/api/workspaces/${workspace.id}/export`,
+      ]) {
+        expect((await call("GET", path, as)).status, path).toBe(200);
+      }
+      await ok("POST", `/api/workspaces/${workspace.id}/documents`, as, { title: "Mine" });
+      await attach(`/api/documents/${own.document.id}/attachments`, as, "mine.txt");
+    }
+    const documents = await ok("GET", `/api/workspaces/${workspace.id}/documents`, grace.as);
+    expect(JSON.stringify(documents)).not.toMatch(/Plan|Secret/);
+    const artifacts = await ok("GET", `/api/workspaces/${workspace.id}/artifacts`, grace.as);
+    expect(artifacts.map((a: { title: string }) => a.title)).toEqual(["Logo"]);
+    const saved = await ok("PATCH", `/api/terms/${own.term.id}`, gracesAgent.as, { baseVersion: 1, definition: "Work to do." });
+    expect(saved.version.number).toBe(2);
+  });
+
+  test("leave a Ticket's Linked Documents and Artifacts the viewer can't read off it", async () => {
+    const setting = await twoProjectsWithKnowledge();
+    const { related, document, artifact, workspace, own, ada, grace } = setting;
+    await ok("POST", `/api/tickets/${related.id}/documents`, ada, { documentId: own.document.id });
+    await ok("POST", `/api/tickets/${related.id}/artifacts`, ada, { artifactId: own.artifact.id });
+    // Links to the private Project's knowledge from another Project's Ticket, which linking itself refuses, so a
+    // Ticket a viewer reads can link what they can't.
+    for (const [table, column, id] of [
+      ["linked_documents", "document_id", document.id],
+      ["linked_artifacts", "artifact_id", artifact.id],
+    ]) {
+      await cronk.stage(`insert into ${table} (ticket_id, ${column}, workspace_id, created_at) values ($1, $2, $3, now())`, [
+        related.id,
+        id,
+        workspace.id,
+      ]);
+    }
+    const titles = async (as: As, kind: string) =>
+      (await ok("GET", `/api/tickets/${related.id}/${kind}`, as)).map((linked: { title: string }) => linked.title);
+    await setting.makePrivate();
+
+    expect(await titles(ada, "documents")).toEqual(["Handbook", "Plan"]);
+    expect(await titles(ada, "artifacts")).toEqual(["Logo", "Board"]);
+    for (const as of [grace.as, setting.gracesAgent.as]) {
+      expect(await titles(as, "documents")).toEqual(["Handbook"]);
+      expect(await titles(as, "artifacts")).toEqual(["Logo"]);
+    }
+    const graces = await connect(setting.gracesAgent.secret);
+    const read = JSON.parse((await tool(graces, "read_ticket", { ticket: "OPEN-2" })).text);
+    expect(read.linkedDocuments.map((d: { title: string }) => d.title)).toEqual(["Handbook"]);
+    expect(read.linkedArtifacts.map((a: { title: string }) => a.title)).toEqual(["Logo"]);
+  });
+
+  test("answer as not found to the Agents of a User it doesn't list over MCP", async () => {
+    const setting = await twoProjectsWithKnowledge();
+    await setting.makePrivate();
+    const graces = await connect(setting.gracesAgent.secret);
+    const linuses = await connect(setting.linusesAgent.secret);
+
+    const calls: [string, Record<string, unknown>][] = [
+      ["list_documents", { project: "SECRET" }],
+      ["read_document", { document: setting.document.slug }],
+      ["read_document", { document: setting.report.id }],
+      ["list_document_versions", { document: setting.document.id }],
+      ["read_glossary", { project: "SECRET" }],
+      ["read_term", { term: "SECRET/Run" }],
+      ["list_term_versions", { term: setting.term.id }],
+      ["list_decisions", { project: "SECRET" }],
+      ["read_decision", { decision: "SECRET/1" }],
+      ["list_artifacts", { project: "SECRET" }],
+      ["read_artifact", { artifact: setting.artifact.slug }],
+      ["export_knowledge", { project: "SECRET" }],
+    ];
+    for (const [name, args] of calls) {
+      const refused = await tool(graces, name, args);
+      expect(refused.isError, `${name} ${JSON.stringify(args)}`).toBe(true);
+      expect(refused.text).not.toMatch(/Secret goals|A secret run|Keep it hidden|Secret findings/);
+      expect((await tool(linuses, name, args)).isError, `${name} ${JSON.stringify(args)}`).toBe(false);
+    }
+    const glossary = await tool(graces, "read_glossary", {});
+    expect(glossary.isError).toBe(false);
+    expect(glossary.text).not.toContain("A secret run");
   });
 });
