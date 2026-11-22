@@ -335,6 +335,8 @@ describe("Project and Workspace page trees", () => {
         ["GET", `/api/documents/${document.id}/versions/1`],
         ["GET", `/api/documents/${document.id}/versions/compare?from=1&to=1`],
         ["PATCH", `/api/documents/${document.id}`, { baseVersion: 1, body: "Mine now." }],
+        ["GET", `/api/documents/${document.id}/sections?section=Plan`],
+        ["PUT", `/api/documents/${document.id}/sections`, { section: "Plan", baseVersion: 1, body: "# Plan\nMine now." }],
         ["DELETE", `/api/documents/${document.id}`],
         ["GET", `/api/projects/${project.id}/documents`],
         ["POST", `/api/projects/${project.id}/documents`, { title: "Planted" }],
