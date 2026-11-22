@@ -81,21 +81,22 @@ type BodyFields<B> = {
   [K in keyof B]-?: undefined extends B[K] ? z.ZodOptional<z.ZodType<Exclude<B[K], undefined>>> : z.ZodType<B[K]>;
 };
 
-/** A new Ticket's own fields; the tools name its parent or source their own way. */
-const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
-
-/**
- * An Artifact save's fields. The route takes `baseVersion` as optional and its domain function refuses a save
- * without one; the tools ask for it up front, as they did before.
- */
-const saveFields = bodyFields(ArtifactSave);
-
-/** A Decision's text: Agents may not change its status, so the tools don't offer it. */
-const decisionTextFields = bodyFields(Type.Pick(DecisionEdit, ["baseVersion", "title", "body"]));
-
-const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
-
 export function buildMcpServer(api: Api): McpServer {
+  // Built here rather than when this module loads: a module importing it may sit in an import cycle with the routes'
+  // bodies, which are then not yet defined.
+  /** A new Ticket's own fields; the tools name its parent or source their own way. */
+  const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
+
+  /**
+   * An Artifact save's fields. The route takes `baseVersion` as optional and its domain function refuses a save
+   * without one; the tools ask for it up front, as they did before.
+   */
+  const saveFields = bodyFields(ArtifactSave);
+
+  /** A Decision's text: Agents may not change its status, so the tools don't offer it. */
+  const decisionTextFields = bodyFields(Type.Pick(DecisionEdit, ["baseVersion", "title", "body"]));
+
+  const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
   const server = new McpServer(
     { name: "Cronk", version: "0.0.0" },
     {
