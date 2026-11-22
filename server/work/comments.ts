@@ -5,7 +5,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
-import type { Viewer } from "../identity/viewers.js";
+import { requireWrite, type Viewer } from "../identity/viewers.js";
 import { answerQuestion } from "../runs/questions.js";
 import { insertComment } from "./comment-writes.js";
 import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
@@ -77,6 +77,7 @@ export async function addComment(
     // A reply may answer a Question, moving the Ticket, so it locks the Ticket as moves do.
     const ticket = await findTicketRow(tx, actor, ticketId, { lock: input.replyToId !== undefined });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, actor, ticket);
     if (input.replyToId !== undefined) {
       const { rowCount } = isUuid(input.replyToId)
         ? await tx.query("select 1 from comments where id = $1 and ticket_id = $2", [input.replyToId, ticket.id])

@@ -2,7 +2,8 @@ import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
-import { userViewer } from "../identity/viewers.js";
+import type { Caller } from "../identity/callers.js";
+import { requireBoardWrite, requireStepAuthor } from "./board-rights.js";
 import { findProject, projectNotFound, statusesOf, type Project } from "./projects.js";
 import { checkOutcomes, mayHaveStep, removeStep, stepOnDoneOrCanceled, writeStep, type Step } from "./steps.js";
 
@@ -14,18 +15,20 @@ export type StepChange = { type: "put"; step: Step } | { type: "remove" };
 
 export async function changeStep(
   context: Context,
-  userId: string,
+  caller: Caller,
   projectId: string,
   statusId: string,
   change: StepChange,
 ): Promise<Project> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
-    const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
+    const project = await findProject(tx, caller, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    requireBoardWrite(caller, project);
     const status = project.statuses.find((s) => s.id === statusId);
     if (!status) throw new ApiError(404, "not_found", "No such Status in this Project.");
     if (change.type === "put") {
+      await requireStepAuthor(tx, caller, project);
       if (!mayHaveStep(status.kind)) throw stepOnDoneOrCanceled(status);
       checkOutcomes(change.step.outcomes, status, project.statuses);
       await writeStep(tx, project, statusId, change.step, clock.now());

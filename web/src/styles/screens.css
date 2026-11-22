@@ -231,10 +231,13 @@
 /* A card is its link (key, Priority, title, meta) and, for a blocked Ticket, its Blocked chip under it: the chip holds
    links of its own, so it can't sit inside the card's. Priority follows the key on the first line, wrapping under it
    in a narrow column; title and meta take a line each. It drags from anywhere on it, so none of its text is
-   selectable: pressing on its title and moving drags the card rather than selecting the words. */
+   selectable: pressing on its title and moving drags the card rather than selecting the words. Its link is
+   draggable="true", an element drag whose dragstart the card handles, so every drag is the card's; never
+   draggable="false", which Vivaldi takes as "select this link's text" whatever user-select says. */
 .card {
   -webkit-user-select: none;
   user-select: none;
+  -webkit-user-drag: element;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -246,6 +249,50 @@
 }
 .card:hover {
   border-color: var(--muted);
+}
+/* With Read, a card doesn't drag: it is only its link. */
+.card-read-only {
+  cursor: pointer;
+}
+/* A selected card: an accent border and tint, and a check in its corner, so it isn't marked by colour alone. */
+.card-selected,
+.card-selected:hover {
+  position: relative;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.card-selected::after {
+  content: "✓";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+/* The count of selected cards, with Clear, above the board; empty, it takes no room. */
+.board-selection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+.board-selection:empty {
+  display: none;
+}
+.board-refusals p,
+.board-refusals ul {
+  margin: 0;
+}
+.board-refusals ul {
+  padding-left: var(--space-4);
 }
 .card-link {
   align-self: stretch;
@@ -259,6 +306,12 @@
   color: var(--text);
   text-decoration: none;
   cursor: inherit;
+}
+.card-link {
+  -webkit-user-drag: element;
+}
+.card-link * {
+  -webkit-user-drag: none;
 }
 .card-link:hover {
   text-decoration: none;
@@ -297,6 +350,33 @@
 .card-meta .people {
   margin-left: auto;
   flex-wrap: wrap;
+}
+/* Group Sub-Tickets: a parent's count chip under its card's link, unfolding a list of its Sub-Tickets on the card,
+   each nested under its own parent. */
+.card-sub-tickets {
+  align-self: stretch;
+  display: grid;
+  gap: var(--space-1);
+  margin: calc(-1 * var(--space-1)) var(--space-2) var(--space-2);
+  justify-items: start;
+}
+.chip-sub-tickets {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+.sub-ticket-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  cursor: default;
+}
+.sub-ticket-list .sub-ticket-list {
+  margin-top: var(--space-1);
+  padding-left: var(--space-3);
 }
 
 /* List */
@@ -997,24 +1077,6 @@
   font-size: 16px !important;
   font-weight: 600;
 }
-.editor-panes {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--space-4);
-  align-items: start;
-}
-.editor-preview {
-  display: grid;
-  gap: var(--space-1);
-}
-.editor-preview .panel {
-  min-height: 200px;
-}
-@media (max-width: 760px) {
-  .editor-panes {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 .glossary .term {
   display: grid;
   gap: 6px;
@@ -1570,4 +1632,17 @@
   color: var(--muted);
   font-size: 13px;
   text-align: center;
+}
+
+/* The line a page with Read shows under its head (docs/ui.md, the Read-only state). */
+.read-only-note {
+  margin: 0 0 var(--space-3);
+}
+
+/* A User in a Project's Access list: their checkbox, then their level, or why an Admin's is fixed. */
+.access-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }

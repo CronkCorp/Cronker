@@ -12,13 +12,14 @@ import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
 import { addRepository, removeRepository, repositoriesOf, Repository } from "./repositories.js";
 import { PullRequest, pullRequestsOf } from "./pull-requests.js";
+import { linkPullRequest, unlinkPullRequest } from "./manual-links.js";
 import { receiveDelivery } from "./webhooks.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
 const webhookBodyLimit = 25 * 1024 * 1024;
 
 /** The page a User links their GitHub account from. */
-const accountPage = "/password";
+const accountPage = "/account";
 
 /** Where a browser GitHub sent back is sent on: a page of the web client, with an error code if it failed. */
 function pageWith(path: string, error: unknown, fallback: string, parameter = "error"): string {
@@ -70,7 +71,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["GitHub"],
           summary: "Link a GitHub account to the signed-in User",
           description:
-            "For a signed-in User's browser to open: redirects to GitHub to authorize the installation's GitHub App, which sends the browser back to Cronk to link the GitHub account to this User. Once linked, the account signs in as the User and its merges are the User's own. Redirects to `/password?github=linked` once linked, or to `/password?github_link_error=<code>`: `github_already_linked` when the User has a GitHub account already, `github_account_taken` when another User has that account, `invalid_state` when the link didn't start in this browser or took too long, `github_denied` when GitHub didn't authorize, `github_not_set_up` while there is no App, and `not_signed_in` when nobody is signed in.",
+            "For a signed-in User's browser to open: redirects to GitHub to authorize the installation's GitHub App, which sends the browser back to Cronk to link the GitHub account to this User. Once linked, the account signs in as the User and its merges are the User's own. Redirects to `/account?github=linked` once linked, or to `/account?github_link_error=<code>`: `github_already_linked` when the User has a GitHub account already, `github_account_taken` when another User has that account, `invalid_state` when the link didn't start in this browser or took too long, `github_denied` when GitHub didn't authorize, `github_not_set_up` while there is no App, and `not_signed_in` when nobody is signed in.",
           response: { 302: Type.Null() },
         },
       },
@@ -231,12 +232,52 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Tickets"],
           summary: "A Ticket's Pull Requests",
           description:
-            "Pull Requests of the Repositories its Project lists whose branch or title names the Ticket's key, oldest link first, each with its state, the checks on its latest commit and its producing Step.",
+            "Pull Requests of the Repositories its Project lists whose branch or title names the Ticket's key, and those a User linked by hand (`manual`), oldest link first, each with its state, the checks on its latest commit and its producing Step.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Type.Array(PullRequest), 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => pullRequestsOf(db, await requireCaller(context, request), request.params.ticketId),
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/pull-requests",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Link a Pull Request to a Ticket by hand (Users only)",
+          description:
+            "For a Pull Request whose branch or title doesn't name the Ticket's key: one of a Repository the Ticket's Project lists, named by its address on GitHub or as `owner/name#number`. It then counts as any linked Pull Request does: its merge completes the Ticket, under the same rules, and its failures send the Ticket back. A merge before the link completes nothing. Linking one already linked by hand changes nothing. Refused with `invalid_pull_request` for anything else, `pull_request_not_found` when Cronk knows no such Pull Request in those Repositories, and `pull_request_closed` for one closed without merging.",
+          params: Type.Object({ ticketId: Type.String() }),
+          body: Type.Object({
+            pullRequest: Type.String({ minLength: 1, maxLength: 500, description: "Its address on GitHub, or `owner/name#number`." }),
+          }),
+          response: { 201: PullRequest, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        return reply.code(201).send(await linkPullRequest(context, user.id, request.params.ticketId, request.body.pullRequest));
+      },
+    );
+
+    app.delete(
+      "/api/tickets/:ticketId/pull-requests/:pullRequestId",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Unlink a Pull Request linked to a Ticket by hand (Users only)",
+          description:
+            "By GitHub's id for the Pull Request. If its branch or title names the Ticket's key it stays linked by that, as no longer `manual`. Answers 404 if it isn't linked, and is refused with `linked_by_key` if it is linked only by key.",
+          params: Type.Object({ ticketId: Type.String(), pullRequestId: Type.Integer({ minimum: 1 }) }),
+          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const user = await requireUser(context, request);
+        await unlinkPullRequest(context, user.id, request.params.ticketId, request.params.pullRequestId);
+        return reply.code(204).send(null);
+      },
     );
 
     await deliveryRoute(

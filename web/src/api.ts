@@ -5,11 +5,13 @@ export interface User {
   /** Unknown for a User added by GitHub login until they first sign in. */
   email: string | null;
   githubLogin: string | null;
+  /** The name the User chose to be shown by; null when they chose none. */
+  displayName: string | null;
 }
 
-/** How to show a User: their email, else their GitHub login. */
+/** How to show a User: their display name, else their email, else their GitHub login. */
 export function nameOf(user: User): string {
-  return user.email ?? `@${user.githubLogin}`;
+  return user.displayName ?? user.email ?? `@${user.githubLogin}`;
 }
 
 export interface GitHubApp {
@@ -150,7 +152,7 @@ export interface ProjectSummary {
 /** Who may see a Project: open or private, and the Users it lists. Only Admins read and set it. */
 export interface ProjectAccess {
   visibility: Visibility;
-  users: { userId: string; level: "write" }[];
+  users: { userId: string; level: "write" | "read" }[];
 }
 
 export interface Project extends ProjectSummary {
@@ -794,7 +796,7 @@ export interface Check {
   url: string | null;
 }
 
-/** A Pull Request linked to a Ticket by its key in the Pull Request's branch or title. */
+/** A Pull Request linked to a Ticket by its key in the Pull Request's branch or title, or by hand by a User. */
 export interface PullRequest {
   id: number;
   repository: string;
@@ -825,6 +827,8 @@ export interface PullRequest {
         at: string;
       }
     | null;
+  /** Whether a User linked it by hand; only such a link can be unlinked. */
+  manual: boolean;
 }
 
 /** What completed a Ticket, and where Reopen sends it. */
@@ -981,6 +985,7 @@ export const api = {
   signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password }),
   signOut: () => call<void>("DELETE", "/api/sign-in"),
   me: () => call<{ user: User; workspaces: WorkspaceSummary[] }>("GET", "/api/me"),
+  changeDisplayName: (displayName: string | null) => call<{ user: User }>("PATCH", "/api/me", { displayName }),
   changePassword: (currentPassword: string, newPassword: string) =>
     call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
   workspace: (id: string) => call<Workspace>("GET", ws(id)),
@@ -1122,6 +1127,10 @@ export const api = {
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
+  linkPullRequest: (ticketId: string, pullRequest: string) =>
+    call<PullRequest>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`, { pullRequest }),
+  unlinkPullRequest: (ticketId: string, pullRequestId: number) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests/${pullRequestId}`),
   linkedDocuments: (ticketId: string) =>
     call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>

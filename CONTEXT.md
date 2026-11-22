@@ -53,7 +53,7 @@ A Ticket an agent files outside its own Ticket's Sub-Tickets. It starts in Backl
 _Avoid_: Follow-up, spin-off, finding
 
 **Step**:
-The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User. Done and Canceled Statuses never have one, so finished or canceled work gets no Runs.
+The agent work a Status asks for: a brief and the model it wants. A delegated Ticket entering a Status with a Step gets a Run; a Status without one waits for a User. Done and Canceled Statuses never have one, so finished or canceled work gets no Runs. Changing a Project's Statuses and Steps needs Write in it; an Agent gives a Status a Step or changes one only when its Owner is an Admin.
 _Avoid_: Stage, phase, pipeline step, job
 
 **Merge Step**:
@@ -161,7 +161,7 @@ A GitHub repository that one or more Projects list as holding their code, reache
 _Avoid_: Repo (in the product), codebase
 
 **Pull Request**:
-A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains. A merge by a User of the Ticket's Workspace completes the Ticket as Verified, unless a Run is running on the Ticket: then it counts as that Run's Agent's. Any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified. A Project can turn this **Pull Request automation** off, so merges complete nothing.
+A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains, and to those a User linked it to by hand, which only a User can unlink; either way it must be of a Repository the Ticket's Project lists, and links the same. A merge by a User of the Ticket's Workspace completes the Ticket as Verified, unless a Run is running on the Ticket: then it counts as that Run's Agent's. Any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified. A Project can turn this **Pull Request automation** off, so merges complete nothing.
 _Avoid_: PR (in the product), merge request, change
 
 ### Actors
@@ -169,6 +169,10 @@ _Avoid_: PR (in the product), merge request, change
 **User**:
 A human who signs in to Cronk, with GitHub or with an email and password. A User exists only once added to a Workspace, and may belong to several.
 _Avoid_: Person, account, member (as the general term)
+
+**Display name**:
+The name a User chose to be shown by, in place of their email or GitHub login, wherever Cronk names them. It is only shown: a User still signs in with their email or GitHub account, is added to a Workspace by them, and names Cronk wrote into a Change keep the name they had.
+_Avoid_: Nickname, username, handle
 
 **Admin**:
 A User who manages one Workspace: who belongs to it and its settings. Whoever creates a Workspace is its first Admin; there is no role above the Workspaces.

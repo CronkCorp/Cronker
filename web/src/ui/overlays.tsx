@@ -332,43 +332,6 @@ export function MenuCheckboxItem({
   );
 }
 
-/**
- * A segmented control inside a Menu, such as the theme's System / Light / Dark. Choosing keeps the menu open, so the
- * choice shows in place.
- */
-export function MenuChoice<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: ReactNode }[];
-  onChange: (value: T) => void;
-}) {
-  const { RadioGroup, RadioItem } = useContext(MenuPartsContext);
-  return (
-    <RadioGroup
-      className="segmented menu-choice"
-      aria-label={label}
-      value={value}
-      onValueChange={(next) => onChange(next as T)}
-    >
-      {options.map((option) => (
-        <RadioItem
-          key={option.value}
-          value={option.value}
-          className="segmented-item"
-          onSelect={(event) => event.preventDefault()}
-        >
-          {option.label}
-        </RadioItem>
-      ))}
-    </RadioGroup>
-  );
-}
-
 export function MenuSeparator() {
   const { Separator } = useContext(MenuPartsContext);
   return <Separator className="menu-separator" />;

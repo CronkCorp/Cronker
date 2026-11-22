@@ -4,7 +4,7 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { User } from "../identity/user.js";
+import { User, userJson, userNameOf } from "../identity/user.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { undelegateTickets } from "../work/tickets.js";
 
@@ -31,7 +31,7 @@ export const AgentName = Type.String({
 type Row = Omit<Agent, "createdAt"> & { createdAt: Date };
 
 const columns = `agents.id, agents.workspace_id as "workspaceId", agents.name,
-  json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner,
+  ${userJson("owners")} as owner,
   agents.runner_id as "runnerId", agents.created_at as "createdAt"`;
 
 const present = (row: Row): Agent => ({ ...row, createdAt: row.createdAt.toISOString() });
@@ -91,7 +91,7 @@ export async function requireOwnAgent(db: Db, userId: string, agentId: string): 
     : { rowCount: 0 };
   if (!agent || rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
   if (agent.owner.id !== userId) {
-    throw new ApiError(403, "not_owner", `Only ${agent.name}'s Owner, ${agent.owner.email ?? `@${agent.owner.githubLogin}`}, can change it.`);
+    throw new ApiError(403, "not_owner", `Only ${agent.name}'s Owner, ${userNameOf(agent.owner)}, can change it.`);
   }
   return agent;
 }
@@ -133,7 +133,7 @@ export async function removeAgent(context: Context, agent: Agent): Promise<void>
       now,
     ]);
     if (rowCount === 0) return;
-    const who = agent.owner.email ?? `@${agent.owner.githubLogin}`;
+    const who = userNameOf(agent.owner);
     await undelegateTickets(context, tx, agent.owner.id, [agent.id], `${who} removed ${agent.name}.`, now);
   });
 }

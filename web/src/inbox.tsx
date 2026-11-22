@@ -15,7 +15,9 @@ import {
   type User,
   type Workspace,
 } from "./api.js";
-import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
+import { field, useSubmit } from "./forms.js";
+import { RichEditor } from "./ui/lazy-rich-editor.js";
+import type { RichEditorHandle } from "./ui/rich-editor.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
@@ -156,7 +158,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
   const [kept, setKept] = useState<InboxItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [reopening, setReopening] = useState(false);
-  const answerBox = useRef<HTMLTextAreaElement>(null);
+  const answerBox = useRef<RichEditorHandle>(null);
   const acceptRef = useRef<(() => void) | null>(null);
 
   // Items the User acted on leave at once, before the Inbox comes back without them.
@@ -221,7 +223,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
     else if (key === "k") move(-1);
-    else if (key === "a" && current?.kind === "question" && !resolved) answerBox.current?.focus();
+    else if (key === "a" && current?.kind === "question" && !resolved) answerBox.current?.textbox()?.focus();
     else if (key === "c" && current?.kind === "unverified" && !resolved) acceptRef.current?.();
     else if (key === "r" && current?.kind === "unverified" && !resolved) setReopening(true);
     else return;
@@ -345,7 +347,7 @@ function Detail({
   workspace: Workspace;
   user: User;
   resolved: boolean;
-  answerBox: RefObject<HTMLTextAreaElement | null>;
+  answerBox: RefObject<RichEditorHandle | null>;
   acceptRef: MutableRefObject<(() => void) | null>;
   reopening: boolean;
   onReopening: (open: boolean) => void;
@@ -402,7 +404,7 @@ function ItemBody({
   user: User;
   disabled: boolean;
   run: (action: () => Promise<unknown>) => void;
-  answerBox: RefObject<HTMLTextAreaElement | null>;
+  answerBox: RefObject<RichEditorHandle | null>;
 }) {
   const ticket = item.ticket;
   switch (item.kind) {
@@ -466,7 +468,7 @@ function Answer({
   item: Extract<InboxItem, { kind: "question" }>;
   disabled: boolean;
   run: (action: () => Promise<unknown>) => void;
-  answerBox: RefObject<HTMLTextAreaElement | null>;
+  answerBox: RefObject<RichEditorHandle | null>;
 }) {
   const [body, setBody] = useState("");
   return (
@@ -474,22 +476,20 @@ function Answer({
       className="comment-form"
       onSubmit={(event) => {
         event.preventDefault();
-        run(() => api.comment(item.ticket.id, { body, replyToId: item.question.commentId }));
+        // An empty box answers nothing.
+        if (body !== "") run(() => api.comment(item.ticket.id, { body, replyToId: item.question.commentId }));
       }}
     >
-      <Field label="Answer">
-        <textarea
-          ref={answerBox}
-          className="markdown-source"
-          required
-          rows={4}
-          placeholder={`Answer ${item.question.agent.name}… (Markdown)`}
-          value={body}
-          disabled={disabled}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={submitOnCtrlOrCmdEnter}
-        />
-      </Field>
+      <RichEditor
+        label="Answer"
+        compact
+        submitOnCtrlOrCmdEnter
+        placeholder={`Answer ${item.question.agent.name}…`}
+        value={body}
+        disabled={disabled}
+        onChange={setBody}
+        handle={answerBox}
+      />
       <Actions>
         <CommentButton variant="primary" disabled={disabled}>
           Post answer
@@ -517,23 +517,23 @@ function Reopen({
   onOpenChange: (open: boolean) => void;
   onReopened: () => void;
 }) {
-  const { error, busy, onSubmit } = useSubmit(async (form) => {
-    await api.reopenTicket(ticketId, field(form, "comment"));
+  const [why, setWhy] = useState("");
+  const { error, busy, onSubmit } = useSubmit(async () => {
+    await api.reopenTicket(ticketId, why);
     onOpenChange(false);
+    setWhy("");
     onReopened();
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={`Reopen ${ticketKey}`} description="It goes back to the Step that completed it, with your Comment.">
       <form onSubmit={onSubmit}>
-        <Field label="Why reopen it?">
-          <textarea name="comment" required rows={4} autoFocus />
-        </Field>
+        <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
         <FormError error={error} />
         <DialogActions>
           <DialogClose asChild>
             <Button>Cancel</Button>
           </DialogClose>
-          <Button type="submit" variant="primary" disabled={busy}>
+          <Button type="submit" variant="primary" disabled={busy || why.trim() === ""}>
             Reopen
           </Button>
         </DialogActions>

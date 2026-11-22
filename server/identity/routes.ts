@@ -2,9 +2,9 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
-import { changePassword, requireUser, signIn, signOut } from "./sign-ins.js";
+import { changeDisplayName, changePassword, requireUser, signIn, signOut } from "./sign-ins.js";
 import { isSetUp, runSetup } from "./setup.js";
-import { Email, Password, User } from "./user.js";
+import { DisplayName, Email, Password, User } from "./user.js";
 import { LinkDetails, lookUpLink, useLink } from "./links.js";
 import { Membership, Workspace, WorkspaceName, workspacesOf } from "../workspaces/workspaces.js";
 
@@ -97,6 +97,21 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         return { user, workspaces: await workspacesOf(db, user.id) };
       },
+    );
+
+    app.patch(
+      "/api/me",
+      {
+        schema: {
+          tags: ["Sign-in"],
+          summary: "Change one's own settings",
+          description:
+            "Sets the signed-in User's display name, which Cronk names them by in place of their email or GitHub login; `null` or an empty one clears it. Sign-in still goes by the email and GitHub account. Names Cronk already wrote into Changes and stop reasons keep the name they had.",
+          body: Type.Object({ displayName: Type.Union([DisplayName, Type.Null()]) }),
+          response: { 200: Type.Object({ user: User }), 400: ErrorBody, 401: ErrorBody },
+        },
+      },
+      async (request) => ({ user: await changeDisplayName(context, request, request.body.displayName) }),
     );
 
     app.put(

@@ -76,6 +76,7 @@ describe("MCP with an Agent token", () => {
 
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "add_block",
+      "add_status",
       "attach_file",
       "comment",
       "compare_decision_versions",
@@ -87,6 +88,7 @@ describe("MCP with an Agent token", () => {
       "create_term",
       "edit_decision",
       "edit_document",
+      "edit_status",
       "edit_term",
       "edit_ticket",
       "export_knowledge",
@@ -107,12 +109,16 @@ describe("MCP with an Agent token", () => {
       "read_decision",
       "read_document",
       "read_glossary",
+      "read_project",
       "read_section",
       "read_term",
       "read_ticket",
+      "remove_status",
+      "remove_step",
       "replace_section",
       "save_artifact",
       "search",
+      "set_step",
       "unlink_artifact",
       "unlink_document",
       "write_report",
@@ -183,6 +189,7 @@ describe("MCP with an Agent token", () => {
         producingStep: null,
         reviewState: null,
         sentBack: null,
+        manual: false,
       },
     ]);
   });
@@ -191,12 +198,13 @@ describe("MCP with an Agent token", () => {
     const { secret } = await workspaceWithTicket();
     const client = await connect(secret);
 
+    // CRONK-1 blocks CRONK-2, and a blocked Ticket lists before the rest of its Status.
     const all = await call(client, "list_tickets", {});
-    expect(all.json.map((t: { key: string }) => t.key)).toEqual(["CRONK-1", "CRONK-2"]);
+    expect(all.json.map((t: { key: string }) => t.key)).toEqual(["CRONK-2", "CRONK-1"]);
     const backlog = await call(client, "list_tickets", { project: "cronk", status: "backlog" });
     expect(backlog.json.map((t: { key: string; status: string }) => [t.key, t.status])).toEqual([
-      ["CRONK-1", "Backlog"],
       ["CRONK-2", "Backlog"],
+      ["CRONK-1", "Backlog"],
     ]);
     const triage = await call(client, "list_tickets", { project: "CRONK", status: "Triage" });
     expect(triage.json).toEqual([]);
@@ -751,6 +759,53 @@ describe("MCP with an Agent token", () => {
       ],
     });
     expect(workspace.json).toEqual({ files: [{ path: "GLOSSARY.md", content: "# Glossary\n\n**Ticket**:\nA unit of work.\n" }] });
+  });
+
+  test("an Agent reads a Project's board and changes its Statuses and Steps, naming Statuses by name", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const board = await call(client, "read_project", { project: "cronk" });
+    expect(board.isError).toBe(false);
+    expect(board.json).toEqual(expect.objectContaining({ key: "CRONK", access: "write" }));
+
+    const added = await call(client, "add_status", { project: "CRONK", name: "Design", kind: "active", position: 1 });
+    expect(added.json.statuses[1]).toEqual(expect.objectContaining({ name: "Design", kind: "active", step: null }));
+    const edited = await call(client, "edit_status", { project: "CRONK", status: "design", name: "Sketch" });
+    expect(edited.json.statuses[1].name).toBe("Sketch");
+
+    const stepped = await call(client, "set_step", {
+      project: "CRONK",
+      status: "Sketch",
+      brief: "Sketch the screens.",
+      model: "sonnet",
+      outcomes: [
+        { name: "sketched", status: "Ready", default: true },
+        { name: "needs you", status: "backlog", needsYou: true },
+      ],
+    });
+    expect(stepped.isError).toBe(false);
+    const ids = new Map<string, string>(stepped.json.statuses.map((s: { name: string; id: string }) => [s.name, s.id]));
+    expect(stepped.json.statuses[1].step).toEqual({
+      kind: "ordinary",
+      brief: "Sketch the screens.",
+      model: "sonnet",
+      roundLimit: 2,
+      labelRule: null,
+      outcomes: [
+        { name: "sketched", statusId: ids.get("Ready"), default: true, needsYou: false, countsAsRound: false },
+        { name: "needs you", statusId: ids.get("Backlog"), default: false, needsYou: true, countsAsRound: false },
+      ],
+    });
+
+    const refused = await call(client, "remove_status", { project: "CRONK", status: "Backlog" });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "status_has_tickets" }) });
+    const unknown = await call(client, "remove_status", { project: "CRONK", status: "Nowhere" });
+    expect(unknown).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_status" }) });
+
+    expect((await call(client, "remove_step", { project: "CRONK", status: "Sketch" })).json.statuses[1].step).toBeNull();
+    const removed = await call(client, "remove_status", { project: "CRONK", status: "Sketch" });
+    expect(removed.json.statuses.map((s: { name: string }) => s.name)).not.toContain("Sketch");
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

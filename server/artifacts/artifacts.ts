@@ -6,7 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
@@ -287,6 +287,7 @@ export async function createArtifact(
   }
   return keepingFiles(context, input.files, (files) =>
     transaction(db, async (tx) => {
+      await requireWrite(tx, actor, place);
       const run =
         input.runId !== undefined && actor.kind === "agent"
           ? await runningRunOf(tx, actor, input.runId, {
@@ -365,6 +366,7 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
     transaction(db, async (tx) => {
       const current = await lockArtifact(tx, actor, artifactId);
       if (!current) throw artifactNotFound();
+      await requireWrite(tx, actor, current);
       if (save.baseVersion === undefined) {
         throw new ApiError(400, "base_version_needed", "A save names the Version it's based on, as `baseVersion`.", {
           rule: "A save names the Version it's based on, so it never overwrites a change its Actor hasn't seen.",
@@ -403,6 +405,7 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
   await transaction(db, async (tx) => {
     const artifact = await lockArtifact(tx, actor, artifactId);
     if (!artifact) throw artifactNotFound();
+    await requireWrite(tx, actor, artifact);
     if (actor.kind === "agent") {
       throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete an Artifact.`, {
         rule: "Only a User deletes an Artifact, so an agent can't remove work.",

@@ -2,7 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { userViewer } from "../identity/viewers.js";
+import { readAccessRefusal, userViewer } from "../identity/viewers.js";
 import { findProject, projectNotFound, type ProjectSummary } from "../work/projects.js";
 import type { Viewer } from "../identity/viewers.js";
 import { repositoryById } from "./client.js";
@@ -61,7 +61,9 @@ export async function repositoriesOf({ db }: Context, viewer: Viewer, projectId:
  */
 export async function addRepository(context: Context, userId: string, projectId: string, repositoryId: number): Promise<Repository> {
   const viewer = userViewer(userId);
-  if (!(await findProject(context.db, viewer, projectId))) throw projectNotFound();
+  const found = await findProject(context.db, viewer, projectId);
+  if (!found) throw projectNotFound();
+  if (found.access !== "write") throw readAccessRefusal();
   const covered = (await listInstallations(context, { refresh: true })).flatMap((i) => i.repositories).find((r) => r.id === repositoryId);
   if (!covered) {
     throw new ApiError(
@@ -73,6 +75,7 @@ export async function addRepository(context: Context, userId: string, projectId:
   return transaction(context.db, async (tx) => {
     const project = await findProject(tx, viewer, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (project.access !== "write") throw readAccessRefusal();
     const now = context.clock.now();
     await tx.query(
       `insert into repositories (id, full_name, updated_at) values ($1, $2, $3)
@@ -111,6 +114,7 @@ export async function removeRepository(context: Context, userId: string, project
   await transaction(context.db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (project.access !== "write") throw readAccessRefusal();
     const { rowCount } = await tx.query("delete from project_repositories where project_id = $1 and repository_id = $2", [
       project.id,
       repositoryId,

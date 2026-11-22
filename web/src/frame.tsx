@@ -7,8 +7,8 @@ import { useLatest, useLiveEvents } from "./live.js";
 import { Link } from "./router.js";
 import { SearchBox } from "./search.js";
 import { Avatar } from "./ui/actor.js";
-import { chooseTheme, keepSidebarHidden, storedSidebarHidden, storedTheme, type Theme } from "./storage.js";
-import { Menu, MenuChoice, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
+import { keepSidebarHidden, storedSidebarHidden } from "./storage.js";
+import { Menu, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
 
 /** Which item of the sidebar a page belongs to. */
 export type Area =
@@ -174,7 +174,6 @@ function Sidebar({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [theme, setTheme] = useState(storedTheme);
   const to = useAddresses();
   const project = projects?.find((p) => p.id === place.projectId) ?? null;
   // On a phone, following a link out of the menu closes it.
@@ -265,22 +264,7 @@ function Sidebar({
               </button>
             }
           >
-            <MenuLabel>Theme</MenuLabel>
-            <MenuChoice<Theme>
-              label="Theme"
-              value={theme}
-              options={[
-                { value: "system", label: "System" },
-                { value: "light", label: "Light" },
-                { value: "dark", label: "Dark" },
-              ]}
-              onChange={(next) => {
-                chooseTheme(next);
-                setTheme(next);
-              }}
-            />
-            <MenuSeparator />
-            <MenuLink to="/password">Password</MenuLink>
+            <MenuLink to="/account">Account settings</MenuLink>
             <MenuItem
               onSelect={() => {
                 setError(null);

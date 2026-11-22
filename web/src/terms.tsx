@@ -12,7 +12,9 @@ import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./li
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
+import { ReadOnlyNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
+import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Where a glossary is shown: a Project's Terms page, or the Workspace's. */
 
@@ -84,12 +86,15 @@ function Glossary({
         actions={
           <>
             <ExportLink place={place} />
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              New Term
-            </Button>
+            {(!project || project.access === "write") && (
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                New Term
+              </Button>
+            )}
           </>
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       <div className="filter-bar">
         <input
           type="search"
@@ -141,10 +146,11 @@ function Glossary({
 /** A dialog creating a Term in the Project or the Workspace, then showing it. */
 function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; onOpenChange: (open: boolean) => void }) {
   const to = useAddresses();
+  const [definition, setDefinition] = useState("");
   const { error, busy, onSubmit } = useSubmit(async (form) => {
     const created = await api.createTerm(place, {
       name: field(form, "name"),
-      definition: field(form, "definition"),
+      definition,
       avoid: wordsToAvoid(field(form, "avoid")),
     });
     navigate(to.term(created));
@@ -155,9 +161,7 @@ function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; o
         <Field label="Name">
           <input name="name" required maxLength={200} autoFocus />
         </Field>
-        <Field label="Definition">
-          <textarea name="definition" rows={4} className="markdown-source" />
-        </Field>
+        <RichEditor label="Definition" compact value={definition} onChange={setDefinition} />
         <Field label="Words to avoid" hint="Separated by commas.">
           <input name="avoid" placeholder="Issue, task" />
         </Field>
@@ -271,6 +275,8 @@ export function TermScreen({
   if (!term) return <p className="muted">Loading…</p>;
   const place: Place = term.projectId ? { kind: "project", id: term.projectId } : { kind: "workspace", id: term.workspaceId };
   const crumbs = knowledgeCrumbs(workspace, project, <Link to={to.place(place, "glossary")}>Terms</Link>);
+  // With Read in its Project, the Term is only read: no Edit or Delete.
+  const canWrite = !project || project.access === "write";
   return (
     <div className="page">
       <PageHead
@@ -287,7 +293,8 @@ export function TermScreen({
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={
           !editing &&
-          !gone && (
+          !gone &&
+          canWrite && (
             <>
               <Menu label="More of this Term">
                 <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
@@ -301,10 +308,11 @@ export function TermScreen({
           )
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       {gone && (
         <DeletedElsewhere back={{ to: to.place(place, "glossary"), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
       )}
-      {editing ? (
+      {editing && canWrite ? (
         <Editor
           term={term}
           onSaved={(next) => {
@@ -395,15 +403,7 @@ function Editor({
       <Field label="Name">
         <input value={name} required maxLength={200} onChange={(e) => setName(e.target.value)} className="title-input" />
       </Field>
-      <div className="editor-panes">
-        <Field label="Definition">
-          <textarea value={definition} rows={12} className="markdown-source" onChange={(e) => setDefinition(e.target.value)} />
-        </Field>
-        <section aria-label="Preview" className="editor-preview">
-          <span className="field-label">Preview</span>
-          <TermBody definition={definition} avoid={wordsToAvoid(avoid)} />
-        </section>
-      </div>
+      <RichEditor label="Definition" value={definition} onChange={setDefinition} />
       <Field label="Words to avoid" hint="Separated by commas.">
         <input value={avoid} onChange={(e) => setAvoid(e.target.value)} />
       </Field>

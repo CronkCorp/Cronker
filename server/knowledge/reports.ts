@@ -4,7 +4,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import type { Caller } from "../identity/callers.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
-import type { Viewer } from "../identity/viewers.js";
+import { requireWrite, type Viewer } from "../identity/viewers.js";
 import { findTicketRow, runOfAgent, ticketNotFound } from "../work/tickets.js";
 import { insertVersion } from "./documents.js";
 import { Mention, mentionsOf } from "../work/mentions.js";
@@ -119,6 +119,7 @@ export async function writeReport(
     if (writer.kind !== "agent") {
       throw new ApiError(403, "only_runs_report", "Reports are written by Runs; comment on the Ticket instead.");
     }
+    await requireWrite(tx, writer, ticket);
     const runId = await runOfAgent(tx, writer, ticket);
     return (await recordReport(context, tx, ticket, { id: runId, agentId: writer.id }, input, writer))!;
   });

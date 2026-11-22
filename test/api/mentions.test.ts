@@ -325,7 +325,7 @@ describe("texts written before the Mention index", () => {
     await ok("PATCH", `/api/documents/${document.id}`, s.ada, { baseVersion: 1, body: "v2 is about CRONK-1" });
     const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Lane", definition: "CRONK-1" });
     const decision = await ok("POST", `/api/projects/${s.project.id}/decisions`, s.ada, { title: "Lanes", body: "CRONK-1" });
-    // As a Cronk before migration 0053 left them: no Mentions recorded, with their indexing still to do.
+    // As a Cronk before migration 0055 left them: no Mentions recorded, with their indexing still to do.
     await cronk.stage("delete from mentions");
     await cronk.stage("insert into pending_backfills (name) values ('mentions')");
     expect(await mentionedIn(s.ada, s.target.id)).toEqual([]);

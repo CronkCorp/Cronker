@@ -21,6 +21,7 @@ import {
 } from "./ui/controls.js";
 import { Diff } from "./ui/diff.js";
 import { Chip, type Tone } from "./ui/labels.js";
+import { ReadOnlyNote } from "./write-access.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
@@ -165,11 +166,14 @@ export function ArtifactScreen({
         actions={
           !gone && (
             <>
-              <Menu label="More of this Artifact">
-                <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
-                  Delete Artifact
-                </MenuItem>
-              </Menu>
+              {/* With Read in its Project, the Artifact is only opened, never deleted. */}
+              {(!project || project.access === "write") && (
+                <Menu label="More of this Artifact">
+                  <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
+                    Delete Artifact
+                  </MenuItem>
+                </Menu>
+              )}
               <a className={buttonClass()} href={artifact.url} target="_blank" rel="noopener noreferrer">
                 Open
               </a>
@@ -177,6 +181,7 @@ export function ArtifactScreen({
           )
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       {gone && <DeletedElsewhere back={{ to: list, label: "Back to Artifacts" }}>this Artifact is no longer kept.</DeletedElsewhere>}
       {artifact.description && <p className="artifact-description">{artifact.description}</p>}
       <div className="page-split">

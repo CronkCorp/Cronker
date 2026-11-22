@@ -43,6 +43,8 @@ describe("reading the model ids", () => {
   test("Workspaces that existed before model ids start with the same defaults", async () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0045_runner_setups.sql" });
+    // Setting up, as today's API does, reads the User's display name.
+    await cronk.applyAhead("0053_display_name.sql");
     const { workspace } = await setUp(cronk);
     const ada = await signIn(cronk);
     const created = await cronk.request("POST", "/api/workspaces", { cookie: ada, body: { name: "Friends" } });

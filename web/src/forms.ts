@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useState, type FormEvent } from "react";
 
 /** Runs a form's action, tracking whether it is busy and the error it ended with. */
 export function useSubmit(action: (form: FormData, element: HTMLFormElement) => Promise<void>) {
@@ -23,17 +23,17 @@ export function useSubmit(action: (form: FormData, element: HTMLFormElement) => 
 export const field = (form: FormData, name: string) => String(form.get(name) ?? "");
 
 /**
- * A Comment box's keydown: Ctrl+Enter or Cmd+Enter submits its form as the submit button does, so an empty box
- * places nothing, and not while that button is disabled, as while the Comment is being sent, nor again for a held key.
- * Plain Enter and Shift+Enter keep adding new lines.
+ * A Comment box's keydown: Ctrl+Enter or Cmd+Enter submits the form the box is in as its submit button does, so an
+ * empty box places nothing, and not while that button is disabled, as while the Comment is being sent, nor again for a
+ * held key. Plain Enter and Shift+Enter keep adding new lines. Says whether it was the shortcut, which it handled.
  */
-export function submitOnCtrlOrCmdEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
-  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return;
+export function submitOnCtrlOrCmdEnter(event: KeyboardEvent, box: HTMLElement): boolean {
+  if (event.key !== "Enter" || !(event.ctrlKey || event.metaKey)) return false;
   event.preventDefault();
-  const form = event.currentTarget.form;
+  const form = box.closest("form");
   const submit = form?.querySelector<HTMLButtonElement>("button[type=submit]");
-  if (!form || event.repeat || submit?.disabled) return;
-  form.requestSubmit(submit);
+  if (form && !event.repeat && !submit?.disabled) form.requestSubmit(submit);
+  return true;
 }
 
 /**
