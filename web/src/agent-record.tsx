@@ -158,7 +158,11 @@ function RecordRow({ entry, agent }: { entry: RecordEntry; agent: RecordAgent })
       <article className="entry-body" aria-label={`Comment by ${agent.name}`}>
         <p className="entry-head">
           <Actor actor={actor} avatar={false} /> {entry.replyToId ? "replied" : "commented"} on{" "}
-          {entry.ticket ? ticketLink(entry.ticket) : entry.artifact && <Link to={to.artifact(entry.artifact)}>{entry.artifact.title}</Link>}{" "}
+          {entry.ticket
+            ? ticketLink(entry.ticket)
+            : entry.artifact
+              ? <Link to={to.artifact(entry.artifact)}>{entry.artifact.title}</Link>
+              : entry.document && <Link to={to.document(entry.document)}>{entry.document.title}</Link>}{" "}
           {when}
         </p>
         <div className="bubble">

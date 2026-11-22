@@ -49,10 +49,14 @@ const RecordComment = Type.Object({
   at: At,
   body: Type.String({ description: "Markdown." }),
   replyToId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
-  ticket: Type.Union([TicketRef, Type.Null()], { description: "The Ticket it is on; null for a Comment on an Artifact." }),
+  ticket: Type.Union([TicketRef, Type.Null()], { description: "The Ticket it is on; null for a Comment on an Artifact or a Document." }),
   artifact: Type.Union(
     [Type.Object({ id: Type.String({ format: "uuid" }), slug: Type.String(), title: Type.String() }), Type.Null()],
-    { description: "The Artifact it is on, by its current title; null for a Comment on a Ticket." },
+    { description: "The Artifact it is on, by its current title; null for a Comment on a Ticket or a Document." },
+  ),
+  document: Type.Union(
+    [Type.Object({ id: Type.String({ format: "uuid" }), slug: Type.String(), title: Type.String() }), Type.Null()],
+    { description: "The Document it is on, a Report included, by its current title; null for a Comment on a Ticket or an Artifact." },
   ),
 });
 
@@ -192,15 +196,21 @@ function branches(viewer: Viewer): { sql: string; value: string | string[] } {
       jsonb_build_object('kind', 'comment', 'id', comments.id, 'body', comments.body, 'replyToId', comments.reply_to_id,
         'ticket', case when tickets.id is null then null else ${ticketRef("tickets", "projects")} end,
         'artifact', case when artifacts.id is null then null else jsonb_build_object('id', artifacts.id,
-          'slug', ${slugColumn("artifact", "artifacts.id", "artifact_titles.title")}, 'title', artifact_titles.title) end)
+          'slug', ${slugColumn("artifact", "artifacts.id", "artifact_titles.title")}, 'title', artifact_titles.title) end,
+        'document', case when comment_documents.id is null then null else jsonb_build_object('id', comment_documents.id,
+          'slug', ${slugColumn("document", "comment_documents.id", "document_titles.title")}, 'title', document_titles.title) end)
     from comments
     left join tickets on tickets.id = comments.ticket_id left join projects on projects.id = tickets.project_id
     left join artifacts on artifacts.id = comments.artifact_id
     left join artifact_versions artifact_titles
       on artifact_titles.artifact_id = artifacts.id and artifact_titles.number = artifacts.version
+    left join documents comment_documents on comment_documents.id = comments.document_id
+    left join document_versions document_titles
+      on document_titles.document_id = comment_documents.id and document_titles.number = comment_documents.version
     where comments.actor_agent_id = $1
       and (tickets.id is not null and ${reach("tickets.project_id", "tickets.workspace_id")}
-        or artifacts.id is not null and ${reach("artifacts.project_id", "artifacts.workspace_id")})
+        or artifacts.id is not null and ${reach("artifacts.project_id", "artifacts.workspace_id")}
+        or comment_documents.id is not null and ${reach("comment_documents.project_id", "comment_documents.workspace_id")})
     union all
     ${versionOf("document", "document_versions", "documents", "document_id", "document_versions.title", currentDocumentTitle, {
       slug: slugColumn("document", "documents.id", currentDocumentTitle),

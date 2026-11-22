@@ -13,6 +13,7 @@ import {
   type ProjectSummary,
   type Ticket,
   type Tree,
+  type User,
   type Version,
   type VersionWithBody,
   type Workspace,
@@ -28,7 +29,8 @@ import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
-import { ProjectNote } from "./write-access.js";
+import { ProjectAccessProvider, ProjectNote } from "./write-access.js";
+import { CommentsPanel } from "./comments-panel.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
@@ -199,9 +201,11 @@ export function ProjectDocuments({ workspace, project }: { workspace: Workspace;
  */
 export function DocumentScreen({
   workspace,
+  user,
   documentId,
 }: {
   workspace: Workspace;
+  user: User;
   documentId: string;
 }) {
   const to = useAddresses();
@@ -349,6 +353,12 @@ export function DocumentScreen({
               dropHint="or, while editing, drop or paste them into the text"
               onChanged={loadAttachments}
             />
+            {!gone && (
+              // The Workspace's own Documents are for every User to change; a Project's, with Write in it.
+              <ProjectAccessProvider access={canWrite ? "write" : "read"}>
+                <CommentsPanel workspace={workspace} target={{ kind: "document", id: document.id }} user={user} />
+              </ProjectAccessProvider>
+            )}
           </div>
           <aside className="side" aria-label="Document details">
             <Versions

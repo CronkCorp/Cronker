@@ -167,6 +167,7 @@ describe("Reports as Documents", () => {
       body: "The bug is in **parsing**.",
       version: { number: 1, title: "Findings", actor: byAgent, savedAt: "2026-01-01T09:00:00.000Z" },
       mentions: [],
+      comments: [],
     });
   });
 

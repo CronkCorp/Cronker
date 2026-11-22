@@ -71,3 +71,36 @@ export async function insertArtifactComment(
   await publishArtifactComments(context, tx, artifact, (ticket) => ({ type: "comment.added", ...ticket, commentId }));
   return commentId;
 }
+
+/** Writes a Comment on the Document, a Report included, as the Actor, telling its readers, and returns its id. */
+export async function insertDocumentComment(
+  context: Context,
+  tx: Tx,
+  document: { id: string; workspaceId: string; projectId: string | null },
+  actor: { kind: "user" | "agent"; id: string },
+  body: string,
+  replyToId: string | null,
+): Promise<string> {
+  const { rows } = await tx.query<{ id: string }>(
+    `insert into comments (workspace_id, document_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    [
+      document.workspaceId,
+      document.id,
+      replyToId,
+      actor.kind === "user" ? actor.id : null,
+      actor.kind === "agent" ? actor.id : null,
+      body,
+      context.clock.now(),
+    ],
+  );
+  const commentId = rows[0]!.id;
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: document.workspaceId }, body);
+  context.live.publish(tx, document.workspaceId, {
+    type: "comment.added",
+    projectId: document.projectId,
+    documentId: document.id,
+    commentId,
+  });
+  return commentId;
+}

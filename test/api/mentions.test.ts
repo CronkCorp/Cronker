@@ -181,11 +181,11 @@ describe("Ticket Mentions in each kind of text", () => {
 
     const ref = { id: ticket.id, projectId: s.project.id, key: "CRONK-2", title: "Follow-up" };
     expect(await mentionedIn(s.ada, s.target.id)).toEqual([
-      { kind: "decision", id: decision.id, projectId: s.project.id, title: "Lanes", ticket: null, slug: null, number: 1 },
-      { kind: "term", id: term.id, projectId: s.project.id, title: "Lane", ticket: null, slug: null, number: null },
-      { kind: "document", id: document.id, projectId: null, title: "Plan", ticket: null, slug: document.slug, number: null },
-      { kind: "comment", id: comment.id, projectId: s.project.id, title: "Follow-up", ticket: ref, slug: null, number: null },
-      { kind: "ticket", id: ticket.id, projectId: s.project.id, title: "Follow-up", ticket: ref, slug: null, number: null },
+      { kind: "decision", id: decision.id, projectId: s.project.id, title: "Lanes", commentOn: null, ticket: null, slug: null, number: 1 },
+      { kind: "term", id: term.id, projectId: s.project.id, title: "Lane", commentOn: null, ticket: null, slug: null, number: null },
+      { kind: "document", id: document.id, projectId: null, title: "Plan", commentOn: null, ticket: null, slug: document.slug, number: null },
+      { kind: "comment", id: comment.id, projectId: s.project.id, title: "Follow-up", commentOn: "ticket", ticket: ref, slug: null, number: null },
+      { kind: "ticket", id: ticket.id, projectId: s.project.id, title: "Follow-up", commentOn: null, ticket: ref, slug: null, number: null },
     ]);
     // Its own description still links the key.
     expect((await ok("GET", `/api/tickets/${s.target.id}`, s.ada)).mentions).toEqual([mentionOf(s.target)]);
@@ -202,6 +202,7 @@ describe("Ticket Mentions in each kind of text", () => {
         id: report.id,
         projectId: s.project.id,
         title: "Findings",
+        commentOn: null,
         ticket: { id: ticket.id, projectId: s.project.id, key: ticket.key, title: "Investigate" },
         slug: report.slug,
         number: null,
@@ -343,11 +344,11 @@ describe("Decision Mentions in each kind of text", () => {
 
     const ref = { id: ticket.id, projectId: s.project.id, key: ticket.key, title: "Follow-up" };
     expect(await decisionMentionedIn(s.ada, s.projects.id)).toEqual([
-      { kind: "decision", id: decision.id, projectId: null, title: "Lanes", ticket: null, slug: null, number: 2 },
-      { kind: "term", id: term.id, projectId: s.project.id, title: "Lane", ticket: null, slug: null, number: null },
-      { kind: "document", id: document.id, projectId: null, title: "Plan", ticket: null, slug: document.slug, number: null },
-      { kind: "comment", id: comment.id, projectId: s.project.id, title: "Follow-up", ticket: ref, slug: null, number: null },
-      { kind: "ticket", id: ticket.id, projectId: s.project.id, title: "Follow-up", ticket: ref, slug: null, number: null },
+      { kind: "decision", id: decision.id, projectId: null, title: "Lanes", commentOn: null, ticket: null, slug: null, number: 2 },
+      { kind: "term", id: term.id, projectId: s.project.id, title: "Lane", commentOn: null, ticket: null, slug: null, number: null },
+      { kind: "document", id: document.id, projectId: null, title: "Plan", commentOn: null, ticket: null, slug: document.slug, number: null },
+      { kind: "comment", id: comment.id, projectId: s.project.id, title: "Follow-up", commentOn: "ticket", ticket: ref, slug: null, number: null },
+      { kind: "ticket", id: ticket.id, projectId: s.project.id, title: "Follow-up", commentOn: null, ticket: ref, slug: null, number: null },
     ]);
     // Its own body still links its key.
     expect((await ok("GET", `/api/decisions/${s.projects.id}`, s.ada)).mentions).toEqual([

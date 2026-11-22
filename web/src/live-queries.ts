@@ -69,7 +69,10 @@ export function invalidations(event: StreamEvent): QueryKey[] {
         keys.agentRecords,
       ];
     case "comment.added":
-      return [keys.comments(event.ticketId), keys.agentRecords];
+      // A Comment on a Document names only the Document.
+      return "ticketId" in event
+        ? [keys.comments(event.ticketId), keys.agentRecords]
+        : [keys.everythingOf("document", event.documentId), keys.agentRecords];
     case "report.added":
     case "report.changed":
       return [keys.reports(event.ticketId), keys.documentAttachments(event.reportId), keys.agentRecords];

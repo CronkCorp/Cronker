@@ -1729,7 +1729,13 @@ export function CommentThread({
   const actor: ActorRef = comment.actor;
   const send = async (body: string) => {
     const reply = { body, replyToId: comment.id };
-    onAdded(await (comment.artifactId ? api.commentOnArtifact(comment.artifactId, reply) : api.comment(comment.ticketId!, reply)));
+    onAdded(
+      await (comment.artifactId
+        ? api.commentOnArtifact(comment.artifactId, reply)
+        : comment.documentId
+          ? api.commentOnDocument(comment.documentId, reply)
+          : api.comment(comment.ticketId!, reply)),
+    );
     setReplying(false);
   };
   const to = useAddresses();
