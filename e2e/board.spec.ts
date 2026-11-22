@@ -1,4 +1,4 @@
-import { setUp, signIn } from "../test/harness/flows.js";
+import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
 import type { Locator, Page } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
 import { expect, signInInBrowser, test } from "./fixtures.js";
@@ -391,3 +391,60 @@ async function copyContrast(card: Locator) {
     };
   });
 }
+
+test("a merge making a Ticket's Pull Request conflict marks its In Review card and its Pull Requests live, and a clean answer clears them", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call("POST", `/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: inReview });
+  /** GitHub reports a Pull Request, as its webhook does. */
+  const pullRequest = async (action: string, fields: Record<string, unknown>) => {
+    const delivered = await cronk.github.deliver(app, "pull_request", {
+      action,
+      installation: { id: installation.id },
+      repository: { id: cronker.id, full_name: cronker.fullName },
+      pull_request: {
+        state: "open", draft: false, merged: false, base: { ref: "main" }, updated_at: "2026-01-01T09:00:00Z", ...fields,
+      },
+    });
+    expect(delivered.status).toBe(200);
+  };
+  const ours = { id: 501, number: 7, title: "CRONK-1: make it so", html_url: "https://github.com/cronkcorp/cronker/pull/7" };
+  await pullRequest("opened", { ...ours, head: { ref: "cronk-1", sha: "c1" } });
+  const other = { id: 609, number: 9, title: "Speed up the board", html_url: "https://github.com/cronkcorp/cronker/pull/9", head: { ref: "o", sha: "o1" } };
+  await pullRequest("opened", other);
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const card = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "In Review", exact: true }).getByRole("link", { name: /CRONK-1 Make it so/ });
+  await expect(card).toBeVisible();
+  await expect(card).not.toContainText("Conflicts with");
+
+  // #9 merges as m1, and GitHub then says #7 conflicts with main.
+  cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", mergeable: false });
+  await pullRequest("closed", { ...other, state: "closed", merged: true, merge_commit_sha: "m1", updated_at: "2026-01-01T09:30:00Z" });
+  await cronk.checkMergeability();
+  await expect(card).toContainText("Conflicts with main");
+
+  await card.click();
+  const panel = page.getByRole("region", { name: "Pull Requests" });
+  await expect(panel).toContainText("Conflicts with main since cronkcorp/cronker#9");
+  await expect(page.getByRole("region", { name: "Code to review" })).toContainText("Conflicts with main");
+
+  // A push resolves it; GitHub then says it merges cleanly.
+  cronk.github.pullRequest(cronker, 7, { headSha: "c2", base: "main", baseSha: "m1", mergeable: true });
+  await pullRequest("synchronize", { ...ours, head: { ref: "cronk-1", sha: "c2" }, updated_at: "2026-01-01T09:40:00Z" });
+  await cronk.checkMergeability();
+  await expect(panel).not.toContainText("Conflicts with");
+  await expect(page.getByRole("region", { name: "Code to review" })).not.toContainText("Conflicts with");
+});

@@ -32,7 +32,8 @@ export function CheckCounts({ checks }: { checks: Check[] }) {
 
 /**
  * The Pull Requests linked to the Ticket, by its key in their branch or title or by hand, one row each: number, title,
- * state and check counts, review state, and the failing check that last sent the Ticket back; those linked by hand say
+ * state and check counts, review state, the failing check that last sent the Ticket back, and a conflict with its base
+ * branch; those linked by hand say
  * so. GitHub's webhooks keep them current. Given the Ticket (`linking`), the section always shows, with Unlink on those
  * linked by hand and a form to link another by its address; otherwise it is hidden until there is one.
  */
@@ -81,7 +82,7 @@ export function PullRequestRows({
                 )}
               </span>
               {pr.sentBack?.kind === "check" && <SentBackBy sentBack={pr.sentBack} />}
-              {pr.sentBack?.kind === "conflict" && <SentBackByConflict sentBack={pr.sentBack} />}
+              {pr.conflict && <ConflictMarker conflict={pr.conflict} />}
             </li>
           ))}
         </ul>
@@ -152,20 +153,26 @@ function SentBackBy({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["s
   );
 }
 
-/** A conflict with its base branch that last sent the Ticket back to its producing Step from a Pull Request. */
-function SentBackByConflict({ sentBack }: { sentBack: Extract<NonNullable<PullRequest["sentBack"]>, { kind: "conflict" }> }) {
+/** *Conflicts with `<base>`*, linking the merge that made it conflict when Cronk knows it. */
+function ConflictMarker({ conflict }: { conflict: NonNullable<PullRequest["conflict"]> }) {
   const what = (
     <>
       <span className="check-failed" aria-hidden="true">
         ✗
       </span>{" "}
-      conflicts with {sentBack.branch}
+      Conflicts with <span className="mono">{conflict.branch}</span>
     </>
   );
   return (
-    <span className="small muted">
-      Sent back: {sentBack.merge ? <ExternalLink url={sentBack.merge.url}>{what}</ExternalLink> : what}{" "}
-      <RelativeTime at={sentBack.at} />
+    <span className="small muted pr-conflict">
+      {conflict.merge ? (
+        <ExternalLink url={conflict.merge.url}>
+          {what} since {conflict.merge.repository}#{conflict.merge.number}
+        </ExternalLink>
+      ) : (
+        what
+      )}{" "}
+      <RelativeTime at={conflict.at} />
     </span>
   );
 }
@@ -178,7 +185,10 @@ const checkStates = {
   neutral: { mark: "–", word: "neutral", order: 3 },
 } as const;
 
-/** For a Ticket in a Review Status: a card per Pull Request with its branch, state, review state and every check. */
+/**
+ * For a Ticket in a Review Status: a card per Pull Request with its branch, state, review state, a conflict with its
+ * base branch and every check.
+ */
 export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[] }) {
   if (pullRequests.length === 0) return null;
   return (
@@ -205,6 +215,11 @@ export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[]
               </>
             )}
           </p>
+          {pr.conflict && (
+            <p>
+              <ConflictMarker conflict={pr.conflict} />
+            </p>
+          )}
           {pr.checks.length > 0 && (
             <ul className="pr-checks">
               {[...pr.checks]
