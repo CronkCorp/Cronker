@@ -411,6 +411,11 @@ export function buildMcpServer(api: Api): McpServer {
       }),
   );
 
+  const avoidedWordsNote =
+    " The answer's `avoidedWords` lists each word the glossary avoids that your text uses, with the Term to use " +
+    "instead, ignoring code, block quotes and link targets: the save goes through anyway, so fix the wording in a " +
+    "next save.";
+
   server.registerTool(
     "write_report",
     {
@@ -419,7 +424,8 @@ export function buildMcpServer(api: Api): McpServer {
         "During your running Run on a Ticket, adds a Report to it: Markdown such as an investigation's findings, " +
         "listed with the Ticket for its Users and read by later Runs on it. Refused for any other Ticket and outside " +
         "a running Run. A Report can also be given to `finish`. A Report is a Document with Versions: " +
-        "`read_document` and `edit_document` take its id.",
+        "`read_document` and `edit_document` take its id." +
+        avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument,
         ...bodyFields(ReportCreate),
@@ -515,7 +521,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Create a Document",
       description:
         "Creates a Markdown Document in a Project's page tree, or the Workspace's when no Project is given, at Version " +
-        "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed.",
+        "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed." +
+        avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
         ...bodyFields(Type.Omit(DocumentCreate, ["parentId"])),
@@ -534,7 +541,8 @@ export function buildMcpServer(api: Api): McpServer {
         "A new title or body saves a Document as its next Version, by your Agent, based on the Version you read: give " +
         "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
         "the current Version as `current`: merge your change into it and save again based on it. A new parent or place " +
-        "moves the Document within its page tree, making no Version. Only Users delete Documents.",
+        "moves the Document within its page tree, making no Version. Only Users delete Documents." +
+        avoidedWordsNote,
       inputSchema: {
         document: documentArgument,
         ...bodyFields(Type.Omit(DocumentEdit, ["parentId"])),
@@ -580,7 +588,8 @@ export function buildMcpServer(api: Api): McpServer {
         "rest stays as it was. The new body starts with a heading of the Section's own level, whose text may change, " +
         "and holds no other heading of that level or a higher one (`section_heading_level`). Give the number of the " +
         "Version you read as `baseVersion`: a replace based on an outdated Version is refused with `outdated_version`, " +
-        `carrying the current Version as \`current\`. ${sectionRules}`,
+        `carrying the current Version as \`current\`. ${sectionRules}` +
+        avoidedWordsNote,
       inputSchema: {
         document: documentArgument,
         ...bodyFields(SectionReplace),

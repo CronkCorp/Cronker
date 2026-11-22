@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
+import { warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import {
@@ -16,6 +17,7 @@ import {
   DocumentSummary,
   editDocument,
   findDocument,
+  placeOfDocument,
   readSection,
   readVersion,
   replaceDocumentSection,
@@ -88,14 +90,21 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
               "Creates the Document under a parent of the same page tree, or at its top, at Version 1 by its Actor.",
             params,
             body: DocumentCreate,
-            response: { 201: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+            response: {
+              201: withAvoidedWords(Document),
+              400: ErrorBody,
+              401: ErrorBody,
+              403: ErrorBody,
+              404: ErrorBody,
+              409: ErrorBody,
+            },
           },
         },
         async (request, reply) => {
           const caller = await requireCaller(context, request);
           const { body = "", ...input } = request.body;
           const created = await createDocument(context, caller, await tree.find(request, caller), { ...input, body });
-          return reply.code(201).send(created);
+          return reply.code(201).send(await warnAgent(db, caller, created, { plain: [input.title], markdown: [body] }, created));
         },
       );
     }
@@ -132,10 +141,23 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "is listed with its Ticket, not in a page tree, so moving one is refused with `report_outside_tree`.",
           params: DocumentParams,
           body: DocumentEdit,
-          response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Document", VersionWithBody) },
+          response: {
+            200: withAvoidedWords(Document),
+            400: ErrorBody,
+            401: ErrorBody,
+            403: ErrorBody,
+            404: ErrorBody,
+            409: OutdatedVersionBody("Document", VersionWithBody),
+          },
         },
       },
-      async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const saved = await editDocument(context, caller, request.params.documentId, request.body);
+        const { title, body } = request.body;
+        const texts = { plain: title === undefined ? [] : [title], markdown: body === undefined ? [] : [body] };
+        return warnAgent(db, caller, saved, texts, saved);
+      },
     );
 
     app.get(
@@ -170,7 +192,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           params: DocumentParams,
           body: SectionReplace,
           response: {
-            200: DocumentSection,
+            200: withAvoidedWords(DocumentSection),
             400: ErrorBody,
             401: ErrorBody,
             403: ErrorBody,
@@ -179,8 +201,12 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           },
         },
       },
-      async (request) =>
-        replaceDocumentSection(context, await requireCaller(context, request), request.params.documentId, request.body),
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const replaced = await replaceDocumentSection(context, caller, request.params.documentId, request.body);
+        const place = await placeOfDocument(db, replaced.documentId);
+        return warnAgent(db, caller, place, { markdown: [request.body.body] }, replaced);
+      },
     );
 
     app.delete(
