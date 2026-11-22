@@ -11,6 +11,7 @@ import { megabyte } from "../config.js";
 import { userName } from "../identity/user.js";
 import { recordChanges } from "../work/changes.js";
 import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
+import { sessionIdOf } from "../runs/session-ids.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
 
 /**
@@ -57,7 +58,9 @@ export const Transcript = Type.Object({
       "short id. The name is only for reading; the short id finds it.",
   }),
   workspaceId: Type.String({ format: "uuid" }),
-  sessionId: Type.String({ description: "The session it records, as its uploader named it." }),
+  sessionId: Type.String({
+    description: "The session it records, as its uploader named it, except that a claude.ai `session_…` id reads `cse_…`.",
+  }),
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Run whose Runner returned this session when starting it; null for a session of no Run.",
@@ -209,9 +212,10 @@ async function transcriptRow(db: Context["db"] | Tx, where: string, params: unkn
 export async function uploadTranscript(
   context: Context,
   agent: AgentCaller,
-  sessionId: string,
+  named: string,
   converted: ConvertedEntry[],
 ): Promise<{ transcript: Transcript; created: boolean }> {
+  const sessionId = sessionIdOf(named);
   const now = context.clock.now();
   const scrubbed = converted.map(scrub);
   return transaction(context.db, async (tx) => {
