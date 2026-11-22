@@ -249,6 +249,46 @@
 .card:hover {
   border-color: var(--muted);
 }
+/* A selected card: an accent border and tint, and a check in its corner, so it isn't marked by colour alone. */
+.card-selected,
+.card-selected:hover {
+  position: relative;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.card-selected::after {
+  content: "✓";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+/* The count of selected cards, with Clear, above the board; empty, it takes no room. */
+.board-selection {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+.board-selection:empty {
+  display: none;
+}
+.board-refusals p,
+.board-refusals ul {
+  margin: 0;
+}
+.board-refusals ul {
+  padding-left: var(--space-4);
+}
 .card-link {
   align-self: stretch;
   display: flex;
