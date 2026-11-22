@@ -102,7 +102,7 @@ async function spanning() {
   await ok("PATCH", `/api/agents/${adasAgent.id}`, ada, { runnerId: runner.id });
   const triage = secret.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
   await ok("PATCH", `/api/tickets/${hidden.id}`, ada, { delegateId: adasAgent.id, statusId: triage });
-  // The fake Runner's first Run ran in `session_1`.
+  // The fake Runner's first Run ran in `cse_1`, which an upload may name `session_1`.
   const ofRun = await uploadTranscript("session_1", "Triage the webhook secrets.", [], adasAgent.as);
   const report = await ok("POST", `/api/tickets/${hidden.id}/reports`, adasAgent.as, {
     title: "Findings",

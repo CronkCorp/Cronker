@@ -68,7 +68,7 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0059_conflict_markers.sql");
     await cronk.applyAhead("0042_merge_conflicts.sql");
     await cronk.applyAhead("0061_merge_queue.sql");
-    await cronk.applyAhead("0064_merge_queue_conflicts.sql");
+    await cronk.applyAhead("0065_merge_queue_conflicts.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
