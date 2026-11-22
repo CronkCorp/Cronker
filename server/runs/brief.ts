@@ -3,7 +3,7 @@ import type { Config } from "../config.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import type { Viewer } from "../identity/viewers.js";
-import { mcpPath } from "../mcp/routes.js";
+import { mcpPath } from "../mcp/paths.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Outcome, Step } from "../work/steps.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
@@ -106,8 +106,11 @@ export function buildBrief(
     "- *needs you* takes a Question.",
     `- While this Run is running you may edit ${ticketKey}'s description, Priority, Labels, due date and estimate, ` +
       "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
-    `- File anything you find that isn't part of ${ticketKey}'s work with \`file_ticket\`, giving your Run id: it waits ` +
-      `for ${ticketKey}'s Assignee as a Discovered Ticket.`,
+    `- Before filing anything you find that isn't part of ${ticketKey}'s work, \`search\` for an open Ticket that ` +
+      "already covers it and, for a fault in the code, check it still happens on the Repository's default branch. " +
+      "If an open Ticket covers it, add what you found there as a Comment instead. Otherwise file it with " +
+      `\`file_ticket\`, giving your Run id and naming any related Tickets in its description: it waits for ` +
+      `${ticketKey}'s Assignee as a Discovered Ticket.`,
     `- Give your Run id when you create an Artifact with \`create_artifact\`, so it is linked to ${ticketKey}.`,
     "- Don't merge pull requests on GitHub directly.",
     ...(conciseReports ? [conciseReportsRule] : []),

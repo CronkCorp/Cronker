@@ -697,14 +697,14 @@ export interface PullRequest {
   sentBack:
     | { kind: "check"; name: string; sha: string; url: string | null; at: string }
     | { kind: "review"; reviewer: string | null; url: string | null; at: string }
-    | {
-        kind: "conflict";
-        branch: string;
-        sha: string;
-        merge: { repository: string; number: number; url: string } | null;
-        at: string;
-      }
     | null;
+  /** While it is open, GitHub's last answer that it conflicts with its base branch; null when it merges cleanly. */
+  conflict: {
+    branch: string;
+    sha: string;
+    merge: { repository: string; number: number; url: string } | null;
+    at: string;
+  } | null;
   /** Whether a User linked it by hand; only such a link can be unlinked. */
   manual: boolean;
 }

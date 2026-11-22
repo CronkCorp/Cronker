@@ -190,6 +190,7 @@ describe("MCP with an Agent token", () => {
         producingStep: null,
         reviewState: null,
         sentBack: null,
+        conflict: null,
         manual: false,
       },
     ]);

@@ -7,13 +7,13 @@ import { inUnarchivedProject, listsPullRequestsRepository, moveByCronk, type Mov
 /**
  * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit
  * (a check run, a commit status, or a check suite, which fails too when its workflow fails before running any check run),
- * a review requesting changes, whoever wrote it, or a conflict with its base branch (see `conflicts.ts`) sends each linked Ticket that is in a Review Status, has a
- * producing Step and is in a Project with Pull Request automation on that still lists the Pull Request's Repository,
+ * or a review requesting changes, whoever wrote it, sends each linked Ticket that is in a Review Status, has a producing Step and is in a Project with Pull Request automation on that still lists the Pull Request's Repository,
  * back to that Step's Status as a move by Cronk. It counts as a round for the Step: past its round limit the Step's *needs you* Outcome applies instead, with
- * Cronk's own Question. Cronk writes a Comment linking the failure. Each head commit, each review and each base commit sends a
+ * Cronk's own Question. Cronk writes a Comment linking the failure. Each head commit and each review sends a
  * Ticket back at most once, so many failing checks on one commit send it back once. A failure that arrived before
  * the Ticket was in a Review Status, such as while its Code review Run was still working, sends it back once an
- * Outcome moves it into one.
+ * Outcome moves it into one. A conflict with the base branch sends nothing back: it only marks the Pull Request (see
+ * `conflicts.ts`).
  */
 
 /** What failed, as reading the Ticket shows it. */
@@ -33,15 +33,6 @@ export type Failure =
       /** The login of the GitHub account that wrote it, if GitHub named one. */
       reviewer: string | null;
       url: string | null;
-    }
-  | {
-      kind: "conflict";
-      /** The base branch it conflicts with. */
-      branch: string;
-      /** The base branch's commit it conflicts with: the merge's commit, or else the one GitHub compared against. */
-      sha: string;
-      /** The merge into the base branch that made it conflict, if Cronk knows it. */
-      merge: { repository: string; number: number; url: string } | null;
     };
 
 /** The Pull Request the failure is on. */
@@ -53,26 +44,22 @@ export interface FailedPullRequest {
 }
 
 const causeOf = (failure: Failure) =>
-  failure.kind === "check" ? `commit:${failure.sha}` : failure.kind === "conflict" ? `base:${failure.sha}` : `review:${failure.id}`;
+  failure.kind === "check" ? `commit:${failure.sha}` : `review:${failure.id}`;
 
 /** The failure as reading the Ticket shows it, without the time it sent the Ticket back. */
 const shown = (failure: Failure) =>
   failure.kind === "check"
     ? { kind: failure.kind, name: failure.name, sha: failure.sha, url: failure.url }
-    : failure.kind === "conflict"
-      ? { kind: failure.kind, branch: failure.branch, sha: failure.sha, merge: failure.merge }
-      : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
+    : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
 
-/** The failure as a `sentBack` Change names it: the check, the review, or the base branch and merge, with its link. */
+/** The failure as a `sentBack` Change names it: the check or the review, with its link. */
 const named = (failure: Failure) =>
   failure.kind === "check"
     ? { kind: failure.kind, name: failure.name, url: failure.url }
-    : failure.kind === "conflict"
-      ? { kind: failure.kind, branch: failure.branch, merge: failure.merge }
-      : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
+    : { kind: failure.kind, reviewer: failure.reviewer, url: failure.url };
 
 /** What sent the Ticket back, as a Run it stops is told. */
-const stopsFor: Record<Failure["kind"], string> = { check: "A failing check", review: "Requested changes", conflict: "A merge conflict" };
+const stopsFor: Record<Failure["kind"], string> = { check: "A failing check", review: "Requested changes" };
 
 const linked = (text: string, url: string | null) => (url ? `[${text}](${url})` : text);
 
@@ -80,13 +67,6 @@ function describe(failure: Failure, pullRequest: FailedPullRequest): string {
   const name = linked(`${pullRequest.repository}#${pullRequest.number}`, pullRequest.url);
   if (failure.kind === "check") {
     return `The check ${linked(`**${failure.name}**`, failure.url)} failed on ${name}'s latest commit \`${failure.sha.slice(0, 7)}\`.`;
-  }
-  if (failure.kind === "conflict") {
-    const { merge, branch } = failure;
-    const sha = `\`${failure.sha.slice(0, 7)}\``;
-    return merge
-      ? `${linked(`${merge.repository}#${merge.number}`, merge.url)} merged into \`${branch}\` as ${sha}, and now ${name} conflicts with it.`
-      : `${name} conflicts with its base branch \`${branch}\` at ${sha}.`;
   }
   const by = failure.reviewer ? `@${failure.reviewer}` : "A reviewer";
   return `${by} ${linked("requested changes", failure.url)} on ${name}.`;
