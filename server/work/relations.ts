@@ -195,7 +195,7 @@ const opposite: Record<RelationKind, RelationKind> = {
  * Records a Relation added or removed on both its Tickets' timelines, each naming the other Ticket, and tells
  * the Workspace's live streams both Tickets changed.
  */
-async function recordRelationChanges(
+export async function recordRelationChanges(
   { clock, live }: Context,
   tx: Tx,
   workspaceId: string,
@@ -221,7 +221,7 @@ async function recordRelationChanges(
  * Whether one Ticket blocks another, directly or through others. Holds the Workspace's blocks still until the
  * transaction ends, so two blocks made at once can't close a cycle between them.
  */
-async function blocksTransitively(tx: Tx, workspaceId: string, blocker: string, blocked: string): Promise<boolean> {
+export async function blocksTransitively(tx: Tx, workspaceId: string, blocker: string, blocked: string): Promise<boolean> {
   await tx.query("select pg_advisory_xact_lock(hashtext('blocks'), hashtext($1))", [workspaceId]);
   const { rowCount } = await tx.query(
     `with recursive reached (id) as (

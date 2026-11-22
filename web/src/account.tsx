@@ -1,14 +1,28 @@
 import { useState } from "react";
-import { api, type User } from "./api.js";
+import { api, type User, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { GitHubAccountPanel } from "./github.js";
 import { chooseEditorMode, chooseTheme, storedEditorMode, storedTheme, type EditorMode, type Theme } from "./storage.js";
 import { Actions, Button, Field, FormError, PageHead, Panel, Saved } from "./ui/controls.js";
 import { SettingsLayout } from "./ui/settings.js";
+import { WebhooksPanel } from "./webhooks.js";
 
-/** The signed-in User's own settings: their display name, how Cronk looks on this browser, their password and GitHub account. */
-export function AccountSettingsPage({ user, onChanged }: { user: User; onChanged: () => void }) {
+/**
+ * The signed-in User's own settings: their display name, how Cronk looks on this browser, their password, GitHub account
+ * and webhooks, these in the Workspace on screen unless they pick another.
+ */
+export function AccountSettingsPage({
+  user,
+  onChanged,
+  workspaces,
+  current,
+}: {
+  user: User;
+  onChanged: () => void;
+  workspaces: WorkspaceSummary[];
+  current: WorkspaceSummary | undefined;
+}) {
   usePlace(null);
   return (
     <div className="page page-settings">
@@ -19,6 +33,7 @@ export function AccountSettingsPage({ user, onChanged }: { user: User; onChanged
           { id: "appearance", label: "Appearance", children: <Appearance /> },
           { id: "password", label: "Password", children: <Password /> },
           { id: "github-account", label: "GitHub account", children: <GitHubAccountPanel user={user} /> },
+          { id: "webhooks", label: "Webhooks", children: <WebhooksPanel workspaces={workspaces} current={current} /> },
         ]}
       />
     </div>

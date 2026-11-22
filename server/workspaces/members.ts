@@ -9,6 +9,7 @@ import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
 import { nameOf, releaseTickets } from "../work/releasing.js";
+import { removeWebhooksOf } from "../webhooks/webhooks.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
@@ -229,6 +230,8 @@ export async function removeMember(context: Context, adminId: string, workspaceI
       "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null",
       [workspaceId, userId],
     );
+    // Nothing of the Workspace reaches them any more.
+    await removeWebhooksOf(tx, userId, workspaceId);
     const now = clock.now();
     const reason = `${await nameOf(tx, adminId)} removed ${await nameOf(tx, userId)} from the Workspace.`;
     // Their Tickets, and any delegated to their Agents, lose them, waiting in every Admin's Inbox.
