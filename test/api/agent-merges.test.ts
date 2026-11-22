@@ -521,17 +521,19 @@ describe("an Agent's merge making another Pull Request conflicting", () => {
     return { ...merging, other, mergedDelivery };
   }
 
-  test("sends that Pull Request's Ticket back once GitHub's delivery of the merge comes, after GitHub answered the merge", async () => {
+  test("marks that Pull Request as conflicting once GitHub's delivery of the merge comes, after GitHub answered the merge", async () => {
     const { merge, ada, other, status, deliver, mergedDelivery } = await anotherInReview();
     expect((await merge()).status).toBe(200);
 
     await deliver("pull_request", mergedDelivery);
     await cronk.checkMergeability();
 
-    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("Implement") });
+    // It stays in In Review, only marked.
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review"), conflicts: ["main"] });
+    expect((await ok("GET", `/api/tickets/${other.id}/pull-requests`, ada))[0].conflict).toMatchObject({ branch: "main", sha: "m1" });
   });
 
-  test("sends that Pull Request's Ticket back when GitHub's delivery of the merge comes before GitHub answers it", async () => {
+  test("marks that Pull Request as conflicting when GitHub's delivery of the merge comes before GitHub answers it", async () => {
     const { merge, ada, other, status, deliver, mergedDelivery } = await anotherInReview();
     cronk.github.onMerge = async () => {
       await deliver("pull_request", mergedDelivery);
@@ -540,6 +542,8 @@ describe("an Agent's merge making another Pull Request conflicting", () => {
 
     await cronk.checkMergeability();
 
-    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("Implement") });
+    // It stays in In Review, only marked.
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review"), conflicts: ["main"] });
+    expect((await ok("GET", `/api/tickets/${other.id}/pull-requests`, ada))[0].conflict).toMatchObject({ branch: "main", sha: "m1" });
   });
 });

@@ -2,7 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
-import { checkAfterMerge } from "../pipeline/conflicts.js";
+import { checkAfterMerge, checkAfterPush, markerChanged } from "../pipeline/conflicts.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
 import { recordMergeAskedByRun } from "../runs/merging.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
@@ -61,31 +61,39 @@ export const SentBack = Type.Union(
       url: Type.Union([Type.String(), Type.Null()], { description: "Where GitHub shows the review, if it says." }),
       at: Type.String({ format: "date-time" }),
     }),
-    Type.Object({
-      kind: Type.Literal("conflict"),
-      branch: Type.String({ description: "The base branch it conflicted with." }),
-      sha: Type.String({ description: "The base branch's commit it conflicted with: the merge's commit, or else the one GitHub compared against." }),
-      merge: Type.Union(
-        [
-          Type.Object({
-            repository: Type.String({ description: "The merged Pull Request's Repository's `owner/name`." }),
-            number: Type.Integer(),
-            url: Type.String({ description: "Where GitHub shows the merged Pull Request." }),
-          }),
-          Type.Null(),
-        ],
-        { description: "The merge into the base branch that caused the conflict: the latest Cronk knows of; null for none." },
-      ),
-      at: Type.String({ format: "date-time" }),
-    }),
   ],
   {
     description:
       "What last sent this Ticket back to its producing Step from this Pull Request: a failing check on its latest commit, " +
-      "a review requesting changes, or a conflict with its base branch.",
+      "or a review requesting changes. A conflict with its base branch sends nothing back; `conflict` marks it instead.",
   },
 );
 export type SentBack = Static<typeof SentBack>;
+
+export const Conflict = Type.Object(
+  {
+    branch: Type.String({ description: "The base branch it conflicts with." }),
+    sha: Type.String({ description: "The base branch's commit it conflicts with: the merge's commit, or else the one GitHub compared against." }),
+    merge: Type.Union(
+      [
+        Type.Object({
+          repository: Type.String({ description: "The merged Pull Request's Repository's `owner/name`." }),
+          number: Type.Integer(),
+          url: Type.String({ description: "Where GitHub shows the merged Pull Request." }),
+        }),
+        Type.Null(),
+      ],
+      { description: "The merge into the base branch that made it conflict, if Cronk knows it; null for none." },
+    ),
+    at: Type.String({ format: "date-time", description: "When GitHub told Cronk it conflicts so." }),
+  },
+  {
+    description:
+      "GitHub's last answer that it conflicts with its base branch. Cronk asks after a merge into that branch and when an " +
+      "Outcome moves its Ticket into a Review Status; the marker stays until GitHub answers that it merges cleanly.",
+  },
+);
+export type Conflict = Static<typeof Conflict>;
 
 const reviewStates = ["approved", "changes_requested"] as const;
 
@@ -129,6 +137,9 @@ export const PullRequest = Type.Object({
     description: "Null until someone approves it or requests changes, whatever the Ticket's Status and whoever opened it, and again once each such review is dismissed.",
   }),
   sentBack: Type.Union([SentBack, Type.Null()], { description: "Null until a failure on it sends the Ticket back." }),
+  conflict: Type.Union([Conflict, Type.Null()], {
+    description: "Null unless it is open and GitHub last answered that it conflicts with its base branch.",
+  }),
   manual: Type.Boolean({
     description:
       "Whether a User linked it to the Ticket by hand. Its branch or title may name the Ticket's key as well; only a link by hand can be unlinked.",
@@ -140,11 +151,12 @@ export type PullRequest = Static<typeof PullRequest>;
 export async function pullRequestsOf(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<PullRequest[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  const { rows } = await db.query<Omit<PullRequest, "id" | "checks" | "sentBack"> & {
+  const { rows } = await db.query<Omit<PullRequest, "id" | "checks" | "sentBack" | "conflict"> & {
     id: string;
     repositoryId: string;
     sha: string;
     sentBack: SentBack | null;
+    conflict: Omit<Conflict, "at"> & { at: Date } | null;
   }>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId", pull_requests.head_sha as sha,
        pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.title,
@@ -158,7 +170,14 @@ export async function pullRequestsOf(db: Db | Tx, viewer: Viewer, ticketId: stri
         order by reviews.state = 'changes_requested' desc, reviews.review_id desc limit 1) as "reviewState",
        (select sent_back.failure || jsonb_build_object('at', sent_back.sent_at) from sent_back
         where sent_back.pull_request_id = pull_requests.id and sent_back.ticket_id = pull_request_links.ticket_id
+          -- Conflicts sent Tickets back before they only marked the Pull Request; that is history, in the timeline.
+          and sent_back.failure->>'kind' <> 'conflict'
         order by sent_back.seq desc limit 1) as "sentBack",
+       case when pull_requests.conflict_sha is null or pull_requests.state not in ('open', 'draft') then null
+         else json_build_object('branch', pull_requests.conflict_branch, 'sha', pull_requests.conflict_sha,
+           'merge', (select json_build_object('repository', merged.repository_full_name, 'number', merged.number,
+             'url', merged.url) from pull_requests merged where merged.id = pull_requests.conflict_merged_pull_request_id),
+           'at', pull_requests.conflict_at) end as conflict,
        pull_request_links.manual_at is not null as manual
      from pull_request_links
      join pull_requests on pull_requests.id = pull_request_links.pull_request_id
@@ -172,12 +191,13 @@ export async function pullRequestsOf(db: Db | Tx, viewer: Viewer, ticketId: stri
     rows.map((r) => ({ repositoryId: r.repositoryId, sha: r.sha })),
   );
   // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
-  return rows.map(({ id, repositoryId, sha, sentBack, ...row }, i) => ({
+  return rows.map(({ id, repositoryId, sha, sentBack, conflict, ...row }, i) => ({
     id: Number(id),
     ...row,
     checks: checks[i]!,
     // jsonb carries the time as Postgres writes it; the API writes every time the same way.
     sentBack: sentBack && { ...sentBack, at: new Date(sentBack.at).toISOString() },
+    conflict: conflict && { ...conflict, at: new Date(conflict.at).toISOString() },
   }));
 }
 
@@ -268,7 +288,8 @@ export async function announce({ live }: Context, tx: Tx, pullRequestIds: number
  * the Run that was running on that Ticket when GitHub says the Pull Request opened, even if
  * the delivery arrives after that Run ended: the producing Step's. A check that failed on its latest
  * commit before Cronk heard of the push sends the Tickets back now. GitHub's first delivery naming a merge's commit,
- * whoever made the merge, has Cronk ask whether the other open Pull Requests on its base branch now conflict.
+ * whoever made the merge, has Cronk ask whether the other open Pull Requests on its base branch now conflict. A push to
+ * one marked as conflicting has Cronk ask about it again; once it merges or closes, its marker goes.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, pull_request: pr } = payload as {
@@ -285,8 +306,9 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       ? { id: pr.merged_by.id, login: pr.merged_by.login }
       : null;
   // Whether Cronk knew the Pull Request merged already, so only the delivery of its merge completes Tickets.
-  const { rows: before } = await tx.query<{ state: PullRequestState; mergeCommit: string | null }>(
-    `select state, merge_commit_sha as "mergeCommit" from pull_requests where id = $1 for update`,
+  const { rows: before } = await tx.query<{ state: PullRequestState; mergeCommit: string | null; headSha: string; conflicted: boolean }>(
+    `select state, merge_commit_sha as "mergeCommit", head_sha as "headSha", conflict_sha is not null as conflicted
+     from pull_requests where id = $1 for update`,
     [pr.id],
   );
   const wasMerged = before[0]?.state === "merged";
@@ -339,6 +361,20 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
     const failed = await failingCheckOn(tx, repository.id, pr.head.sha);
     if (failed) {
       await sendBackForFailure(context, tx, { id: pr.id, repository: repository.full_name, number: pr.number, url: pr.html_url }, failed);
+    }
+  }
+  if (newest && before[0]?.conflicted) {
+    if (state === "open" || state === "draft") {
+      // A push may resolve the conflict, and GitHub says nothing when it does, so Cronk asks.
+      if (before[0].headSha !== pr.head.sha) await checkAfterPush(context, tx, pr.id);
+    } else {
+      await tx.query(
+        `update pull_requests set conflict_branch = null, conflict_sha = null, conflict_merged_pull_request_id = null,
+           conflict_at = null
+         where id = $1`,
+        [pr.id],
+      );
+      await markerChanged(context, tx, pr.id);
     }
   }
   // A merge a Run asked Cronk for is that Run's, even when GitHub's delivery of it comes before GitHub's answer.

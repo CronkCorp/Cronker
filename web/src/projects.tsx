@@ -500,6 +500,15 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * read included. Hovering or focusing it names them, each a link to its Ticket, and lists each unreadable one as "a
  * Ticket you can't see". An unblocked Ticket shows nothing.
  */
+/** A *Conflicts with `<base>`* marker for each base branch the Ticket's open Pull Requests conflict with. */
+function ConflictChips({ ticket }: { ticket: TicketSummary }) {
+  return ticket.conflicts.map((branch) => (
+    <Chip key={branch} tone="warn" title={`A Pull Request of ${ticket.key} conflicts with ${branch}`}>
+      Conflicts with <span className="mono">{branch}</span>
+    </Chip>
+  ));
+}
+
 function BlockedChip({ ticket }: { ticket: TicketSummary }) {
   const to = useAddresses();
   const blockers = ticket.blockedBy;
@@ -759,6 +768,7 @@ function Card({
           {ticket.labels.map((label) => (
             <Chip key={label}>{label}</Chip>
           ))}
+          <ConflictChips ticket={ticket} />
           <TicketRunState ticket={ticket} />
           <People ticket={ticket} members={members} agents={agents} />
         </span>

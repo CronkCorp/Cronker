@@ -122,7 +122,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
           target.kind === "outcome"
             ? `${target.step.name} sent ${ticket.key} back by ${target.outcome.name} ${times(step.roundLimit)}, its round limit, ` +
               "so it comes to you instead. Read the latest Reports, then move it on yourself."
-            : `Failing checks, requested changes and merge conflicts sent ${ticket.key} back to ${target.step.name} ${times(step.roundLimit)}, ` +
+            : `Failing checks and requested changes sent ${ticket.key} back to ${target.step.name} ${times(step.roundLimit)}, ` +
               "its round limit, so it comes to you instead. Read the latest Comments, then move it on yourself.";
       } else {
         await tx.query(
