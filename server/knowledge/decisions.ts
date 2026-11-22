@@ -12,7 +12,8 @@ import { title } from "../work/fields.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
 import { outdatedVersion } from "./versions.js";
-import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
+import { indexMentions, Mention, mentionedIn, MentioningText, mentionsOfOne } from "../work/mentions.js";
+import { literals } from "../literals.js";
 
 /**
  * Decisions: recorded choices with their reasoning and a status, of a Project or of the Workspace, numbered in
@@ -20,14 +21,8 @@ import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
  */
 
 export const statuses = ["proposed", "accepted", "rejected", "deprecated", "superseded"] as const;
-export const DecisionStatus = Type.Union(
-  [
-    Type.Literal("proposed"),
-    Type.Literal("accepted"),
-    Type.Literal("rejected"),
-    Type.Literal("deprecated"),
-    Type.Literal("superseded"),
-  ],
+export const DecisionStatus = literals(
+  statuses,
   { description: "Agents propose Decisions; only a User changes their status." },
 );
 export type DecisionStatus = (typeof statuses)[number];
@@ -62,12 +57,17 @@ export const Decision = Type.Object({
   status: DecisionStatus,
   supersededById: SupersededById,
   version: Type.Object(DecisionVersion.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
+  mentionedIn: Type.Array(MentioningText, {
+    description:
+      "Mentioned in: each other text whose Markdown mentions its key, outside code and links, that the caller may " +
+      "read, most recently saved first; for knowledge, only its current Version counts.",
+  }),
 });
 export type Decision = Static<typeof Decision>;
 
-/** A Decision as stored, without what its body mentions. */
-export type DecisionRecord = Omit<Decision, "mentions">;
+/** A Decision as stored, without what its body mentions or what mentions it. */
+export type DecisionRecord = Omit<Decision, "mentions" | "mentionedIn">;
 
 
 type Row = Omit<DecisionRecord, "version"> & { version: DecisionVersion };
@@ -96,7 +96,23 @@ export async function findDecision(db: Db | Tx, viewer: Viewer, decisionId: stri
     decisionId,
     view.value,
   ]);
-  return rows[0] && { ...present(rows[0]), mentions: await mentionsOfOne(db, viewer, "decision", rows[0].id) };
+  const row = rows[0];
+  if (!row) return undefined;
+  const project =
+    row.projectId === null
+      ? undefined
+      : (await db.query<{ key: string }>("select key from projects where id = $1", [row.projectId])).rows[0];
+  return {
+    ...present(row),
+    mentions: await mentionsOfOne(db, viewer, "decision", row.id),
+    mentionedIn: await mentionedIn(db, viewer, {
+      kind: "decision",
+      id: row.id,
+      workspaceId: row.workspaceId,
+      projectKey: project?.key ?? null,
+      number: row.number,
+    }),
+  };
 }
 
 export function decisionNotFound(): ApiError {
@@ -262,7 +278,7 @@ export async function createDecision(
   });
 }
 
-export const DecisionSummary = Type.Omit(Decision, ["body", "mentions"]);
+export const DecisionSummary = Type.Omit(Decision, ["body", "mentions", "mentionedIn"]);
 export type DecisionSummary = Static<typeof DecisionSummary>;
 
 /** The scope's Decisions by number, with their bodies. */

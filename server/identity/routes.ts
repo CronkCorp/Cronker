@@ -2,11 +2,11 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
-import { changeDisplayName, changePassword, requireUser, signIn, signOut } from "./sign-ins.js";
-import { isSetUp, runSetup } from "./setup.js";
-import { DisplayName, Email, Password, User } from "./user.js";
-import { LinkDetails, lookUpLink, useLink } from "./links.js";
-import { Membership, Workspace, WorkspaceName, workspacesOf } from "../workspaces/workspaces.js";
+import { changeDisplayName, changePassword, MeEdit, PasswordChange, requireUser, SignIn, signIn, signOut } from "./sign-ins.js";
+import { isSetUp, runSetup, SetupInput } from "./setup.js";
+import { User } from "./user.js";
+import { LinkDetails, LinkLookup, LinkUse, lookUpLink, useLink } from "./links.js";
+import { Membership, Workspace, workspacesOf } from "../workspaces/workspaces.js";
 
 export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -31,12 +31,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Set up a fresh installation",
           description:
             "Creates the first User and their first Workspace, with that User as its Admin. Needs the setup code from Cronk's log, and works once.",
-          body: Type.Object({
-            setupCode: Type.String(),
-            email: Email,
-            password: Password,
-            workspaceName: WorkspaceName,
-          }),
+          body: SetupInput,
           response: { 201: Type.Object({ user: User, workspace: Workspace }), 403: ErrorBody, 409: ErrorBody },
         },
       },
@@ -53,7 +48,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Sign-in"],
           summary: "Sign in with email and password",
           description: "Sets a sign-in cookie lasting 30 days.",
-          body: Type.Object({ email: Type.String(), password: Type.String() }),
+          body: SignIn,
           response: { 200: Type.Object({ user: User }), 401: ErrorBody },
         },
       },
@@ -107,7 +102,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Change one's own settings",
           description:
             "Sets the signed-in User's display name, which Cronk names them by in place of their email or GitHub login; `null` or an empty one clears it. Sign-in still goes by the email and GitHub account. Names Cronk already wrote into Changes and stop reasons keep the name they had.",
-          body: Type.Object({ displayName: Type.Union([DisplayName, Type.Null()]) }),
+          body: MeEdit,
           response: { 200: Type.Object({ user: User }), 400: ErrorBody, 401: ErrorBody },
         },
       },
@@ -121,7 +116,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Sign-in"],
           summary: "Change one's own password",
           description: "Needs the current password. Ends every other sign-in of the User; this one stays.",
-          body: Type.Object({ currentPassword: Type.String(), newPassword: Password }),
+          body: PasswordChange,
           response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody },
         },
       },
@@ -139,7 +134,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "What a one-time link does",
           description:
             "Takes the secret from a join or reset link's fragment and says what using it will do, without using it.",
-          body: Type.Object({ token: Type.String() }),
+          body: LinkLookup,
           response: { 200: LinkDetails, 404: ErrorBody },
         },
       },
@@ -154,7 +149,7 @@ export function identityRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Use a one-time link",
           description:
             "A join link makes the User a member of its Workspace: it sets their password if they have none yet, and otherwise needs their current one (`wrong_password` if not). A reset link sets a new password and ends all the User's sign-ins. Either works once.",
-          body: Type.Object({ token: Type.String(), password: Password }),
+          body: LinkUse,
           response: { 200: Type.Object({ user: User }), 400: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

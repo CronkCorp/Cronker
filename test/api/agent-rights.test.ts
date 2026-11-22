@@ -107,6 +107,8 @@ describe("what an Agent may change", () => {
     expect(await response.json()).toEqual({
       id: expect.any(String),
       ticketId: ticket.id,
+      artifactId: null,
+      artifact: null,
       replyToId: comment.id,
       body: "On it.",
       actor: { kind: "agent", id: agent.id, name: "claude-max" },
@@ -115,6 +117,7 @@ describe("what an Agent may change", () => {
       questionId: null,
       sentBack: false,
       attachments: [],
+      avoidedWords: [],
     });
   });
 

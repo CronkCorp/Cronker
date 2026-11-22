@@ -19,7 +19,6 @@ import {
   type RelationKind,
   type Report,
   type Run,
-  type MentioningText,
   type Ticket,
   type TicketEdit,
   type TicketRef,
@@ -37,8 +36,10 @@ import { shortcutStandsAside } from "./keys.js";
 import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
-import { priorityLabel, QueueChip } from "./projects.js";
+import { MentionedIn } from "./mentioned-in.js";
+import { labelsOf, priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
+import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { fitWindow } from "./ui/fit-window.js";
@@ -318,7 +319,7 @@ export function TicketScreen({
           )}
         </div>
         <aside className="side side-fits-window" aria-label="Details" ref={fitWindow}>
-          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
+          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf([ticket, ...projectTickets])} onSave={save}>
             {ticket.verification && (
               <Verification
               ticket={ticket}
@@ -374,7 +375,7 @@ export function TicketScreen({
           />
           <MentionedIn texts={ticket.mentionedIn} />
           <FileList
-            attachments={[...attachments, ...comments.flatMap((c) => c.attachments), ...reportFiles]}
+            attachments={[...attachments, ...comments.filter((c) => c.artifactId === null).flatMap((c) => c.attachments), ...reportFiles]}
             onChanged={() => {
               loadAttachments();
               loadComments();
@@ -385,11 +386,6 @@ export function TicketScreen({
     </div>
   );
   return <ProjectAccessProvider access={project.access}>{page}</ProjectAccessProvider>;
-}
-
-/** Every Label used on the Project's Tickets, offered when picking Labels. */
-function labelsOf(tickets: TicketSummary[], ticket: Ticket): string[] {
-  return [...new Set([...ticket.labels, ...tickets.flatMap((t) => t.labels)])].sort((a, b) => a.localeCompare(b));
 }
 
 function TextFields({ ticket, onSave, onDone }: { ticket: Ticket; onSave: (edit: TicketEdit) => Promise<void>; onDone: () => void }) {
@@ -695,6 +691,7 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
+          <MovedOnDependents ticketId={ticket.id} open={reopening} />
           <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>
@@ -1172,52 +1169,7 @@ function Linked({
   );
 }
 
-const mentioningKinds: Record<MentioningText["kind"], string> = {
-  ticket: "Ticket",
-  comment: "Comment",
-  document: "Document",
-  report: "Report",
-  term: "Term",
-  decision: "Decision",
-};
-
-/** The page a text mentioning a Ticket is read on: a Comment's is its Ticket's. */
-function mentioningPage(to: Addresses, text: MentioningText): string {
-  switch (text.kind) {
-    case "ticket":
-    case "comment":
-      return to.ticket(text.ticket!);
-    case "document":
-    case "report":
-      return to.document({ slug: text.slug! });
-    case "term":
-      return to.term({ id: text.id, projectId: text.projectId, name: text.title });
-    case "decision":
-      return to.decision({ id: text.id, projectId: text.projectId, number: text.number! });
-  }
-}
-
-/** Mentioned in: each text whose Markdown mentions the Ticket's key, linked, with what kind of text it is. */
-function MentionedIn({ texts }: { texts: MentioningText[] }) {
-  const to = useAddresses();
-  if (texts.length === 0) return null;
-  return (
-    <section aria-label="Mentioned in" className="panel side-section">
-      <h2 className="side-title">Mentioned in</h2>
-      <ul aria-label="Mentioned in" className="side-list">
-        {texts.map((text) => (
-          <li key={`${text.kind}:${text.id}`}>
-            <KindLabel kind={mentioningKinds[text.kind]} />{" "}
-            {text.ticket && text.kind !== "report" && <span className="muted small">{text.ticket.key} </span>}
-            <Link to={mentioningPage(to, text)}>{text.title}</Link>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function CommentForm({
+export function CommentForm({
   label,
   button,
   placeholder,
@@ -1369,13 +1321,32 @@ interface RunStopped {
   why: "projectArchived";
 }
 
-/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
-function describedWithLink(change: Change): ReactNode {
-  const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
+/**
+ * What a `created` Change records for a Ticket imported from a GitHub issue: the issue's address and its author, a
+ * User as named then or, when no User has linked their account, their GitHub login. Imports before authors were
+ * kept record none.
+ */
+interface ImportedFrom {
+  source?: string;
+  url?: string;
+  author?: { id: string; name: string } | { login: string };
+}
+
+/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked, and its author. */
+export function describedWithLink(change: Change): ReactNode {
+  const imported = change.field === "created" ? (change.to as ImportedFrom | null) : null;
   if (imported?.source === "github" && typeof imported.url === "string") {
+    const author = imported.author;
     return (
       <>
         imported the Ticket from <ExternalLink url={imported.url}>its GitHub issue</ExternalLink>
+        {author && (
+          <>
+            {" "}
+            opened by{" "}
+            <Actor actor={"login" in author ? { kind: "github", name: `@${author.login} on GitHub` } : { kind: "user", name: author.name }} avatar={false} />
+          </>
+        )}
       </>
     );
   }
@@ -1733,8 +1704,11 @@ function Timeline({
   );
 }
 
-/** A Comment with its replies indented under it; a Question from an Agent shows in a warn box with its answer box. */
-function CommentThread({
+/**
+ * A Comment with its replies indented under it; a Question from an Agent shows in a warn box with its answer box. On a
+ * Ticket's timeline, a Comment on one of its Linked Artifacts names the Artifact; replies to it go to the Artifact.
+ */
+export function CommentThread({
   comment,
   comments,
   ticket,
@@ -1747,7 +1721,8 @@ function CommentThread({
 }: {
   comment: Comment;
   comments: Comment[];
-  ticket: Ticket;
+  /** The Ticket whose timeline it shows on; null on an Artifact's page. */
+  ticket: Ticket | null;
   user: User;
   runs: Run[];
   depth: number;
@@ -1765,9 +1740,11 @@ function CommentThread({
   const askedIn = question ? runs.find((r) => r.question === comment.body && r.questionBy === "agent") : undefined;
   const actor: ActorRef = comment.actor;
   const send = async (body: string) => {
-    onAdded(await api.comment(ticket.id, { body, replyToId: comment.id }));
+    const reply = { body, replyToId: comment.id };
+    onAdded(await (comment.artifactId ? api.commentOnArtifact(comment.artifactId, reply) : api.comment(comment.ticketId!, reply)));
     setReplying(false);
   };
+  const to = useAddresses();
   return (
     <article
       aria-label={`${question ? "Question from" : comment.sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
@@ -1775,7 +1752,13 @@ function CommentThread({
     >
       <p className="entry-head">
         {depth === 0 && <KindLabel kind={question ? "Question" : comment.sentBack ? "Sent back" : "Comment"} />}{" "}
-        <Actor actor={actor} avatar={depth > 0} /> <RelativeTime at={comment.createdAt} clock />
+        <Actor actor={actor} avatar={depth > 0} />{" "}
+        {depth === 0 && ticket && comment.artifact && (
+          <span className="muted small">
+            on <Link to={to.artifact(comment.artifact)}>{comment.artifact.title}</Link>{" "}
+          </span>
+        )}
+        <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}
       </p>
@@ -1814,7 +1797,7 @@ function CommentThread({
           label="Answer"
           button="Post answer"
           placeholder={`Answer ${comment.actor.name}…`}
-          hint={`The answer sends ${ticket.key} back to ${askedIn ? `the ${askedIn.step.name} Step` : "the Step that asked"}.`}
+          hint={`The answer sends ${ticket?.key ?? "the Ticket"} back to ${askedIn ? `the ${askedIn.step.name} Step` : "the Step that asked"}.`}
           onSend={send}
         />
       ) : replying ? (

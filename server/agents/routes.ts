@@ -8,7 +8,8 @@ import { requireMember } from "../workspaces/members.js";
 import { findWorkspace, Workspace } from "../workspaces/workspaces.js";
 import {
   Agent,
-  AgentName,
+  AgentCreate,
+  AgentEdit,
   agentsOf,
   createAgent,
   findAgent,
@@ -17,7 +18,8 @@ import {
   requireOwnAgent,
   setAgentRunner,
 } from "./agents.js";
-import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, tokensOf } from "./tokens.js";
+import { AgentRecord, agentRecord, defaultRecordLimit, maxRecordLimit } from "./record.js";
+import { AgentToken, IssuedToken, issueToken, revokeToken, TokenAccess, TokenIssue, tokensOf } from "./tokens.js";
 
 export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -49,7 +51,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Create an Agent of one's own",
           description: "The signed-in User becomes the Agent's Owner. Refused with `agent_name_taken` if the Workspace has an Agent of that name.",
           params: Type.Object({ workspaceId: Type.String() }),
-          body: Type.Object({ name: AgentName }),
+          body: AgentCreate,
           response: { 201: Agent, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -72,10 +74,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Changes whichever of name and Runner are given. Only the Agent's Owner can change it (`not_owner` otherwise), " +
             "and only to one of their own Runners (`unknown_runner` otherwise).",
           params: AgentParams,
-          body: Type.Object({
-            name: Type.Optional(AgentName),
-            runnerId: Type.Optional(Type.Union([Type.Null(), Type.String({ format: "uuid" })])),
-          }),
+          body: AgentEdit,
           response: { 200: Agent, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -111,6 +110,34 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
     );
 
     app.get(
+      "/api/agents/:agentId/record",
+      {
+        schema: {
+          tags: ["Agents"],
+          summary: "An Agent's Record",
+          description:
+            "Everything the Agent did across its Workspace, newest first, in pages: its Runs, the Changes recorded as its, " +
+            "its Comments on Tickets and Artifacts, the Versions it saved of Documents, Reports, Terms, Decisions and " +
+            "Artifacts, and its Transcripts of sessions outside a Run. Any member sees any Agent's Record, each entry " +
+            "left out unless they can read where it is; it stays after the Agent is removed. Pass `next` as `before` " +
+            "for the next, older page.",
+          params: AgentParams,
+          querystring: Type.Object({
+            before: Type.Optional(Type.String({ minLength: 1, description: "The `next` of the page before." })),
+            limit: Type.Optional(
+              Type.Integer({ minimum: 1, maximum: maxRecordLimit, default: defaultRecordLimit, description: "Entries per page." }),
+            ),
+          }),
+          response: { 200: AgentRecord, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        return agentRecord(context, caller, request.params.agentId, request.query);
+      },
+    );
+
+    app.get(
       "/api/agents/:agentId/tokens",
       {
         schema: {
@@ -136,10 +163,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "A full token acts as the Agent; a read-only one may only read. The secret is in this response only: Cronk keeps just its hash.",
           params: AgentParams,
-          body: Type.Object({
-            name: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S", description: "Where it's used, such as `laptop`." }),
-            access: TokenAccess,
-          }),
+          body: TokenIssue,
           response: { 201: IssuedToken, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

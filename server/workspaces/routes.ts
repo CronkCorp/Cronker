@@ -2,7 +2,7 @@ import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
-import { Email, User } from "../identity/user.js";
+import { User } from "../identity/user.js";
 import {
   AddedMember,
   cancelPendingAdd,
@@ -13,6 +13,9 @@ import {
   membersOf,
   PendingAdd,
   pendingAddsOf,
+  MemberAdd,
+  MemberAddByGitHub,
+  MemberEdit,
   removeMember,
   requireAdmin,
   requireMember,
@@ -28,13 +31,14 @@ import {
   renameWorkspace,
   settingsOf,
   Workspace,
-  WorkspaceName,
+  WorkspaceCreate,
+  WorkspaceRename,
   WorkspaceSettings,
+  WorkspaceSettingsEdit,
   ModelId,
 } from "./workspaces.js";
 import { Link } from "../identity/links.js";
-import { WorkspaceSlug } from "./slugs.js";
-import { modelIdsOf, ModelLabel, removeModelId, saveModelId } from "./model-ids.js";
+import { modelIdsOf, ModelIdSave, ModelLabel, removeModelId, saveModelId } from "./model-ids.js";
 
 export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db, clock } = context;
@@ -49,7 +53,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Any signed-in User may create a Workspace, and becomes its Admin. Its slug, the Workspace's name in web " +
             "addresses, is the one given (`workspace_slug_taken` when another Workspace has it), or else one made " +
             "from its name; it never changes.",
-          body: Type.Object({ name: WorkspaceName, slug: Type.Optional(WorkspaceSlug) }),
+          body: WorkspaceCreate,
           response: { 201: Membership, 400: ErrorBody, 401: ErrorBody, 409: ErrorBody },
         },
       },
@@ -84,7 +88,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Workspaces"],
           summary: "Rename a Workspace (Admins only)",
           params: Type.Object({ workspaceId: Type.String() }),
-          body: Type.Object({ name: WorkspaceName }),
+          body: WorkspaceRename,
           response: { 200: Workspace, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -121,7 +125,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Change a Workspace's settings (Admins only)",
           description: "Changes whichever settings are given, such as the lost-Run threshold.",
           params: Type.Object({ workspaceId: Type.String() }),
-          body: Type.Partial(WorkspaceSettings),
+          body: WorkspaceSettingsEdit,
           response: { 200: WorkspaceSettings, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -164,7 +168,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Adds the label, or changes the one matching it ignoring case, which then takes this spelling.",
           params: ModelIdParams,
-          body: Type.Object({ modelId: ModelId.properties.modelId }),
+          body: ModelIdSave,
           response: { 200: ModelId, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -260,7 +264,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Gives a one-time link, valid 7 days, for the Admin to pass on. Using it joins the User: a new User sets their password with it, and one who can already sign in gives theirs.",
           params: Type.Object({ workspaceId: Type.String() }),
-          body: Type.Object({ email: Email }),
+          body: MemberAdd,
           response: { 201: AddedMember, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -280,7 +284,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Creates a User for that GitHub account if no User has it yet. They join the Workspace at their next sign-in with GitHub. Refused with `github_not_set_up` while the installation has no GitHub App, and `unknown_github_login` if GitHub has no such account.",
           params: Type.Object({ workspaceId: Type.String() }),
-          body: Type.Object({ login: Type.String({ minLength: 1, maxLength: 39, pattern: "^[A-Za-z0-9-]+$" }) }),
+          body: MemberAddByGitHub,
           response: {
             201: Type.Object({ user: User }),
             401: ErrorBody,
@@ -309,7 +313,7 @@ export function workspaceRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Make a member Admin or not (Admins only)",
           description: "Refused with `last_admin` if it would leave the Workspace without an Admin.",
           params: MemberParams,
-          body: Type.Object({ isAdmin: Type.Boolean() }),
+          body: MemberEdit,
           response: { 200: Member, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

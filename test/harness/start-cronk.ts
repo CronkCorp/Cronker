@@ -13,6 +13,7 @@ import { startStandInClaude, type StandInClaude } from "./claude.js";
 import { startStandInGitHub, type StandInGitHub } from "./github.js";
 import { startStandInManagedAgents, type StandInManagedAgents } from "./managed-agents.js";
 import { FakeRunner } from "./runner.js";
+import { startStandInWebhookReceiver, type StandInWebhookReceiver } from "./webhook-receiver.js";
 
 /**
  * Starts Cronk in-process against its own disposable database, with the clock
@@ -41,6 +42,8 @@ export interface StartedCronk {
   claude: StandInClaude;
   /** The stand-in Managed Agents API the `managed_agents` Runner creates agents, vaults and sessions with. */
   managedAgents: StandInManagedAgents;
+  /** A stand-in webhook receiver on 127.0.0.1, which records what Cronk delivers to it and can fail on cue. */
+  webhooks: StandInWebhookReceiver;
   /** The fake Runner, installed as the Runner kind `fake`: what it was asked to start, and what to do next. */
   runner: FakeRunner;
   clock: TestClock;
@@ -63,6 +66,8 @@ export interface StartedCronk {
   checkQueue(): Promise<void>;
   /** Reads the next page of issues of each running GitHub issues import, as the server does every five seconds. */
   runImports(): Promise<void>;
+  /** Sends the webhook deliveries that are due, as the server does every five seconds; move the clock first. */
+  deliverWebhooks(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -136,6 +141,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   const github = await startStandInGitHub(clock);
   const claude = await startStandInClaude();
   const managedAgents = await startStandInManagedAgents();
+  const webhooks = await startStandInWebhookReceiver();
   const runner = new FakeRunner();
   const logs: LogLine[] = [];
   const logStream = new Writable({
@@ -195,7 +201,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
   try {
     cronk = await boot(options.migrateBefore);
   } catch (error) {
-    await Promise.all([database.drop(), github.stop(), claude.stop(), managedAgents.stop(), removeAttachments()]);
+    await Promise.all([database.drop(), github.stop(), claude.stop(), managedAgents.stop(), webhooks.stop(), removeAttachments()]);
     throw error;
   }
 
@@ -206,6 +212,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     github,
     claude,
     managedAgents,
+    webhooks,
     runner,
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),
@@ -216,6 +223,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     checkMergeability: () => cronk.checkMergeability(),
     checkQueue: () => cronk.checkQueue(),
     runImports: () => cronk.runImports(),
+    deliverWebhooks: () => cronk.deliverWebhooks(),
     logs,
     setupCode() {
       const line = logs.findLast((l) => typeof l.setupCode === "string");
@@ -262,7 +270,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
       // A test's afterEach may stop this Cronk again when the next test's start failed: the second stop does nothing.
       stopped ??= (async () => {
         if (!closed) await cronk.close();
-        await Promise.all([database.drop(), github.stop(), claude.stop(), managedAgents.stop(), removeAttachments()]);
+        await Promise.all([database.drop(), github.stop(), claude.stop(), managedAgents.stop(), webhooks.stop(), removeAttachments()]);
       })();
       return stopped;
     },

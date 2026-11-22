@@ -59,6 +59,10 @@ export async function repositoriesOf({ db }: Context, viewer: Viewer, projectId:
  * is asked afresh which Repositories that is, so a list kept from before can't add one the App
  * no longer reads, nor refuse one just installed.
  */
+/** The add-a-Repository route's body. */
+export const RepositoryAdd = Type.Object({ id: Type.Integer({ minimum: 1, description: "GitHub's id for the Repository." }) });
+export type RepositoryAdd = Static<typeof RepositoryAdd>;
+
 export async function addRepository(context: Context, userId: string, projectId: string, repositoryId: number): Promise<Repository> {
   const viewer = userViewer(userId);
   const found = await findProject(context.db, viewer, projectId);

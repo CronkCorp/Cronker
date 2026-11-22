@@ -179,7 +179,7 @@ describe("Reports", () => {
       createdAt: "2026-01-01T09:00:00.000Z",
       mentions: [],
     };
-    expect(written.json).toEqual(findings);
+    expect(written.json).toEqual({ ...findings, avoidedWords: [] });
     const reports = await ok("GET", `/api/tickets/${ticket.id}/reports`, ada);
     expect(reports).toEqual([
       findings,

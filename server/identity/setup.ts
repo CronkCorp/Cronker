@@ -1,11 +1,12 @@
 import type { FastifyBaseLogger } from "fastify";
+import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
 import { transaction, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { hashPassword } from "./passwords.js";
 import { hashSecret, issueSecret, secretMatches } from "./secrets.js";
-import { userColumns, type User } from "./user.js";
-import { insertWorkspace, type Workspace } from "../workspaces/workspaces.js";
+import { Email, Password, userColumns, type User } from "./user.js";
+import { insertWorkspace, WorkspaceName, type Workspace } from "../workspaces/workspaces.js";
 
 /**
  * Setup turns a fresh installation into one with its first User and Workspace.
@@ -34,12 +35,14 @@ export async function issueSetupCode(db: Db, log: FastifyBaseLogger): Promise<vo
   log.info({ setupCode: code }, `Cronk is not set up yet. Open it and enter this setup code: ${code}`);
 }
 
-export interface SetupInput {
-  setupCode: string;
-  email: string;
-  password: string;
-  workspaceName: string;
-}
+/** The set-up route's body: the setup code from Cronk's log, the first User and their first Workspace. */
+export const SetupInput = Type.Object({
+  setupCode: Type.String(),
+  email: Email,
+  password: Password,
+  workspaceName: WorkspaceName,
+});
+export type SetupInput = Static<typeof SetupInput>;
 
 export interface SetupResult {
   user: User;

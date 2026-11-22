@@ -53,7 +53,7 @@ export const Document = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
 });
 export type Document = Static<typeof Document>;
 
@@ -581,4 +581,13 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
     if (isInPageTree(document)) await shiftSiblings(tx, document, document.parentId, document.position + 1, -1);
     documentChanged(live, tx, document);
   });
+}
+
+/** Where a saved Document, or Report, is kept: its page tree's Project or Workspace, a Report's being its Ticket's Project. */
+export async function placeOfDocument(db: Db, documentId: string): Promise<Place> {
+  const { rows } = await db.query<Place>(
+    `select workspace_id as "workspaceId", project_id as "projectId" from documents where id = $1`,
+    [documentId],
+  );
+  return rows[0]!;
 }

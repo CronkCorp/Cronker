@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { minutes } from "../harness/clock.js";
-import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { addMember, createGitHubApp, linkGitHub, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -60,6 +60,20 @@ async function ticketsOf(cookie: string, projectId: string) {
   return response.json();
 }
 
+async function commentsOf(cookie: string, ticketId: string) {
+  const response = await cronk.request("GET", `/api/tickets/${ticketId}/comments`, { cookie });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+/** A member of the Workspace who has linked a GitHub account, and the account. */
+async function memberWithGitHub(cookie: string, workspaceId: string, email: string, login: string) {
+  const member = await addMember(cronk, cookie, workspaceId, email);
+  const account = cronk.github.account(login);
+  await linkGitHub(cronk, member.cookie, account);
+  return { ...member, account };
+}
+
 async function timelineOf(cookie: string, ticketId: string) {
   const response = await cronk.request("GET", `/api/tickets/${ticketId}/timeline`, { cookie });
   expect(response.status).toBe(200);
@@ -107,7 +121,7 @@ describe("importing a Repository's GitHub issues", () => {
         actor: expect.objectContaining({ kind: "user", id: user.id }),
         at: created.toISOString(),
         from: null,
-        to: { source: "github", url: `${cronk.github.url}/cronkcorp/cronker/issues/1` },
+        to: { source: "github", url: `${cronk.github.url}/cronkcorp/cronker/issues/1`, author: { login: "octocat" } },
       }),
     ]);
   });
@@ -292,5 +306,404 @@ describe("importing a Repository's GitHub issues", () => {
 
     cronk.clock.advance(minutes(2));
     expect(await runImportsToEnd(cookie, project.id, repository.id)).toMatchObject({ state: "done", imported: 1, waitingUntil: null });
+  });
+});
+
+async function relationsOf(cookie: string, ticketId: string) {
+  const response = await cronk.request("GET", `/api/tickets/${ticketId}/relations`, { cookie });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+async function ticketsByTitle(cookie: string, projectId: string) {
+  const tickets = await ticketsOf(cookie, projectId);
+  return Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+}
+
+const keysOf = (refs: { key: string }[]) => refs.map((r) => r.key);
+
+describe("an import keeps the issues' structure", () => {
+  test("sub-issues become Sub-Tickets of their parent's Ticket, wherever the parent comes in the list", async () => {
+    const { cookie, user, repository, project } = await projectListingRepository();
+    const early = cronk.github.issue(repository, { title: "Early child", createdAt: new Date("2024-01-01T00:00:00Z") });
+    const parent = cronk.github.issue(repository, { title: "Parent", createdAt: new Date("2024-01-02T00:00:00Z") });
+    cronk.github.issue(repository, { title: "Late child", parent, createdAt: new Date("2024-01-03T00:00:00Z") });
+    early.parent = parent;
+    cronk.github.issue(repository, { title: "Alone", createdAt: new Date("2024-01-04T00:00:00Z") });
+
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ state: "running", phase: "linking", imported: 4 });
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", phase: "linking", imported: 4 });
+    const byTitle = await ticketsByTitle(cookie, project.id);
+    expect(byTitle["Early child"].parentId).toBe(byTitle["Parent"].id);
+    expect(byTitle["Late child"].parentId).toBe(byTitle["Parent"].id);
+    expect(byTitle["Alone"].parentId).toBeNull();
+    expect(keysOf((await relationsOf(cookie, byTitle["Parent"].id)).subTickets).sort()).toEqual(["CRONK-1", "CRONK-3"]);
+    // Only the issue GitHub says has sub-issues is asked about them.
+    expect(cronk.github.linkRequests).toEqual([`cronkcorp/cronker#${parent.number}/sub_issues`]);
+    expect(byTitle["Early child"]).toMatchObject({ delegateId: null, assigneeId: null, autonomousDelegation: null, lastRun: null });
+
+    const childTimeline = await timelineOf(cookie, byTitle["Early child"].id);
+    expect(childTimeline.map((c: { field: string }) => c.field)).toEqual(["created", "parent"]);
+    expect(childTimeline[1]).toMatchObject({ actor: expect.objectContaining({ id: user.id }), to: expect.objectContaining({ key: "CRONK-2" }) });
+    const parentTimeline = await timelineOf(cookie, byTitle["Parent"].id);
+    expect(parentTimeline.filter((c: { field: string }) => c.field === "subTicket")).toHaveLength(2);
+  });
+
+  test("issue dependencies become blocks between the Tickets", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const blocked = cronk.github.issue(repository, { title: "Blocked", createdAt: new Date("2024-01-01T00:00:00Z") });
+    const blocker = cronk.github.issue(repository, { title: "Blocker", createdAt: new Date("2024-01-02T00:00:00Z") });
+    const other = cronk.github.issue(repository, { title: "Other blocker", state: "closed", stateReason: "completed", createdAt: new Date("2024-01-03T00:00:00Z") });
+    blocked.blockedBy = [blocker, other];
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const byTitle = await ticketsByTitle(cookie, project.id);
+    const relations = (await relationsOf(cookie, byTitle["Blocked"].id)).relations;
+    expect(relations.map((r: { kind: string; ticket: { key: string } }) => [r.kind, r.ticket.key])).toEqual([
+      ["blockedBy", "CRONK-2"],
+      ["blockedBy", "CRONK-3"],
+    ]);
+    expect((await relationsOf(cookie, byTitle["Blocker"].id)).relations).toEqual([
+      expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-1" }) }),
+    ]);
+    const timeline = await timelineOf(cookie, byTitle["Blocker"].id);
+    expect(timeline.map((c: { field: string }) => c.field)).toEqual(["created", "blocks"]);
+  });
+
+  test("#123 in titles and bodies becomes the imported Ticket's key, so it is a Mention; others stay as written", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, { title: "Pull Request #3 and issue #4", body: null, createdAt: new Date("2024-01-01T00:00:00Z") });
+    cronk.github.issue(repository, {
+      title: "Follow-up to #4",
+      body: [
+        "Comes after #4, see also #1.",
+        "",
+        "Not `#4` in code, not cronkcorp/other#4, not [#4](https://example.com), not #99 and not https://example.com/#4.",
+        "",
+        "```",
+        "#4",
+        "```",
+      ].join("\n"),
+      createdAt: new Date("2024-01-02T00:00:00Z"),
+    });
+    cronk.github.issue(repository, { title: "A Pull Request", pullRequest: true, createdAt: new Date("2024-01-03T00:00:00Z") });
+    cronk.github.issue(repository, { title: "Fourth", body: "Plain.", createdAt: new Date("2024-01-04T00:00:00Z") });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byKey = Object.fromEntries(tickets.map((t: { key: string }) => [t.key, t]));
+    // Issue 4 became CRONK-3, as Pull Request 3 made no Ticket.
+    expect(byKey["CRONK-1"].title).toBe("Pull Request #3 and issue CRONK-3");
+    expect(byKey["CRONK-2"].title).toBe("Follow-up to CRONK-3");
+    expect(byKey["CRONK-2"].description).toBe(
+      [
+        "Comes after CRONK-3, see also CRONK-1.",
+        "",
+        "Not `#4` in code, not cronkcorp/other#4, not [#4](https://example.com), not #99 and not https://example.com/#4.",
+        "",
+        "```",
+        "#4",
+        "```",
+      ].join("\n"),
+    );
+    const detail = await (await cronk.request("GET", `/api/tickets/${byKey["CRONK-2"].id}`, { cookie })).json();
+    expect(detail.mentions.map((m: { key: string }) => m.key)).toEqual(["CRONK-3", "CRONK-1"]);
+    // Rewriting is part of importing, so it adds nothing to the timeline.
+    expect((await timelineOf(cookie, byKey["CRONK-2"].id)).map((c: { field: string }) => c.field)).toEqual(["created"]);
+  });
+
+  test("a later run links new issues to Tickets imported before, leaving the old ones' own structure alone", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const parent = cronk.github.issue(repository, { title: "Old parent", createdAt: new Date("2024-01-01T00:00:00Z") });
+    const blocker = cronk.github.issue(repository, { title: "Old blocker", createdAt: new Date("2024-01-02T00:00:00Z") });
+    const loner = cronk.github.issue(repository, { title: "Old loner", createdAt: new Date("2024-01-03T00:00:00Z") });
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    cronk.github.issue(repository, { title: "New child of #1", parent, createdAt: new Date("2024-02-01T00:00:00Z") });
+    cronk.github.issue(repository, { title: "New blocked", blockedBy: [blocker], createdAt: new Date("2024-02-02T00:00:00Z") });
+    // Linked on GitHub between two old issues since the first run: that structure is the old Tickets' own.
+    loner.blockedBy = [blocker];
+    await startImport(cookie, project.id, repository.id);
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", imported: 2, skipped: 3 });
+    const byTitle = await ticketsByTitle(cookie, project.id);
+    expect(byTitle["New child of CRONK-1"].parentId).toBe(byTitle["Old parent"].id);
+    expect((await relationsOf(cookie, byTitle["New blocked"].id)).relations).toEqual([
+      expect.objectContaining({ kind: "blockedBy", ticket: expect.objectContaining({ key: "CRONK-2" }) }),
+    ]);
+    expect((await relationsOf(cookie, byTitle["Old loner"].id)).relations).toEqual([]);
+  });
+
+  test("a linking pass GitHub can't answer is linked again whole, making no Relation or Change twice", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const parent = cronk.github.issue(repository, { title: "Parent", createdAt: new Date("2024-01-01T00:00:00Z") });
+    const blocker = cronk.github.issue(repository, { title: "Blocker", createdAt: new Date("2024-01-02T00:00:00Z") });
+    cronk.github.issue(repository, { title: "Child", parent, blockedBy: [blocker], createdAt: new Date("2024-01-03T00:00:00Z") });
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+
+    // GitHub answers the parent's sub-issues, then fails on the child's blockers, after the pass made the Sub-Ticket.
+    cronk.github.linksFail = (asked) => asked.endsWith("/dependencies/blocked_by");
+    await expect(cronk.runImports()).rejects.toThrow(/answered 502/);
+    expect(cronk.github.linkRequests).toEqual(["cronkcorp/cronker#1/sub_issues", "cronkcorp/cronker#3/dependencies/blocked_by"]);
+    expect((await ticketsByTitle(cookie, project.id))["Child"].parentId).toBeNull();
+    cronk.github.linksFail = null;
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done" });
+    const byTitle = await ticketsByTitle(cookie, project.id);
+    expect(byTitle["Child"].parentId).toBe(byTitle["Parent"].id);
+    expect((await relationsOf(cookie, byTitle["Child"].id)).relations).toHaveLength(1);
+    expect((await timelineOf(cookie, byTitle["Child"].id)).map((c: { field: string }) => c.field)).toEqual(["created", "parent", "blockedBy"]);
+    expect((await timelineOf(cookie, byTitle["Parent"].id)).map((c: { field: string }) => c.field)).toEqual(["created", "subTicket"]);
+  });
+
+  test("a linking pass GitHub rate-limits waits until the limit lifts, then links the rest, making nothing twice", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const parent = cronk.github.issue(repository, { title: "Parent", createdAt: new Date("2024-01-01T00:00:00Z") });
+    const blocker = cronk.github.issue(repository, { title: "Blocker", createdAt: new Date("2024-01-02T00:00:00Z") });
+    cronk.github.issue(repository, { title: "Child", parent, blockedBy: [blocker], createdAt: new Date("2024-01-03T00:00:00Z") });
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+
+    // GitHub answers the parent's sub-issues, then runs out of requests as the pass asks for the child's blockers.
+    const lifts = new Date(cronk.clock.now().getTime() + minutes(10));
+    cronk.github.linksFail = (asked) => {
+      if (asked.endsWith("/dependencies/blocked_by")) cronk.github.rateLimitLinks(lifts);
+      return false;
+    };
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({
+      state: "running",
+      phase: "linking",
+      waitingUntil: lifts.toISOString(),
+    });
+    expect((await ticketsByTitle(cookie, project.id))["Child"].parentId).not.toBeNull();
+    cronk.github.linksFail = null;
+    const asked = cronk.github.linkRequests.length;
+    cronk.clock.advance(minutes(9));
+    await cronk.runImports();
+    expect(cronk.github.linkRequests).toHaveLength(asked);
+
+    cronk.clock.advance(minutes(1));
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", waitingUntil: null });
+    const byTitle = await ticketsByTitle(cookie, project.id);
+    expect(byTitle["Child"].parentId).toBe(byTitle["Parent"].id);
+    expect((await relationsOf(cookie, byTitle["Child"].id)).relations).toHaveLength(1);
+    expect((await timelineOf(cookie, byTitle["Child"].id)).map((c: { field: string }) => c.field)).toEqual(["created", "parent", "blockedBy"]);
+    expect((await timelineOf(cookie, byTitle["Parent"].id)).map((c: { field: string }) => c.field)).toEqual(["created", "subTicket"]);
+  });
+
+  test("an import with nothing to link ends with its last page", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, { title: "Plain" });
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ state: "done", phase: "issues" });
+    expect(cronk.github.linkRequests).toEqual([]);
+  });
+});
+
+describe("importing an issue's Comments and people", () => {
+  test("each Comment comes in as a Comment, in order, at GitHub's time", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const stranger = cronk.github.account("stranger");
+    const times = [new Date("2024-03-02T09:00:00Z"), new Date("2024-03-02T10:00:00Z"), new Date("2024-03-03T08:30:00Z")];
+    cronk.github.issue(repository, {
+      title: "Open bug",
+      createdAt: new Date("2024-03-01T10:00:00Z"),
+      comments: times.map((createdAt, n) => ({ author: stranger, body: `Comment ${n + 1}`, createdAt })),
+    });
+    cronk.github.issue(repository, { title: "Quiet", createdAt: new Date("2024-03-04T10:00:00Z") });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byTitle = Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+    const comments = await commentsOf(cookie, byTitle["Open bug"].id);
+    expect(comments.map((c: { body: string; createdAt: string }) => [c.body, c.createdAt])).toEqual(
+      times.map((at, n) => [`Comment ${n + 1}`, at.toISOString()]),
+    );
+    expect(comments.every((c: { sentBack: boolean; replyToId: string | null }) => !c.sentBack && c.replyToId === null)).toBe(true);
+    expect(await commentsOf(cookie, byTitle["Quiet"].id)).toEqual([]);
+  });
+
+  test("an issue with more Comments than one page brings them all", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, {
+      comments: Array.from({ length: 130 }, (_, n) => ({ author: null, body: `Comment ${n + 1}`, createdAt: new Date(Date.UTC(2024, 0, 1, 0, n)) })),
+    });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const [ticket] = await ticketsOf(cookie, project.id);
+    const comments = await commentsOf(cookie, ticket.id);
+    expect(comments).toHaveLength(130);
+    expect([comments[0].body, comments[129].body]).toEqual(["Comment 1", "Comment 130"]);
+  });
+
+  test("authors are matched to Users by linked GitHub account; others show as their login on GitHub", async () => {
+    const { workspace, cookie, user, repository, project } = await projectListingRepository();
+    const grace = await memberWithGitHub(cookie, workspace.id, "grace@example.com", "grace");
+    const stranger = cronk.github.account("stranger");
+    const at = new Date("2024-03-02T09:00:00Z");
+    cronk.github.issue(repository, {
+      title: "By Grace",
+      author: grace.account,
+      comments: [
+        { author: stranger, body: "Me too", createdAt: at },
+        { author: grace.account, body: "Thanks", createdAt: new Date("2024-03-02T10:00:00Z") },
+        { author: null, body: "Gone", createdAt: new Date("2024-03-02T11:00:00Z") },
+      ],
+    });
+    cronk.github.issue(repository, { title: "By a stranger", author: stranger });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byTitle = Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+    expect(byTitle["By Grace"].createdBy).toBe(grace.user.id);
+    expect(byTitle["By a stranger"].createdBy).toBe(user.id);
+
+    const [graces] = await timelineOf(cookie, byTitle["By Grace"].id);
+    expect(graces).toMatchObject({ actor: { kind: "user", id: user.id }, to: { author: { id: grace.user.id, name: "grace@example.com" } } });
+    const [strangers] = await timelineOf(cookie, byTitle["By a stranger"].id);
+    expect(strangers).toMatchObject({ actor: { kind: "user", id: user.id }, to: { author: { login: "stranger" } } });
+
+    const comments = await commentsOf(cookie, byTitle["By Grace"].id);
+    expect(comments.map((c: { actor: unknown }) => c.actor)).toEqual([
+      { kind: "github", login: "stranger", name: "@stranger on GitHub" },
+      expect.objectContaining({ kind: "user", id: grace.user.id }),
+      { kind: "github", login: "ghost", name: "@ghost on GitHub" },
+    ]);
+  });
+
+  test("a GitHub account whose User isn't a member of the Workspace counts as having no User", async () => {
+    const { workspace, cookie, user, repository, project } = await projectListingRepository();
+    const bea = await memberWithGitHub(cookie, workspace.id, "bea@example.com", "bea");
+    const removed = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
+    expect(removed.status, await removed.clone().text()).toBeLessThan(300);
+    cronk.github.issue(repository, {
+      author: bea.account,
+      assignees: [bea.account],
+      comments: [{ author: bea.account, body: "Hi", createdAt: new Date("2024-03-02T09:00:00Z") }],
+    });
+
+    await startImport(cookie, project.id, repository.id);
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    const [ticket] = await ticketsOf(cookie, project.id);
+    expect(ticket).toMatchObject({ createdBy: user.id, assigneeId: null });
+    const [comment] = await commentsOf(cookie, ticket.id);
+    expect(comment.actor).toEqual({ kind: "github", login: "bea", name: "@bea on GitHub" });
+    expect(ended.unmatchedAuthors).toEqual(["bea"]);
+  });
+
+  test("the first assignee with a User becomes the Assignee; assignees with none are dropped and no User is created", async () => {
+    const { workspace, cookie, user, repository, project } = await projectListingRepository();
+    const grace = await memberWithGitHub(cookie, workspace.id, "grace@example.com", "grace");
+    const hal = await memberWithGitHub(cookie, workspace.id, "hal@example.com", "hal");
+    const stranger = cronk.github.account("stranger");
+    const membersBefore = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    cronk.github.issue(repository, { title: "Shared", assignees: [stranger, grace.account, hal.account] });
+    cronk.github.issue(repository, { title: "Stranger's", assignees: [stranger] });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byTitle = Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+    expect(byTitle["Shared"]).toMatchObject({ assigneeId: grace.user.id, delegateId: null });
+    expect(byTitle["Stranger's"]).toMatchObject({ assigneeId: null });
+    const timeline = await timelineOf(cookie, byTitle["Shared"].id);
+    expect(timeline.map((c: { field: string }) => c.field)).toEqual(["created", "assignee"]);
+    expect(timeline[1]).toMatchObject({ actor: { kind: "user", id: user.id }, from: null, to: { id: grace.user.id } });
+    const membersAfter = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(membersAfter).toEqual(membersBefore);
+  });
+
+  test("the summary lists the authors with no User, once each, alphabetical, across pages and runs", async () => {
+    const { workspace, cookie, repository, project } = await projectListingRepository();
+    const grace = await memberWithGitHub(cookie, workspace.id, "grace@example.com", "grace");
+    const zed = cronk.github.account("zed");
+    const amy = cronk.github.account("amy");
+    const assigned = cronk.github.account("assigned");
+    for (let n = 1; n <= 101; n++) {
+      cronk.github.issue(repository, {
+        author: n === 101 ? amy : grace.account,
+        assignees: [assigned],
+        createdAt: new Date(Date.UTC(2024, 0, 1, 0, n)),
+        comments: n === 1 ? [{ author: zed, body: "First", createdAt: new Date(Date.UTC(2024, 0, 2)) }] : [],
+      });
+    }
+
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ state: "running", unmatchedAuthors: ["zed"] });
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", imported: 101, unmatchedAuthors: ["amy", "zed"] });
+  });
+
+  test("importing again adds no Comments to Tickets imported before", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const issue = cronk.github.issue(repository, { comments: [{ author: null, body: "First", createdAt: new Date("2024-03-02T09:00:00Z") }] });
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    issue.comments.push({ author: null, body: "Second", createdAt: new Date("2024-03-03T09:00:00Z") });
+    await startImport(cookie, project.id, repository.id);
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ imported: 0, skipped: 1 });
+    const [ticket] = await ticketsOf(cookie, project.id);
+    expect((await commentsOf(cookie, ticket.id)).map((c: { body: string }) => c.body)).toEqual(["First"]);
+  });
+
+  test("an import whose Comments GitHub rate-limits waits, keeping nothing of the page, then brings them all", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, { title: "First", comments: [{ author: null, body: "Hi", createdAt: new Date("2024-03-02T09:00:00Z") }] });
+    cronk.github.issue(repository, { title: "Second", comments: [{ author: null, body: "Yo", createdAt: new Date("2024-03-03T09:00:00Z") }] });
+    await startImport(cookie, project.id, repository.id);
+
+    const lifts = new Date(cronk.clock.now().getTime() + minutes(5));
+    cronk.github.rateLimitIssues(lifts, { only: "comments" });
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ state: "running", imported: 0, waitingUntil: lifts.toISOString() });
+    expect(await ticketsOf(cookie, project.id)).toEqual([]);
+
+    cronk.clock.advance(minutes(5));
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", imported: 2, waitingUntil: null });
+    for (const ticket of await ticketsOf(cookie, project.id)) expect(await commentsOf(cookie, ticket.id)).toHaveLength(1);
+  });
+
+  test("an import GitHub stops letting read an issue's Comments fails, keeping nothing of that page", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, { title: "Readable" });
+    cronk.github.issue(repository, { title: "Hidden", commentsRefused: true });
+    await startImport(cookie, project.id, repository.id);
+
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "failed", imported: 0, error: expect.stringMatching(/Comments of cronkcorp\/cronker#2/) });
+    expect(await ticketsOf(cookie, project.id)).toEqual([]);
   });
 });

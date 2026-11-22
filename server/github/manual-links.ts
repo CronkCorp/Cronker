@@ -1,3 +1,4 @@
+import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
@@ -31,6 +32,12 @@ export function parsePullRequest(text: string): { repository: string; number: nu
 }
 
 /** Links a Pull Request to a Ticket by hand, as the User; linking one already linked by hand changes nothing. */
+/** The link-a-Pull-Request-by-hand route's body. */
+export const PullRequestLink = Type.Object({
+  pullRequest: Type.String({ minLength: 1, maxLength: 500, description: "Its address on GitHub, or `owner/name#number`." }),
+});
+export type PullRequestLink = Static<typeof PullRequestLink>;
+
 export async function linkPullRequest(context: Context, userId: string, ticketId: string, text: string): Promise<PullRequest> {
   const named = parsePullRequest(text);
   const viewer = userViewer(userId);
