@@ -19,7 +19,7 @@ What a web address, the HTTP API and the MCP tools name a thing by in place of i
 _Avoid_: Alias, handle, permalink
 
 **Project**:
-The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived.
+The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived. Meanwhile its Tickets leave the Inbox and its work is left out of search unless the search names the Project.
 _Avoid_: Board, space, repo
 
 ### Work
@@ -103,6 +103,10 @@ _Avoid_: Event, activity, history entry, audit log
 **Inbox**:
 A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions, Tickets waiting for their review and Discovered Tickets. An Admin's also holds the Tickets of Users removed from the Workspace or who lost Write in their Project, until someone assigns them.
 _Avoid_: Notifications, review queue, to-do
+
+**Webhook**:
+A User's own channel for their Inbox in one Workspace: a name, a URL and the Inbox kinds it gets (by default Questions, *needs you* and Runs gone wrong). Cronk sends it a JSON delivery per item, signed with the webhook's secret as Standard Webhooks lays out. Only its User sees or changes it; Agents never do. Removing the User from the Workspace removes their webhooks there.
+_Avoid_: Notification, subscription, hook, integration
 
 **Brief**:
 The instructions a Run starts from: Cronk's fixed preamble, then the Step's own text, then the Ticket's key. The agent reads the Ticket itself over MCP.
