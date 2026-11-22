@@ -19,6 +19,7 @@ import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
+import { deliverWebhooks } from "./webhooks/webhooks.js";
 
 export interface CronkOptions {
   config: Config;
@@ -45,6 +46,8 @@ export interface Cronk {
   replayFailedDeliveries(): Promise<void>;
   /** Asks GitHub whether the Pull Requests waiting on a mergeability check conflict, sending conflicting ones' Tickets back. */
   checkMergeability(): Promise<void>;
+  /** Sends the webhook deliveries that are due. */
+  deliverWebhooks(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -94,6 +97,7 @@ export async function createCronk({
       resumePausedRunners: () => resumePausedRunners(context),
       replayFailedDeliveries: () => replayFailedDeliveries(context),
       checkMergeability: () => checkMergeability(context),
+      deliverWebhooks: () => deliverWebhooks(context),
       async close() {
         await app.close();
         await endPool(db);

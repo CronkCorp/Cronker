@@ -10,10 +10,12 @@ import type { Change } from "../../server/work/changes.js";
 import type { Comment } from "../../server/work/comments.js";
 import type { Mention } from "../../server/work/mentions.js";
 import type { Relation, RelationKind, TicketRelations } from "../../server/work/relations.js";
+import type { Webhook, WebhookDelivery, WebhookKind } from "../../server/webhooks/webhooks.js";
 import type { MentioningText, Priority, Ticket, TicketList, TicketRef, TicketSummary } from "../../server/work/tickets.js";
 
 export type { Change, Comment, Cost, Mention, MentioningText, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
+export type { Webhook, WebhookDelivery, WebhookKind };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
 export type ChangeActor = ActorOrCronk;
@@ -953,6 +955,16 @@ export const api = {
   removeTrigger: (runnerId: string, triggerId: string) =>
     call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),
+  webhooks: (workspaceId: string) => call<Webhook[]>("GET", webhooksOf(workspaceId)),
+  createWebhook: (workspaceId: string, input: { name: string; url: string; kinds: WebhookKind[] }) =>
+    call<Webhook & { secret: string }>("POST", webhooksOf(workspaceId), input),
+  editWebhook: (workspaceId: string, id: string, input: { name?: string; url?: string; kinds?: WebhookKind[]; enabled?: boolean }) =>
+    call<Webhook>("PATCH", `${webhooksOf(workspaceId)}/${encodeURIComponent(id)}`, input),
+  removeWebhook: (workspaceId: string, id: string) => call<void>("DELETE", `${webhooksOf(workspaceId)}/${encodeURIComponent(id)}`),
+  testWebhook: (workspaceId: string, id: string) =>
+    call<WebhookDelivery>("POST", `${webhooksOf(workspaceId)}/${encodeURIComponent(id)}/test`),
+  webhookDeliveries: (workspaceId: string, id: string) =>
+    call<WebhookDelivery[]>("GET", `${webhooksOf(workspaceId)}/${encodeURIComponent(id)}/deliveries`),
   tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
   issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
     call<{ token: AgentToken; secret: string }>("POST", `${agent(agentId)}/tokens`, input),
@@ -1090,4 +1102,8 @@ function connect(requestId: string) {
 
 function agent(id: string) {
   return `/api/agents/${encodeURIComponent(id)}`;
+}
+
+function webhooksOf(workspaceId: string) {
+  return `/api/workspaces/${encodeURIComponent(workspaceId)}/webhooks`;
 }

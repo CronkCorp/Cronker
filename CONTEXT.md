@@ -100,6 +100,10 @@ _Avoid_: Event, activity, history entry, audit log
 A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions, Tickets waiting for their review and Discovered Tickets. An Admin's also holds the Tickets of Users removed from the Workspace or who lost Write in their Project, until someone assigns them.
 _Avoid_: Notifications, review queue, to-do
 
+**Webhook**:
+A User's own channel for their Inbox in one Workspace: a name, a URL and the Inbox kinds it gets (by default Questions, *needs you* and Runs gone wrong). Cronk sends it a JSON delivery per item, signed with the webhook's secret as Standard Webhooks lays out. Only its User sees or changes it; Agents never do. Removing the User from the Workspace removes their webhooks there.
+_Avoid_: Notification, subscription, hook, integration
+
 **Brief**:
 The instructions a Run starts from: Cronk's fixed preamble, then the Step's own text, then the Ticket's key. The agent reads the Ticket itself over MCP.
 _Avoid_: Prompt, system prompt, instructions

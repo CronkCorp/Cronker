@@ -44,7 +44,8 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 - **Questions** end a Run with *needs you*; answering one moves the Ticket back to the asking Step's Status, starting a new Run. Runs never wait.
 - **Agents creating Tickets.** A Run may split its Ticket into Sub-Tickets, which inherit the Delegation; a parent gets no Runs while a Sub-Ticket is unfinished. Any other Ticket an agent files is a Discovered Ticket: Backlog, undelegated, assigned to the source Ticket's Assignee, in their Inbox until they delegate, move or dismiss it.
 - **Inbox** per User: Questions, *needs you* Outcomes, failed and lost Runs, Unverified completions, Tickets in a Review Status, Discovered Tickets. No shared Triage view.
-- **Leaving a Workspace.** Removing a User stops their Agents' Runs there and unassigns and undelegates their Tickets, which go to the Admins' Inbox.
+- **Leaving a Workspace.** Removing a User stops their Agents' Runs there and unassigns and undelegates their Tickets, which go to the Admins' Inbox, and removes their webhooks there.
+- **Webhooks** per User and Workspace carry what waits in their Inbox to ntfy, n8n, Discord, Home Assistant or their own receiver: signed JSON deliveries laid out like Standard Webhooks, the kinds each chose, **Send test** and the last 20 deliveries on Account settings. Deliveries are kept in Postgres and sent by a check the server runs every five seconds. Only `https` URLs, except plain `http` to localhost on a local Cronk. Agents never see them. Sending real Inbox items, and retrying failed deliveries, follow (Spec: Reach).
 - **Removing an Agent.** Its Owner's removal undelegates each Ticket delegated to it, recorded as their Change; the Tickets keep their Assignee and Status. Its running Runs stop, as on any undelegation, and no Run ever starts for a removed Agent.
 
 ### Tickets
@@ -105,4 +106,4 @@ Ideas, not yet grilled.
 
 ## Not now
 
-Custom fields, Protected items and Suggestions, full Markdown export and import, User and Workspace webhooks, email, a shared Triage view, other Git hosts.
+Custom fields, Protected items and Suggestions, full Markdown export and import, Workspace-wide webhooks, email, a shared Triage view, other Git hosts.
