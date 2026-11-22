@@ -13,7 +13,7 @@ afterEach(async () => {
 const me = async (cookie: string) => (await (await cronk.request("GET", "/api/me", { cookie })).json()).user;
 
 describe("linking a GitHub account", () => {
-  test("a User who signs in with a password links a GitHub account of another email, and returns to the password page", async () => {
+  test("a User who signs in with a password links a GitHub account of another email, and returns to their settings page", async () => {
     const { user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     await createGitHubApp(cronk, cookie);
@@ -21,8 +21,8 @@ describe("linking a GitHub account", () => {
 
     const linked = await linkGitHub(cronk, cookie, account);
 
-    expect(linked.location).toBe("/password?github=linked");
-    expect(await me(cookie)).toEqual({ id: user.id, email: "ada@example.com", githubLogin: "ada-gh" });
+    expect(linked.location).toBe("/account?github=linked");
+    expect(await me(cookie)).toEqual({ id: user.id, email: "ada@example.com", githubLogin: "ada-gh", displayName: null });
     // The account now signs in as the User.
     const signedIn = await signInWithGitHub(cronk, account);
     expect(signedIn.location).toBe("/");
@@ -41,9 +41,9 @@ describe("linking a GitHub account", () => {
 
     const linked = await linkGitHub(cronk, bea.cookie, account);
 
-    expect(linked.location).toBe("/password?github=linked");
+    expect(linked.location).toBe("/account?github=linked");
     const after = await (await cronk.request("GET", "/api/me", { cookie: bea.cookie })).json();
-    expect(after.user).toEqual({ id: bea.user.id, email: "bea@example.com", githubLogin: "bea-gh" });
+    expect(after.user).toEqual({ id: bea.user.id, email: "bea@example.com", githubLogin: "bea-gh", displayName: null });
     expect(after.workspaces.map((w: { id: string }) => w.id).sort()).toEqual([workspace.id, other.id].sort());
   });
 });
@@ -59,7 +59,7 @@ describe("linking a GitHub account: refusals", () => {
 
     const linked = await linkGitHub(cronk, bea.cookie, account);
 
-    expect(linked.location).toBe("/password?github_link_error=github_account_taken");
+    expect(linked.location).toBe("/account?github_link_error=github_account_taken");
     expect((await me(bea.cookie)).githubLogin).toBeNull();
     expect((await me(cookie)).githubLogin).toBe("ada-gh");
   });
@@ -72,7 +72,7 @@ describe("linking a GitHub account: refusals", () => {
 
     const again = await linkGitHub(cronk, cookie, cronk.github.account("ada-alt"));
 
-    expect(again.location).toBe("/password?github_link_error=github_already_linked");
+    expect(again.location).toBe("/account?github_link_error=github_already_linked");
     expect((await me(cookie)).githubLogin).toBe("ada-gh");
   });
 
@@ -82,7 +82,7 @@ describe("linking a GitHub account: refusals", () => {
 
     const start = await navigate(`${cronk.url}/api/github/link`);
 
-    expect(start.headers.get("location")).toBe("/password?github_link_error=not_signed_in");
+    expect(start.headers.get("location")).toBe("/account?github_link_error=not_signed_in");
   });
 
   test("without a GitHub App, linking says so", async () => {
@@ -90,7 +90,7 @@ describe("linking a GitHub account: refusals", () => {
 
     const linked = await linkGitHub(cronk, await signIn(cronk), cronk.github.account("ada-gh"));
 
-    expect(linked.location).toBe("/password?github_link_error=github_not_set_up");
+    expect(linked.location).toBe("/account?github_link_error=github_not_set_up");
   });
 
   test("GitHub not authorizing links nothing", async () => {
@@ -104,7 +104,7 @@ describe("linking a GitHub account: refusals", () => {
 
     const back = await navigate(atGitHub.headers.get("location")!, stateCookie);
 
-    expect(back.headers.get("location")).toBe("/password?github_link_error=github_denied");
+    expect(back.headers.get("location")).toBe("/account?github_link_error=github_denied");
     expect((await me(cookie)).githubLogin).toBeNull();
   });
 
@@ -120,7 +120,7 @@ describe("linking a GitHub account: refusals", () => {
     // Ada's browser opens Mallory's callback link, without Mallory's state cookie.
     const back = await navigate(atGitHub.headers.get("location")!, cookie);
 
-    expect(back.headers.get("location")).toBe("/password?github_link_error=invalid_state");
+    expect(back.headers.get("location")).toBe("/account?github_link_error=invalid_state");
     expect((await me(cookie)).githubLogin).toBeNull();
     expect((await me(mallory.cookie)).githubLogin).toBeNull();
   });
@@ -137,7 +137,7 @@ describe("linking a GitHub account: refusals", () => {
 
     const back = await navigate(atGitHub.headers.get("location")!, stateCookie);
 
-    expect(back.headers.get("location")).toBe("/password?github_link_error=invalid_state");
+    expect(back.headers.get("location")).toBe("/account?github_link_error=invalid_state");
     expect((await me(cookie)).githubLogin).toBeNull();
   });
 });

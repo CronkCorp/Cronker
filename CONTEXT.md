@@ -170,6 +170,10 @@ _Avoid_: PR (in the product), merge request, change
 A human who signs in to Cronk, with GitHub or with an email and password. A User exists only once added to a Workspace, and may belong to several.
 _Avoid_: Person, account, member (as the general term)
 
+**Display name**:
+The name a User chose to be shown by, in place of their email or GitHub login, wherever Cronk names them. It is only shown: a User still signs in with their email or GitHub account, is added to a Workspace by them, and names Cronk wrote into a Change keep the name they had.
+_Avoid_: Nickname, username, handle
+
 **Admin**:
 A User who manages one Workspace: who belongs to it and its settings. Whoever creates a Workspace is its first Admin; there is no role above the Workspaces.
 _Avoid_: Owner, superuser

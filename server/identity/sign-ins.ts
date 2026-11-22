@@ -138,3 +138,20 @@ export async function changePassword(
     await endResetLinks(tx, user.id);
   });
 }
+
+/**
+ * Sets or clears the signed-in User's display name: trimmed, and empty or `null` clearing it. Refused with
+ * `invalid_display_name` for one with line breaks or other control characters.
+ */
+export async function changeDisplayName(context: Context, request: FastifyRequest, displayName: string | null): Promise<User> {
+  const user = await requireUser(context, request);
+  const trimmed = displayName?.trim() || null;
+  if (trimmed !== null && /\p{Cc}/u.test(trimmed)) {
+    throw new ApiError(400, "invalid_display_name", "A display name is one line of text, without control characters.");
+  }
+  const { rows } = await context.db.query<User>(
+    `update users set display_name = $2 where id = $1 returning ${userColumns}`,
+    [user.id, trimmed],
+  );
+  return rows[0]!;
+}
