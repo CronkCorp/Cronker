@@ -325,7 +325,7 @@ function WorkspaceSwitcher({ workspaces, current }: { workspaces: WorkspaceSumma
 }
 
 /** The Workspace's Projects, kept current as Projects are created. */
-function useProjects(workspaceId: string | null): ProjectSummary[] | null {
+export function useProjects(workspaceId: string | null): ProjectSummary[] | null {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const latest = useLatest();
   const load = useCallback(() => {
