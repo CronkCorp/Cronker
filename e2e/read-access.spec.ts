@@ -71,3 +71,30 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
   await page.goto(`${cronk.url}/projects/${project.id}`);
   await expect(page.getByText("Nothing is here.")).toBeVisible();
 });
+
+test("an Access change that takes a User's Write from their Tickets names how many first", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const adaCookie = await signIn(cronk);
+  const grace = await addMember(cronk, adaCookie, workspace.id, "grace@example.com");
+  const request = async (method: string, path: string, body: unknown) =>
+    (await cronk.request(method, path, { cookie: adaCookie, body })).json() as Promise<{ id: string }>;
+  const project = await request("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await request("POST", `/api/projects/${project.id}/tickets`, { title: "Grace's work" });
+  await request("PATCH", `/api/tickets/${ticket.id}`, { assigneeId: grace.user.id });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/projects/${project.id}/settings`);
+  const access = page.getByRole("region", { name: "Access" });
+  await access.getByLabel("Private to the Users listed below").click();
+  const dialog = page.getByRole("dialog", { name: "Change Access?" });
+  await expect(dialog).toContainText("1 Ticket will be unassigned or undelegated");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(access.getByLabel("Open to every User of the Workspace")).toBeChecked();
+
+  await access.getByLabel("Private to the Users listed below").click();
+  await dialog.getByRole("button", { name: "Change Access" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(access.getByLabel("Private to the Users listed below")).toBeChecked();
+  const after = await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie: adaCookie });
+  expect(await after.json()).toMatchObject({ assigneeId: null });
+});

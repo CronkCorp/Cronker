@@ -101,12 +101,12 @@ export const DiscoveredItem = Type.Object({
   since: Since("when the Agent filed the Ticket"),
 });
 
-/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it to someone. */
+/** A Ticket whose Assignee was removed from the Workspace or lost Write in its Project, waiting for an Admin to assign it to someone. */
 export const ReassignItem = Type.Object({
   kind: Type.Literal("reassign"),
   ticket: TicketSummary,
   formerAssignee: User,
-  since: Since("when the Assignee of the Ticket was removed from the Workspace"),
+  since: Since("when the Assignee of the Ticket was taken off it, by leaving the Workspace or losing Write in its Project"),
 });
 
 export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem, ReassignItem]);
