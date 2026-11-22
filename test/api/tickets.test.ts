@@ -73,6 +73,7 @@ describe("creating a Ticket", () => {
       waiting: null,
       blockedBy: [],
       conflicts: [],
+      queue: null,
       blockedByHidden: 0,
       mentions: [],
       mentionedIn: [],

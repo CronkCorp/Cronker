@@ -448,3 +448,72 @@ test("a merge making a Ticket's Pull Request conflict marks its In Review card a
   await expect(panel).not.toContainText("Conflicts with");
   await expect(page.getByRole("region", { name: "Code to review" })).not.toContainText("Conflicts with");
 });
+
+test("Merge queues Tickets: the Merge column lists them in queue order with their chips, live, and Remove from queue sends one back", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call("POST", `/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  const deliver = async (event: string, payload: Record<string, unknown>) => {
+    const delivered = await cronk.github.deliver(app, event, {
+      installation: { id: installation.id },
+      repository: { id: cronker.id, full_name: cronker.fullName },
+      ...payload,
+    });
+    expect(delivered.status).toBe(200);
+  };
+  // CRONK-1 and CRONK-2 in In Review, each with an open Pull Request whose check passed and that GitHub says merges.
+  for (const n of [1, 2]) {
+    const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: `Change ${n}` });
+    await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: inReview });
+    await deliver("pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 500 + n, number: n, title: `CRONK-${n}: change ${n}`, state: "open", draft: false, merged: false,
+        html_url: `https://github.com/cronkcorp/cronker/pull/${n}`, head: { ref: `cronk-${n}`, sha: `c${n}` }, base: { ref: "main" },
+        updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await deliver("check_run", {
+      action: "completed",
+      check_run: { id: n, name: "test", head_sha: `c${n}`, status: "completed", conclusion: "success", html_url: null },
+    });
+    cronk.github.pullRequest(cronker, n, { headSha: `c${n}`, mergeable: true });
+  }
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const mergeColumn = board.getByRole("region", { name: "Merge", exact: true });
+
+  // CRONK-2 is merged first from its page, then CRONK-1, so the queue's order isn't the keys'.
+  for (const key of ["CRONK-2", "CRONK-1"]) {
+    await board.getByRole("link", { name: new RegExp(key) }).click();
+    const queue = page.getByRole("region", { name: "Merge Queue" });
+    await queue.getByRole("button", { name: "Merge" }).click();
+    await expect(queue).toContainText(key === "CRONK-2" ? "#1 in queue" : "#2 in queue");
+    await page.goBack();
+  }
+  const cards = mergeColumn.locator(".card-link");
+  await expect(cards).toHaveText([/CRONK-2.*#1 in queue/, /CRONK-1.*#2 in queue/]);
+
+  // The queue pass merges CRONK-2; the board follows live, CRONK-1 moving up.
+  await cronk.checkQueue();
+  await expect(cards).toHaveText([/CRONK-1.*#1 in queue/]);
+
+  // Remove from queue sends CRONK-1 back to In Review.
+  await mergeColumn.getByRole("link", { name: /CRONK-1/ }).click();
+  await page.getByRole("region", { name: "Merge Queue" }).getByRole("button", { name: "Remove from queue" }).click();
+  await expect(page.getByRole("region", { name: "Merge Queue" }).getByRole("button", { name: "Merge" })).toBeVisible();
+  await page.goBack();
+  await expect(cards).toHaveCount(0);
+  await expect(board.getByRole("region", { name: "In Review", exact: true })).toContainText("CRONK-1");
+});

@@ -500,6 +500,11 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * read included. Hovering or focusing it names them, each a link to its Ticket, and lists each unreadable one as "a
  * Ticket you can't see". An unblocked Ticket shows nothing.
  */
+/** A queued Ticket's place in the Merge Queue: *#2 in queue*, or *Merging* while Cronk merges it. */
+export function QueueChip({ queue }: { queue: NonNullable<TicketSummary["queue"]> }) {
+  return queue.state === "merging" ? <Chip tone="ok">Merging</Chip> : <Chip tone="info">#{queue.position} in queue</Chip>;
+}
+
 /** A *Conflicts with `<base>`* marker for each base branch the Ticket's open Pull Requests conflict with. */
 function ConflictChips({ ticket }: { ticket: TicketSummary }) {
   return ticket.conflicts.map((branch) => (
@@ -768,6 +773,7 @@ function Card({
           {ticket.labels.map((label) => (
             <Chip key={label}>{label}</Chip>
           ))}
+          {ticket.queue && <QueueChip queue={ticket.queue} />}
           <ConflictChips ticket={ticket} />
           <TicketRunState ticket={ticket} />
           <People ticket={ticket} members={members} agents={agents} />

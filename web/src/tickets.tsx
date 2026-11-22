@@ -15,6 +15,7 @@ import {
   type Member,
   type Priority,
   type Project,
+  type PullRequest,
   type RelationKind,
   type Report,
   type Run,
@@ -36,7 +37,7 @@ import { shortcutStandsAside } from "./keys.js";
 import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
-import { priorityLabel } from "./projects.js";
+import { priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
@@ -333,6 +334,13 @@ export function TicketScreen({
             )}
           </Fields>
           <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
+          <MergeQueueCard
+            ticket={ticket}
+            project={project}
+            pullRequests={pullRequests}
+            onMerge={() => apply(api.mergeTicket(ticket.id))}
+            onRemove={() => apply(api.removeFromQueue(ticket.id))}
+          />
           <PullRequestRows pullRequests={pullRequests} linking={canWrite ? { ticketId: ticket.id, onChanged: loadPullRequests } : undefined} />
           <Relations
             ticket={ticket}
@@ -787,6 +795,72 @@ function RunCard({
   );
 }
 
+/**
+ * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, or *Merging*) with Remove from queue;
+ * otherwise Merge, where it applies: with Write, in a Review Status with an open Pull Request, in a Project with Pull
+ * Request automation on and a Merge Status. Hidden otherwise.
+ */
+function MergeQueueCard({
+  ticket,
+  project,
+  pullRequests,
+  onMerge,
+  onRemove,
+}: {
+  ticket: Ticket;
+  project: Project;
+  pullRequests: PullRequest[];
+  onMerge: () => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const canWrite = useCanWrite();
+  const act = (action: () => Promise<void>) => {
+    setBusy(true);
+    action().finally(() => setBusy(false));
+  };
+  const { queue } = ticket;
+  if (queue) {
+    return (
+      <section aria-label="Merge Queue" className="panel side-section">
+        <h2 className="side-title">Merge Queue</h2>
+        <p>
+          <QueueChip queue={queue} />
+        </p>
+        <p className="small muted">
+          {queue.state === "merging" ? "Cronk is merging it now." : "Cronk merges it once it reaches the front and is clean and green."}
+        </p>
+        {canWrite && queue.state === "queued" && (
+          <Actions>
+            <Button size="small" disabled={busy} onClick={() => act(onRemove)}>
+              Remove from queue
+            </Button>
+          </Actions>
+        )}
+      </section>
+    );
+  }
+  const status = project.statuses.find((s) => s.id === ticket.statusId);
+  const applies =
+    canWrite &&
+    status?.kind === "review" &&
+    project.pullRequestAutomation &&
+    project.statuses.some((s) => s.step?.kind === "merge") &&
+    pullRequests.some((pr) => pr.state === "open");
+  if (!applies) return null;
+  return (
+    <section aria-label="Merge Queue" className="panel side-section">
+      <h2 className="side-title">Merge Queue</h2>
+      <p className="small muted">Cronk merges it in turn, once it is clean and green, as your merge, completing it as Verified.</p>
+      <Actions>
+        <Button variant="primary" size="small" disabled={busy} onClick={() => act(onMerge)}>
+          Merge
+        </Button>
+      </Actions>
+    </section>
+  );
+}
+
 const relationGroups: { kind: RelationKind; label: string }[] = [
   { kind: "blockedBy", label: "Blocked by" },
   { kind: "blocks", label: "Blocks" },
@@ -1177,7 +1251,18 @@ function CommentForm({
 const fieldNames: Record<
   Exclude<
     Change["field"],
-    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | "transcriptDeleted" | RelationKind
+    | "created"
+    | "subTicket"
+    | "stepSkipped"
+    | "dismissed"
+    | "linkedDocument"
+    | "linkedArtifact"
+    | "merged"
+    | "queueJoined"
+    | "queueLeft"
+    | "sentBack"
+    | "transcriptDeleted"
+    | RelationKind
   >,
   string
 > = {
@@ -1225,6 +1310,11 @@ const mergeRulesShown = {
 interface Merged {
   pullRequest: { repository: string; number: number; title: string };
   mergedBy: string | null;
+}
+
+/** What a `queueJoined` Change goes to, and a `queueLeft` Change from: the Pull Request in the Merge Queue. */
+interface Queued {
+  pullRequest: { repository: string; number: number; url: string };
 }
 
 /**
@@ -1283,6 +1373,12 @@ function described(change: Change): string {
     return failure.kind === "check"
       ? `sent it back: the check ${failure.name} failed on ${name}`
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
+  }
+  if (change.field === "queueJoined") {
+    return `queued ${pullRequestName((change.to as Queued).pullRequest)} in the Merge Queue`;
+  }
+  if (change.field === "queueLeft") {
+    return `took ${pullRequestName((change.from as Queued).pullRequest)} out of the Merge Queue`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "transcriptDeleted") {

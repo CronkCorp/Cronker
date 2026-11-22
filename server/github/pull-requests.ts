@@ -5,6 +5,7 @@ import type { Viewer } from "../identity/viewers.js";
 import { checkAfterMerge, checkAfterPush, markerChanged } from "../pipeline/conflicts.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
 import { recordAskedMerge } from "../pipeline/pull-request-merging.js";
+import { dropFromQueue } from "../pipeline/merge-queue.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
@@ -289,7 +290,8 @@ export async function announce({ live }: Context, tx: Tx, pullRequestIds: number
  * the delivery arrives after that Run ended: the producing Step's. A check that failed on its latest
  * commit before Cronk heard of the push sends the Tickets back now. GitHub's first delivery naming a merge's commit,
  * whoever made the merge, has Cronk ask whether the other open Pull Requests on its base branch now conflict. A push to
- * one marked as conflicting has Cronk ask about it again; once it merges or closes, its marker goes.
+ * one marked as conflicting has Cronk ask about it again; once it merges or closes, its marker goes, and it leaves the
+ * Merge Queue.
  */
 export const onPullRequestEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, pull_request: pr } = payload as {
@@ -385,6 +387,8 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       autoMerged: pr.auto_merge !== null && pr.auto_merge !== undefined,
     });
   }
+  // A Pull Request merged or closed on GitHub leaves the Merge Queue; one whose merge completed its Ticket left already.
+  if (newest && (state === "merged" || state === "closed")) await dropFromQueue(context, tx, pr.id);
   // GitHub sends nothing when the merge makes another Pull Request conflict, so Cronk asks, once it knows the merge's
   // commit: on GitHub's first delivery naming it, whether Cronk or GitHub's delivery recorded the merge first.
   if (newest && state === "merged" && !knewMergeCommit) await checkAfterMerge(context, tx, pr.id);

@@ -114,6 +114,23 @@ export const TicketSummary = Type.Object({
       "The base branches its open Pull Requests conflict with, as GitHub last answered Cronk asking, for marking the " +
       "board's card; its Pull Requests say with which commit and merge.",
   }),
+  queue: Type.Union(
+    [
+      Type.Object({
+        position: Type.Integer({ minimum: 1, description: "Its place in its queue, the head being 1." }),
+        state: Type.Union([Type.Literal("queued"), Type.Literal("merging")], {
+          description: "`merging` while Cronk asks GitHub to merge it; `queued` while it waits.",
+        }),
+        pullRequestId: Type.Number({ description: "GitHub's id for the queued Pull Request." }),
+      }),
+      Type.Null(),
+    ],
+    {
+      description:
+        "Its entry in the Merge Queue for its Pull Request's Repository and base branch, while a User's Merge has it " +
+        "waiting for Cronk to merge it; null otherwise.",
+    },
+  ),
   blockedByHidden: Type.Integer({
     minimum: 0,
     description:
@@ -221,6 +238,7 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
     join pull_requests on pull_requests.id = pull_request_links.pull_request_id
     where pull_request_links.ticket_id = tickets.id and pull_requests.state in ('open', 'draft')
       and pull_requests.conflict_sha is not null order by pull_requests.conflict_branch) as conflicts,
+  ${queueColumn("tickets")} as queue,
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources
@@ -228,6 +246,20 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
       where sources.id = tickets.discovered_from_ticket_id and ${reach("sources")}),
     'runId', tickets.discovered_in_run_id,
     'waiting', tickets.discovery_waits) end as discovered`;
+
+/**
+ * SQL for the Ticket `alias`'s first entry in the Merge Queue, with its place among the entries whose Pull Requests
+ * share its Repository and base branch, in the order they joined.
+ */
+const queueColumn = (alias: string) => `(select json_build_object('pullRequestId', entry.pull_request_id, 'state', entry.state,
+    'position', (select count(*) from merge_queue ahead join pull_requests ahead_pr on ahead_pr.id = ahead.pull_request_id
+      where ahead_pr.repository_id = queued_pr.repository_id
+        and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '') and ahead.seq <= entry.seq))
+  from merge_queue entry join pull_requests queued_pr on queued_pr.id = entry.pull_request_id
+  where entry.ticket_id = ${alias}.id order by entry.seq limit 1)`;
+
+/** SQL ordering a Status's Tickets: those in the Merge Queue first, by their place in it. */
+const queueOrder = (alias: string) => `(${queueColumn(alias)} ->> 'position')::int nulls last`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -643,7 +675,7 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, ${runningFirstThenBlocked("tickets")}, tickets.number`,
+     order by statuses.position, ${queueOrder("tickets")}, ${runningFirstThenBlocked("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
@@ -718,8 +750,19 @@ export async function editTicket(
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
-  const { db, clock, live } = context;
-  return transaction(db, async (tx) => {
+  return transaction(context.db, (tx) => editTicketIn(context, tx, editor, ticketId, edit));
+}
+
+/** Edits the Ticket as `editTicket` says, in the caller's transaction. */
+export async function editTicketIn(
+  context: Context,
+  tx: Tx,
+  editor: Caller,
+  ticketId: string,
+  edit: TicketEdit,
+): Promise<Ticket> {
+  const { clock, live } = context;
+  {
     const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     await requireWrite(tx, editor, ticket);
@@ -896,7 +939,7 @@ export async function editTicket(
     else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
     return fullTicket(tx, editor, (await findTicketRow(tx, editor, ticket.id))!);
-  });
+  }
 }
 
 /**
