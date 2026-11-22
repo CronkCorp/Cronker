@@ -61,7 +61,7 @@ describe("upgrading the GitHub App", () => {
 
     expect(listed).toEqual({
       settingsUrl: `${cronk.github.url}/settings/apps/${app.slug}`,
-      missingPermissions: { metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read" },
+      missingPermissions: { metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read", issues: "read" },
       missingEvents: ["pull_request", "pull_request_review", "check_run", "check_suite", "status", "repository"],
       webhook: { url: `${cronk.url}/api/github/webhooks`, secret: expect.stringMatching(/.{32,}/) },
       installationsNotAccepted: [],
@@ -77,7 +77,7 @@ describe("upgrading the GitHub App", () => {
     const { webhook } = await (await checklist(cookie)).json();
 
     // The Admin edits the App's settings on GitHub.
-    app.permissions = { ...app.permissions, metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read" };
+    app.permissions = { ...app.permissions, metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read", issues: "read" };
     app.events = ["pull_request", "pull_request_review", "check_run", "check_suite", "status", "repository"];
     app.webhookUrl = webhook.url;
     app.webhookSecret = webhook.secret;
@@ -138,7 +138,7 @@ describe("upgrading the GitHub App", () => {
     const app = await createSignInOnlyApp(cookie);
     const acme = cronk.github.install(app, "acme", ["api"]);
     cronk.github.install(app, "bea", ["notes"]);
-    app.permissions = { ...app.permissions, metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read" };
+    app.permissions = { ...app.permissions, metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read", issues: "read" };
     cronk.github.installations[1]!.accept();
 
     const before = await (await checklist(cookie)).json();
@@ -147,7 +147,7 @@ describe("upgrading the GitHub App", () => {
       {
         account: "acme",
         htmlUrl: `${cronk.github.url}/settings/installations/${acme.id}`,
-        missingPermissions: { metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read" },
+        missingPermissions: { metadata: "read", contents: "write", pull_requests: "write", checks: "read", statuses: "read", issues: "read" },
       },
     ]);
     acme.accept();
@@ -157,7 +157,7 @@ describe("upgrading the GitHub App", () => {
 
 describe("upgrading the GitHub App to write to Repositories", () => {
   /** An App as Cronk created it before Runs pushed and agents merged: read-only on Repositories. */
-  const readOnly = { emails: "read", metadata: "read", pull_requests: "read", checks: "read", statuses: "read" };
+  const readOnly = { emails: "read", metadata: "read", pull_requests: "read", checks: "read", statuses: "read", issues: "read" };
 
   test("an App that only reads lists contents and Pull Requests to give write access, and the installations yet to accept", async () => {
     await setUp(cronk);
@@ -197,6 +197,28 @@ describe("upgrading the GitHub App to write to Repositories", () => {
     const { missingPermissions } = await (await checklist(cookie)).json();
 
     expect(missingPermissions).toEqual({ contents: "write" });
+  });
+});
+
+describe("upgrading the GitHub App to read issues", () => {
+  test("an App created before Cronk imported issues lists reading them, and the installations yet to accept it", async () => {
+    await setUp(cronk);
+    const cookie = await signIn(cronk);
+    await createGitHubApp(cronk, cookie);
+    const app = cronk.github.apps[0]!;
+    const { issues: _issues, ...before } = app.permissions;
+    app.permissions = before;
+    const acme = cronk.github.install(app, "acme", ["api"]);
+
+    expect((await (await checklist(cookie)).json()).missingPermissions).toEqual({ issues: "read" });
+
+    // The Admin adds it to the App on GitHub; acme's owner hasn't accepted it yet.
+    app.permissions = { ...before, issues: "read" };
+    const after = await (await checklist(cookie)).json();
+    expect(after.missingPermissions).toEqual({});
+    expect(after.installationsNotAccepted).toEqual([
+      { account: "acme", htmlUrl: `${cronk.github.url}/settings/installations/${acme.id}`, missingPermissions: { issues: "read" } },
+    ]);
   });
 });
 

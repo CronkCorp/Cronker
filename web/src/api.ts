@@ -72,6 +72,19 @@ export interface Repository {
   keyClash: boolean;
 }
 
+/** An import of a Repository's GitHub issues into a Project, running as a background job. */
+export interface GitHubImport {
+  id: string;
+  repository: { id: number; fullName: string };
+  state: "running" | "done" | "failed";
+  imported: number;
+  skipped: number;
+  error: string | null;
+  startedBy: string;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -896,6 +909,10 @@ export const api = {
     call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
   removeRepository: (projectId: string, id: number) =>
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
+  startImport: (projectId: string, repositoryId: number) =>
+    call<GitHubImport>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
+  latestImport: (projectId: string, repositoryId: number) =>
+    call<{ import: GitHubImport | null }>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>

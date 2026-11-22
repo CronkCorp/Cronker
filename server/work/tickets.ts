@@ -1188,7 +1188,7 @@ async function named(tx: Tx, query: string, id: string | null): Promise<{ id: st
 }
 
 /** Labels are matched ignoring case: one of each, kept as first written. */
-function distinctLabels(labels: string[]): string[] {
+export function distinctLabels(labels: string[]): string[] {
   const seen = new Map<string, string>();
   for (const label of labels) {
     const trimmed = label.trim();
