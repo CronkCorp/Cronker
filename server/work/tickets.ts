@@ -195,14 +195,18 @@ export const MentioningText = Type.Object({
     description: "Its Project, or null for the Workspace's own knowledge.",
   }),
   title: Type.String({
-    description: "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's.",
+    description:
+      "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact or a Document that one's.",
+  }),
+  commentOn: Type.Union([Type.Literal("ticket"), Type.Literal("artifact"), Type.Literal("document"), Type.Null()], {
+    description: "For a Comment, what it is on: a Ticket, an Artifact or a Document (a Report included); otherwise null.",
   }),
   ticket: Type.Union([TicketRef, Type.Null()], {
     description:
-      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge.",
+      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact or a Document and other knowledge.",
   }),
   slug: Type.Union([Type.String(), Type.Null()], {
-    description: "A Document's or Report's slug, or for a Comment on an Artifact the Artifact's; otherwise null.",
+    description: "A Document's or Report's slug, or for a Comment on an Artifact or a Document that one's; otherwise null.",
   }),
   number: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], { description: "A Decision's number; otherwise null." }),
 });
@@ -468,23 +472,29 @@ async function mentionedIn(db: Db | Tx, viewer: Viewer, ticket: Row): Promise<Me
      )
      select * from (
        select hits.seq, 'ticket' as kind, tickets.id, tickets.project_id as "projectId", tickets.title,
-         ${ref("tickets", "ref_projects")} as ticket, null as slug, null::integer as number
+         null as "commentOn", ${ref("tickets", "ref_projects")} as ticket, null as slug, null::integer as number
        from hits join tickets on tickets.id = hits.source_ticket_id
        where tickets.id <> $4 and ${reach("tickets.project_id", "tickets.workspace_id")}
        union all
-       select hits.seq, 'comment', comments.id, tickets.project_id, tickets.title,
+       select hits.seq, 'comment', comments.id, tickets.project_id, tickets.title, 'ticket',
          ${ref("tickets", "ref_projects")}, null, null
        from hits join comments on comments.id = hits.source_comment_id join tickets on tickets.id = comments.ticket_id
        where ${reach("tickets.project_id", "tickets.workspace_id")}
        union all
-       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, null,
+       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, 'artifact', null,
          ${slugColumn("artifact", "artifacts.id", "versions.title")}, null
        from hits join comments on comments.id = hits.source_comment_id join artifacts on artifacts.id = comments.artifact_id
        join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version
        where ${reach("artifacts.project_id", "artifacts.workspace_id")}
        union all
+       select hits.seq, 'comment', comments.id, documents.project_id, versions.title, 'document', null,
+         ${slugColumn("document", "documents.id", "versions.title")}, null
+       from hits join comments on comments.id = hits.source_comment_id join documents on documents.id = comments.document_id
+       join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
+       where ${reach("documents.project_id", "documents.workspace_id")}
+       union all
        select hits.seq, case when documents.ticket_id is null then 'document' else 'report' end, documents.id,
-         documents.project_id, versions.title,
+         documents.project_id, versions.title, null,
          (select ${ticketRefColumn("report_tickets", "report_projects")} from tickets report_tickets
           join projects report_projects on report_projects.id = report_tickets.project_id
           where report_tickets.id = documents.ticket_id),
@@ -493,11 +503,11 @@ async function mentionedIn(db: Db | Tx, viewer: Viewer, ticket: Row): Promise<Me
        join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
        where ${reach("documents.project_id", "documents.workspace_id")}
        union all
-       select hits.seq, 'term', terms.id, terms.project_id, terms.name, null, null, null
+       select hits.seq, 'term', terms.id, terms.project_id, terms.name, null, null, null, null
        from hits join terms on terms.id = hits.source_term_id
        where ${reach("terms.project_id", "terms.workspace_id")}
        union all
-       select hits.seq, 'decision', decisions.id, decisions.project_id, versions.title, null, null, decisions.number
+       select hits.seq, 'decision', decisions.id, decisions.project_id, versions.title, null, null, null, decisions.number
        from hits join decisions on decisions.id = hits.source_decision_id
        join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version
        where ${reach("decisions.project_id", "decisions.workspace_id")}

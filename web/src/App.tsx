@@ -349,7 +349,7 @@ function SignedIn({
         case "term":
           return <TermScreen key={`${workspace.id} ${id}`} workspace={workspace} termId={id} />;
         case "document":
-          return <DocumentScreen key={`${workspace.id} ${id}`} workspace={workspace} documentId={id} />;
+          return <DocumentScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} documentId={id} />;
         case "artifact":
           return <ArtifactScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} artifactId={id} />;
         case "transcript":

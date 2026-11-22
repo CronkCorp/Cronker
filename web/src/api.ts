@@ -304,6 +304,10 @@ export const api = {
     call<Comment[]>("GET", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`),
   commentOnArtifact: (artifactId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`, input),
+  documentComments: (documentId: string) =>
+    call<Comment[]>("GET", `/api/documents/${encodeURIComponent(documentId)}/comments`),
+  commentOnDocument: (documentId: string, input: { body: string; replyToId?: string }) =>
+    call<Comment>("POST", `/api/documents/${encodeURIComponent(documentId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),

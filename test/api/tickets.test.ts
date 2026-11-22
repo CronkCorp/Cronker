@@ -374,6 +374,8 @@ describe("Comments", () => {
       ticketId: ticket.id,
       artifactId: null,
       artifact: null,
+      documentId: null,
+      document: null,
       replyToId: null,
       body: "Shall we use **SSE**?",
       actor: { kind: "user", id: user.id, name: user.email },

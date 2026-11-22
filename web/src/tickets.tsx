@@ -1186,7 +1186,8 @@ function mentioningPage(to: Addresses, text: MentioningText): string {
     case "ticket":
       return to.ticket(text.ticket!);
     case "comment":
-      return text.ticket ? to.ticket(text.ticket) : to.artifact({ slug: text.slug! });
+      // A Comment on a Ticket leads to its Ticket; one on an Artifact or a Document, to that.
+      return text.ticket ? to.ticket(text.ticket) : text.commentOn === "document" ? to.document({ slug: text.slug! }) : to.artifact({ slug: text.slug! });
     case "document":
     case "report":
       return to.document({ slug: text.slug! });
@@ -1757,7 +1758,13 @@ export function CommentThread({
   const actor: ActorRef = comment.actor;
   const send = async (body: string) => {
     const reply = { body, replyToId: comment.id };
-    onAdded(await (comment.artifactId ? api.commentOnArtifact(comment.artifactId, reply) : api.comment(comment.ticketId!, reply)));
+    onAdded(
+      await (comment.artifactId
+        ? api.commentOnArtifact(comment.artifactId, reply)
+        : comment.documentId
+          ? api.commentOnDocument(comment.documentId, reply)
+          : api.comment(comment.ticketId!, reply)),
+    );
     setReplying(false);
   };
   const to = useAddresses();

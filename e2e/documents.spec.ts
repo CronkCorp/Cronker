@@ -64,3 +64,26 @@ test("files pasted or dropped into the text become the Document's Attachments, e
   // The pasted one went in at the cursor; the dropped ones where they were dropped.
   expect(saved.body).toMatch(new RegExp(`efore\\.${reference("brief.png")}\\n\\nAfter\\.$`));
 });
+
+test("Comments on a Document show under it, with replies, and arrive live", async ({ page, cronk }) => {
+  const { document } = await openDocument(page, cronk, "Runs start on delegation.");
+  const cookie = await signIn(cronk);
+  const comments = page.getByRole("region", { name: "Comments" });
+  await expect(comments.getByText("No Comments yet.")).toBeVisible();
+
+  const box = comments.getByRole("textbox", { name: "New Comment" });
+  await box.click();
+  await page.keyboard.type("Does a Merge Step count?");
+  await comments.getByRole("button", { name: /^Comment/ }).click();
+  const mine = comments.getByRole("article", { name: "Comment by ada@example.com" });
+  await expect(mine).toContainText("Does a Merge Step count?");
+
+  await mine.getByRole("button", { name: "Reply" }).click();
+  await page.keyboard.type("It does.");
+  await mine.getByRole("button", { name: /^Send reply/ }).click();
+  await expect(comments.getByRole("article", { name: "Reply from ada@example.com" })).toContainText("It does.");
+
+  // Another's Comment arrives live.
+  await cronk.request("POST", `/api/documents/${document.id}/comments`, { cookie, body: { body: "Added it to the page." } });
+  await expect(comments.getByText("Added it to the page.")).toBeVisible();
+});

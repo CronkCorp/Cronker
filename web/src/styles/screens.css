@@ -1812,14 +1812,14 @@
   color: var(--muted);
 }
 
-/* An Artifact's Comments, under the Artifact, as Comments show on a Ticket's timeline. */
-.artifact-comments {
+/* The Comments under an Artifact or a Document, as Comments show on a Ticket's timeline. */
+.comments-panel {
   display: grid;
   gap: var(--space-3);
   max-width: 760px;
   margin-top: var(--space-5);
 }
-.artifact-comment-list {
+.comments-panel-list {
   display: grid;
   gap: var(--space-3);
   padding: 0;

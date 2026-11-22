@@ -109,6 +109,8 @@ describe("what an Agent may change", () => {
       ticketId: ticket.id,
       artifactId: null,
       artifact: null,
+      documentId: null,
+      document: null,
       replyToId: comment.id,
       body: "On it.",
       actor: { kind: "agent", id: agent.id, name: "claude-max" },

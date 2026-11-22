@@ -18,7 +18,10 @@ const samples: { [type in StreamEvent["type"]]: Extract<StreamEvent, { type: typ
   "statuses.changed": [{ type: "statuses.changed", projectId: p }],
   "ticket.created": [{ type: "ticket.created", projectId: p, ticketId: t }],
   "ticket.changed": [{ type: "ticket.changed", projectId: p, ticketId: t }],
-  "comment.added": [{ type: "comment.added", projectId: p, ticketId: t, commentId: "comment-1" }],
+  "comment.added": [
+    { type: "comment.added", projectId: p, ticketId: t, commentId: "comment-1" },
+    { type: "comment.added", projectId: null, documentId: "document-1", commentId: "comment-2" },
+  ],
   "report.added": [{ type: "report.added", projectId: p, ticketId: t, reportId: "report-1" }],
   "report.changed": [{ type: "report.changed", projectId: p, ticketId: t, reportId: "report-1" }],
   "attachments.changed": [
@@ -89,6 +92,13 @@ test("each event of a Ticket refreshes the part it names", () => {
   expect(stale(samples["ticket.created"][0]!, keys.projectTickets(p))).toBe(true);
   expect(stale(samples["statuses.changed"][0]!, keys.project(p))).toBe(true);
   expect(stale(samples["comment.added"][0]!, keys.ticket(t))).toBe(false);
+});
+
+test("a Comment on a Document refreshes what is loaded of that Document, and no Ticket's Comments", () => {
+  const onDocument = samples["comment.added"][1]!;
+  expect(stale(onDocument, keys.documentAttachments("document-1"))).toBe(true);
+  expect(stale(onDocument, keys.documentAttachments("document-2"))).toBe(false);
+  expect(stale(onDocument, keys.comments(t))).toBe(false);
 });
 
 test("a Ticket's files changing refreshes its Attachments and its Comments, which carry theirs; a Report's, its Document's", () => {
