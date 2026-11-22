@@ -16,6 +16,7 @@ import {
   readTermVersion,
   Term,
   TermComparison,
+  TermDetail,
   termNotFound,
   termsOf,
   withMentions,
@@ -78,7 +79,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
               "Terms, or the Workspace's: a taken one is refused with `term_name_taken`.",
             params,
             body: Type.Object({ name: Name, definition: Type.Optional(Definition), avoid: Type.Optional(Avoid) }),
-            response: { 201: Term, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+            response: { 201: TermDetail, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
           },
         },
         async (request, reply) => {
@@ -117,8 +118,9 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags,
           summary: "A Term at its current Version",
+          description: "With `mentionedIn`, the texts mentioning it that the caller may read.",
           params: TermParams,
-          response: { 200: Term, 401: ErrorBody, 404: ErrorBody },
+          response: { 200: TermDetail, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
@@ -146,7 +148,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             definition: Type.Optional(Definition),
             avoid: Type.Optional(Avoid),
           }),
-          response: { 200: Term, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Term", TermVersion) },
+          response: { 200: TermDetail, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Term", TermVersion) },
         },
       },
       async (request) => editTerm(context, await requireCaller(context, request), request.params.termId, tidy(request.body)),

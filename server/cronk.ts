@@ -13,6 +13,7 @@ import { backfillMentions } from "./work/mentions.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
+import { Jobs } from "./jobs.js";
 import { Live } from "./live/live.js";
 import { checkMergeability } from "./pipeline/conflicts.js";
 import type { RunnerKind } from "./runs/runner.js";
@@ -45,6 +46,8 @@ export interface Cronk {
   replayFailedDeliveries(): Promise<void>;
   /** Asks GitHub whether the Pull Requests waiting on a mergeability check conflict, sending conflicting ones' Tickets back. */
   checkMergeability(): Promise<void>;
+  /** Resolves once the work done after changes committed, such as indexing texts again after a Term's save, is done. */
+  jobsSettled(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -74,6 +77,7 @@ export async function createCronk({
       installationTokens: new InstallationTokens(clock),
       installationListings: new InstallationListings(clock),
       attachments: directoryStorage(config.attachments.directory),
+      jobs: new Jobs(),
     };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
@@ -81,6 +85,7 @@ export async function createCronk({
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
     log = app.log;
+    context.jobs.onError = (error, key) => app.log.error({ err: error, job: key }, "A job after a change failed.");
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
     return {
@@ -94,8 +99,10 @@ export async function createCronk({
       resumePausedRunners: () => resumePausedRunners(context),
       replayFailedDeliveries: () => replayFailedDeliveries(context),
       checkMergeability: () => checkMergeability(context),
+      jobsSettled: () => context.jobs.settled(),
       async close() {
         await app.close();
+        await context.jobs.settled();
         await endPool(db);
       },
     };

@@ -11,11 +11,23 @@ interface Node {
   children?: Node[];
 }
 
-/** Turns each mentioned Ticket key in the text into a link to its Ticket. */
+/** Where a Mention links to: its Ticket, or its Term's glossary entry. */
+function mentionUrl(to: Addresses, mention: Mention): string {
+  return mention.kind === "ticket"
+    ? to.ticket(mention)
+    : to.term({ id: mention.termId, projectId: mention.projectId, name: mention.name });
+}
+
+/**
+ * Turns each Mention in the text into a link: a Ticket key to its Ticket, a Term's name to its glossary entry. As the
+ * server finds them, each as a whole word (not next to a letter, digit or underscore), the longest first.
+ */
 function linkMentions(mentions: Mention[], to: Addresses) {
   const byText = new Map(mentions.map((m) => [m.text, m]));
-  const escaped = mentions.map((m) => m.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
+  const escaped = [...byText.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map((text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])(${escaped.join("|")})(?![\\p{L}\\p{N}_])`, "gu");
 
   const split = (text: string): Node[] =>
     text
@@ -24,7 +36,7 @@ function linkMentions(mentions: Mention[], to: Addresses) {
       .map((part) => {
         const mention = byText.get(part);
         return mention
-          ? { type: "link", url: to.ticket(mention), children: [{ type: "text", value: part }] }
+          ? { type: "link", url: mentionUrl(to, mention), children: [{ type: "text", value: part }] }
           : { type: "text", value: part };
       });
 
@@ -63,7 +75,7 @@ const components: Components = {
     ),
 };
 
-/** Markdown as written by Users, without raw HTML, with Ticket keys as links and `attachment:` references resolved. */
+/** Markdown as written by Users, without raw HTML, with Ticket keys and Term names as links and `attachment:` references resolved. */
 export function Markdown({ text, mentions }: { text: string; mentions: Mention[] }) {
   const to = useAddresses();
   return (

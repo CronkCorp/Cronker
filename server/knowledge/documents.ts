@@ -52,7 +52,7 @@ export const Document = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys and Term names its body mentions that the caller may read." }),
 });
 export type Document = Static<typeof Document>;
 

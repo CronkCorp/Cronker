@@ -31,3 +31,28 @@ test("a Ticket key in a Document links to its Ticket, which lists the Document u
   await mentionedIn.getByRole("link", { name: "Roadmap" }).click();
   await expect(page.getByRole("article", { name: "Roadmap" })).toBeVisible();
 });
+
+test("a Term's name in a Document links to its glossary entry, which lists the Document under Mentioned in", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await cronk.request("POST", `/api/workspaces/${workspace.id}/terms`, { cookie, body: { name: "Run", definition: "One go." } });
+  await cronk.request("POST", `/api/workspaces/${workspace.id}/terms`, { cookie, body: { name: "Run Step", definition: "Where a Run starts." } });
+  const document = await (
+    await cronk.request("POST", `/api/workspaces/${workspace.id}/documents`, {
+      cookie,
+      body: { title: "Roadmap", body: "Each Run Step starts a Run; a run or a Runner is no Term." },
+    })
+  ).json();
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/documents/${document.id}`);
+  const body = page.getByRole("article", { name: "Roadmap" });
+  // The longest name wins, and only the name with its capitalisation, as a whole word, is a link.
+  await expect(body.getByRole("link")).toHaveText(["Run Step", "Run"]);
+
+  await body.getByRole("link", { name: "Run", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/glossary\/Run$/);
+  const mentionedIn = page.getByRole("region", { name: "Mentioned in" });
+  await expect(mentionedIn.getByRole("listitem")).toHaveText(["Document Roadmap", "Term Run Step"]);
+});

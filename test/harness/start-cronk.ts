@@ -59,6 +59,11 @@ export interface StartedCronk {
    * seconds; a conflicting one sends its Ticket back. Move the clock first to ask again those GitHub was still working out.
    */
   checkMergeability(): Promise<void>;
+  /**
+   * Waits for the work Cronk does after a change commits, without its response waiting: indexing texts again after a
+   * Term is created, renamed or removed.
+   */
+  jobsSettled(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -210,6 +215,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     resumePausedRunners: () => cronk.resumePausedRunners(),
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     checkMergeability: () => cronk.checkMergeability(),
+    jobsSettled: () => cronk.jobsSettled(),
     logs,
     setupCode() {
       const line = logs.findLast((l) => typeof l.setupCode === "string");

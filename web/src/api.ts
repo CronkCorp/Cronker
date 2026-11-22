@@ -185,13 +185,28 @@ export const priorities: { priority: Priority; label: string }[] = [
 ];
 
 /** A Ticket key written in Markdown that names a Ticket of the Workspace, outside code and links. */
-export interface Mention {
+export interface TicketMention {
   kind: "ticket";
   /** The key as written, such as `cronk-12`. */
   text: string;
   key: string;
   ticketId: string;
 }
+
+/** A Term's name written in Markdown with its capitalisation as a whole word, outside code and links. */
+export interface TermMention {
+  kind: "term";
+  /** The name as written. */
+  text: string;
+  termId: string;
+  /** The Term's name now. */
+  name: string;
+  /** Null for the Workspace's. */
+  projectId: string | null;
+}
+
+/** What a text mentions: a Ticket by its key, or a Term by its name. */
+export type Mention = TicketMention | TermMention;
 
 export interface TicketSummary {
   id: string;
@@ -224,7 +239,7 @@ export interface TicketSummary {
   blockedByHidden: number;
 }
 
-/** A text that mentions a Ticket, as its Mentioned in lists it. */
+/** A text that mentions a Ticket or a Term, as its Mentioned in lists it. */
 export interface MentioningText {
   kind: "ticket" | "comment" | "document" | "report" | "term" | "decision";
   id: string;
@@ -869,6 +884,12 @@ export interface Term {
   mentions: Mention[];
 }
 
+/** A Term read alone, with the texts mentioning it. */
+export interface TermDetail extends Term {
+  /** The other texts mentioning its name that the User may read, most recently saved first. */
+  mentionedIn: MentioningText[];
+}
+
 /** One saved state of a Term, recording the Actor who saved it. */
 export interface TermVersion {
   number: number;
@@ -1160,9 +1181,9 @@ export const api = {
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
   terms: (place: Place) => call<Term[]>("GET", `${placePath(place)}/terms`),
   glossary: (projectId: string) => call<Term[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/glossary`),
-  createTerm: (place: Place, input: TermContent) => call<Term>("POST", `${placePath(place)}/terms`, input),
-  term: (id: string) => call<Term>("GET", term(id)),
-  editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
+  createTerm: (place: Place, input: TermContent) => call<TermDetail>("POST", `${placePath(place)}/terms`, input),
+  term: (id: string) => call<TermDetail>("GET", term(id)),
+  editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<TermDetail>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
   termVersion: (termId: string, number: number) => call<TermVersion>("GET", `${term(termId)}/versions/${number}`),
