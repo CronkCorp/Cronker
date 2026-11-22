@@ -53,6 +53,8 @@ export function retryAt(now: Date, retryAfter: string | null): Date {
 
 export function subscriptionRunner(context: Context): Runner {
   return {
+    // A claude.ai routine runs in a cloud session.
+    cloud: true,
     async start(run): Promise<StartResult> {
       const refuse = (refusal: RunnerRefusal): StartResult => ({ started: false, refusal });
       const trigger = await triggerFor(context, run);

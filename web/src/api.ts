@@ -2,7 +2,12 @@
 
 // The Ticket area's response and request types are the server's own, from its schemas: type-only, so no server code
 // reaches the browser bundle (the build refuses any that does). Screens import them from here.
+import type { ArtifactLink } from "../../server/artifacts/linked-artifacts.js";
+import type { DecisionCreate, DecisionEdit } from "../../server/knowledge/decisions.js";
+import type { DocumentCreate, DocumentEdit } from "../../server/knowledge/documents.js";
+import type { DocumentLink } from "../../server/knowledge/linked-documents.js";
 import type { Report } from "../../server/knowledge/reports.js";
+import type { TermCreate, TermEdit } from "../../server/knowledge/terms.js";
 import type { Cost } from "../../server/runs/costs.js";
 import type { RunState } from "../../server/runs/states.js";
 import type { ActorOrCronk } from "../../server/work/actors.js";
@@ -25,6 +30,7 @@ import type { TicketReopen } from "../../server/work/verification.js";
 export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
+export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
 export type ChangeActor = ActorOrCronk;
@@ -80,6 +86,8 @@ export interface GitHubImport {
   imported: number;
   skipped: number;
   error: string | null;
+  /** While it waits out GitHub's rate limit, when it carries on; null otherwise. */
+  waitingUntil: string | null;
   startedBy: string;
   startedAt: string;
   finishedAt: string | null;
@@ -244,6 +252,8 @@ export interface Agent {
   name: string;
   owner: User;
   runnerId: string | null;
+  /** Whether its Runner runs in the cloud, so a `local-only` Ticket can't be delegated to it. */
+  cloud: boolean;
   createdAt: string;
 }
 
@@ -290,6 +300,8 @@ export interface Runner {
   id: string;
   name: string;
   kind: string;
+  /** Whether its kind runs Runs in the cloud: a `local-only` Ticket gets no Run through it. */
+  cloud: boolean;
   limit: number;
   /** How many of its Runs are running now, counted against its limit. */
   running: number;
@@ -586,14 +598,6 @@ export interface Document extends DocumentSummary {
   mentions: Mention[];
 }
 
-export interface DocumentEdit {
-  baseVersion?: number;
-  title?: string;
-  body?: string;
-  parentId?: string | null;
-  position?: number;
-}
-
 /** A file of an Artifact's Version, by its path relative to the Version. */
 export interface ArtifactFile {
   path: string;
@@ -761,12 +765,6 @@ export interface TermComparison {
   avoid: ComparedLine[];
 }
 
-export interface TermContent {
-  name: string;
-  definition: string;
-  avoid: string[];
-}
-
 /** Where knowledge is kept: a Project, or the Workspace. */
 export type Place = Tree;
 
@@ -796,14 +794,6 @@ export interface DecisionSummary {
 export interface Decision extends DecisionSummary {
   body: string;
   mentions: Mention[];
-}
-
-export interface DecisionEdit {
-  baseVersion: number;
-  title?: string;
-  body?: string;
-  status?: DecisionStatus;
-  supersededById?: string | null;
 }
 
 /** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
@@ -1019,11 +1009,11 @@ export const api = {
   linkedDocuments: (ticketId: string) =>
     call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>
-    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId }),
+    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId } satisfies DocumentLink),
   unlinkDocument: (ticketId: string, documentId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/documents/${encodeURIComponent(documentId)}`),
   documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
-  createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
+  createDocument: (tree: Tree, input: DocumentCreate) =>
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
   artifact: (id: string, version?: number | null) =>
@@ -1037,7 +1027,7 @@ export const api = {
   linkedArtifacts: (ticketId: string) =>
     call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),
   linkArtifact: (ticketId: string, artifactId: string) =>
-    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId }),
+    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId } satisfies ArtifactLink),
   unlinkArtifact: (ticketId: string, artifactId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts/${encodeURIComponent(artifactId)}`),
   editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
@@ -1048,9 +1038,9 @@ export const api = {
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
   terms: (place: Place) => call<Term[]>("GET", `${placePath(place)}/terms`),
   glossary: (projectId: string) => call<Term[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/glossary`),
-  createTerm: (place: Place, input: TermContent) => call<Term>("POST", `${placePath(place)}/terms`, input),
+  createTerm: (place: Place, input: TermCreate) => call<Term>("POST", `${placePath(place)}/terms`, input),
   term: (id: string) => call<Term>("GET", term(id)),
-  editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
+  editTerm: (id: string, edit: TermEdit) => call<Term>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
   termVersion: (termId: string, number: number) => call<TermVersion>("GET", `${term(termId)}/versions/${number}`),
@@ -1062,7 +1052,7 @@ export const api = {
   removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
   decisions: (place: Place) => call<DecisionSummary[]>("GET", `${placePath(place)}/decisions`),
   artifacts: (place: Place) => call<ArtifactSummary[]>("GET", `${placePath(place)}/artifacts`),
-  createDecision: (place: Place, input: { title: string; body?: string }) =>
+  createDecision: (place: Place, input: DecisionCreate) =>
     call<Decision>("POST", `${placePath(place)}/decisions`, input),
   decision: (id: string) => call<Decision>("GET", decision(id)),
   editDecision: (id: string, edit: DecisionEdit) => call<Decision>("PATCH", decision(id), edit),

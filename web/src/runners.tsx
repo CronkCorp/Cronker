@@ -209,6 +209,7 @@ function RunnerSettings({
         <Chip>
           <span className="mono">{runner.kind}</span>
         </Chip>
+        {runner.cloud && <Chip>cloud</Chip>}
         <span className="runner-usage">
           <strong>{runner.running}</strong> of <strong>{runner.limit}</strong> <span className="muted">running</span>
         </span>
