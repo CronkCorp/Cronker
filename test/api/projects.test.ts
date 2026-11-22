@@ -55,6 +55,7 @@ describe("creating a Project", () => {
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
       agentsMayMerge: false,
+      conciseReports: false,
       statuses: defaultBoard.map((status) => ({
         id: expect.any(String),
         ...status,

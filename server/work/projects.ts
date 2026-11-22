@@ -65,6 +65,11 @@ export const Project = Type.Object({
       "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation; off, every Merge Step " +
       "skips itself. Off by default; only an Admin changes it.",
   }),
+  conciseReports: Type.Boolean({
+    description:
+      "Whether the Briefs of Runs in this Project ask them to keep their Reports concise: the outcome, findings, what was " +
+      "verified and what the next Run or User needs, without the working. Off by default; nothing stored is cut.",
+  }),
   statuses: Type.Array(Status),
 });
 export type Project = Static<typeof Project>;
@@ -122,7 +127,8 @@ export async function findProject(
   const { rows } = await db.query<Omit<Project, "statuses">>(
     `select ${summaryColumns(viewer, "$2")}, projects.new_tickets_delegated as "newTicketsDelegated",
        projects.autonomous_delegation_default as "autonomousDelegationDefault",
-       projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge"
+       projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge",
+       projects.concise_reports as "conciseReports"
      from projects where projects.id = $1 and ${view.sql}
      ${lock ? "for update of projects" : ""}`,
     [projectId, view.value],
@@ -187,6 +193,7 @@ export async function createProject(
       autonomousDelegationDefault: false,
       pullRequestAutomation: true,
       agentsMayMerge: false,
+      conciseReports: false,
       statuses: await statusesOf(tx, project.id),
     };
   });
@@ -199,6 +206,7 @@ export interface ProjectEdit {
   pullRequestAutomation?: boolean;
   /** Only an Admin of the Project's Workspace may give this, whatever its value. */
   agentsMayMerge?: boolean;
+  conciseReports?: boolean;
 }
 
 /** Changes a Project's settings, as a User. */
@@ -221,18 +229,27 @@ export async function editProject(
       autonomousDelegationDefault: edit.autonomousDelegationDefault ?? project.autonomousDelegationDefault,
       pullRequestAutomation: edit.pullRequestAutomation ?? project.pullRequestAutomation,
       agentsMayMerge: edit.agentsMayMerge ?? project.agentsMayMerge,
+      conciseReports: edit.conciseReports ?? project.conciseReports,
     };
     if (
       next.newTicketsDelegated !== project.newTicketsDelegated ||
       next.autonomousDelegationDefault !== project.autonomousDelegationDefault ||
       next.pullRequestAutomation !== project.pullRequestAutomation ||
-      next.agentsMayMerge !== project.agentsMayMerge
+      next.agentsMayMerge !== project.agentsMayMerge ||
+      next.conciseReports !== project.conciseReports
     ) {
       await tx.query(
         `update projects set new_tickets_delegated = $2, autonomous_delegation_default = $3, pull_request_automation = $4,
-           agents_may_merge = $5
+           agents_may_merge = $5, concise_reports = $6
          where id = $1`,
-        [project.id, next.newTicketsDelegated, next.autonomousDelegationDefault, next.pullRequestAutomation, next.agentsMayMerge],
+        [
+          project.id,
+          next.newTicketsDelegated,
+          next.autonomousDelegationDefault,
+          next.pullRequestAutomation,
+          next.agentsMayMerge,
+          next.conciseReports,
+        ],
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     }

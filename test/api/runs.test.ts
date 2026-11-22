@@ -125,6 +125,29 @@ describe("starting Runs", () => {
     expect(start!.brief).toBe(brief.text);
   });
 
+  test("with Concise Reports on, the preview and a started Run's Brief ask for concise Reports; off, they don't", async () => {
+    const { ada, ticket, agent, project, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const rule = /^- This Project keeps Reports concise, even where the Step's brief asks for more: lead with the outcome/m;
+    expect((await ok("GET", `/api/tickets/${ticket.id}/brief`, ada)).preamble).not.toMatch(rule);
+
+    expect(project.conciseReports).toBe(false);
+    expect(await ok("PATCH", `/api/projects/${project.id}`, ada, { conciseReports: true })).toMatchObject({ conciseReports: true });
+    expect(await ok("GET", `/api/projects/${project.id}`, ada)).toMatchObject({ conciseReports: true });
+
+    const preview = await ok("GET", `/api/tickets/${ticket.id}/brief`, ada);
+    expect(preview.preamble).toMatch(rule);
+    expect(preview.preamble.endsWith("as a step-by-step log of what you read or tried.")).toBe(true);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    const [run] = await runsOf(ticket.id, ada);
+    expect((await ok("GET", `/api/runs/${run.id}/brief`, ada)).preamble).toMatch(rule);
+    expect(cronk.runner.starts[0]!.brief).toMatch(rule);
+
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { conciseReports: false });
+    expect((await ok("GET", `/api/tickets/${ticket.id}/brief`, ada)).preamble).not.toMatch(rule);
+  });
+
   test("undelegated Tickets never get Runs, and Statuses without a Step start none", async () => {
     const { ada, ticket, agent, status } = await adaWithAgent();
 

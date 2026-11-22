@@ -191,6 +191,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     delegateRemoved: boolean;
     autonomousDelegation: boolean | null;
     agentsMayMerge: boolean;
+    conciseReports: boolean;
     agentName: string | null;
     runnerId: string | null;
     runnerOwnerId: string | null;
@@ -203,7 +204,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
        tickets.labels, tickets.delegate_id as "delegateId", agents.removed_at is not null as "delegateRemoved",
        tickets.autonomous_delegation as "autonomousDelegation", projects.agents_may_merge as "agentsMayMerge",
-       agents.name as "agentName", runners.id as "runnerId",
+       projects.concise_reports as "conciseReports", agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
        tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
      from tickets join projects on projects.id = tickets.project_id
@@ -278,8 +279,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     ticket.key,
     statuses,
     status as Status & { step: Step },
-    ticket.autonomousDelegation === true,
-    runId,
+    { autonomous: ticket.autonomousDelegation === true, conciseReports: ticket.conciseReports, runId },
   );
   const refusal = !ticket.runnerId
     ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`

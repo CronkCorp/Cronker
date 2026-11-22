@@ -161,6 +161,8 @@ export interface Project extends ProjectSummary {
   pullRequestAutomation: boolean;
   /** Whether Merge Steps let agents merge Autonomous Delegation Tickets' Pull Requests; only Admins change it. */
   agentsMayMerge: boolean;
+  /** Whether Briefs in this Project ask Runs to keep their Reports concise. */
+  conciseReports: boolean;
   statuses: Status[];
 }
 
@@ -170,6 +172,7 @@ export interface ProjectEdit {
   autonomousDelegationDefault?: boolean;
   pullRequestAutomation?: boolean;
   agentsMayMerge?: boolean;
+  conciseReports?: boolean;
 }
 
 export type Priority = "urgent" | "high" | "medium" | "low" | "none";
