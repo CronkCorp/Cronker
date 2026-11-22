@@ -80,6 +80,8 @@ export interface GitHubImport {
   imported: number;
   skipped: number;
   error: string | null;
+  /** While it waits out GitHub's rate limit, when it carries on; null otherwise. */
+  waitingUntil: string | null;
   startedBy: string;
   startedAt: string;
   finishedAt: string | null;
