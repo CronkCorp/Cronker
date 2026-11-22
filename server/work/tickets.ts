@@ -8,6 +8,7 @@ import { accessOf, inReach, readAccessRefusal, requireWrite, userViewer, type Vi
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
+import { lockTickets, writeTicket } from "./ticket-writes.js";
 import { findProject, projectNotFound } from "./projects.js";
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { Cost, costTotalsSql } from "../runs/costs.js";
@@ -675,25 +676,10 @@ export async function editTicket(
     // Only Users get this far with fields that name a User.
     const userId = editor.id;
     const next = { ...ticket };
-    const changes: NewChange[] = [];
-    /** Sets a field and records the Change, if the value differs; `shown` gives how the Change shows a value. */
-    const change = async <K extends keyof Row & keyof TicketEdit>(
-      key: K,
-      field: NewChange["field"],
-      value: Row[K],
-      shown: (value: Row[K]) => unknown = (v) => v,
-    ) => {
-      if (JSON.stringify(value) === JSON.stringify(ticket[key])) return;
-      next[key] = value;
-      changes.push({ field, from: await shown(ticket[key]), to: await shown(value) });
-    };
-    const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
-    const userNamed = (id: string | null) => named(tx, `select id, ${userName()} as name from users where id = $1`, id);
-    const agentNamed = (id: string | null) => named(tx, "select id, name from agents where id = $1", id);
-    const ticketRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
+    // `next` holds the Ticket as the edit leaves it; the write records a Change for each field that differs.
 
-    if (edit.title !== undefined) await change("title", "title", edit.title.trim());
-    if (edit.description !== undefined) await change("description", "description", edit.description);
+    if (edit.title !== undefined) next.title = edit.title.trim();
+    if (edit.description !== undefined) next.description = edit.description;
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
       if (edit.statusId !== ticket.statusId && ticket.verification === "unverified") {
@@ -707,33 +693,32 @@ export async function editTicket(
           },
         );
       }
-      await change("statusId", "status", edit.statusId, statusNamed);
+      next.statusId = edit.statusId;
       // Leaving its Done Status, an Accepted Ticket is no longer Verified: Verification is of that completion.
       if (next.statusId !== ticket.statusId && ticket.verification !== null) {
         next.verification = null;
-        changes.push({ field: "verification", from: ticket.verification, to: null });
       }
     }
-    if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
-    if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
+    if (edit.priority !== undefined) next.priority = edit.priority;
+    if (edit.labels !== undefined) next.labels = distinctLabels(edit.labels);
     if (edit.assigneeId !== undefined) {
       if (edit.assigneeId !== null && edit.assigneeId !== ticket.assigneeId) {
         await checkMember(tx, ticket.workspaceId, edit.assigneeId);
         await checkAssigneeWrites(tx, ticket, edit.assigneeId);
       }
-      await change("assigneeId", "assignee", edit.assigneeId, userNamed);
+      next.assigneeId = edit.assigneeId;
     }
     if (edit.delegateId !== undefined && edit.delegateId !== null) {
       const delegate = await checkDelegate(tx, ticket, userId, edit.delegateId, next.assigneeId);
       // Delegating an unassigned Ticket assigns the delegating User.
-      if (next.assigneeId === null) await change("assigneeId", "assignee", userId, userNamed);
-      await change("delegateId", "delegate", delegate.id, agentNamed);
+      if (next.assigneeId === null) next.assigneeId = userId;
+      next.delegateId = delegate.id;
     } else if (edit.delegateId === null) {
-      await change("delegateId", "delegate", null, agentNamed);
+      next.delegateId = null;
     } else if (next.delegateId !== null && next.assigneeId !== ticket.assigneeId) {
       // A new Assignee who doesn't own the Delegate removes it.
       const owner = await ownerOf(tx, next.delegateId);
-      if (owner !== next.assigneeId) await change("delegateId", "delegate", null, agentNamed);
+      if (owner !== next.assigneeId) next.delegateId = null;
     }
     /** The parent the Ticket was just put under, if any. */
     let newParent: TicketRef | null = null;
@@ -741,7 +726,7 @@ export async function editTicket(
     let delegationInherited = false;
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
-      await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
+      next.parentId = parent?.id ?? null;
       if (parent && parent.id !== ticket.parentId) newParent = parent;
       // A new Sub-Ticket takes a delegated parent's Delegation, and so its Assignee, whose Agent the Delegate is,
       // even over a Delegation of its own; under an undelegated parent it keeps its own. An Assignee or Delegate
@@ -749,69 +734,51 @@ export async function editTicket(
       const delegationGiven = edit.assigneeId !== undefined || edit.delegateId !== undefined;
       const delegation = newParent && !delegationGiven ? await heldDelegationOf(tx, newParent.id) : null;
       if (delegation) {
-        await change("assigneeId", "assignee", delegation.assigneeId, userNamed);
-        await change("delegateId", "delegate", delegation.delegateId, agentNamed);
+        next.assigneeId = delegation.assigneeId;
+        next.delegateId = delegation.delegateId;
         delegationInherited = true;
       }
     }
     if (edit.autonomousDelegation !== undefined) {
-      await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
+      next.autonomousDelegation = edit.autonomousDelegation;
     } else {
       // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
       const inherited = newParent ? await autonomousDelegationOf(tx, newParent.id) : null;
       if (inherited !== null) {
-        await change("autonomousDelegation", "autonomousDelegation", inherited);
+        next.autonomousDelegation = inherited;
       } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
         const { rows } = await tx.query<{ value: boolean }>(
           "select autonomous_delegation_default as value from projects where id = $1",
           [ticket.projectId],
         );
-        await change("autonomousDelegation", "autonomousDelegation", rows[0]!.value);
+        next.autonomousDelegation = rows[0]!.value;
       }
     }
-    if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
-    if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
-    if (changes.length === 0) return fullTicket(tx, editor, ticket);
-
+    if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
+    if (edit.estimate !== undefined) next.estimate = edit.estimate;
     const now = clock.now();
     // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
-    if (next.discovered?.waiting && (next.statusId !== ticket.statusId || delegated)) {
-      next.discovered = { ...next.discovered, waiting: false };
-    }
-    await tx.query(
-      `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       former_assignee_id = case when $6::uuid is null then former_assignee_id end,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
-       status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
-       autonomous_delegation = $13, verification = $14,
-       completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end,
-       discovery_waits = $15
-       where id = $1`,
-      [
-        ticket.id,
-        next.title,
-        next.description,
-        next.priority,
-        next.labels,
-        next.assigneeId,
-        next.dueDate,
-        next.estimate,
-        next.statusId,
-        next.parentId,
-        next.delegateId,
-        now,
-        next.autonomousDelegation,
-        next.verification,
-        next.discovered?.waiting ?? false,
-      ],
-    );
+    const takenUp = ticket.discovered?.waiting === true && (next.statusId !== ticket.statusId || delegated);
+    const { written, changes } = await writeTicket(context, tx, ticket, actor, {
+      title: next.title,
+      description: next.description,
+      statusId: next.statusId,
+      verification: next.verification,
+      priority: next.priority,
+      labels: next.labels,
+      assigneeId: next.assigneeId,
+      delegateId: next.delegateId,
+      parentId: next.parentId,
+      autonomousDelegation: next.autonomousDelegation,
+      dueDate: next.dueDate,
+      estimate: next.estimate,
+      ...(takenUp ? { discoveryWaits: false } : {}),
+    }, { at: now });
+    if (!written) return fullTicket(tx, editor, ticket);
+
     if (next.description !== ticket.description) await indexMentions(tx, "ticket", ticket, next.description);
-    if (ticket.discovered?.waiting && !next.discovered?.waiting) await settleDiscoveredSubTickets(context, tx, ticket);
-    // Moving the Ticket ends its waiting from a needs you Outcome.
-    if (next.statusId !== ticket.statusId) await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
-    await recordChanges(tx, ticket, actor, now, changes);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    if (takenUp) await settleDiscoveredSubTickets(context, tx, ticket, actor, now);
     if (next.parentId !== ticket.parentId) {
       // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
       const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
@@ -880,19 +847,12 @@ export async function undelegateTickets(
   reason: string,
   now: Date,
 ): Promise<void> {
-  const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string; delegateId: string; agentName: string }>(
-    `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
-       tickets.delegate_id as "delegateId", agents.name as "agentName"
-     from tickets join agents on agents.id = tickets.delegate_id
-     where tickets.delegate_id = any($1::uuid[]) order by tickets.id for update of tickets`,
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from tickets where delegate_id = any($1::uuid[])",
     [agentIds],
   );
-  for (const ticket of rows) {
-    await tx.query("update tickets set delegate_id = null where id = $1", [ticket.id]);
-    await recordChanges(tx, ticket, userId, now, [
-      { field: "delegate", from: { id: ticket.delegateId, name: ticket.agentName }, to: null },
-    ]);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  for (const ticket of await lockTickets(tx, rows.map((row) => row.id))) {
+    await writeTicket(context, tx, ticket, userId, { delegateId: null }, { at: now });
     await stopRunningRun(context, tx, ticket.id, reason, now);
     // Losing its Delegate ends the Ticket's wait for a Run.
     await startRunIfNeeded(context, tx, ticket.id, now);
@@ -909,33 +869,30 @@ async function autonomousDelegationOf(tx: Tx, ticketId: string): Promise<boolean
 
 /** Gives the Ticket's Sub-Tickets, however deep, its Autonomous Delegation, recording a Change on each that differed. */
 async function passAutonomousDelegationDown(
-  { live }: Context,
+  context: Context,
   tx: Tx,
   ticket: TicketRow,
   value: boolean,
   userId: string,
   now: Date,
 ): Promise<void> {
-  const { rows } = await tx.query<{ id: string; from: boolean | null }>(
+  for (const subTicket of await lockTickets(tx, await descendantsOf(tx, ticket.id))) {
+    await writeTicket(context, tx, subTicket, userId, { autonomousDelegation: value }, { at: now });
+  }
+}
+
+/** The ids of the Ticket's Sub-Tickets, however deep. */
+async function descendantsOf(tx: Tx, ticketId: string): Promise<string[]> {
+  const { rows } = await tx.query<{ id: string }>(
     `with recursive descendants (id) as (
        select id from tickets where parent_id = $1
        union
        select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
-     ),
-     changed as (
-       select tickets.id, tickets.autonomous_delegation as from from tickets join descendants using (id)
-       where tickets.autonomous_delegation is distinct from $2
-       for update of tickets
      )
-     update tickets set autonomous_delegation = $2 from changed where tickets.id = changed.id
-     returning tickets.id, changed.from`,
-    [ticket.id, value],
+     select id from descendants`,
+    [ticketId],
   );
-  for (const row of rows) {
-    const subTicket = { id: row.id, workspaceId: ticket.workspaceId };
-    await recordChanges(tx, subTicket, userId, now, [{ field: "autonomousDelegation", from: row.from, to: value }]);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: row.id });
-  }
+  return rows.map((row) => row.id);
 }
 
 /**
@@ -953,55 +910,43 @@ async function passDelegationDown(
   now: Date,
 ): Promise<void> {
   const undelegated = next.delegateId === null;
-  const { rows } = await tx.query<{
-    id: string;
-    key: string;
-    assigneeId: string | null;
-    assignee: string | null;
-    delegateId: string | null;
-    delegate: string | null;
-  }>(
-    `with recursive descendants (id) as (
-       select id from tickets where parent_id = $1
-       union
-       select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
-     )
-     select tickets.id, projects.key || '-' || tickets.number as key,
-       tickets.assignee_id as "assigneeId", ${userName()} as assignee,
-       tickets.delegate_id as "delegateId", agents.name as delegate
-     from tickets join descendants using (id) join projects on projects.id = tickets.project_id
-     left join users on users.id = tickets.assignee_id left join agents on agents.id = tickets.delegate_id
-     where ${undelegated ? "tickets.delegate_id = $2" : "tickets.assignee_id is distinct from $3 or tickets.delegate_id is distinct from $2"}
-     order by tickets.id for update of tickets`,
-    undelegated ? [ticket.id, ticket.delegateId] : [ticket.id, next.delegateId, next.assigneeId],
+  const subTickets = (await lockTickets(tx, await descendantsOf(tx, ticket.id))).filter((subTicket) =>
+    undelegated
+      ? subTicket.delegateId === ticket.delegateId
+      : subTicket.assigneeId !== next.assigneeId || subTicket.delegateId !== next.delegateId,
   );
-  if (rows.length === 0) return;
-  const assignee = undelegated ? null : await named(tx, `select id, ${userName()} as name from users where id = $1`, next.assigneeId);
+  if (subTickets.length === 0) return;
   const delegate = await named(tx, "select id, name from agents where id = $1", next.delegateId);
   const who = await nameOfUser(tx, userId);
-  for (const subTicket of rows) {
-    const assigneeId = undelegated ? subTicket.assigneeId : next.assigneeId;
-    await tx.query(
-      `update tickets set assignee_id = $2, delegate_id = $3,
-       discovery_waits = case when $3::uuid is not null and delegate_id is distinct from $3 then false else discovery_waits end
-       where id = $1`,
-      [subTicket.id, assigneeId, next.delegateId],
+  const keys = new Map(
+    (
+      await tx.query<{ id: string; key: string }>(
+        `select tickets.id, projects.key || '-' || tickets.number as key
+         from tickets join projects on projects.id = tickets.project_id where tickets.id = any($1::uuid[])`,
+        [subTickets.map((subTicket) => subTicket.id)],
+      )
+    ).rows.map((row) => [row.id, row.key]),
+  );
+  for (const subTicket of subTickets) {
+    const delegateChanged = subTicket.delegateId !== next.delegateId;
+    await writeTicket(
+      context,
+      tx,
+      subTicket,
+      userId,
+      {
+        assigneeId: undelegated ? subTicket.assigneeId : next.assigneeId,
+        delegateId: next.delegateId,
+        // Delegated to a new Agent, a waiting Discovered Sub-Ticket is taken up.
+        ...(next.delegateId !== null && delegateChanged ? { discoveryWaits: false } : {}),
+      },
+      { at: now },
     );
-    const changes: NewChange[] = [];
-    if (subTicket.assigneeId !== assigneeId) {
-      const from = subTicket.assigneeId === null ? null : { id: subTicket.assigneeId, name: subTicket.assignee };
-      changes.push({ field: "assignee", from, to: assignee });
-    }
-    if (subTicket.delegateId !== next.delegateId) {
-      const from = subTicket.delegateId === null ? null : { id: subTicket.delegateId, name: subTicket.delegate };
-      changes.push({ field: "delegate", from, to: delegate });
-    }
-    await recordChanges(tx, { id: subTicket.id, workspaceId: ticket.workspaceId }, userId, now, changes);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: subTicket.id });
-    if (subTicket.delegateId !== next.delegateId) {
+    if (delegateChanged) {
+      const key = keys.get(subTicket.id)!;
       const reason = delegate
-        ? `${who} delegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}, to ${delegate.name}.`
-        : `${who} undelegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}.`;
+        ? `${who} delegated ${ticket.key}, and so its Sub-Ticket ${key}, to ${delegate.name}.`
+        : `${who} undelegated ${ticket.key}, and so its Sub-Ticket ${key}.`;
       await stopRunningRun(context, tx, subTicket.id, reason, now);
       // Gaining a Delegate may get the Sub-Ticket a Run; losing it ends its wait for one.
       await startRunIfNeeded(context, tx, subTicket.id, now);
@@ -1014,7 +959,7 @@ async function passDelegationDown(
  * Refused for any other Ticket.
  */
 export async function dismissTicket(context: Context, userId: string, ticketId: string): Promise<Ticket> {
-  const { db, clock, live } = context;
+  const { db, clock } = context;
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
@@ -1026,10 +971,12 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
         `${ticket.key} isn't a Discovered Ticket waiting for a User: only those are dismissed.`,
       );
     }
-    await tx.query("update tickets set discovery_waits = false where id = $1", [ticket.id]);
-    await settleDiscoveredSubTickets(context, tx, ticket);
-    await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    const now = clock.now();
+    await writeTicket(context, tx, ticket, userId, { discoveryWaits: false }, {
+      at: now,
+      changes: [{ field: "dismissed", from: null, to: null }],
+    });
+    await settleDiscoveredSubTickets(context, tx, ticket, userId, now);
     return fullTicket(tx, userViewer(userId), { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
 }
@@ -1038,7 +985,13 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
  * A User took up a waiting Discovered Ticket: the Sub-Tickets its Agent split it into, waiting with it, are settled
  * with it, leaving the Agent's hands. Call it in the transaction that settles the Ticket.
  */
-async function settleDiscoveredSubTickets(context: Context, tx: Tx, ticket: TicketRow): Promise<void> {
+async function settleDiscoveredSubTickets(
+  context: Context,
+  tx: Tx,
+  ticket: TicketRow,
+  actor: ChangeActor,
+  now: Date,
+): Promise<void> {
   const { rows } = await tx.query<{ id: string }>(
     `with recursive settled (id) as (
        select id from tickets where parent_id = $1 and discovery_waits and discovered_by_agent_id = $2
@@ -1046,12 +999,11 @@ async function settleDiscoveredSubTickets(context: Context, tx: Tx, ticket: Tick
        select tickets.id from tickets join settled on tickets.parent_id = settled.id
        where tickets.discovery_waits and tickets.discovered_by_agent_id = $2
      )
-     update tickets set discovery_waits = false from settled where tickets.id = settled.id
-     returning tickets.id`,
+     select id from settled`,
     [ticket.id, ticket.discovered!.agentId],
   );
-  for (const { id } of rows) {
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: id });
+  for (const subTicket of await lockTickets(tx, rows.map((row) => row.id))) {
+    await writeTicket(context, tx, subTicket, actor, { discoveryWaits: false }, { at: now });
   }
 }
 
