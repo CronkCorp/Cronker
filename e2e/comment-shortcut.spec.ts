@@ -37,34 +37,54 @@ test("Ctrl+Enter places a Comment from the Ticket's Comment box, while Enter and
   await ticketsWithAQuestion(page, cronk);
   await openTicket(page, "CRONK-1");
   const timeline = page.getByRole("region", { name: "Timeline" });
-  const box = page.getByLabel("New Comment");
+  const box = page.getByRole("textbox", { name: "New Comment" });
 
   // An empty box places nothing.
   await box.press("Control+Enter");
+  // The box is the shared editor: Enter starts a paragraph, Shift+Enter breaks the line, and formatting saves as Markdown.
   await box.pressSequentially("First line");
   await box.press("Enter");
-  await box.pressSequentially("second line");
+  await box.pressSequentially("second ");
+  await box.press("ControlOrMeta+b");
+  await box.pressSequentially("bold");
+  await box.press("ControlOrMeta+b");
   await box.press("Shift+Enter");
   await box.pressSequentially("third line");
-  await expect(box).toHaveValue("First line\nsecond line\nthird line");
+  await expect(box.getByRole("strong")).toHaveText("bold");
   await expect(timeline.getByRole("article", { name: "Comment by ada@example.com" })).toHaveCount(0);
 
   await box.press("Control+Enter");
   const comment = timeline.getByRole("article", { name: "Comment by ada@example.com" });
   await expect(comment).toHaveCount(1);
-  await expect(comment).toContainText("third line");
-  await expect(box).toHaveValue("");
+  const paragraphs = comment.locator(".markdown p");
+  await expect(paragraphs).toHaveCount(2);
+  await expect(paragraphs.first()).toHaveText("First line");
+  await expect(comment.getByRole("strong")).toHaveText("bold");
+  await expect(paragraphs.last().locator("br")).toHaveCount(1);
+  await expect(box).toHaveText("");
+});
+
+test("Ctrl+Enter places a Comment from the Markdown source too, as it was written", async ({ page, cronk }) => {
+  await ticketsWithAQuestion(page, cronk);
+  await openTicket(page, "CRONK-1");
+  await page.getByRole("group", { name: "Editing mode" }).getByRole("button", { name: "Markdown", exact: true }).click();
+  const source = page.getByRole("textbox", { name: "New Comment, as Markdown" });
+  await source.fill("Written as **Markdown**.");
+  await source.press("Control+Enter");
+  const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
+  await expect(comment.getByRole("strong")).toHaveText("Markdown");
+  await expect(source).toHaveValue("");
 });
 
 test("Cmd+Enter places a Reply to a Comment", async ({ page, cronk }) => {
   await ticketsWithAQuestion(page, cronk);
   await openTicket(page, "CRONK-1");
-  await page.getByLabel("New Comment").fill("Is it blocked?");
+  await page.getByRole("textbox", { name: "New Comment" }).fill("Is it blocked?");
   await placeCommentButton(page).click();
   const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
   await comment.getByRole("button", { name: "Reply" }).click();
-  await comment.getByLabel("Reply").fill("No, it isn't.");
-  await comment.getByLabel("Reply").press("Meta+Enter");
+  await comment.getByRole("textbox", { name: "Reply" }).fill("No, it isn't.");
+  await comment.getByRole("textbox", { name: "Reply" }).press("Meta+Enter");
   await expect(comment.getByRole("article", { name: "Reply from ada@example.com" })).toContainText("No, it isn't.");
 });
 
@@ -73,7 +93,7 @@ test("Ctrl+Enter answers a Question from the Inbox's answer box", async ({ page,
   await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /^Inbox/ }).click();
   const detail = page.getByRole("region", { name: "Selected item" });
   await expect(detail).toContainText("Blue or green?");
-  const answer = detail.getByLabel("Answer");
+  const answer = detail.getByRole("textbox", { name: "Answer" });
   await answer.press("Control+Enter");
   await expect(detail).toContainText("Blue or green?");
   await answer.fill("Green.");
@@ -100,7 +120,7 @@ test("pressing Ctrl+Enter again while a Comment is being sent doesn't place it t
     await held;
     await route.continue();
   });
-  const box = page.getByLabel("New Comment");
+  const box = page.getByRole("textbox", { name: "New Comment" });
   await box.fill("Only once.");
   await box.press("Control+Enter");
   await expect.poll(() => sent).toBe(1);
@@ -113,14 +133,15 @@ test("pressing Ctrl+Enter again while a Comment is being sent doesn't place it t
   release();
   const comment = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
   await expect(comment).toHaveCount(1);
-  await expect(box).toHaveValue("");
+  await expect(box).toHaveText("");
   expect(sent).toBe(1);
 
   // A held key's repeats place nothing, even once the box is free again.
   await box.fill("Not from a held key.");
   await box.dispatchEvent("keydown", { key: "Enter", ctrlKey: true, repeat: true });
   await box.press("Shift+Enter");
-  await expect(box).toHaveValue("Not from a held key.\n");
+  await expect(box.locator("br")).not.toHaveCount(0);
+  await expect(box).toContainText("Not from a held key.");
   expect(sent).toBe(1);
 });
 
@@ -145,8 +166,8 @@ test("on macOS the hint is ⌘↵", async ({ page, cronk }) => {
   const comment = placeCommentButton(page);
   await expect(comment).toHaveText("Comment ⌘↵");
   await expect(comment).toHaveAttribute("aria-keyshortcuts", "Meta+Enter");
-  await page.getByLabel("New Comment").fill("Is it blocked?");
-  await page.getByLabel("New Comment").press("Meta+Enter");
+  await page.getByRole("textbox", { name: "New Comment" }).fill("Is it blocked?");
+  await page.getByRole("textbox", { name: "New Comment" }).press("Meta+Enter");
   const placed = page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by ada@example.com" });
   await placed.getByRole("button", { name: "Reply" }).click();
   await expect(placed.getByRole("button", { name: "Send reply", exact: true })).toHaveText("Send reply ⌘↵");
@@ -155,8 +176,9 @@ test("on macOS the hint is ⌘↵", async ({ page, cronk }) => {
 test("a Comment Cronk refuses stays in its box with the refusal under it", async ({ page, cronk }) => {
   await ticketsWithAQuestion(page, cronk);
   await openTicket(page, "CRONK-1");
-  const box = page.getByLabel("New Comment");
-  // Only spaces pass the box's required check, but Cronk refuses a Comment with no words.
+  // Only spaces, written as the Markdown source, pass the box's check, but Cronk refuses a Comment with no words.
+  await page.getByRole("group", { name: "Editing mode" }).getByRole("button", { name: "Markdown", exact: true }).click();
+  const box = page.getByRole("textbox", { name: "New Comment, as Markdown" });
   await box.fill("   ");
   await box.press("Control+Enter");
   await expect(page.getByRole("alert")).toBeVisible();

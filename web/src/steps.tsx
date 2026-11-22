@@ -13,6 +13,7 @@ import {
 import { field, useSave, useSubmit } from "./forms.js";
 import { Actions, Button, Check, Field, FormError, Panel, Saved } from "./ui/controls.js";
 import { StatusPill } from "./ui/labels.js";
+import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /**
  * A new Step's starting point: sends Tickets on to the next Status, or back to the first other one for a User,
@@ -156,16 +157,7 @@ function StepForm({
         void onSave();
       }}
     >
-      <Field label={`Brief for ${of}`}>
-        <textarea
-          className="markdown-source"
-          rows={8}
-          required
-          maxLength={50_000}
-          value={draft.brief}
-          onChange={(e) => onDraft({ ...draft, brief: e.target.value })}
-        />
-      </Field>
+      <RichEditor label={`Brief for ${of}`} value={draft.brief} onChange={(brief) => onDraft({ ...draft, brief })} />
       <div className="form-row">
         <Field label={`Kind of Step for ${of}`}>
           <select value={draft.kind} onChange={(e) => onDraft({ ...draft, kind: e.target.value as StepKind })}>

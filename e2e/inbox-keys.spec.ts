@@ -62,7 +62,7 @@ test("J and K move through the Inbox, A focuses the answer box, C Accepts and R 
   const answer = detail.getByLabel("Answer");
   await expect(answer).toBeFocused();
   await page.keyboard.type("jjk");
-  await expect(answer).toHaveValue("jjk");
+  await expect(answer).toHaveText("jjk");
   await expect(items.nth(0)).toHaveAttribute("aria-current", "true");
   await answer.blur();
 

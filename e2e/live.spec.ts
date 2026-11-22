@@ -39,14 +39,14 @@ test("the board and the Ticket view show what another member changes, without a 
   await lane("Ready").getByRole("link", { name: /CRONK-1/ }).click();
   await expect(page.getByRole("heading", { name: "CRONK-1 Moved by Bob" })).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).click();
-  await page.getByLabel("Description").fill("Ada is still typing");
+  await page.getByRole("textbox", { name: "Description" }).fill("Ada is still typing");
   await asBob("PATCH", `/api/tickets/${ticket.id}`, { priority: "high", statusId: statusId("Triage") });
   await expect(fieldPicker(page, "Priority")).toContainText("High");
   await expect(fieldPicker(page, "Status")).toContainText("Triage");
   await expect(page.getByRole("region", { name: "Timeline" })).toContainText(
     "bob@example.com changed Priority from None to High",
   );
-  await expect(page.getByLabel("Description")).toHaveValue("Ada is still typing");
+  await expect(page.getByRole("textbox", { name: "Description" })).toHaveText("Ada is still typing");
   await asBob("POST", `/api/tickets/${ticket.id}/comments`, { body: "Picking this up." });
   await expect(page.getByRole("region", { name: "Timeline" }).getByRole("article", { name: "Comment by bob@example.com" })).toContainText(
     "Picking this up.",

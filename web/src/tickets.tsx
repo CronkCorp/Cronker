@@ -31,7 +31,7 @@ import {
 } from "./api.js";
 import { attachAll, Attachments, FileList } from "./attachments.js";
 import { costsText, costText } from "./costs.js";
-import { field, submitOnCtrlOrCmdEnter, useSubmit } from "./forms.js";
+import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { shortcutStandsAside } from "./keys.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
@@ -45,6 +45,8 @@ import { Actions, Button, CommentButton, daySeparator, ExternalLink, Field, Form
 import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
+import { RichEditor } from "./ui/lazy-rich-editor.js";
+import type { RichEditorHandle } from "./ui/rich-editor.js";
 
 /**
  * A Ticket: its title, description and Attachments, one timeline of its Comments, Reports, Runs and Changes, and
@@ -84,15 +86,18 @@ export function TicketScreen({
   // Whether the timeline's first load is in, after which new entries are marked as they arrive.
   const [loaded, setLoaded] = useState(false);
   // The Comment box stays at the end of the timeline; the Comment button and C take the User there.
-  const commentBox = useRef<HTMLTextAreaElement>(null);
-  const toCommentBox = () => commentBox.current && scrollToAndFocus(commentBox.current);
+  const commentBox = useRef<RichEditorHandle>(null);
+  const toCommentBox = () => {
+    const box = commentBox.current?.textbox();
+    if (box) scrollToAndFocus(box);
+  };
   useEffect(() => {
     // Once C has focused the box, its repeats while held land in the box, and must not type there either.
     let held = false;
     const onKey = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== "c") return;
       if (held && event.repeat) return event.preventDefault();
-      if (shortcutStandsAside(event) || !commentBox.current) return;
+      if (shortcutStandsAside(event) || !commentBox.current?.textbox()) return;
       event.preventDefault();
       held = true;
       toCommentBox();
@@ -245,15 +250,16 @@ export function TicketScreen({
   };
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     setDropping(false);
-    if (event.dataTransfer.files.length === 0) return;
+    if (event.defaultPrevented || event.dataTransfer.files.length === 0) return;
     event.preventDefault();
     attachToTicket([...event.dataTransfer.files]);
   };
   const onPaste = (event: ClipboardEvent<HTMLDivElement>) => {
     const files = [...event.clipboardData.files];
     if (files.length === 0) return;
-    // A paste into a text field that carries text too pastes the text and attaches nothing.
-    const inField = (event.target as HTMLElement).closest("input, textarea");
+    // A paste the editor took in itself is done; one into a text field that carries text too pastes the text and attaches nothing.
+    if (event.defaultPrevented) return;
+    const inField = (event.target as HTMLElement).closest("input, textarea, [contenteditable]:not([contenteditable=false])");
     if (inField && event.clipboardData.getData("text")) return;
     event.preventDefault();
     attachToTicket(files);
@@ -342,7 +348,7 @@ export function TicketScreen({
             <CommentForm
               label="New Comment"
               button="Comment"
-              placeholder="Comment… Markdown, and Ticket keys link"
+              placeholder="Comment… Ticket keys link to their Tickets"
               boxRef={commentBox}
               onSend={async (body) => addComment(await api.comment(ticket.id, { body }))}
             />
@@ -437,9 +443,7 @@ function TextFields({ ticket, onSave, onDone }: { ticket: Ticket; onSave: (edit:
       <Field label="Title">
         <input value={title} required maxLength={300} onChange={(e) => setTitle(e.target.value)} />
       </Field>
-      <Field label="Description" hint="Markdown. Ticket keys link to their Tickets.">
-        <textarea className="markdown-source" value={description} rows={8} onChange={(e) => setDescription(e.target.value)} />
-      </Field>
+      <RichEditor label="Description" hint="Ticket keys link to their Tickets." value={description} onChange={setDescription} />
       <Actions>
         <Button type="submit" variant="primary" disabled={busy || (title === ticket.title && description === ticket.description)}>
           Save
@@ -662,9 +666,11 @@ function Verification({
       current = false;
     };
   }, [ticket]);
-  const { error, busy, onSubmit } = useSubmit(async (form) => {
-    await onReopen(field(form, "comment"));
+  const [why, setWhy] = useState("");
+  const { error, busy, onSubmit } = useSubmit(async () => {
+    await onReopen(why);
     setReopening(false);
+    setWhy("");
   });
   const merge = completion?.merge ?? null;
   const completing = runs.filter((r) => r.state === "finished").at(-1);
@@ -711,15 +717,13 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
-          <Field label="Why reopen it?">
-            <textarea name="comment" required rows={4} autoFocus />
-          </Field>
+          <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>
             <DialogClose asChild>
               <Button>Cancel</Button>
             </DialogClose>
-            <Button type="submit" variant="primary" disabled={busy}>
+            <Button type="submit" variant="primary" disabled={busy || why.trim() === ""}>
               Reopen
             </Button>
           </DialogActions>
@@ -1105,6 +1109,7 @@ function CommentForm({
   placeholder,
   hint,
   primary = true,
+  autoFocus,
   boxRef,
   onSend,
 }: {
@@ -1113,20 +1118,30 @@ function CommentForm({
   placeholder?: string;
   hint?: ReactNode;
   primary?: boolean;
-  boxRef?: Ref<HTMLTextAreaElement>;
+  autoFocus?: boolean;
+  boxRef?: Ref<RichEditorHandle>;
   onSend: (body: string) => Promise<void>;
 }) {
-  // The box empties once the Comment is placed; a refused one stays to be fixed.
-  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
-    await onSend(field(form, "body"));
-    element.reset();
+  const [body, setBody] = useState("");
+  // The box empties once the Comment is placed; a refused one stays to be fixed. An empty box places nothing.
+  const { error, busy, onSubmit } = useSubmit(async () => {
+    if (body === "") return;
+    await onSend(body);
+    setBody("");
   });
   return (
     <form className="comment-form" onSubmit={onSubmit}>
-      <label className="field">
-        <span className="sr-only">{label}</span>
-        <textarea ref={boxRef} name="body" required rows={3} placeholder={placeholder ?? label} className="markdown-source" onKeyDown={submitOnCtrlOrCmdEnter} />
-      </label>
+      <RichEditor
+        label={label}
+        hideLabel
+        compact
+        submitOnCtrlOrCmdEnter
+        autoFocus={autoFocus}
+        placeholder={placeholder ?? label}
+        value={body}
+        onChange={setBody}
+        handle={boxRef}
+      />
       <FormError error={error} />
       <Actions>
         <CommentButton variant={primary ? "primary" : "secondary"} disabled={busy}>
@@ -1629,12 +1644,12 @@ function CommentThread({
         <CommentForm
           label="Answer"
           button="Post answer"
-          placeholder={`Answer ${comment.actor.name}… (Markdown)`}
+          placeholder={`Answer ${comment.actor.name}…`}
           hint={`The answer sends ${ticket.key} back to ${askedIn ? `the ${askedIn.step.name} Step` : "the Step that asked"}.`}
           onSend={send}
         />
       ) : replying ? (
-        <CommentForm label="Reply" button="Send reply" primary={false} onSend={send} />
+        <CommentForm label="Reply" button="Send reply" primary={false} autoFocus onSend={send} />
       ) : (
         depth < 4 && (
           <Button variant="ghost" size="small" onClick={() => setReplying(true)}>

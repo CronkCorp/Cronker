@@ -158,16 +158,23 @@ test("a renamed Term's Diff names both Versions by their names", async ({ page, 
   await expect(diff).toContainText(/^Version 1: Brief\s*→\s*Version 3: Run brief/);
 });
 
-test("a Term's editor shows its definition and words to avoid in a preview beside the Markdown, as a Document's does", async ({ page, cronk }) => {
+test("a Term's definition is written in the shared editor, as formatted text, and saved as Markdown", async ({ page, cronk }) => {
   await openTerm(page, cronk);
   await page.getByRole("button", { name: "Edit" }).click();
-  await page.getByRole("textbox", { name: "Definition", exact: true }).fill("The instructions a Run starts from, **in full**.");
+  const definition = page.getByRole("textbox", { name: "Definition", exact: true });
+  await definition.fill("The instructions a Run starts from, ");
+  await definition.press("End");
+  await definition.press("ControlOrMeta+b");
+  await definition.pressSequentially("in full");
+  await definition.press("ControlOrMeta+b");
+  await definition.pressSequentially(".");
+  await expect(definition.getByRole("strong")).toHaveText("in full");
   await page.getByLabel("Words to avoid").fill("Prompt, instructions");
-  const preview = page.getByRole("region", { name: "Preview" });
-  await expect(preview.getByRole("strong")).toHaveText("in full");
-  await expect(preview).toContainText("Avoid: Prompt, instructions");
 
   await page.getByRole("button", { name: "Save as Version 3" }).click();
-  await expect(page.getByRole("article", { name: "Brief" })).toContainText("The instructions a Run starts from, in full.");
+  const term = page.getByRole("article", { name: "Brief" });
+  await expect(term).toContainText("The instructions a Run starts from, in full.");
+  await expect(term.getByRole("strong")).toHaveText("in full");
+  await expect(term).toContainText("Avoid: Prompt, instructions");
   await expect(page.getByRole("region", { name: "Versions" }).getByRole("listitem")).toHaveCount(3);
 });
