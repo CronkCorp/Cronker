@@ -3,7 +3,8 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { blockingChanged } from "../runs/runs.js";
-import { userViewer } from "../identity/viewers.js";
+import type { Caller } from "../identity/callers.js";
+import { requireBoardWrite } from "./board-rights.js";
 import {
   findProject,
   insertStatus,
@@ -42,14 +43,15 @@ const kindNames: Record<StatusKind, string> = {
 
 export async function changeStatuses(
   context: Context,
-  userId: string,
+  caller: Caller,
   projectId: string,
   change: StatusChange,
 ): Promise<Project> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
-    const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
+    const project = await findProject(tx, caller, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    requireBoardWrite(caller, project);
     const { statuses } = project;
 
     const board: Draft[] = statuses.map((s) => ({ ...s }));

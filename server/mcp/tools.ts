@@ -1019,6 +1019,185 @@ export function buildMcpServer(api: Api): McpServer {
     ({ project }) => answer(async () => get(await placePath(project, "export"))),
   );
 
+  /** A Project of your Workspace by key, as the API answers it: with its Statuses in board order and their Steps. */
+  const boardOf = async (key: string) => get<Project>(`/api/projects/${(await projectByKey(key)).id}`);
+
+  /** The id of the Status named, ignoring case, or given by id, on the Project's board; refused naming its Statuses. */
+  function statusIdOf(project: Project, status: string): string {
+    const wanted = status.trim().toLowerCase();
+    const found = project.statuses.find((s) => s.id === status.trim() || s.name.toLowerCase() === wanted);
+    if (found) return found.id;
+    throw new Refused({
+      code: "unknown_status",
+      message: `${project.key} has no Status named ${status}.`,
+      rule: "A Status is named as it is on its Project's board, ignoring case, or by its id.",
+      advice: `Use one of its Statuses: ${project.statuses.map((s) => s.name).join(", ")}.`,
+    });
+  }
+
+  const projectArgument = z.string().min(1).describe("The Project's key, such as `CRONK`.");
+  const statusArgument = z.string().min(1).describe("A Status of the Project: its name, ignoring case, or its id.");
+  const statusKind = z
+    .enum(["backlog", "active", "review", "done", "canceled"])
+    .describe("What the Status means for its Tickets: `backlog`, `active`, `review`, `done` or `canceled`.");
+  const position = z.number().int().min(0).describe("Its place on the board, counting from 0.");
+  const boardRule =
+    "Needs Write in the Project: the least of its Agent Access, your Owner's Access and your token's access. " +
+    "Returns the Project with its Statuses and Steps.";
+
+  server.registerTool(
+    "read_project",
+    {
+      title: "Read a Project's board",
+      description:
+        "A Project of your Workspace with its settings, your Access in it (`write` or `read`) and its Statuses in " +
+        "board order, each with its kind and its Step, if it has one: the Step's kind, Brief, model, round limit, " +
+        "Label rule and Outcomes, each Outcome naming the id of the Status it moves Tickets to.",
+      inputSchema: { project: projectArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(() => boardOf(project)),
+  );
+
+  server.registerTool(
+    "add_status",
+    {
+      title: "Add a Status",
+      description:
+        "Adds a Status to a Project's board, at a place or last. Refused for a name the board already has, " +
+        `ignoring case. ${boardRule}`,
+      inputSchema: {
+        project: projectArgument,
+        name: z.string().min(1).max(100),
+        kind: statusKind,
+        position: position.optional().describe("Its place on the board, counting from 0; last when left out."),
+      },
+    },
+    ({ project, ...input }) =>
+      answer(async () => send("POST", `/api/projects/${(await boardOf(project)).id}/statuses`, input)),
+  );
+
+  server.registerTool(
+    "edit_status",
+    {
+      title: "Rename, move or change the kind of a Status",
+      description:
+        "Changes whichever of a Status's name, kind and place on the board are given. Refused if it would leave a " +
+        "Status kind without a Status, if a Status with a Step would become Done or Canceled (remove its Step first), " +
+        `and if an Outcome targeting it may not target its new kind. ${boardRule}`,
+      inputSchema: {
+        project: projectArgument,
+        status: statusArgument,
+        name: z.string().min(1).max(100).optional(),
+        kind: statusKind.optional(),
+        position: position.optional(),
+      },
+    },
+    ({ project, status, ...edit }) =>
+      answer(async () => {
+        const board = await boardOf(project);
+        return send("PATCH", `/api/projects/${board.id}/statuses/${statusIdOf(board, status)}`, edit);
+      }),
+  );
+
+  server.registerTool(
+    "remove_status",
+    {
+      title: "Remove a Status",
+      description:
+        "Removes a Status from a Project's board, with its Step. Refused while it holds Tickets (move them first), " +
+        "while another Step's Outcome targets it, and if it is the board's only Status of its kind. " +
+        boardRule,
+      inputSchema: { project: projectArgument, status: statusArgument },
+    },
+    ({ project, status }) =>
+      answer(async () => {
+        const board = await boardOf(project);
+        return send("DELETE", `/api/projects/${board.id}/statuses/${statusIdOf(board, status)}`);
+      }),
+  );
+
+  server.registerTool(
+    "set_step",
+    {
+      title: "Give a Status a Step, or change its Step",
+      description:
+        "Gives a Status this Step, replacing any it had: Tickets entering it get Runs. Refused on a Done or Canceled " +
+        "Status. Exactly one Outcome is the default and exactly one, another, is *needs you*; neither may target a Done " +
+        "or Canceled Status, no Outcome may target a Canceled Status, and *needs you* may not target the Status the Step " +
+        "is on. A Step's Brief, model and Outcomes are what later Runs work by, so besides Write in the Project this " +
+        "needs your Owner to be an Admin of the Workspace. Returns the Project with its Statuses and Steps.",
+      inputSchema: {
+        project: projectArgument,
+        status: statusArgument,
+        kind: z
+          .enum(["ordinary", "merge"])
+          .optional()
+          .describe(
+            "`ordinary` (when left out), or `merge`: a Merge Step skips itself by its default Outcome unless the Ticket " +
+              "has Autonomous Delegation and its Project has agents may merge on.",
+          ),
+        brief: z.string().min(1).max(50_000).describe("Markdown; the middle of the Brief each Run starts from."),
+        model: z.string().min(1).max(50).describe("The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`."),
+        roundLimit: z
+          .number()
+          .int()
+          .min(0)
+          .max(100)
+          .optional()
+          .describe("How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*; 2 when left out."),
+        labelRule: z
+          .object({
+            kind: z.enum(["requires", "skippedBy"]).describe("`requires`: only Tickets with the Label pass. `skippedBy`: Tickets with it don't."),
+            label: z.string().min(1).max(50),
+          })
+          .nullable()
+          .optional()
+          .describe("Which Tickets get a Run; every Ticket when left out. One that doesn't pass moves on by the default Outcome."),
+        outcomes: z
+          .array(
+            z.object({
+              name: z.string().min(1).max(50).describe("Unique within the Step, ignoring case."),
+              status: statusArgument.describe("The Status it moves the Ticket to: its name, ignoring case, or its id."),
+              default: z.boolean().optional().describe("Where a skipped Step sends the Ticket."),
+              needsYou: z.boolean().optional().describe("Hands the Ticket back to its Assignee with a Question."),
+              countsAsRound: z.boolean().optional().describe("Sends work back, counting toward the round limit."),
+            }),
+          )
+          .min(2)
+          .max(20),
+      },
+    },
+    ({ project, status, outcomes, ...step }) =>
+      answer(async () => {
+        const board = await boardOf(project);
+        return send("PUT", `/api/projects/${board.id}/statuses/${statusIdOf(board, status)}/step`, {
+          ...step,
+          outcomes: outcomes.map(({ status: target, ...outcome }) => ({
+            name: outcome.name,
+            statusId: statusIdOf(board, target),
+            default: outcome.default ?? false,
+            needsYou: outcome.needsYou ?? false,
+            countsAsRound: outcome.countsAsRound ?? false,
+          })),
+        });
+      }),
+  );
+
+  server.registerTool(
+    "remove_step",
+    {
+      title: "Take a Status's Step off",
+      description: `Takes the Step off a Status, so Tickets in it wait for a User instead of getting Runs. ${boardRule}`,
+      inputSchema: { project: projectArgument, status: statusArgument },
+    },
+    ({ project, status }) =>
+      answer(async () => {
+        const board = await boardOf(project);
+        return send("DELETE", `/api/projects/${board.id}/statuses/${statusIdOf(board, status)}/step`);
+      }),
+  );
+
   server.registerTool(
     "finish",
     {
