@@ -16,6 +16,7 @@ import { ownerName } from "../agents/tokens.js";
 import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
 import { insertLink } from "./linked-artifacts.js";
 import { ComparedLine, compareWords } from "../knowledge/compare.js";
+import { sandboxPath } from "./sandbox-path.js";
 
 /**
  * Artifacts: live pages an Actor builds, such as an HTML prototype, with the files the page refers to by relative
@@ -106,7 +107,7 @@ export const ArtifactSave = Type.Object({
 export type ArtifactSave = Static<typeof ArtifactSave>;
 
 /** Where a Version's files are served, by its key: each file at its relative path under it. */
-export const sandboxPath = (key: string, path = "") => `/sandbox/${key}/${path.split("/").map(encodeURIComponent).join("/")}`;
+export { sandboxPath };
 
 type Row = Omit<Artifact, "url" | "files" | "version"> & {
   serveKey: string;

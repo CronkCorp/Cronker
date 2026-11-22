@@ -1,7 +1,7 @@
 import type { Nodes, Paragraph } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { Type, type Static } from "typebox";
-import { sandboxPath } from "../artifacts/artifacts.js";
+import { sandboxPath } from "../artifacts/sandbox-path.js";
 import type { Db, Tx } from "../db.js";
 import { slugColumn } from "../http/readable.js";
 import { inReach, type Viewer } from "../identity/viewers.js";
