@@ -220,8 +220,9 @@ export interface PullRequestOnGitHub {
   base: { ref: string; sha: string };
 }
 
-const pullPath = (fullName: string, number: number) =>
-  `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/pulls/${number}`;
+const repoPath = (fullName: string) => `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}`;
+
+const pullPath = (fullName: string, number: number) => `${repoPath(fullName)}/pulls/${number}`;
 
 /** A Pull Request of a repository, by `owner/name` and number, as an installation covering it sees it; nothing if it can't. */
 export async function pullRequestOnGitHub(
@@ -298,6 +299,10 @@ export interface IssueOnGitHub {
   labels: (string | { name?: string | null })[];
   created_at: string;
   pull_request?: unknown;
+  /** How many sub-issues it has, if GitHub says; an import asks for them only where there are some. */
+  sub_issues_summary?: { total?: number } | null;
+  /** How many issues block it, if GitHub says; an import asks for them only where there are some. */
+  issue_dependencies_summary?: { blocked_by?: number; total_blocked_by?: number } | null;
 }
 
 /**
@@ -311,7 +316,7 @@ export async function issuesPage(
   fullName: string,
   page: number,
 ): Promise<{ kind: "page"; issues: IssueOnGitHub[]; more: boolean } | { kind: "refused"; status: number }> {
-  const url = under(github.apiUrl, `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/issues`);
+  const url = under(github.apiUrl, `${repoPath(fullName)}/issues`);
   url.searchParams.set("state", "all");
   url.searchParams.set("sort", "created");
   url.searchParams.set("direction", "asc");
@@ -322,4 +327,43 @@ export async function issuesPage(
   const issues = await jsonOf<IssueOnGitHub[]>(response, "The issues list");
   if (!Array.isArray(issues)) throw unavailable("The issues list answered something other than a list");
   return { kind: "page", issues, more: /rel="next"/.test(response.headers.get("link") ?? "") };
+}
+
+/** The issues an issue lists as linked to it on GitHub: its sub-issues, or the issues it is blocked by. */
+export type IssueLinks = "sub_issues" | "dependencies/blocked_by";
+
+/** A linked issue as GitHub lists it; only its node id matters to an import. */
+export interface LinkedIssueOnGitHub {
+  node_id: string;
+  number: number;
+}
+
+/**
+ * Every issue an issue lists as linked to it, as an installation covering its repository sees them, following GitHub's
+ * pages. An issue GitHub no longer has (404 or 410) lists none; a refusal (403) comes back with its status, as
+ * `issuesPage` answers one.
+ */
+export async function linkedIssues(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  number: number,
+  links: IssueLinks,
+): Promise<{ kind: "list"; issues: LinkedIssueOnGitHub[] } | { kind: "refused"; status: number }> {
+  const first = under(github.apiUrl, `${repoPath(fullName)}/issues/${number}/${links}`);
+  first.searchParams.set("per_page", "100");
+  const issues: LinkedIssueOnGitHub[] = [];
+  let url: URL | undefined = first;
+  // GitHub caps sub-issues at 100 an issue; ten pages is well beyond what it lists.
+  for (let pages = 0; url && pages < 10; pages++) {
+    const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+    if (response.status === 404 || response.status === 410) return { kind: "list", issues };
+    if (response.status === 403) return { kind: "refused", status: response.status };
+    const page = await jsonOf<LinkedIssueOnGitHub[]>(response, `The issue's ${links.replace("dependencies/", "")} list`);
+    if (!Array.isArray(page)) throw unavailable("A linked issues list answered something other than a list");
+    issues.push(...page);
+    const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get("link") ?? "")?.[1];
+    url = next && new URL(next).origin === first.origin ? new URL(next) : undefined;
+  }
+  return { kind: "list", issues };
 }

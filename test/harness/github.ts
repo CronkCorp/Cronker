@@ -88,6 +88,10 @@ export interface StandInIssue {
   createdAt: Date;
   /** Whether it is a Pull Request, which GitHub's issues list includes. */
   pullRequest: boolean;
+  /** The issue it is a sub-issue of, if any, which lists it among its sub-issues. */
+  parent: StandInIssue | null;
+  /** The issues it is blocked by. */
+  blockedBy: StandInIssue[];
 }
 
 /** A merge GitHub made at the App's request. */
@@ -175,6 +179,10 @@ export interface StandInGitHub {
   issue(repository: StandInRepository, fields?: Partial<Omit<StandInIssue, "repository" | "number" | "nodeId">>): StandInIssue;
   /** Every issue of every repository, in the order they were filed. */
   issues: StandInIssue[];
+  /** Every ask for an issue's sub-issues or blockers, as `owner/name#number/sub_issues` or `…/dependencies/blocked_by`. */
+  linkRequests: string[];
+  /** When set, the asks for an issue's links it picks, as `linkRequests` writes them, answer 502. */
+  linksFail: ((asked: string) => boolean) | null;
   /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
   merges: StandInMerge[];
   /**
@@ -337,12 +345,16 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         labels: [],
         createdAt: clock.now(),
         pullRequest: false,
+        parent: null,
+        blockedBy: [],
         ...fields,
       };
       github.issues.push(issue);
       return issue;
     },
     issues: [],
+    linkRequests: [],
+    linksFail: null,
     merges: [],
     onMerge: null,
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
@@ -664,6 +676,45 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
           html_url: `${github.url}/${repository.fullName}/${i.pullRequest ? "pull" : "issues"}/${i.number}`,
           created_at: i.createdAt.toISOString().replace(/\.\d{3}Z$/, "Z"),
           ...(i.pullRequest ? { pull_request: { url: `${github.apiUrl}/repos/${repository.fullName}/pulls/${i.number}` } } : {}),
+          sub_issues_summary: { total: github.issues.filter((s) => s.parent === i).length, completed: 0, percent_completed: 0 },
+          issue_dependencies_summary: {
+            blocked_by: i.blockedBy.filter((b) => b.state === "open").length,
+            total_blocked_by: i.blockedBy.length,
+            blocking: 0,
+            total_blocking: github.issues.filter((b) => b.blockedBy.includes(i)).length,
+          },
+        })),
+        link ? { link } : {},
+      );
+    }
+
+    // API: an issue's sub-issues, or the issues it is blocked by, with a token of an installation that covers its
+    // repository and may read issues.
+    const linked = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/(sub_issues|dependencies\/blocked_by)$/.exec(path);
+    if (request.method === "GET" && linked) {
+      const asked = `${decodeURIComponent(linked[1]!)}#${linked[2]}/${linked[3]}`;
+      github.linkRequests.push(asked);
+      if (github.linksFail?.(asked)) return json(response, 502, { message: "Server Error" });
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(linked[1]!).toLowerCase());
+      const issue = repository && github.issues.find((i) => i.repository === repository && i.number === Number(linked[2]));
+      if (!repository || !issue) return json(response, 404, { message: "Not Found" });
+      const access = installation.permissions.issues;
+      if (access !== "read" && access !== "write") return json(response, 403, { message: "Resource not accessible by integration" });
+      const listed = linked[3] === "sub_issues" ? github.issues.filter((i) => i.parent === issue) : issue.blockedBy;
+      const { items, link } = page(url, listed);
+      return json(
+        response,
+        200,
+        items.map((i) => ({
+          node_id: i.nodeId,
+          number: i.number,
+          title: i.title,
+          state: i.state,
+          html_url: `${github.url}/${i.repository.fullName}/issues/${i.number}`,
+          repository_url: `${github.apiUrl}/repos/${i.repository.fullName}`,
         })),
         link ? { link } : {},
       );

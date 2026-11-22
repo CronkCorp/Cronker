@@ -174,11 +174,13 @@ function IssuesImport({ project, repository, isAdmin }: { project: Project; repo
   const issues = (n: number) => `${n} ${n === 1 ? "issue" : "issues"}`;
   const status = !latest
     ? null
-    : latest.state === "running"
-      ? `Importing issues… ${issues(latest.imported)} imported so far${latest.skipped ? `, ${latest.skipped} skipped` : ""}.`
-      : latest.state === "done"
-        ? `Imported ${issues(latest.imported)}; skipped ${latest.skipped} already imported.`
-        : `The import stopped after ${issues(latest.imported)}: ${latest.error ?? "it failed."}`;
+    : latest.state === "running" && latest.phase === "linking"
+      ? `Linking Sub-Tickets, blocks and references… ${issues(latest.imported)} imported.`
+      : latest.state === "running"
+        ? `Importing issues… ${issues(latest.imported)} imported so far${latest.skipped ? `, ${latest.skipped} skipped` : ""}.`
+        : latest.state === "done"
+          ? `Imported ${issues(latest.imported)}; skipped ${latest.skipped} already imported.`
+          : `The import stopped after ${issues(latest.imported)}: ${latest.error ?? "it failed."}`;
   return (
     <div className="repository-import">
       {isAdmin && (

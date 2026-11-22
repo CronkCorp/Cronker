@@ -77,6 +77,8 @@ export interface GitHubImport {
   id: string;
   repository: { id: number; fullName: string };
   state: "running" | "done" | "failed";
+  /** `issues` while it reads GitHub's pages of issues; `linking` once it keeps their structure. */
+  phase: "issues" | "linking";
   imported: number;
   skipped: number;
   error: string | null;
