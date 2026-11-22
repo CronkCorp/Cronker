@@ -215,6 +215,11 @@ export interface PullRequestOnGitHub {
   merged?: boolean;
   /** Whether it merges cleanly into its base branch: `false` when it conflicts, `null` while GitHub works it out. */
   mergeable: boolean | null;
+  /**
+   * GitHub's fuller answer: `behind` when it merges cleanly but its base branch has commits its head lacks, as well as
+   * `clean`, `dirty`, `blocked`, `unstable` and `unknown`.
+   */
+  mergeable_state?: string;
   head: { sha: string };
   /** Its base branch, and the commit of it GitHub worked mergeability out against. */
   base: { ref: string; sha: string };
@@ -248,7 +253,7 @@ export async function mergeOnGitHub(
   fullName: string,
   number: number,
   { method, sha }: { method: MergeMethod | undefined; sha: string },
-): Promise<{ merged: true } | { merged: false; status: number; message: string }> {
+): Promise<{ merged: true; sha: string | null } | { merged: false; status: number; message: string }> {
   const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/merge`), {
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -258,8 +263,34 @@ export async function mergeOnGitHub(
     const body = (await response.json().catch(() => ({}))) as { message?: unknown };
     return { merged: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
   }
-  await jsonOf<unknown>(response, "The merge");
-  return { merged: true };
+  const merged = await jsonOf<{ sha?: unknown }>(response, "The merge");
+  return { merged: true, sha: typeof merged?.sha === "string" ? merged.sha : null };
+}
+
+/**
+ * Asks GitHub to bring a Pull Request's branch up to date with its base branch, by merging the base into it, only while
+ * its head is still `expectedHeadSha`. GitHub answers 202 and updates it in the background, delivering the push as a
+ * `pull_request` `synchronize`; its refusals (422 when the head moved or the update conflicts, 403 and 405 when it may
+ * not) come back with GitHub's message.
+ */
+export async function updateBranchOnGitHub(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  number: number,
+  expectedHeadSha: string,
+): Promise<{ updated: true } | { updated: false; status: number; message: string }> {
+  const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/update-branch`), {
+    method: "PUT",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ expected_head_sha: expectedHeadSha }),
+  });
+  if (response.status === 403 || response.status === 405 || response.status === 409 || response.status === 422) {
+    const body = (await response.json().catch(() => ({}))) as { message?: unknown };
+    return { updated: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
+  }
+  await jsonOf<unknown>(response, "The branch update");
+  return { updated: true };
 }
 
 /** One attempt at one of the App's webhook deliveries, as GitHub's delivery log lists it. */

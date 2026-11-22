@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
-// An Agent's Merge Run merges its Ticket's Pull Request through Cronk's merge_pull_request (ADR 0005, ADR 0007).
+// An Agent's Merge Run merges its Ticket's Pull Request through Cronk's merge_pull_request (ADR 0005, ADR 0007). An
+// Autonomous Delegation Ticket with an open Pull Request joins the Merge Queue instead (merge-queue.test.ts), so a Merge
+// Run starts only for one that entered Merge with none to queue, such as a draft, which a custom Brief may then merge.
 
 let cronk: StartedCronk;
 beforeEach(async () => {
@@ -30,8 +32,9 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
 
 /**
  * Ada's Project on the default board, listing cronkcorp/cronker, with agents may merge on, and her Ticket CRONK-1
- * delegated with Autonomous Delegation to claude-max on her fake Runner. Its Implement Run opened Pull Request #7,
- * whose one check passed and which GitHub says is mergeable, and Code review approved it: a Merge Run is running.
+ * delegated with Autonomous Delegation to claude-max on her fake Runner. Its Implement Run opened Pull Request #7 as a
+ * draft, whose one check passed, and Code review approved it: with no Pull Request to queue, a Merge Run is running.
+ * #7 was then marked ready for review, and GitHub says it is mergeable.
  */
 async function mergeRunning({ agentsMayMerge = true, autonomous = true } = {}) {
   const { workspace, user } = await setUp(cronk);
@@ -70,7 +73,7 @@ async function mergeRunning({ agentsMayMerge = true, autonomous = true } = {}) {
     const delivered = await cronk.github.deliver(app, event, { installation: { id: installation.id }, repository, ...payload });
     expect(delivered.status).toBe(200);
   };
-  await deliver("pull_request", { action: "opened", pull_request: pullRequest });
+  await deliver("pull_request", { action: "opened", pull_request: { ...pullRequest, draft: true } });
   const checkRun = (id: number, name: string, status: string, conclusion: string | null = null) =>
     deliver("check_run", {
       action: status === "completed" ? "completed" : "created",
@@ -92,6 +95,7 @@ async function mergeRunning({ agentsMayMerge = true, autonomous = true } = {}) {
   if (!autonomous) await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { autonomousDelegation: false });
   const run = await runningRun();
   expect(run.step.name).toBe("Merge");
+  await deliver("pull_request", { action: "ready_for_review", pull_request: pullRequest });
   const merge = (as: As = asAgent, pullRequestId = 501) => call("POST", `/api/runs/${run.id}/merge`, as, { pullRequestId });
 
   return {
@@ -399,8 +403,9 @@ describe("the Merge Step's send-back Outcome", () => {
     expect(await ok("GET", `/api/tickets/${ticket.id}`, ada)).toMatchObject({ statusId: status("Implement") });
     expect((await runningRun()).step.name).toBe("Implement");
 
-    // The next round comes back to Merge, where the conflict is still there.
+    // The next round comes back to Merge, where the conflict is still there, its Pull Request a draft again.
     await finish("done");
+    await setup.deliver("pull_request", { action: "converted_to_draft", pull_request: { ...setup.pullRequest, draft: true } });
     await finish("approve");
     expect((await runningRun()).step.name).toBe("Merge");
     const last = await finish("send back");
@@ -413,15 +418,38 @@ describe("the Merge Step's send-back Outcome", () => {
 });
 
 describe("the default Merge Step's Brief", () => {
-  test("explains merge_pull_request, that a merge ends the Run, and sending conflicts and known failures back with a Comment", async () => {
+  test("leaves merging to Cronk: it resolves only the conflicting hunks, pushing to the open Pull Request, then finishes resolved, or sends it back with a Comment", async () => {
     const { ada, ticket } = await mergeRunning();
 
     const brief = await ok("GET", `/api/tickets/${ticket.id}/brief`, ada);
 
-    expect(brief.brief).toContain("`merge_pull_request`");
-    expect(brief.brief).toContain("**send back**");
-    expect(brief.brief).toMatch(/merge conflict/);
-    expect(brief.brief).toMatch(/Comment/);
+    expect(brief.brief).not.toContain("merge_pull_request");
+    expect(brief.brief).toContain("Merge Queue");
+    expect(brief.brief).toContain("changing nothing beyond the conflicting hunks");
+    expect(brief.brief).toContain("push to that branch");
+    expect(brief.brief).toContain("**resolved**");
+    expect(brief.brief).toContain("**send back** when the resolution isn't mechanical");
+    expect(brief.brief).toMatch(/leaving a Comment/);
+    expect(brief.preamble).toContain("- Call `finish` exactly once, as the last thing you do.");
+    expect(brief.preamble).toContain(
+      "- **resolved**: once you've pushed a resolution of the conflict, leaves CRONK-1 in Merge, waiting for the new commit's checks to go green, when it rejoins the Merge Queue at the front.",
+    );
+    expect(brief.preamble).toContain("From a Run resolving a conflict it counts as no round");
+    expect(brief.preamble).not.toContain("merge_pull_request");
+  });
+
+  test("a Project's own Merge Brief that tells its Run to merge with merge_pull_request gets the rules for it", async () => {
+    const { ada, project, status } = await mergeRunning();
+    const { step } = project.statuses.find((s: { name: string }) => s.name === "Merge");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Merge")}/step`, ada, {
+      ...step,
+      brief: "Merge the pull request with `merge_pull_request` once it is ready.",
+    });
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Something else" });
+    await ok("PATCH", `/api/tickets/${other.id}`, ada, { statusId: status("Merge") });
+
+    const brief = await ok("GET", `/api/tickets/${other.id}/brief`, ada);
+
     expect(brief.preamble).toContain(
       "- Call `finish` exactly once, as the last thing you do, unless you merge: a merge with `merge_pull_request` " +
         "ends this Run, finished as *merged*, so don't call `finish` after it.",
@@ -521,17 +549,19 @@ describe("an Agent's merge making another Pull Request conflicting", () => {
     return { ...merging, other, mergedDelivery };
   }
 
-  test("sends that Pull Request's Ticket back once GitHub's delivery of the merge comes, after GitHub answered the merge", async () => {
+  test("marks that Pull Request as conflicting once GitHub's delivery of the merge comes, after GitHub answered the merge", async () => {
     const { merge, ada, other, status, deliver, mergedDelivery } = await anotherInReview();
     expect((await merge()).status).toBe(200);
 
     await deliver("pull_request", mergedDelivery);
     await cronk.checkMergeability();
 
-    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("Implement") });
+    // It stays in In Review, only marked.
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review"), conflicts: ["main"] });
+    expect((await ok("GET", `/api/tickets/${other.id}/pull-requests`, ada))[0].conflict).toMatchObject({ branch: "main", sha: "m1" });
   });
 
-  test("sends that Pull Request's Ticket back when GitHub's delivery of the merge comes before GitHub answers it", async () => {
+  test("marks that Pull Request as conflicting when GitHub's delivery of the merge comes before GitHub answers it", async () => {
     const { merge, ada, other, status, deliver, mergedDelivery } = await anotherInReview();
     cronk.github.onMerge = async () => {
       await deliver("pull_request", mergedDelivery);
@@ -540,6 +570,8 @@ describe("an Agent's merge making another Pull Request conflicting", () => {
 
     await cronk.checkMergeability();
 
-    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("Implement") });
+    // It stays in In Review, only marked.
+    expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review"), conflicts: ["main"] });
+    expect((await ok("GET", `/api/tickets/${other.id}/pull-requests`, ada))[0].conflict).toMatchObject({ branch: "main", sha: "m1" });
   });
 });

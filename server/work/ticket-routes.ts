@@ -6,6 +6,7 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
+import { joinQueue, leaveQueue } from "../pipeline/merge-queue.js";
 import { addComment, Comment, CommentCreate, commentsOn } from "./comments.js";
 import { Report, ReportCreate, reportsOn, writeReport } from "../knowledge/reports.js";
 import { acceptTicket, Completion, completionOf, reopenTicket, TicketReopen } from "./verification.js";
@@ -61,7 +62,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "The Project's Tickets",
-          description: "In board order of their Statuses, then by key, narrowed by whichever filters are given.",
+          description: "In board order of their Statuses; within one, Tickets in the Merge Queue first by their place in it, then " +
+            "running, unblocked and blocked ones, then by key; narrowed by whichever filters are given.",
           params: Type.Object({ projectId: Type.String() }),
           querystring: Type.Object({
             statusId: Type.Optional(Type.String()),
@@ -164,6 +166,49 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return dismissTicket(context, user.id, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/merge",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Merge a Ticket through the Merge Queue",
+          description:
+            "Queues the Ticket's first open linked Pull Request in the Merge Queue for its Repository and base branch and " +
+            "moves the Ticket into its Project's Merge Status, as the User's move. Cronk merges each queue's head in turn, " +
+            "once it is clean and green, as this User's merge, completing the Ticket as Verified. Needs Write; refused, " +
+            "naming the rule, unless the Ticket is in a Review Status (`not_in_review`), its Project has Pull Request " +
+            "automation on (`pull_request_automation_off`) and a Merge Status (`no_merge_status`), and it has an open " +
+            "linked Pull Request (`no_open_pull_request`). Only Users merge this way.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return joinQueue(context, { kind: "user", ...user }, request.params.ticketId);
+      },
+    );
+
+    app.post(
+      "/api/tickets/:ticketId/queue/remove",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "Remove a Ticket from the Merge Queue",
+          description:
+            "Sends a Ticket in the Merge Queue back to its Project's first Review Status, as the User's move, taking its " +
+            "Pull Request out of the queue. Needs Write; refused for a Ticket not in the queue (`not_queued`) or while " +
+            "Cronk is merging it (`merging`).",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        return leaveQueue(context, { kind: "user", ...user }, request.params.ticketId);
       },
     );
 

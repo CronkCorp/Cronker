@@ -187,8 +187,11 @@ export async function writeTicket(
   }
   if (sets.length > 0) await tx.query(`update tickets set ${sets.join(", ")} where id = $1`, params);
   if (statusChanged) await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
+  // Leaving the Merge Status its Pull Requests were queued in takes them out of the Merge Queue. Completing it for a
+  // merge records the merge instead, so it shows no leaving.
+  const left = statusChanged ? await leaveMergeQueue(tx, ticket.id, patch.statusId!) : [];
 
-  const changes = [...given];
+  const changes = [...given, ...left];
   for (const key of differs) {
     const { field, shown } = columns[key];
     if (!field) continue;
@@ -198,6 +201,25 @@ export async function writeTicket(
   await recordChanges(tx, ticket, actor, at, changes);
   live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   return { written: true, changes };
+}
+
+/**
+ * Takes the Ticket's Pull Requests out of the Merge Queue unless they wait in the Status it now enters, returning a
+ * `queueLeft` Change for each, unless that Status is a Done one.
+ */
+async function leaveMergeQueue(tx: Tx, ticketId: string, statusId: string): Promise<NewChange[]> {
+  const { rows } = await tx.query<{ pullRequest: unknown; done: boolean }>(
+    `with left_queue as (
+       delete from merge_queue where ticket_id = $1 and status_id <> $2 returning pull_request_id
+     )
+     select json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
+         'number', pull_requests.number, 'url', pull_requests.url) as "pullRequest",
+       (select kind = 'done' from statuses where id = $2) as done
+     from left_queue join pull_requests on pull_requests.id = left_queue.pull_request_id
+     order by pull_requests.id`,
+    [ticketId, statusId],
+  );
+  return rows.filter((row) => !row.done).map((row) => ({ field: "queueLeft", from: { pullRequest: row.pullRequest }, to: null }));
 }
 
 /** The Ticket's current value of each field, from the locked row, reading the bookkeeping it lacks that the patch gives. */
