@@ -523,14 +523,18 @@ export const MentioningText = Type.Object({
     description: "Its Project, or null for the Workspace's own knowledge.",
   }),
   title: Type.String({
-    description: "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's.",
+    description:
+      "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact or a Document that one's.",
+  }),
+  commentOn: Type.Union([Type.Literal("ticket"), Type.Literal("artifact"), Type.Literal("document"), Type.Null()], {
+    description: "For a Comment, what it is on: a Ticket, an Artifact or a Document (a Report included); otherwise null.",
   }),
   ticket: Type.Union([TicketRef, Type.Null()], {
     description:
-      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge.",
+      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact or a Document and other knowledge.",
   }),
   slug: Type.Union([Type.String(), Type.Null()], {
-    description: "A Document's or Report's slug, or for a Comment on an Artifact the Artifact's; otherwise null.",
+    description: "A Document's or Report's slug, or for a Comment on an Artifact or a Document that one's; otherwise null.",
   }),
   number: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], { description: "A Decision's number; otherwise null." }),
 });
@@ -578,23 +582,29 @@ export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTa
      )
      select * from (
        select hits.seq, 'ticket' as kind, tickets.id, tickets.project_id as "projectId", tickets.title,
-         ${ref("tickets", "ref_projects")} as ticket, null as slug, null::integer as number
+         null as "commentOn", ${ref("tickets", "ref_projects")} as ticket, null as slug, null::integer as number
        from hits join tickets on tickets.id = hits.source_ticket_id
        where tickets.id <> $5 and ${reach("tickets.project_id", "tickets.workspace_id")}
        union all
-       select hits.seq, 'comment', comments.id, tickets.project_id, tickets.title,
+       select hits.seq, 'comment', comments.id, tickets.project_id, tickets.title, 'ticket',
          ${ref("tickets", "ref_projects")}, null, null
        from hits join comments on comments.id = hits.source_comment_id join tickets on tickets.id = comments.ticket_id
        where ${reach("tickets.project_id", "tickets.workspace_id")}
        union all
-       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, null,
+       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, 'artifact', null,
          ${slugColumn("artifact", "artifacts.id", "versions.title")}, null
        from hits join comments on comments.id = hits.source_comment_id join artifacts on artifacts.id = comments.artifact_id
        join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version
        where ${reach("artifacts.project_id", "artifacts.workspace_id")}
        union all
+       select hits.seq, 'comment', comments.id, documents.project_id, versions.title, 'document', null,
+         ${slugColumn("document", "documents.id", "versions.title")}, null
+       from hits join comments on comments.id = hits.source_comment_id join documents on documents.id = comments.document_id
+       join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
+       where ${reach("documents.project_id", "documents.workspace_id")}
+       union all
        select hits.seq, case when documents.ticket_id is null then 'document' else 'report' end, documents.id,
-         documents.project_id, versions.title,
+         documents.project_id, versions.title, null,
          (select ${ticketRefColumn("report_tickets", "report_projects")} from tickets report_tickets
           join projects report_projects on report_projects.id = report_tickets.project_id
           where report_tickets.id = documents.ticket_id),
@@ -603,11 +613,11 @@ export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTa
        join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
        where ${reach("documents.project_id", "documents.workspace_id")}
        union all
-       select hits.seq, 'term', terms.id, terms.project_id, terms.name, null, null, null
+       select hits.seq, 'term', terms.id, terms.project_id, terms.name, null, null, null, null
        from hits join terms on terms.id = hits.source_term_id
        where terms.id <> $5 and ${reach("terms.project_id", "terms.workspace_id")}
        union all
-       select hits.seq, 'decision', decisions.id, decisions.project_id, versions.title, null, null, decisions.number
+       select hits.seq, 'decision', decisions.id, decisions.project_id, versions.title, null, null, null, decisions.number
        from hits join decisions on decisions.id = hits.source_decision_id
        join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version
        where decisions.id <> $5 and ${reach("decisions.project_id", "decisions.workspace_id")}
@@ -618,13 +628,32 @@ export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTa
   return rows.map(({ seq: _seq, ...text }) => text);
 }
 
+/** What a Comment may be on, each with its table and its column on `comments`. */
+const commentTargets = {
+  ticket: ["tickets", "ticket_id"],
+  artifact: ["artifacts", "artifact_id"],
+  document: ["documents", "document_id"],
+} as const;
+
+/**
+ * Comments as stored, each with its place's Project: its Ticket's, Artifact's or Document's. Only the targets given,
+ * as a database migrated short of Comments on Artifacts or Documents has no column for them.
+ */
+function storedComments(targets: (keyof typeof commentTargets)[]): string {
+  const joins = targets.map((target) => {
+    const [table, column] = commentTargets[target];
+    return `left join ${table} on ${table}.id = comments.${column}`;
+  });
+  const projects = targets.map((target) => `${commentTargets[target][0]}.project_id`);
+  return `select comments.id, comments.workspace_id as "workspaceId", coalesce(${projects.join(", ")}, null) as "projectId",
+      comments.body as markdown
+    from comments ${joins.join(" ")}`;
+}
+
 /** Each kind of text, as stored: its id, Workspace, Project and Markdown (for knowledge, its current Version's). */
 const storedTexts: Record<MentioningKind, string> = {
   ticket: `select id, workspace_id as "workspaceId", project_id as "projectId", description as markdown from tickets`,
-  comment: `select comments.id, comments.workspace_id as "workspaceId",
-      coalesce(tickets.project_id, artifacts.project_id) as "projectId", comments.body as markdown
-    from comments left join tickets on tickets.id = comments.ticket_id
-    left join artifacts on artifacts.id = comments.artifact_id`,
+  comment: storedComments(["ticket", "artifact", "document"]),
   document: `select documents.id, documents.workspace_id as "workspaceId", documents.project_id as "projectId",
       versions.body as markdown
     from documents join document_versions versions
@@ -646,11 +675,6 @@ const lockedRow: Record<MentioningKind, string> = {
   term: "terms",
   decision: "decisions",
 };
-
-/** A Comment as stored before Comments on Artifacts, as a database migrated short of them keeps it. */
-const storedTicketComments = `select comments.id, comments.workspace_id as "workspaceId", tickets.project_id as "projectId",
-    comments.body as markdown
-  from comments join tickets on tickets.id = comments.ticket_id`;
 
 type StoredText = { id: string; workspaceId: string; projectId: string | null; markdown: string };
 
@@ -710,10 +734,16 @@ export async function backfillMentions(db: Db): Promise<void> {
       ((await client.query("delete from pending_backfills where name = any($1::text[])", [backfills])).rowCount ?? 0) > 0;
     if (pending) {
       const glossaries: Glossaries = new Map();
-      const { rowCount: artifactComments } = await client.query(
-        "select 1 from information_schema.columns where table_name = 'comments' and column_name = 'artifact_id'",
+      // A database migrated short of Comments on Artifacts or Documents has no column for them.
+      const { rows: columns } = await client.query<{ name: string }>(
+        `select column_name as name from information_schema.columns
+         where table_name = 'comments' and column_name in ('artifact_id', 'document_id')`,
       );
-      const texts = { ...storedTexts, ...(artifactComments ? {} : { comment: storedTicketComments }) };
+      const present = new Set(columns.map((column) => column.name));
+      const targets = (["ticket", "artifact", "document"] as const).filter(
+        (target) => target === "ticket" || present.has(commentTargets[target][1]),
+      );
+      const texts = { ...storedTexts, comment: storedComments([...targets]) };
       for (const [kind, sql] of Object.entries(texts) as [MentioningKind, string][]) {
         const texts = await client.query<StoredText>(sql);
         for (const text of texts.rows) await indexMentions(client, kind, text, text.markdown, glossaries);

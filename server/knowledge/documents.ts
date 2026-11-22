@@ -538,7 +538,7 @@ export async function compareVersions(
 }
 
 /**
- * Deletes a Document with all its Versions and Attachments; only a User may. Refused while it has children: they are
+ * Deletes a Document with all its Versions, Attachments and Comments; only a User may. Refused while it has children: they are
  * moved or deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
  */
 export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
@@ -565,9 +565,14 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
         },
       );
     }
-    const attached = await tx.query<{ id: string }>("delete from attachments where document_id = $1 returning id", [
-      document.id,
-    ]);
+    // Its Attachments go with it, its Comments too with the files attached to them; replies before what they answer.
+    const attached = await tx.query<{ id: string }>(
+      `delete from attachments
+       where document_id = $1 or comment_id in (select id from comments where document_id = $1) returning id`,
+      [document.id],
+    );
+    await tx.query("update comments set reply_to_id = null where document_id = $1", [document.id]);
+    await tx.query("delete from comments where document_id = $1", [document.id]);
     afterCommit(tx, () => forgetAttachments(context, attached.rows.map((row) => row.id)));
     // It drops out of its links: the Tickets linking it show the change.
     const linking = await tx.query<{ ticketId: string; projectId: string }>(

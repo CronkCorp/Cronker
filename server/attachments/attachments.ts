@@ -71,10 +71,12 @@ export function attachmentNotFound(): ApiError {
 /** What an Attachment's owner is, found in the Viewer's view: its Workspace, and the Ticket it is on or with. */
 interface FoundOwner extends Owner {
   workspaceId: string;
-  /** The Ticket, and its Project, a Ticket or Comment Attachment shows with; none for a Document or an Artifact's Comment. */
+  /** The Ticket, and its Project, a Ticket or Comment Attachment shows with; none for a Document or an Artifact's or Document's Comment. */
   ticket: { id: string; projectId: string } | null;
   /** The Artifact a Comment is on; none otherwise. */
   artifactId?: string | null;
+  /** The Document a Comment is on, a Report included; none otherwise. */
+  documentId?: string | null;
   /** The Project it is in: its Ticket's, its Artifact's or its Document's; null for the Workspace's own. */
   projectId: string | null;
   /** A Comment's author. */
@@ -109,22 +111,24 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
   }
   const view = inReach(
     viewer,
-    { project: "coalesce(tickets.project_id, artifacts.project_id)", workspace: "comments.workspace_id" },
+    { project: "coalesce(tickets.project_id, artifacts.project_id, documents.project_id)", workspace: "comments.workspace_id" },
     "$2",
   );
   const { rows } = await db.query<{
     workspaceId: string;
     ticketId: string | null;
     artifactId: string | null;
+    documentId: string | null;
     projectId: string | null;
     author: FoundOwner["author"];
   }>(
     `select comments.workspace_id as "workspaceId", comments.ticket_id as "ticketId", comments.artifact_id as "artifactId",
-       coalesce(tickets.project_id, artifacts.project_id) as "projectId",
+       comments.document_id as "documentId", coalesce(tickets.project_id, artifacts.project_id, documents.project_id) as "projectId",
        case when comments.actor_agent_id is null then json_build_object('kind', 'user', 'id', comments.actor_user_id)
          else json_build_object('kind', 'agent', 'id', comments.actor_agent_id) end as author
      from comments left join tickets on tickets.id = comments.ticket_id
      left join artifacts on artifacts.id = comments.artifact_id
+     left join documents on documents.id = comments.document_id
      where comments.id = $1 and ${view.sql}`,
     [owner.id, view.value],
   );
@@ -135,6 +139,7 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
     workspaceId: comment.workspaceId,
     ticket: comment.ticketId ? { id: comment.ticketId, projectId: comment.projectId! } : null,
     artifactId: comment.artifactId,
+    documentId: comment.documentId,
     projectId: comment.projectId,
     author: comment.author,
   };
@@ -233,12 +238,14 @@ async function publishChange(context: Context, tx: Tx, owner: FoundOwner): Promi
   } else if (owner.ticket) {
     live.publish(tx, owner.workspaceId, { type: "attachments.changed", projectId: owner.ticket.projectId, ticketId: owner.ticket.id });
   } else {
-    live.publish(tx, owner.workspaceId, { type: "attachments.changed", documentId: owner.id }, { readersOf: [owner.projectId] });
+    // A Document's own, or one of its Comments': either names only the Document.
+    const documentId = owner.documentId ?? owner.id;
+    live.publish(tx, owner.workspaceId, { type: "attachments.changed", documentId }, { readersOf: [owner.projectId] });
   }
 }
 
 /**
- * The Project an Attachment is in, as SQL: its Ticket's, its Comment's Ticket's or Artifact's, or its Document's; none
+ * The Project an Attachment is in, as SQL: its Ticket's, its Comment's Ticket's, Artifact's or Document's, or its Document's; none
  * for the Workspace's own.
  */
 const attachmentProject = `coalesce(
@@ -248,7 +255,8 @@ const attachmentProject = `coalesce(
   (select attachment_artifacts.project_id from comments attachment_comments
    join artifacts attachment_artifacts on attachment_artifacts.id = attachment_comments.artifact_id
    where attachment_comments.id = attachments.comment_id),
-  (select attachment_documents.project_id from documents attachment_documents where attachment_documents.id = attachments.document_id))`;
+  (select attachment_documents.project_id from documents attachment_documents where attachment_documents.id = coalesce(attachments.document_id,
+     (select attachment_comments.document_id from comments attachment_comments where attachment_comments.id = attachments.comment_id))))`;
 
 /** An Attachment in the Viewer's view; otherwise nothing, as if it didn't exist. */
 export async function findAttachment(db: Db | Tx, viewer: Viewer, attachmentId: string): Promise<Attachment | undefined> {

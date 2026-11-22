@@ -529,16 +529,18 @@ function Reopen({
   onReopened: () => void;
 }) {
   const [why, setWhy] = useState("");
+  const [sendBack, setSendBack] = useState<string[]>([]);
   const { error, busy, onSubmit } = useSubmit(async () => {
-    await api.reopenTicket(ticketId, why);
+    await api.reopenTicket(ticketId, why, sendBack);
     onOpenChange(false);
     setWhy("");
+    setSendBack([]);
     onReopened();
   });
   return (
     <Dialog open={open} onOpenChange={onOpenChange} title={`Reopen ${ticketKey}`} description="It goes back to the Step that completed it, with your Comment.">
       <form onSubmit={onSubmit}>
-        <MovedOnDependents ticketId={ticketId} open={open} />
+        <MovedOnDependents ticketId={ticketId} open={open} sendBack={sendBack} onSendBackChange={setSendBack} />
         <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
         <FormError error={error} />
         <DialogActions>

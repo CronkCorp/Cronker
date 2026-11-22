@@ -259,6 +259,33 @@ describe("MCP with an Agent token", () => {
     expect(comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts.", "On it."]);
   });
 
+  test("an Agent comments on a Document and reads its threads with read_document", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const plan = await (
+      await cronk.request("POST", `/api/projects/${ticket.projectId}/documents`, { cookie, body: { title: "Plan", body: "One." } })
+    ).json();
+    const byAda = await (
+      await cronk.request("POST", `/api/documents/${plan.id}/comments`, { cookie, body: { body: "Is step two needed?" } })
+    ).json();
+
+    const reply = await call(client, "comment", { document: plan.slug, body: "No, dropped it.", replyToId: byAda.id });
+    const two = await call(client, "comment", { ticket: "CRONK-1", document: plan.id, body: "Both?" });
+
+    expect(reply.isError).toBe(false);
+    expect(reply.json).toEqual(
+      expect.objectContaining({ documentId: plan.id, replyToId: byAda.id, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
+    );
+    expect(two).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
+    const read = await call(client, "read_document", { document: plan.id });
+    expect(read.json).toEqual(expect.objectContaining({ title: "Plan", comments: [byAda, reply.json] }));
+    // An earlier Version is read without them.
+    expect((await call(client, "read_document", { document: plan.id, version: 1 })).json).not.toHaveProperty("comments");
+    // A Document's Comments stay off the Ticket's.
+    const readTicket = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(readTicket.json.comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts."]);
+  });
+
   test("an Agent comments on an Artifact, sees the Comments with read_artifact and on the linking Ticket with read_ticket", async () => {
     const { cookie, ticket, agent, secret } = await workspaceWithTicket();
     const client = await connect(secret);

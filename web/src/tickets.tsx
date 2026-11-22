@@ -325,8 +325,8 @@ export function TicketScreen({
               ticket={ticket}
               runs={runs}
               onAccept={() => apply(api.acceptTicket(ticket.id))}
-              onReopen={async (comment) => {
-                const reopened = api.reopenTicket(ticket.id, comment);
+              onReopen={async (comment, sendBack) => {
+                const reopened = api.reopenTicket(ticket.id, comment, sendBack);
                 await apply(reopened);
                 await reopened;
                 loadComments();
@@ -623,7 +623,7 @@ function Verification({
   ticket: Ticket;
   runs: Run[];
   onAccept: () => Promise<void>;
-  onReopen: (comment: string) => Promise<void>;
+  onReopen: (comment: string, sendBack: string[]) => Promise<void>;
 }) {
   const [reopening, setReopening] = useState(false);
   const [completion, setCompletion] = useState<Completion | null>(null);
@@ -639,10 +639,12 @@ function Verification({
     };
   }, [ticket]);
   const [why, setWhy] = useState("");
+  const [sendBack, setSendBack] = useState<string[]>([]);
   const { error, busy, onSubmit } = useSubmit(async () => {
-    await onReopen(why);
+    await onReopen(why, sendBack);
     setReopening(false);
     setWhy("");
+    setSendBack([]);
   });
   const merge = completion?.merge ?? null;
   const completing = runs.filter((r) => r.state === "finished").at(-1);
@@ -691,7 +693,7 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
-          <MovedOnDependents ticketId={ticket.id} open={reopening} />
+          <MovedOnDependents ticketId={ticket.id} open={reopening} sendBack={sendBack} onSendBackChange={setSendBack} />
           <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>
@@ -1727,7 +1729,13 @@ export function CommentThread({
   const actor: ActorRef = comment.actor;
   const send = async (body: string) => {
     const reply = { body, replyToId: comment.id };
-    onAdded(await (comment.artifactId ? api.commentOnArtifact(comment.artifactId, reply) : api.comment(comment.ticketId!, reply)));
+    onAdded(
+      await (comment.artifactId
+        ? api.commentOnArtifact(comment.artifactId, reply)
+        : comment.documentId
+          ? api.commentOnDocument(comment.documentId, reply)
+          : api.comment(comment.ticketId!, reply)),
+    );
     setReplying(false);
   };
   const to = useAddresses();

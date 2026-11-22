@@ -134,7 +134,7 @@ describe("which names are Mentions", () => {
     ]);
   });
 
-  test("a text mentions Terms beside Decision keys, and a Comment on a Project's Artifact by its Project's glossary", async () => {
+  test("a text mentions Terms beside Decision keys, and a Comment on a Project's Artifact or Document by its Project's glossary", async () => {
     const s = await workspaceWithProject();
     const workspaceLane = await workspaceTerm(s, "Lane");
     const projectLane = await projectTerm(s, "Lane");
@@ -149,6 +149,8 @@ describe("which names are Mentions", () => {
     ]);
     const comment = await ok("POST", `/api/artifacts/${board.id}/comments`, s.ada, { body: "One Lane per column." });
     expect(comment.mentions).toEqual([mentionOf(projectLane)]);
+    const onDocument = await ok("POST", `/api/documents/${written.id}/comments`, s.ada, { body: "A Lane each." });
+    expect(onDocument.mentions).toEqual([mentionOf(projectLane)]);
 
     // Indexed again after a rename, the Comment keeps its Project's glossary.
     await ok("PATCH", `/api/terms/${projectLane.id}`, s.ada, { name: "Swimlane", baseVersion: 1 });
@@ -156,6 +158,7 @@ describe("which names are Mentions", () => {
     await cronk.jobsSettled();
     expect(await mentionedIn(s.ada, projectLane.id)).toEqual([
       ["document", written.id],
+      ["comment", onDocument.id],
       ["comment", comment.id],
     ]);
     expect(await mentionedIn(s.ada, workspaceLane.id)).toEqual([]);

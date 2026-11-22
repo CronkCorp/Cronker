@@ -251,7 +251,10 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Sends a Ticket a Run completed back to the Status of the Step that completed it, with a Comment saying why, " +
             "so a new Run picks it up there; it blocks again the Tickets it blocks. Cronk writes a Comment, naming it and " +
             "quoting the reason, on each Ticket it blocks that moved on since it was completed (see `reopen-preview`) and " +
-            "the User may read. Only Users Reopen; a Ticket that " +
+            "the User may read, saying whether it was sent back. Those named in `sendBack` are sent back to their " +
+            "Project's first Backlog Status, as the User's Change, stopping any running Run; they stay blocked by it. " +
+            "A `sendBack` naming a Ticket the preview doesn't list is refused with `not_in_preview`, and one in a Project " +
+            "where the User lacks Write with `read_access`, before anything changes. Only Users Reopen; a Ticket that " +
             "isn't Unverified is refused with `not_unverified`.",
           params: Type.Object({ ticketId: Type.String() }),
           body: TicketReopen,
@@ -260,7 +263,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return reopenTicket(context, user, request.params.ticketId, request.body.comment);
+        return reopenTicket(context, user, request.params.ticketId, request.body.comment, request.body.sendBack);
       },
     );
 

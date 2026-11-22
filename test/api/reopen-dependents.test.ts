@@ -5,7 +5,7 @@ import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
  * Reopen and the Tickets it blocks: Reopening an Unverified completion lists the Tickets it blocks that moved on since
- * it was completed, and Cronk tells each of them, quoting the reason.
+ * it was completed, and Cronk tells each of them, quoting the reason. The User may send each back to wait.
  */
 
 let cronk: StartedCronk;
@@ -94,16 +94,19 @@ describe("Reopen's preview of the dependents that moved on", () => {
         ticket: { id: leftBacklog.id, projectId: ticket.projectId, key: "CRONK-2", title: "Leaves Backlog after" },
         status: { id: status("Merge"), name: "Merge", kind: "active" },
         running: false,
+        canWrite: true,
       },
       {
         ticket: { id: ranAfter.id, projectId: ticket.projectId, key: "CRONK-3", title: "Gets a Run after" },
         status: { id: status("Implement"), name: "Implement", kind: "active" },
         running: true,
+        canWrite: true,
       },
       {
         ticket: { id: waiting.id, projectId: ticket.projectId, key: "CRONK-6", title: "Waits for it" },
         status: { id: status("Investigate"), name: "Investigate", kind: "active" },
         running: true,
+        canWrite: true,
       },
     ]);
     expect(keysOf(preview)).not.toContain(stayed.key);
@@ -143,7 +146,7 @@ describe("Reopening with dependents that moved on", () => {
         actor: expect.objectContaining({ kind: "cronk" }),
         body:
           "CRONK-1, which blocks this Ticket, was Reopened after this one moved on, so the work this one builds on may change:\n\n" +
-          "> The tests don't pass.\n>\n> See the log.",
+          "> The tests don't pass.\n>\n> See the log.\n\nIt was left where it is.",
       }),
     ]);
     expect(await ok("GET", `/api/tickets/${stayed.id}/comments`, ada)).toEqual([]);
@@ -182,4 +185,88 @@ describe("Reopening with dependents that moved on", () => {
     expect(await ok("GET", `/api/tickets/${stayed.id}/comments`, ada)).toEqual([]);
     expect((await ok("GET", `/api/tickets/${ticket.id}/comments`, ada)).map((c: { body: string }) => c.body)).toEqual(["Again."]);
   });
+});
+
+describe("Sending dependents back when reopening", () => {
+  /** CRONK-1 completed, with CRONK-2 running in Implement and CRONK-3 moved to Triage, both after it was completed. */
+  async function movedOnDependents() {
+    const setup = await blockerInCodeReview();
+    const { ada, agent, status, dependent, complete } = setup;
+    const running = await dependent("Running on it");
+    const moved = await dependent("Moved on");
+    await complete();
+    await ok("PATCH", `/api/tickets/${running.id}`, ada, { delegateId: agent.id, statusId: status("Implement") });
+    await ok("PATCH", `/api/tickets/${moved.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${running.id}/runs`, ada);
+    expect(run.state).toBe("running");
+    return { ...setup, running, moved, run };
+  }
+
+  test("stops its Run and moves it to the first Backlog Status as the User's Change, still blocked by the reopened Ticket", async () => {
+    const { ada, ticket, status, running, moved, run } = await movedOnDependents();
+
+    await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Not done.", sendBack: [running.id] });
+
+    const sentBack = await ok("GET", `/api/tickets/${running.id}`, ada);
+    expect(sentBack.statusId).toBe(status("Backlog"));
+    const runs = await ok("GET", `/api/tickets/${running.id}/runs`, ada);
+    expect(runs).toEqual([expect.objectContaining({ id: run.id, state: "stopped" })]);
+    expect(runs[0].endReason).toContain("sent CRONK-2 back to Backlog");
+    const timeline = await ok("GET", `/api/tickets/${running.id}/timeline`, ada);
+    expect(timeline.filter((c: { field?: string }) => c.field === "status").at(-1)).toEqual(
+      expect.objectContaining({ field: "status", to: expect.objectContaining({ name: "Backlog" }), actor: expect.objectContaining({ kind: "user" }) }),
+    );
+    expect(sentBack.blockedBy).toEqual([expect.objectContaining({ key: "CRONK-1" })]);
+    // Left where it is, the other changes only by Cronk's Comment.
+    expect((await ok("GET", `/api/tickets/${moved.id}`, ada)).statusId).toBe(status("Triage"));
+    const comment = async (id: string) => (await ok("GET", `/api/tickets/${id}/comments`, ada)).map((c: { body: string }) => c.body);
+    expect(await comment(running.id)).toEqual([expect.stringMatching(/> Not done\.\n\nIt was sent back to Backlog, to wait until CRONK-1 is done again\.$/)]);
+    expect(await comment(moved.id)).toEqual([expect.stringMatching(/\n\nIt was left where it is\.$/)]);
+  });
+
+  test("sent back to Backlog and moved on again, it gets no Run while the reopened Ticket isn't done", async () => {
+    const { ada, ticket, status, running } = await movedOnDependents();
+    await ok("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Not done.", sendBack: [running.id] });
+
+    await ok("PATCH", `/api/tickets/${running.id}`, ada, { statusId: status("Implement") });
+
+    const runs = await ok("GET", `/api/tickets/${running.id}/runs`, ada);
+    expect(runs.filter((r: { state: string }) => r.state === "running")).toEqual([]);
+  });
+
+  test("refuses a Ticket the preview doesn't list, changing nothing", async () => {
+    const { ada, ticket, dependent, running } = await movedOnDependents();
+    const stayed = await dependent("Stayed");
+
+    const refused = await call("POST", `/api/tickets/${ticket.id}/reopen`, ada, { comment: "Not done.", sendBack: [running.id, stayed.id] });
+
+    expect(refused.status).toBe(400);
+    expect(refused.json.error.code).toBe("not_in_preview");
+    await expectUnchanged(ada, ticket.id, running.id);
+  });
+
+  test("refuses a dependent in a Project where the User has only Read, changing nothing", async () => {
+    const { workspace, ada, grace, ticket, dependent, complete } = await blockerInCodeReview();
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    await ok("PUT", `/api/projects/${other.id}/access`, ada, { visibility: "private", users: [{ userId: grace.user.id, level: "read" }] });
+    const readOnly = await dependent("Read only", other.id);
+    await complete();
+    await ok("PATCH", `/api/tickets/${readOnly.id}`, ada, { statusId: other.statuses.find((s: { name: string }) => s.name === "Triage").id });
+    expect((await ok("GET", `/api/tickets/${ticket.id}/reopen-preview`, grace.as)).dependents).toEqual([
+      expect.objectContaining({ ticket: expect.objectContaining({ key: "OTHER-1" }), canWrite: false }),
+    ]);
+
+    const refused = await call("POST", `/api/tickets/${ticket.id}/reopen`, grace.as, { comment: "Not done.", sendBack: [readOnly.id] });
+
+    expect(refused.status).toBe(403);
+    expect(refused.json.error.code).toBe("read_access");
+    await expectUnchanged(ada, ticket.id, readOnly.id);
+  });
+
+  /** The reopened Ticket is still Unverified, and neither it nor the dependent got a Comment. */
+  async function expectUnchanged(as: Request, ticketId: string, dependentId: string) {
+    expect((await ok("GET", `/api/tickets/${ticketId}`, as)).verification).toBe("unverified");
+    expect(await ok("GET", `/api/tickets/${ticketId}/comments`, as)).toEqual([]);
+    expect(await ok("GET", `/api/tickets/${dependentId}/comments`, as)).toEqual([]);
+  }
 });
