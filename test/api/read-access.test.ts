@@ -116,6 +116,7 @@ function reads({ project, ticket, document, term, decision, artifact }: Setting)
     `/api/projects/${project.id}/artifacts`,
     `/api/artifacts/${artifact.id}`,
     `/api/artifacts/${artifact.id}/comments`,
+    `/api/documents/${document.id}/comments`,
     `/api/projects/${project.id}/repositories`,
   ];
 }
@@ -161,6 +162,7 @@ function writes(setting: Setting): [string, string, unknown?][] {
     ["PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, title: "Changed" }],
     ["DELETE", `/api/artifacts/${artifact.id}`],
     ["POST", `/api/artifacts/${artifact.id}/comments`, { body: "Mine." }],
+    ["POST", `/api/documents/${document.id}/comments`, { body: "Mine." }],
     ["POST", `/api/tickets/${ticket.id}/artifacts`, { artifactId: artifact.id }],
     ["DELETE", `/api/tickets/${ticket.id}/artifacts/${artifact.id}`],
     // Attachments

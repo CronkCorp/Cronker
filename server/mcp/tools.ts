@@ -288,13 +288,14 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "comment",
     {
-      title: "Comment on a Ticket or an Artifact",
+      title: "Comment on a Ticket, an Artifact or a Document",
       description:
-        "Adds a Markdown Comment to a Ticket or an Artifact of your Workspace, as your Agent, or a reply to one of " +
-        "its Comments: give exactly one of `ticket` and `artifact`. A Comment on an Artifact also shows on the " +
-        "Tickets linking it. Refused for a read-only token; a Ticket or Artifact outside your Workspace answers as " +
-        "not found, and a reply only goes to a Comment on the same Ticket or Artifact: reply to a Comment on a " +
-        "Linked Artifact, as `read_ticket` shows it, by its `artifactId`." + avoidedWordsNote,
+        "Adds a Markdown Comment to a Ticket, an Artifact or a Document (a Report included) of your Workspace, as " +
+        "your Agent, or a reply to one of its Comments: give exactly one of `ticket`, `artifact` and `document`. A " +
+        "Comment on an Artifact also shows on the Tickets linking it. Refused for a read-only token; a Ticket, " +
+        "Artifact or Document outside your Workspace answers as not found, and a reply only goes to a Comment on the " +
+        "same Ticket, Artifact or Document: reply to a Comment on a Linked Artifact, as `read_ticket` shows it, by " +
+        "its `artifactId`." + avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument.optional(),
         artifact: z
@@ -302,21 +303,29 @@ export function buildMcpServer(api: Api): McpServer {
           .min(1)
           .optional()
           .describe("The Artifact's slug, such as `board-prototype-3f9a1b2c` (its words may be stale), or its id."),
+        document: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("The Document's slug, such as `onboarding-3f9a1b2c` (its words may be stale), or its id."),
         ...bodyFields(CommentCreate),
       },
     },
-    ({ ticket, artifact, body, replyToId }) =>
+    ({ ticket, artifact, document, body, replyToId }) =>
       answer(async () => {
-        if ((ticket === undefined) === (artifact === undefined)) {
+        if ([ticket, artifact, document].filter((target) => target !== undefined).length !== 1) {
           throw new Refused({
             code: "one_target",
-            message: "A Comment is on exactly one Ticket or Artifact.",
-            rule: "Each Comment belongs to one Ticket or one Artifact.",
-            advice: "Give exactly one of `ticket` and `artifact`; comment again for another.",
+            message: "A Comment is on exactly one Ticket, Artifact or Document.",
+            rule: "Each Comment belongs to one Ticket, one Artifact or one Document.",
+            advice: "Give exactly one of `ticket`, `artifact` and `document`; comment again for another.",
           });
         }
         if (artifact !== undefined) {
           return send("POST", `/api/artifacts/${encodeURIComponent(artifact)}/comments`, { body, replyToId });
+        }
+        if (document !== undefined) {
+          return send("POST", `/api/documents/${encodeURIComponent(document)}/comments`, { body, replyToId });
         }
         const found = await ticketByKeyOrId(ticket!);
         return send("POST", `/api/tickets/${found.id}/comments`, { body, replyToId });
@@ -494,7 +503,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read a Document",
       description:
         "A Document of your Workspace as Markdown, at its current Version, whose number a save names as its " +
-        "`baseVersion`; or, given a Version's number, that earlier Version.",
+        "`baseVersion`, with its Comments, oldest first, each reply naming the Comment it answers; or, given a " +
+        "Version's number, that earlier Version, without Comments.",
       inputSchema: {
         document: documentArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),

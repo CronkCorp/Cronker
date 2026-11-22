@@ -518,6 +518,7 @@ const waitingReasons = {
   runnerSlot: "Runner full",
   runnerPaused: "Runner rate-limited",
   blocked: "Blocked by another Ticket",
+  archived: "Project archived",
 } as const;
 
 /** A Ticket's Run state on its card or row: while a Run is running, waiting or has gone wrong; nothing otherwise. */

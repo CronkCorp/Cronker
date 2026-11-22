@@ -13,7 +13,8 @@ import { findTicketRow, ticketNotFound } from "./tickets.js";
 import { Mention, mentionsOf } from "./mentions.js";
 import { slugColumn } from "../http/readable.js";
 import { artifactNotFound, findArtifact } from "../artifacts/artifacts.js";
-import { insertArtifactComment } from "./comment-writes.js";
+import { insertArtifactComment, insertDocumentComment } from "./comment-writes.js";
+import { documentNotFound, findDocument } from "../knowledge/documents.js";
 
 /** The Artifact a Comment is on, as a Ticket's timeline marks it. */
 export const CommentArtifact = Type.Object(
@@ -23,7 +24,18 @@ export const CommentArtifact = Type.Object(
     title: Type.String({ description: "Its current title." }),
     slug: Type.String(),
   },
-  { description: "The Artifact the Comment is on; null for a Comment on a Ticket." },
+  { description: "The Artifact the Comment is on; null for a Comment on a Ticket or a Document." },
+);
+
+/** The Document a Comment is on, a Report included. */
+export const CommentDocument = Type.Object(
+  {
+    id: Type.String({ format: "uuid" }),
+    projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
+    title: Type.String({ description: "Its current title." }),
+    slug: Type.String(),
+  },
+  { description: "The Document the Comment is on; null for a Comment on a Ticket or an Artifact." },
 );
 import { markdown } from "./fields.js";
 
@@ -41,14 +53,18 @@ export type GitHubAuthor = Static<typeof GitHubAuthor>;
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
   ticketId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
-    description: "The Ticket it is on; null for a Comment on an Artifact.",
+    description: "The Ticket it is on; null for a Comment on an Artifact or a Document.",
   }),
   artifactId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description:
-      "The Artifact it is on; null for a Comment on a Ticket. A Ticket's Comments include those on its Linked " +
+      "The Artifact it is on; null for a Comment on a Ticket or a Document. A Ticket's Comments include those on its Linked " +
       "Artifacts, each naming its Artifact here and in `artifact`; replies to one go to the Artifact.",
   }),
   artifact: Type.Union([CommentArtifact, Type.Null()]),
+  documentId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Document it is on, a Report included; null for a Comment on a Ticket or an Artifact.",
+  }),
+  document: Type.Union([CommentDocument, Type.Null()]),
   replyToId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
   body: Type.String({ description: "Markdown." }),
   actor: Type.Union([...ActorOrCronk.anyOf, GitHubAuthor], {
@@ -71,6 +87,9 @@ type Row = Omit<Comment, "createdAt" | "mentions" | "attachments"> & { createdAt
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.artifact_id as "artifactId",
   case when artifacts.id is null then null else json_build_object('id', artifacts.id, 'projectId', artifacts.project_id,
     'title', artifact_versions.title, 'slug', ${slugColumn("artifact", "artifacts.id", "artifact_versions.title")}) end as artifact,
+  comments.document_id as "documentId",
+  case when documents.id is null then null else json_build_object('id', documents.id, 'projectId', documents.project_id,
+    'title', document_versions.title, 'slug', ${slugColumn("document", "documents.id", "document_versions.title")}) end as document,
   comments.reply_to_id as "replyToId", comments.body,
   case when comments.github_author_login is not null then json_build_object('kind', 'github',
     'login', comments.github_author_login, 'name', '@' || comments.github_author_login || ' on GitHub')
@@ -82,7 +101,9 @@ const fromComments = `comments
   left join agents on agents.id = comments.actor_agent_id
   left join questions on questions.comment_id = comments.id
   left join artifacts on artifacts.id = comments.artifact_id
-  left join artifact_versions on artifact_versions.artifact_id = artifacts.id and artifact_versions.number = artifacts.version`;
+  left join artifact_versions on artifact_versions.artifact_id = artifacts.id and artifact_versions.number = artifacts.version
+  left join documents on documents.id = comments.document_id
+  left join document_versions on document_versions.document_id = documents.id and document_versions.number = documents.version`;
 
 /**
  * The Ticket's Comments, oldest first, with those on its Linked Artifacts the Viewer can read among them; or only
@@ -112,6 +133,17 @@ async function artifactRowsOf(db: Db | Tx, artifactId: string, commentId?: strin
   return rows;
 }
 
+/** The Document's Comments, oldest first; or only the one given. */
+async function documentRowsOf(db: Db | Tx, documentId: string, commentId?: string): Promise<Row[]> {
+  const { rows } = await db.query<Row>(
+    `select ${columns} from ${fromComments}
+     where comments.document_id = $1 ${commentId ? "and comments.id = $2" : ""}
+     order by comments.seq`,
+    commentId ? [documentId, commentId] : [documentId],
+  );
+  return rows;
+}
+
 /** Comments as the API shows them, finding the Ticket keys of all their bodies, and their Attachments, at once. */
 async function present(db: Db | Tx, viewer: Viewer, rows: Row[]): Promise<Comment[]> {
   const mentions = await mentionsOf(db, viewer, "comment", rows.map((row) => row.id));
@@ -133,7 +165,7 @@ export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Prom
 /** The comment route's body: a Comment, or a reply to one. */
 export const CommentCreate = Type.Object({
   body: markdown(100_000),
-  replyToId: Type.Optional(Type.String({ description: "The id of the Comment on this Ticket or Artifact being replied to." })),
+  replyToId: Type.Optional(Type.String({ description: "The id of the Comment on this Ticket, Artifact or Document being replied to." })),
 });
 export type CommentCreate = Static<typeof CommentCreate>;
 
@@ -163,13 +195,13 @@ export async function addComment(
   });
 }
 
-function unknownReplyTarget(on: "Ticket" | "Artifact"): ApiError {
+function unknownReplyTarget(on: "Ticket" | "Artifact" | "Document"): ApiError {
   return new ApiError(400, "unknown_comment", `Replies go to a Comment on the same ${on}.`, {
     rule: `A reply answers a Comment on the ${on} it is written on.`,
     advice:
       on === "Ticket"
         ? "Reply to a Comment on an Artifact through the Artifact, as its Comment names it, or comment without `replyToId`."
-        : "Name a Comment of this Artifact as `replyToId`, or comment without it.",
+        : `Name a Comment of this ${on} as \`replyToId\`, or comment without it.`,
   });
 }
 
@@ -204,6 +236,42 @@ export async function addArtifactComment(
     }
     const commentId = await insertArtifactComment(context, tx, artifact, actor, input.body, input.replyToId ?? null);
     const [comment] = await present(tx, actor, await artifactRowsOf(tx, artifact.id, commentId));
+    return comment!;
+  });
+}
+
+/** The Document's Comments, oldest first, for a Viewer who can read it; a Report's included. */
+export async function commentsOnDocument(db: Db | Tx, viewer: Viewer, documentId: string): Promise<Comment[]> {
+  const document = await findDocument(db, viewer, documentId);
+  if (!document) throw documentNotFound();
+  return present(db, viewer, await documentRowsOf(db, document.id));
+}
+
+/**
+ * Comments on a Document, or replies to one of its Comments, as the Actor: with Write where the Document is kept, as
+ * on a Ticket. Its readers are told; nobody is notified.
+ */
+export async function addDocumentComment(
+  context: Context,
+  actor: Caller,
+  documentId: string,
+  input: { body: string; replyToId?: string },
+): Promise<Comment> {
+  return transaction(context.db, async (tx) => {
+    const document = await findDocument(tx, actor, documentId);
+    if (!document) throw documentNotFound();
+    await requireWrite(tx, actor, document);
+    // Held until the Comment is in, so a delete of the Document either went first, and it is unknown, or waits.
+    const { rowCount: held } = await tx.query("select 1 from documents where id = $1 for key share", [document.id]);
+    if (held === 0) throw documentNotFound();
+    if (input.replyToId !== undefined) {
+      const { rowCount } = isUuid(input.replyToId)
+        ? await tx.query("select 1 from comments where id = $1 and document_id = $2", [input.replyToId, document.id])
+        : { rowCount: 0 };
+      if (rowCount === 0) throw unknownReplyTarget("Document");
+    }
+    const commentId = await insertDocumentComment(context, tx, document, actor, input.body, input.replyToId ?? null);
+    const [comment] = await present(tx, actor, await documentRowsOf(tx, document.id, commentId));
     return comment!;
   });
 }

@@ -531,6 +531,33 @@ describe("Inbox items", () => {
     expect(receivedAt("/new").map((d) => d.ticket.key)).toEqual([fresh.key]);
   });
 
+  test("an archived Project's items reach no webhook, and unarchiving sends only what arrives after", async () => {
+    const { ada, adaId: me, hooks, project, status, agent, ticket, running } = await withProject();
+    await ok("POST", hooks, ada, { name: "All", url: `${cronk.webhooks.url}/all`, kinds: allKinds });
+    const delivered = await ticket("Delivered before", { statusId: status("In Review"), assigneeId: me });
+    const crashing = await ticket("Crashes while archived", { delegateId: agent.id, statusId: status("Investigate") });
+    const crashingRun = await running(crashing.id);
+    await cronk.deliverWebhooks();
+    expect(receivedAt("/all").map((d) => d.ticket.key)).toEqual([delivered.key]);
+
+    await ok("POST", `/api/projects/${project.id}/archive`, ada);
+    cronk.clock.advance(60_000);
+    // The Run ending is no write in the Project, so it still lands, while the Project is archived.
+    await cronk.runner.endWithoutFinishing(crashingRun.id, "The session crashed.");
+    await cronk.deliverWebhooks();
+    expect(receivedAt("/all").map((d) => d.ticket.key)).toEqual([delivered.key]);
+
+    cronk.clock.advance(60_000);
+    await ok("POST", `/api/projects/${project.id}/unarchive`, ada);
+    await cronk.deliverWebhooks();
+    expect(receivedAt("/all").map((d) => d.ticket.key)).toEqual([delivered.key]);
+
+    cronk.clock.advance(60_000);
+    const after = await ticket("After unarchiving", { statusId: status("In Review"), assigneeId: me });
+    await cronk.deliverWebhooks();
+    expect(receivedAt("/all").map((d) => d.ticket.key)).toEqual([delivered.key, after.key]);
+  });
+
   test("a User who leaves gets nothing more, not even items queued before they left", async () => {
     const { ada, hooks, workspace, status, bea, ticket } = await withProject();
     await ok("POST", hooks, bea.as, { name: "Bea's", url: `${cronk.webhooks.url}/bea`, kinds: allKinds });

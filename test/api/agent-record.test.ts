@@ -79,6 +79,28 @@ async function wholeRecord(agentId: string, as: Request, limit = 2) {
 }
 
 describe("the Agent Record", () => {
+  test("lists the Agent's Comments on a Document, by the Document's current title", async () => {
+    const { ada, project, agent, asAgent } = await runningRun();
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan", body: "One." });
+    tick();
+    const comment = await ok("POST", `/api/documents/${document.id}/comments`, asAgent, { body: "Step two?" });
+    await ok("PATCH", `/api/documents/${document.id}`, ada, { baseVersion: 1, title: "The plan" });
+
+    const record = await ok("GET", `/api/agents/${agent.id}/record`, ada);
+    expect(record.entries.filter((e: { kind: string }) => e.kind === "comment")).toEqual([
+      {
+        kind: "comment",
+        id: comment.id,
+        at: comment.createdAt,
+        body: "Step two?",
+        replyToId: null,
+        ticket: null,
+        artifact: null,
+        document: { id: document.id, slug: expect.stringMatching(/^the-plan-/), title: "The plan" },
+      },
+    ]);
+  });
+
   test("lists the Agent's Runs, Changes, Comments, Versions and Transcripts, newest first", async () => {
     const { workspace, ada, project, ticket, agent, run, asAgent } = await runningRun();
     const ticketRef = { id: ticket.id, projectId: project.id, key: "CRONK-1", title: "Make it so" };
@@ -123,6 +145,7 @@ describe("the Agent Record", () => {
         replyToId: null,
         ticket: null,
         artifact: { id: artifact.id, slug: artifact.slug, title: "Board" },
+        document: null,
       },
       {
         kind: "version",
@@ -158,6 +181,7 @@ describe("the Agent Record", () => {
         replyToId: null,
         ticket: ticketRef,
         artifact: null,
+        document: null,
       },
       {
         kind: "change",

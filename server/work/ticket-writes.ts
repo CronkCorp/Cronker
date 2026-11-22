@@ -41,6 +41,10 @@ export interface TicketPatch {
    * without this; a caller clearing the Assignee for good, as releasing a member does, gives it.
    */
   formerAssigneeId?: string | null;
+  /** The Repository, by GitHub's id, whose issue the Ticket was imported from, so `#123` resolves to it. */
+  githubRepositoryId?: number | null;
+  /** The number of the issue the Ticket was imported from. */
+  githubIssueNumber?: number | null;
 }
 
 /**
@@ -71,6 +75,8 @@ export type LockedTicket = Pick<
   completedWithoutStep?: boolean;
   completedByPullRequestId?: number | null;
   formerAssigneeId?: string | null;
+  githubRepositoryId?: number | null;
+  githubIssueNumber?: number | null;
 };
 
 type Shown = (tx: Tx, workspaceId: string, value: unknown) => Promise<unknown>;
@@ -128,6 +134,8 @@ const columns: { [K in keyof Required<TicketPatch>]: Column } = {
   completedWithoutStep: { column: "completed_without_step" },
   completedByPullRequestId: { column: "completed_by_pull_request_id" },
   formerAssigneeId: { column: "former_assignee_id" },
+  githubRepositoryId: { column: "github_repository_id" },
+  githubIssueNumber: { column: "github_issue_number" },
 };
 
 /** Bookkeeping a LockedTicket may lack, read when a patch gives it. */
@@ -138,6 +146,8 @@ const bookkeeping = {
   // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
   completedByPullRequestId: `completed_by_pull_request_id::float8 as "completedByPullRequestId"`,
   formerAssigneeId: `former_assignee_id as "formerAssigneeId"`,
+  githubRepositoryId: `github_repository_id::float8 as "githubRepositoryId"`,
+  githubIssueNumber: `github_issue_number as "githubIssueNumber"`,
 } as const;
 
 /** What a write wrote and recorded. */
@@ -154,7 +164,8 @@ export interface TicketWrite {
  * Ticket field (such as `dismissed`), and publishes `ticket.changed` once. A Status change sets `status_entered_at`
  * and ends the Ticket's waiting from a needs you Outcome; giving an Assignee forgets the former one, while clearing
  * it keeps whom it remembers; clearing `verification` forgets the Status the Ticket was completed from. A patch that
- * changes nothing, with no `changes`, writes and publishes nothing.
+ * changes nothing, with no `changes`, writes and publishes nothing. A write that is part of making the Ticket, such as
+ * an import rewriting `#123` to a key, gives `unrecorded` and records no Change of its own.
  */
 export async function writeTicket(
   { live }: Pick<Context, "live">,
@@ -162,7 +173,7 @@ export async function writeTicket(
   ticket: LockedTicket,
   actor: ChangeActor,
   patch: TicketPatch,
-  { at, changes: given = [] }: { at: Date; changes?: NewChange[] },
+  { at, changes: given = [], unrecorded = false }: { at: Date; changes?: NewChange[]; unrecorded?: boolean },
 ): Promise<TicketWrite> {
   const current = await currentValues(tx, ticket, patch);
   const differs = (Object.keys(columns) as (keyof TicketPatch)[]).filter(
@@ -197,7 +208,7 @@ export async function writeTicket(
   const left = statusChanged ? await leaveMergeQueue(tx, ticket.id, patch.statusId!) : [];
 
   const changes = [...given, ...left];
-  for (const key of differs) {
+  for (const key of unrecorded ? [] : differs) {
     const { field, shown } = columns[key];
     if (!field) continue;
     const show = (value: unknown) => (shown ? shown(tx, ticket.workspaceId, value) : value);

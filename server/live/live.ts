@@ -14,6 +14,7 @@ export type LiveEvent =
   | { type: "ticket.created"; projectId: string; ticketId: string }
   | { type: "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
+  | { type: "comment.added"; projectId: string | null; documentId: string; commentId: string }
   | { type: "report.added"; projectId: string; ticketId: string; reportId: string }
   | { type: "report.changed"; projectId: string; ticketId: string; reportId: string }
   | { type: "attachments.changed"; projectId: string; ticketId: string }
@@ -38,7 +39,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "ticket.created": "A Ticket was created.",
   "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
   "comment.added":
-    "A Comment was added to a Ticket, or to an Artifact the Ticket links (`artifact.comments.changed` tells the Artifact's page).",
+    "A Comment was added to a Ticket, or to an Artifact the Ticket links (`artifact.comments.changed` tells the Artifact's page), " +
+    "naming the Ticket; or to a Document, a Report included, naming only the Document (`projectId` null for the Workspace's own).",
   "report.added": "A Run wrote a Report on a Ticket.",
   "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
   "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state, checks or reviews.",
@@ -53,7 +55,7 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "transcript.changed":
     "A Transcript was uploaded again, with the session's newer entries, or deleted; `runId` names the Run it records, or null.",
   "attachments.changed":
-    "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), one of the Comments on an Artifact the Ticket links (naming the Ticket), or a Document (naming only the Document).",
+    "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), one of the Comments on an Artifact the Ticket links (naming the Ticket), or a Document or one of its Comments (naming only the Document).",
 };
 
 /**

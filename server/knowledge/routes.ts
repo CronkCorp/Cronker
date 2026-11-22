@@ -28,6 +28,13 @@ import {
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
+import { addDocumentComment, Comment, CommentCreate, commentsOnDocument } from "../work/comments.js";
+
+/** A Document as its read gives it: at its current Version, with its Comments. */
+const DocumentRead = Type.Object({
+  ...Document.properties,
+  comments: Type.Array(Comment, { description: "Its Comments, oldest first; a reply names the Comment it answers." }),
+});
 import { knowledgePlaces } from "./places.js";
 import { OutdatedVersionBody } from "./versions.js";
 import { DocumentLink, linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
@@ -114,16 +121,51 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags,
-          summary: "A Document at its current Version",
+          summary: "A Document at its current Version, with its Comments",
+          description: "Its Comments are oldest first, a reply naming the Comment it answers, as its Comments route lists them.",
           params: DocumentParams,
-          response: { 200: Document, 401: ErrorBody, 404: ErrorBody },
+          response: { 200: DocumentRead, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
         const caller = await requireCaller(context, request);
         const document = await findDocument(db, caller, request.params.documentId);
         if (!document) throw documentNotFound();
-        return document;
+        return { ...document, comments: await commentsOnDocument(db, caller, document.id) };
+      },
+    );
+
+    app.get(
+      "/api/documents/:documentId/comments",
+      {
+        schema: {
+          tags,
+          summary: "A Document's Comments",
+          description: "Oldest first. A reply names the Comment it answers. A Report is a Document, and has Comments too.",
+          params: DocumentParams,
+          response: { 200: Type.Array(Comment), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => commentsOnDocument(db, await requireCaller(context, request), request.params.documentId),
+    );
+
+    app.post(
+      "/api/documents/:documentId/comments",
+      {
+        schema: {
+          tags,
+          summary: "Comment on a Document, or reply to one of its Comments",
+          description:
+            "Users and Agents with a full token may comment on a Document they can change, as on a Ticket, a Report " +
+            "included. Its readers see it live; nobody is notified of it.",
+          params: DocumentParams,
+          body: CommentCreate,
+          response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await addDocumentComment(context, caller, request.params.documentId, request.body));
       },
     );
 

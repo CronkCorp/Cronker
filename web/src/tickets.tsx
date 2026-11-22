@@ -325,8 +325,8 @@ export function TicketScreen({
               ticket={ticket}
               runs={runs}
               onAccept={() => apply(api.acceptTicket(ticket.id))}
-              onReopen={async (comment) => {
-                const reopened = api.reopenTicket(ticket.id, comment);
+              onReopen={async (comment, sendBack) => {
+                const reopened = api.reopenTicket(ticket.id, comment, sendBack);
                 await apply(reopened);
                 await reopened;
                 loadComments();
@@ -623,7 +623,7 @@ function Verification({
   ticket: Ticket;
   runs: Run[];
   onAccept: () => Promise<void>;
-  onReopen: (comment: string) => Promise<void>;
+  onReopen: (comment: string, sendBack: string[]) => Promise<void>;
 }) {
   const [reopening, setReopening] = useState(false);
   const [completion, setCompletion] = useState<Completion | null>(null);
@@ -639,10 +639,12 @@ function Verification({
     };
   }, [ticket]);
   const [why, setWhy] = useState("");
+  const [sendBack, setSendBack] = useState<string[]>([]);
   const { error, busy, onSubmit } = useSubmit(async () => {
-    await onReopen(why);
+    await onReopen(why, sendBack);
     setReopening(false);
     setWhy("");
+    setSendBack([]);
   });
   const merge = completion?.merge ?? null;
   const completing = runs.filter((r) => r.state === "finished").at(-1);
@@ -691,7 +693,7 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
-          <MovedOnDependents ticketId={ticket.id} open={reopening} />
+          <MovedOnDependents ticketId={ticket.id} open={reopening} sendBack={sendBack} onSendBackChange={setSendBack} />
           <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>
@@ -715,6 +717,7 @@ const waitingReasons = {
   runnerSlot: "Runner full",
   runnerPaused: "Runner rate-limited",
   blocked: "Blocked by another Ticket",
+  archived: "Project archived",
 } as const;
 
 /** The Ticket's Run while one is running or waiting, or gone wrong with Retry; hidden otherwise. */
@@ -1232,6 +1235,7 @@ const fieldNames: Record<
     | "queueLeft"
     | "sentBack"
     | "transcriptDeleted"
+    | "runStopped"
     | RelationKind
   >,
   string
@@ -1311,6 +1315,14 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
+/** What a `runStopped` Change records: the Run Cronk stopped, its Step's name, its Agent, and why. */
+interface RunStopped {
+  runId: string;
+  step: string;
+  agent: { id: string; name: string };
+  why: "projectArchived";
+}
+
 /**
  * What a `created` Change records for a Ticket imported from a GitHub issue: the issue's address and its author, a
  * User as named then or, when no User has linked their account, their GitHub login. Imports before authors were
@@ -1374,6 +1386,10 @@ function described(change: Change): string {
   if (change.field === "transcriptDeleted") {
     const { step, agent } = change.from as TranscriptDeleted;
     return step ? `deleted the Transcript of the ${step} Run` : `deleted a Transcript of ${agent.name}'s session outside a Run`;
+  }
+  if (change.field === "runStopped") {
+    const { step, agent } = change.from as RunStopped;
+    return `stopped ${agent.name}'s ${step} Run: the Project was archived`;
   }
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
@@ -1727,7 +1743,13 @@ export function CommentThread({
   const actor: ActorRef = comment.actor;
   const send = async (body: string) => {
     const reply = { body, replyToId: comment.id };
-    onAdded(await (comment.artifactId ? api.commentOnArtifact(comment.artifactId, reply) : api.comment(comment.ticketId!, reply)));
+    onAdded(
+      await (comment.artifactId
+        ? api.commentOnArtifact(comment.artifactId, reply)
+        : comment.documentId
+          ? api.commentOnDocument(comment.documentId, reply)
+          : api.comment(comment.ticketId!, reply)),
+    );
     setReplying(false);
   };
   const to = useAddresses();

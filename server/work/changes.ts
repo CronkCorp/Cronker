@@ -19,7 +19,8 @@ export const ChangedBy = ActorOrCronk;
  * one of its Pull Requests in the Merge Queue, before the `status` Change moving it into the Merge Status;
  * `queueLeft` marks it leaving the queue without being merged. `sentBack` marks Cronk sending the Ticket back for a failing check,
  * requested changes or a merge conflict on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
- * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket.
+ * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket. `runStopped` marks
+ * Cronk stopping the Ticket's running Run when nothing else about the Ticket changed, as when its Project is archived.
  */
 export const changeFields = [
   "created",
@@ -48,6 +49,7 @@ export const changeFields = [
   "queueLeft",
   "sentBack",
   "transcriptDeleted",
+  "runStopped",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 
@@ -80,7 +82,9 @@ export const Change = Type.Object({
       "caused it, or null when Cronk knows none; a `url` is null when GitHub gave none. " +
       "A `transcriptDeleted` Change goes from `{ runId, step, sessionId, agent: { id, name } }` to null: the Run whose " +
       "Transcript a User deleted and its Step's name (both null for a session outside a Run that named the Ticket), " +
-      "its session and its Agent.",
+      "its session and its Agent. A `runStopped` Change, Cronk's, goes from `{ runId, step, agent: { id, name }, why }` " +
+      "to null: the Run Cronk stopped, its Step's name, its Agent and why, `projectArchived` when an Admin archived " +
+      "the Ticket's Project.",
   }),
   to: Type.Unknown({ description: "The value after, in the same form as `from`." }),
   runId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
