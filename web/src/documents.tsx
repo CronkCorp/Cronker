@@ -1,5 +1,5 @@
 import { useAddresses, useCanonicalAddress } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   api,
   ApiError,
@@ -26,8 +26,10 @@ import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
-import { RichEditor } from "./ui/rich-editor.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
+
+/** The rich editor, with ProseMirror and its Markdown parsers, loads only once something is edited. */
+const RichEditor = lazy(() => import("./ui/rich-editor.js").then((module) => ({ default: module.RichEditor })));
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
 function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSummary[]> {
@@ -424,13 +426,15 @@ export function Editor<T>({
       <Field label="Title">
         <input value={title} required maxLength={300} onChange={(e) => setTitle(e.target.value)} className="title-input" />
       </Field>
-      <RichEditor
-        value={body}
-        onChange={setBody}
-        hint={attachTo ? "Drop or paste files here to attach them." : undefined}
-        attachTo={attachTo}
-        onAttached={onAttached}
-      />
+      <Suspense fallback={<p className="muted">Loading the editor…</p>}>
+        <RichEditor
+          value={body}
+          onChange={setBody}
+          hint={attachTo ? "Drop or paste files here to attach them." : undefined}
+          attachTo={attachTo}
+          onAttached={onAttached}
+        />
+      </Suspense>
       {!current && <FormError error={error} />}
       <Actions>
         {/* Until the draft is based on the Version saved meanwhile, a save would only be refused again. */}
