@@ -12,6 +12,7 @@ import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
 import { outdatedVersion } from "./versions.js";
 import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
+import { literals } from "../literals.js";
 
 /**
  * Decisions: recorded choices with their reasoning and a status, of a Project or of the Workspace, numbered in
@@ -19,8 +20,8 @@ import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
  */
 
 export const statuses = ["proposed", "accepted", "rejected", "deprecated", "superseded"] as const;
-export const DecisionStatus = Type.Union(
-  statuses.map((status) => Type.Literal(status)),
+export const DecisionStatus = literals(
+  statuses,
   { description: "Agents propose Decisions; only a User changes their status." },
 );
 export type DecisionStatus = (typeof statuses)[number];

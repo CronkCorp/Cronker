@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Db, Tx } from "../db.js";
 import { inReach, type Viewer } from "../identity/viewers.js";
 import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
+import { literals } from "../literals.js";
 
 /** Who made a Change: a User, an Agent, or Cronk itself, such as when it moves a Ticket on past a skipped Step. */
 export const ChangedBy = ActorOrCronk;
@@ -49,7 +50,7 @@ export const Change = Type.Object({
   id: Type.String({ format: "uuid" }),
   actor: ChangedBy,
   at: Type.String({ format: "date-time" }),
-  field: Type.Union(changeFields.map((f) => Type.Literal(f))),
+  field: literals(changeFields),
   from: Type.Unknown({
     description:
       "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +

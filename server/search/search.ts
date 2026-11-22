@@ -3,6 +3,7 @@ import type { Db } from "../db.js";
 import { slugColumn } from "../http/readable.js";
 import { inReach, type Viewer } from "../identity/viewers.js";
 import { transcriptReadable } from "../transcripts/transcripts.js";
+import { literals } from "../literals.js";
 
 /**
  * Search over a Workspace's Tickets, knowledge, Artifacts (by title and description) and Transcripts with Postgres
@@ -17,7 +18,7 @@ export const SnippetPart = Type.Object({
 
 export const searchKinds = ["ticket", "document", "report", "term", "decision", "artifact", "transcript"] as const;
 export type SearchKind = (typeof searchKinds)[number];
-export const SearchKind = Type.Union(searchKinds.map((kind) => Type.Literal(kind)));
+export const SearchKind = literals(searchKinds);
 
 export const SearchResult = Type.Object({
   kind: SearchKind,
