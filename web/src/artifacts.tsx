@@ -21,7 +21,7 @@ import {
 } from "./ui/controls.js";
 import { Diff } from "./ui/diff.js";
 import { Chip, type Tone } from "./ui/labels.js";
-import { ReadOnlyNote } from "./write-access.js";
+import { ProjectNote } from "./write-access.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
@@ -123,6 +123,8 @@ export function ArtifactScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
+  // Counts the Artifact's changes, so its Versions are read again when one is deleted elsewhere.
+  const [revision, setRevision] = useState(0);
   usePlace("artifacts", artifact?.projectId ?? null);
 
   useEffect(() => {
@@ -138,7 +140,10 @@ export function ArtifactScreen({
   /** Fetches the shown Artifact again after a live event, keeping it on screen if it went meanwhile. */
   const reload = useCallback(() => latest(api.artifact(artifactId), setArtifact, failed), [artifactId, latest, failed]);
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected" || (event.type === "artifact.changed" && event.artifactId === artifactId)) reload();
+    if (event.type === "reconnected" || (event.type === "artifact.changed" && event.artifactId === artifactId)) {
+      reload();
+      setRevision((n) => n + 1);
+    }
   });
   const projectId = artifact?.projectId ?? null;
   useEffect(() => {
@@ -181,7 +186,7 @@ export function ArtifactScreen({
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       {gone && <DeletedElsewhere back={{ to: list, label: "Back to Artifacts" }}>this Artifact is no longer kept.</DeletedElsewhere>}
       {artifact.description && <p className="artifact-description">{artifact.description}</p>}
       <div className="page-split">
@@ -208,6 +213,16 @@ export function ArtifactScreen({
           </Panel>
           <Versions<VersionWithBody, ArtifactComparison>
             current={artifact.version.number}
+            revision={revision}
+            // With Read in its Project, or once it is gone, no Version is deleted.
+            deleting={
+              !gone && (!project || project.access === "write")
+                ? {
+                    run: (number) => api.deleteArtifactVersion(artifact.id, number),
+                    note: "It goes with its files, which are no longer served, and its number is never used again. The other Versions stay. It can't be brought back.",
+                  }
+                : undefined
+            }
             source={{
               list: () => api.artifactVersions(artifact.id),
               compare: (from, to) => api.compareArtifactVersions(artifact.id, from, to),

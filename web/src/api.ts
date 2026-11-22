@@ -16,6 +16,7 @@ import type {
 import type { LinkedArtifact } from "../../server/artifacts/linked-artifacts.js";
 import type { Attachment, Owner as AttachmentOwner } from "../../server/attachments/attachments.js";
 import type { GitHubApp, ManifestStart } from "../../server/github/app.js";
+import type { Import as GitHubImport } from "../../server/github/importing.js";
 import type { Installation as GitHubInstallation } from "../../server/github/installations.js";
 import type { Check, PullRequest } from "../../server/github/pull-requests.js";
 import type { Repository } from "../../server/github/repositories.js";
@@ -80,7 +81,7 @@ export type { ComparedLine, Comparison, Document, DocumentSummary, LinkedDocumen
 export type { Term, TermComparison, TermVersion };
 export type { Decision, DecisionComparison, DecisionStatus, DecisionSummary, DecisionVersion, DecisionVersionWithBody };
 export type { Artifact, ArtifactComparison, ArtifactFile, ArtifactSummary, ArtifactVersion, ComparedFile, LinkedArtifact };
-export type { Check, Completion, GitHubApp, GitHubChecklist, GitHubInstallation, PullRequest, Repository };
+export type { Check, Completion, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
 export type { ConnectRequest, Inbox, InboxItem, SearchKind, SearchResult };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
@@ -250,6 +251,8 @@ export const api = {
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: ProjectEdit) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
+  archiveProject: (id: string) => call<Project>("POST", `/api/projects/${encodeURIComponent(id)}/archive`),
+  unarchiveProject: (id: string) => call<Project>("POST", `/api/projects/${encodeURIComponent(id)}/unarchive`),
   projectAccess: (id: string) => call<ProjectAccess>("GET", `/api/projects/${encodeURIComponent(id)}/access`),
   setProjectAccess: (id: string, access: ProjectAccess) =>
     call<ProjectAccess>("PUT", `/api/projects/${encodeURIComponent(id)}/access`, access),
@@ -261,6 +264,10 @@ export const api = {
     call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
   removeRepository: (projectId: string, id: number) =>
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
+  startImport: (projectId: string, repositoryId: number) =>
+    call<GitHubImport>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
+  latestImport: (projectId: string, repositoryId: number) =>
+    call<{ import: GitHubImport | null }>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>
@@ -348,6 +355,8 @@ export const api = {
       `/api/transcripts/${encodeURIComponent(id)}/entries${after === undefined ? "" : `?after=${after}`}`,
     ),
   deleteTranscript: (id: string) => call<void>("DELETE", `/api/transcripts/${encodeURIComponent(id)}`),
+  redactTranscript: (id: string, text: string) =>
+    call<Transcript>("POST", `/api/transcripts/${encodeURIComponent(id)}/redactions`, { text }),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
@@ -377,6 +386,8 @@ export const api = {
   compareArtifactVersions: (id: string, from: number, to: number) =>
     call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),
   deleteArtifact: (id: string) => call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}`),
+  deleteArtifactVersion: (id: string, number: number) =>
+    call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}/versions/${number}`),
   linkedArtifacts: (ticketId: string) =>
     call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),
   linkArtifact: (ticketId: string, artifactId: string) =>

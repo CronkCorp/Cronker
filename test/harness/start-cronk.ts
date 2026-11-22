@@ -59,6 +59,8 @@ export interface StartedCronk {
    * seconds; a conflicting one sends its Ticket back. Move the clock first to ask again those GitHub was still working out.
    */
   checkMergeability(): Promise<void>;
+  /** Reads the next page of issues of each running GitHub issues import, as the server does every five seconds. */
+  runImports(): Promise<void>;
   logs: LogLine[];
   /** The setup code from the server log. */
   setupCode(): string;
@@ -210,6 +212,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     resumePausedRunners: () => cronk.resumePausedRunners(),
     replayFailedDeliveries: () => cronk.replayFailedDeliveries(),
     checkMergeability: () => cronk.checkMergeability(),
+    runImports: () => cronk.runImports(),
     logs,
     setupCode() {
       const line = logs.findLast((l) => typeof l.setupCode === "string");

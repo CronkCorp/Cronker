@@ -1,4 +1,4 @@
-import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access.js";
+import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.js";
 import { useAddresses, type Addresses } from "./addresses.js";
 import { useQueries, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
@@ -263,7 +263,7 @@ export function TicketScreen({
           )
         }
       />
-      <ReadOnlyNote access={project.access} />
+      <ProjectNote project={project} />
       <FormError error={error} />
       <div className="page-split">
         <div className="page ticket-main">
@@ -1250,6 +1250,19 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
+/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
+function describedWithLink(change: Change): ReactNode {
+  const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
+  if (imported?.source === "github" && typeof imported.url === "string") {
+    return (
+      <>
+        imported the Ticket from <ExternalLink url={imported.url}>its GitHub issue</ExternalLink>
+      </>
+    );
+  }
+  return described(change);
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
@@ -1520,7 +1533,7 @@ function Timeline({
           </span>
           <p className="entry-line">
             <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
-            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : described(change)}
+            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : describedWithLink(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,

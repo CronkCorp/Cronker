@@ -13,6 +13,21 @@ export function ProjectAccessProvider({ access, children }: { access: "read" | "
   return <WriteAccess.Provider value={access === "write"}>{children}</WriteAccess.Provider>;
 }
 
+/**
+ * The line a page of a Project shows under its head when it offers no changes: the Project is archived, or the User
+ * has Read in it.
+ */
+export function ProjectNote({ project }: { project: { access: "read" | "write"; archivedAt: string | null } }) {
+  if (project.archivedAt !== null) {
+    return (
+      <p className="read-only-note muted small" role="note">
+        This Project is archived: everyone reads it, but nothing in it changes until an Admin unarchives it.
+      </p>
+    );
+  }
+  return <ReadOnlyNote access={project.access} />;
+}
+
 /** The line a page shows under its head with Read in its Project, saying why it offers no changes. */
 export function ReadOnlyNote({ access }: { access: "read" | "write" }) {
   if (access === "write") return null;

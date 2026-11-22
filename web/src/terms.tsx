@@ -12,7 +12,7 @@ import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./li
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
-import { ReadOnlyNote } from "./write-access.js";
+import { ProjectNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
@@ -94,7 +94,7 @@ function Glossary({
           </>
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       <div className="filter-bar">
         <input
           type="search"
@@ -308,7 +308,7 @@ export function TermScreen({
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       {gone && (
         <DeletedElsewhere back={{ to: to.place(place, "glossary"), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
       )}
