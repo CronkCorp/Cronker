@@ -152,7 +152,7 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields, the Ticket keys its description mentions and, as `mentionedIn`, " +
+        "A Ticket of your Workspace with its fields, the Ticket and Decision keys its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
         "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
@@ -963,7 +963,9 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read a Decision",
       description:
         "A Decision of your Workspace with its Markdown body, at its current Version, whose number a save names as its " +
-        "`baseVersion`; or, given a Version's number, that earlier Version.",
+        "`baseVersion`, the Ticket and Decision keys its body mentions and, as `mentionedIn`, the texts mentioning it " +
+        "(Tickets, Comments, Documents, Reports, Terms and other Decisions you can read); or, given a Version's " +
+        "number, that earlier Version.",
       inputSchema: {
         decision: decisionArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
