@@ -323,6 +323,15 @@ test("Group Sub-Tickets folds them under their parent in their own column with a
   const copy = done.getByRole("link", { name: /^CRONK-1 Board view.*In Backlog/ });
   await expect(copy).toBeVisible();
   await expect(copy.locator("xpath=..")).not.toHaveAttribute("draggable", "true");
+  // Easy to spot in both themes: its dashed edge and its text stand out from the column it sits in.
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    const contrast = await copyContrast(copy.locator("xpath=.."));
+    expect(contrast.edge, `${colorScheme} edge`).toBeGreaterThanOrEqual(3);
+    expect(contrast.title, `${colorScheme} title`).toBeGreaterThanOrEqual(4.5);
+    expect(contrast.status, `${colorScheme} status`).toBeGreaterThanOrEqual(4.5);
+  }
+  await page.emulateMedia({ colorScheme: null });
   await done.getByRole("button", { name: "1 / 1 Sub-Ticket" }).click();
   await expect(done.getByRole("list", { name: "Sub-Tickets" }).getByRole("link", { name: "CRONK-2 Columns" })).toBeVisible();
 
@@ -357,3 +366,28 @@ test("Group Sub-Tickets folds them under their parent in their own column with a
   await page.reload();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
 });
+
+/** WCAG contrast of a card copy's dashed edge, title and status line against the column behind it. */
+async function copyContrast(card: Locator) {
+  return card.evaluate((element) => {
+    const rgb = (color: string) => (color.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    const luminance = (color: string) => {
+      const [r = 0, g = 0, b = 0] = rgb(color).map((c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a: string, b: string) => {
+      const [x, y] = [luminance(a), luminance(b)];
+      return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+    };
+    const column = getComputedStyle(element.closest(".column")!).backgroundColor;
+    const color = (selector: string) => getComputedStyle(element.querySelector(selector)!).color;
+    return {
+      edge: ratio(getComputedStyle(element).borderTopColor, column),
+      title: ratio(color(".card-title"), column),
+      status: ratio(color(".card-copy-status"), column),
+    };
+  });
+}

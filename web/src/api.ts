@@ -1,19 +1,30 @@
 /** A thin client for Cronk's HTTP API. The web client holds no rules of its own. */
 
-// The Ticket area's response types are the server's own, from its schemas: type-only, so no server code reaches the
-// browser bundle (the build refuses any that does). Screens import them from here.
+// The Ticket area's response and request types are the server's own, from its schemas: type-only, so no server code
+// reaches the browser bundle (the build refuses any that does). Screens import them from here.
 import type { Report } from "../../server/knowledge/reports.js";
 import type { Cost } from "../../server/runs/costs.js";
 import type { RunState } from "../../server/runs/states.js";
 import type { ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
-import type { Comment } from "../../server/work/comments.js";
+import type { Comment, CommentCreate } from "../../server/work/comments.js";
 import type { ArtifactMention, Mention, TicketMention } from "../../server/work/mentions.js";
-import type { Relation, RelationKind, TicketRelations } from "../../server/work/relations.js";
-import type { MentioningText, Priority, Ticket, TicketList, TicketRef, TicketSummary } from "../../server/work/tickets.js";
+import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
+import type {
+  MentioningText,
+  Priority,
+  Ticket,
+  TicketCreate,
+  TicketEdit,
+  TicketList,
+  TicketRef,
+  TicketSummary,
+} from "../../server/work/tickets.js";
+import type { TicketReopen } from "../../server/work/verification.js";
 
 export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
+export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
 export type ChangeActor = ActorOrCronk;
@@ -202,20 +213,6 @@ export const priorities: { priority: Priority; label: string }[] = [
   { priority: "low", label: "Low" },
   { priority: "none", label: "None" },
 ];
-
-export interface TicketEdit {
-  title?: string;
-  description?: string;
-  statusId?: string;
-  priority?: Priority;
-  labels?: string[];
-  assigneeId?: string | null;
-  delegateId?: string | null;
-  autonomousDelegation?: boolean;
-  dueDate?: string | null;
-  estimate?: number | null;
-  parentId?: string | null;
-}
 
 export interface TicketFilter {
   statusId?: string;
@@ -920,15 +917,15 @@ export const api = {
     const search = query.size ? `?${query}` : "";
     return call<TicketList>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
   },
-  createTicket: (projectId: string, input: { title: string; description?: string }) =>
+  createTicket: (projectId: string, input: TicketCreate) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
   acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
   reopenTicket: (id: string, comment: string) =>
-    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment }),
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment } satisfies TicketReopen),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
-  comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
+  comment: (ticketId: string, input: CommentCreate) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
@@ -960,7 +957,7 @@ export const api = {
     call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
   relations: (ticketId: string) =>
     call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
-  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
+  relate: (ticketId: string, input: RelationCreate) =>
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),

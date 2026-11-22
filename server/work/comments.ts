@@ -11,6 +11,7 @@ import { insertComment } from "./comment-writes.js";
 import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
 import { findTicketRow, ticketNotFound } from "./tickets.js";
 import { Mention, mentionsOf } from "./mentions.js";
+import { markdown } from "./fields.js";
 
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -67,11 +68,18 @@ export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Prom
   return present(db, viewer, await rowsOf(db, ticket.id));
 }
 
+/** The comment route's body: a Comment, or a reply to one. */
+export const CommentCreate = Type.Object({
+  body: markdown(100_000),
+  replyToId: Type.Optional(Type.String({ description: "The id of the Comment on this Ticket being replied to." })),
+});
+export type CommentCreate = Static<typeof CommentCreate>;
+
 export async function addComment(
   context: Context,
   actor: Caller,
   ticketId: string,
-  input: { body: string; replyToId?: string },
+  input: CommentCreate,
 ): Promise<Comment> {
   return transaction(context.db, async (tx) => {
     // A reply may answer a Question, moving the Ticket, so it locks the Ticket as moves do.

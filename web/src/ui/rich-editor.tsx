@@ -44,6 +44,7 @@ import { submitOnCtrlOrCmdEnter } from "../forms.js";
 import { chooseEditorMode, storedEditorMode, type EditorMode } from "../storage.js";
 import { Button, Field, FormError } from "./controls.js";
 import { Dialog, DialogActions, DialogClose } from "./overlays.js";
+import { scrollIntoViewAsAsked } from "./scroll.js";
 
 const onMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -303,8 +304,16 @@ function LinkDialog({ view, onClose }: { view: EditorView; onClose: () => void }
 export interface RichEditorHandle {
   /** The text being edited: the formatted text, or the Markdown source. */
   textbox(): HTMLElement | null;
-  /** Puts the cursor in the text; asked before the editor is ready, as while it loads, it does so once it is. */
-  focus(): void;
+  /**
+   * Puts the cursor in the text, with `scroll` scrolling it into view first; asked before the editor is ready, as while
+   * it loads, it does so once it is.
+   */
+  focus(options?: EditorFocus): void;
+}
+
+export interface EditorFocus {
+  /** Scroll the text into view as the User asked for it, as the Ticket page's C does. */
+  scroll?: boolean;
 }
 
 export interface RichEditorProps {
@@ -365,15 +374,16 @@ export function RichEditor({
   latest.current = { value, onChange, attachTo, onAttached, submits, disabled, placeholder };
 
   // A focus asked for before the formatted text is ready, which it gets once it is.
-  const wantsFocus = useRef(false);
+  const wantsFocus = useRef<EditorFocus | null>(null);
   useImperativeHandle(
     handle,
     () => ({
       textbox: () => viewRef.current?.dom ?? source.current,
-      focus: () => {
-        const target = viewRef.current ?? source.current;
-        if (target) target.focus();
-        else wantsFocus.current = true;
+      focus: (options = {}) => {
+        const view = viewRef.current;
+        if (view) focusText(view.dom, () => view.focus(), options);
+        else if (source.current) focusText(source.current, () => source.current?.focus({ preventScroll: true }), options);
+        else wantsFocus.current = options;
       },
     }),
     [],
@@ -481,8 +491,9 @@ export function RichEditor({
     });
     viewRef.current = view;
     setState(view.state);
-    if (autoFocus || wantsFocus.current) view.focus();
-    wantsFocus.current = false;
+    if (wantsFocus.current) focusText(view.dom, () => view.focus(), wantsFocus.current);
+    else if (autoFocus) view.focus();
+    wantsFocus.current = null;
     return () => {
       view.destroy();
       viewRef.current = null;
@@ -566,4 +577,10 @@ export function RichEditor({
       {linking && viewRef.current && <LinkDialog view={viewRef.current} onClose={() => setLinking(false)} />}
     </div>
   );
+}
+
+/** Focuses the text, scrolling it into view first when asked; `focus` itself doesn't scroll. */
+function focusText(element: HTMLElement, focus: () => void, { scroll }: EditorFocus) {
+  if (scroll) scrollIntoViewAsAsked(element);
+  focus();
 }

@@ -15,6 +15,7 @@ import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 import { userName } from "../identity/user.js";
+import { Description, Label, nullable, title } from "./fields.js";
 import { indexMentions, keysWritten, Mention, mentionsOfOne, type TicketMention } from "./mentions.js";
 
 export { keysWritten, Mention };
@@ -412,15 +413,21 @@ async function mentionedIn(db: Db | Tx, viewer: Viewer, ticket: Row): Promise<Me
   return rows.map(({ seq: _seq, ...text }: MentioningText & { seq?: unknown }) => text);
 }
 
-/** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. */
-export interface NewTicket {
-  title: string;
-  description?: string;
-  /** Makes it a Sub-Ticket of this Ticket of the same Project, with the parent's Assignee and Delegation. */
-  parentId?: string;
-  /** For an Agent filing a Discovered Ticket: its running Run, whose Ticket is the source. */
-  runId?: string;
-}
+/** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. The create route's body. */
+export const TicketCreate = Type.Object({
+  title: title("The Ticket's title."),
+  description: Type.Optional(Description),
+  parentId: Type.Optional(
+    Type.String({ format: "uuid", description: "Makes it a Sub-Ticket of this Ticket of the same Project." }),
+  ),
+  runId: Type.Optional(
+    Type.String({
+      format: "uuid",
+      description: "For an Agent filing a Discovered Ticket: its running Run, whose Ticket it records as the source.",
+    }),
+  ),
+});
+export type TicketCreate = Static<typeof TicketCreate>;
 
 /**
  * Creates a Ticket in the Project's first Backlog Status. A Sub-Ticket takes its parent's Assignee, Delegation and
@@ -434,7 +441,7 @@ export async function createTicket(
   context: Context,
   creator: Caller,
   projectId: string,
-  input: NewTicket,
+  input: TicketCreate,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
@@ -632,19 +639,59 @@ export async function listTickets(
   return rows.map(ticketSummary);
 }
 
-export interface TicketEdit {
-  title?: string;
-  description?: string;
-  priority?: Priority;
-  labels?: string[];
-  assigneeId?: string | null;
-  delegateId?: string | null;
-  autonomousDelegation?: boolean;
-  dueDate?: string | null;
-  estimate?: number | null;
-  statusId?: string;
-  parentId?: string | null;
-}
+/** The edit route's body: whichever fields are given change, and `null` clears a field. */
+export const TicketEdit = Type.Object({
+  title: Type.Optional(title("The Ticket's title. An Agent edits it only on a Discovered Ticket it filed.")),
+  description: Type.Optional(Type.String({ ...Description, description: "The whole new description, in Markdown." })),
+  priority: Type.Optional(Priority),
+  labels: Type.Optional(
+    Type.Array(Label, { maxItems: 50, description: "The Ticket's Labels, all of them, replacing those it has." }),
+  ),
+  assigneeId: Type.Optional(nullable(Type.String({ format: "uuid" }))),
+  delegateId: Type.Optional(
+    nullable(
+      Type.String({
+        format: "uuid",
+        description:
+          "Delegates the Ticket to one of your own Agents, or `null` undelegates it. Only the Assignee " +
+          "delegates a Ticket; delegating an unassigned Ticket assigns you. A new Assignee who doesn't " +
+          "own the Delegate removes it.",
+      }),
+    ),
+  ),
+  autonomousDelegation: Type.Optional(
+    Type.Boolean({
+      description:
+        "Lets a Step complete the Ticket itself, as Unverified, or stops that. Only Users set it; " +
+        "its Sub-Tickets take it too.",
+    }),
+  ),
+  dueDate: Type.Optional(
+    nullable(Type.String({ format: "date" }), "A date such as `2026-02-01`, or null to clear it."),
+  ),
+  estimate: Type.Optional(
+    nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }), "A number, or null to clear it."),
+  ),
+  statusId: Type.Optional(
+    Type.String({ format: "uuid", description: "Moves the Ticket to this Status of its Project." }),
+  ),
+  parentId: Type.Optional(
+    nullable(
+      Type.String({
+        format: "uuid",
+        description:
+          "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; " +
+          "never of itself or of one of its own Sub-Tickets. Under a delegated parent it takes the parent's " +
+          "Assignee and Delegate, replacing its own and stopping its running Run, unless `assigneeId` or " +
+          "`delegateId` is given too; under an undelegated parent it keeps its own.",
+      }),
+    ),
+  ),
+});
+export type TicketEdit = Static<typeof TicketEdit>;
+
+/** The fields of a Ticket an Agent may edit: during its running Run on it, and the title only on a Discovered Ticket it filed. */
+export const AgentTicketEdit = Type.Pick(TicketEdit, ["title", "description", "priority", "labels", "dueDate", "estimate"]);
 
 /** The fields of a Ticket an Agent may edit, during its running Run on it. */
 const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate"]);
