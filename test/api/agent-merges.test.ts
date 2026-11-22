@@ -418,16 +418,23 @@ describe("the Merge Step's send-back Outcome", () => {
 });
 
 describe("the default Merge Step's Brief", () => {
-  test("leaves merging to Cronk: it asks why there was nothing to queue, sending it back or to a User with a Comment", async () => {
+  test("leaves merging to Cronk: it resolves only the conflicting hunks, pushing to the open Pull Request, then finishes resolved, or sends it back with a Comment", async () => {
     const { ada, ticket } = await mergeRunning();
 
     const brief = await ok("GET", `/api/tickets/${ticket.id}/brief`, ada);
 
     expect(brief.brief).not.toContain("merge_pull_request");
     expect(brief.brief).toContain("Merge Queue");
-    expect(brief.brief).toContain("**send back**");
-    expect(brief.brief).toMatch(/Comment/);
+    expect(brief.brief).toContain("changing nothing beyond the conflicting hunks");
+    expect(brief.brief).toContain("push to that branch");
+    expect(brief.brief).toContain("**resolved**");
+    expect(brief.brief).toContain("**send back** when the resolution isn't mechanical");
+    expect(brief.brief).toMatch(/leaving a Comment/);
     expect(brief.preamble).toContain("- Call `finish` exactly once, as the last thing you do.");
+    expect(brief.preamble).toContain(
+      "- **resolved**: once you've pushed a resolution of the conflict, leaves CRONK-1 in Merge, waiting for the new commit's checks to go green, when it rejoins the Merge Queue at the front.",
+    );
+    expect(brief.preamble).toContain("From a Run resolving a conflict it counts as no round");
     expect(brief.preamble).not.toContain("merge_pull_request");
   });
 

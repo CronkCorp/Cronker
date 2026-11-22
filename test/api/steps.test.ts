@@ -116,6 +116,7 @@ describe("the default board's Steps", () => {
         labelRule: null,
         outcomes: [
           outcome("review", id("In Review"), { default: true }),
+          outcome("resolved", id("Merge")),
           outcome("send back", id("Implement"), { countsAsRound: true }),
           outcome("needs you", id("In Review"), { needsYou: true }),
         ],

@@ -99,7 +99,7 @@ export async function linkedPullRequest(
 }
 
 /** A check still running on the commit, by what GitHub reported, by its name. */
-async function pendingCheckOn(tx: Tx, repositoryId: string, sha: string): Promise<string | null> {
+export async function pendingCheckOn(tx: Tx, repositoryId: string, sha: string): Promise<string | null> {
   const { rows } = await tx.query<{ name: string }>(
     `select name from commit_checks where repository_id = $1 and sha = $2 and state = 'pending' order by lower(name), name limit 1`,
     [repositoryId, sha],
@@ -145,6 +145,20 @@ export class GitHubRefusedMerge extends ApiError {
     message: string,
     advice: string,
     readonly reason: string | null,
+  ) {
+    super(409, "not_mergeable", message, { rule: rules.mergeable, advice });
+  }
+}
+
+/**
+ * GitHub's answer that the Pull Request can't be merged because it conflicts with its base branch, with the base
+ * commit GitHub worked that out against.
+ */
+export class ConflictingPullRequest extends ApiError {
+  constructor(
+    message: string,
+    advice: string,
+    readonly base: { ref: string | null; sha: string | null },
   ) {
     super(409, "not_mergeable", message, { rule: rules.mergeable, advice });
   }
@@ -247,8 +261,11 @@ async function tokenForPullRequest(context: Context, pullRequest: AskedMerge["pu
   return tokenFor(context, installationId);
 }
 
-/** Asks GitHub to merge the Pull Request, refusing, as Cronk's rules say, when GitHub says it can't be merged. */
-async function askGitHub(context: Context, { pullRequest, advice }: AskedMerge, options: MergeOptions): Promise<void> {
+/**
+ * Asks GitHub to merge the Pull Request, refusing, as Cronk's rules say, when GitHub says it can't be merged; returns
+ * the merge commit, when GitHub names it.
+ */
+async function askGitHub(context: Context, { pullRequest, advice }: AskedMerge, options: MergeOptions): Promise<string | null> {
   const name = `${pullRequest.repository}#${pullRequest.number}`;
   const repositoryId = Number(pullRequest.repositoryId);
   const token = await tokenForPullRequest(context, pullRequest, advice);
@@ -262,7 +279,12 @@ async function askGitHub(context: Context, { pullRequest, advice }: AskedMerge, 
     throw notMergeable(`GitHub is still working out whether ${name} can be merged.`, "Wait a minute, then merge again.");
   }
   if (!onGitHub.mergeable) {
-    throw notMergeable(`GitHub says ${name} can't be merged, as when it has a merge conflict.`, advice.sendBack(`${name} has a merge conflict`));
+    const base = onGitHub.base as { ref?: unknown; sha?: unknown } | undefined;
+    throw new ConflictingPullRequest(
+      `GitHub says ${name} can't be merged, as when it has a merge conflict.`,
+      advice.sendBack(`${name} has a merge conflict`),
+      { ref: typeof base?.ref === "string" ? base.ref : null, sha: typeof base?.sha === "string" ? base.sha : null },
+    );
   }
   if (options.refuseBehind && onGitHub.mergeable_state === "behind") {
     throw new ApiError(409, behindCode, `${name}'s base branch has commits its branch lacks, so it is updated before it merges.`, {
@@ -275,7 +297,7 @@ async function askGitHub(context: Context, { pullRequest, advice }: AskedMerge, 
     method: defaultMergeMethod(repository),
     sha: pullRequest.sha,
   });
-  if (merged.merged) return;
+  if (merged.merged) return merged.sha;
   if (merged.status === 409) throw unknownCommit(name);
   // Such as branch protection or the Repository's settings, which the work's author can't change.
   throw new GitHubRefusedMerge(
@@ -296,8 +318,9 @@ export async function mergeAsAsked<T>(
   then: (tx: Tx) => Promise<T>,
   options: MergeOptions = {},
 ): Promise<T> {
+  let mergeCommit: string | null;
   try {
-    await askGitHub(context, asked, options);
+    mergeCommit = await askGitHub(context, asked, options);
   } catch (error) {
     await context.db.query("update pull_requests set merge_asked_by = null where id = $1 and merge_asked_by = $2::jsonb", [
       asked.pullRequest.id,
@@ -306,6 +329,14 @@ export async function mergeAsAsked<T>(
     throw error;
   }
   return transaction(context.db, async (tx) => {
+    // So a queued Pull Request conflicting with it afterwards can name the merge, before GitHub's delivery says so too;
+    // kept apart from the delivery's merge commit, whose arrival has Cronk check the other Pull Requests.
+    if (mergeCommit) {
+      await tx.query("update pull_requests set answered_merge_sha = $2 where id = $1", [
+        asked.pullRequest.id,
+        mergeCommit,
+      ]);
+    }
     await recordAskedMerge(context, tx, Number(asked.pullRequest.id));
     return then(tx);
   });

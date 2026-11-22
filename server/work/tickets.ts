@@ -117,17 +117,44 @@ export const TicketSummary = Type.Object({
   queue: Type.Union(
     [
       Type.Object({
-        position: Type.Integer({ minimum: 1, description: "Its place in its queue, the head being 1." }),
+        position: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+          description: "Its place in its queue, the head being 1; null while it has stepped aside for a conflict, out of line.",
+        }),
         state: Type.Union(
-          [Type.Literal("queued"), Type.Literal("merging"), Type.Literal("updating-branch"), Type.Literal("waiting-for-checks")],
+          [
+            Type.Literal("queued"),
+            Type.Literal("merging"),
+            Type.Literal("updating-branch"),
+            Type.Literal("resolving-conflict"),
+            Type.Literal("waiting-for-checks"),
+          ],
           {
             description:
               "`merging` while Cronk asks GitHub to merge it; `updating-branch` while Cronk asks GitHub to bring its branch, " +
-              "behind its base branch, up to date; `waiting-for-checks` until the updated commit's checks are green; " +
-              "`queued` while it waits.",
+              "behind its base branch, up to date; `resolving-conflict` while, stepped aside for a conflict with its base " +
+              "branch, a Run of the Merge Step resolves it; `waiting-for-checks` until the updated or resolving commit's " +
+              "checks are green; `queued` while it waits.",
           },
         ),
         pullRequestId: Type.Number({ description: "GitHub's id for the queued Pull Request." }),
+        conflict: Type.Union(
+          [
+            Type.Object({
+              merge: Type.Union(
+                [Type.Object({ repository: Type.String(), number: Type.Integer(), url: Type.String() }), Type.Null()],
+                { description: "The merged Pull Request that caused the conflict, or null when Cronk knows none." },
+              ),
+              baseSha: Type.Union([Type.String(), Type.Null()], { description: "The base branch's commit it conflicted with." }),
+              at: Type.String({ format: "date-time" }),
+              count: Type.Integer({
+                minimum: 1,
+                description: "How many times this entry stepped aside for a conflict; past 3 its Ticket comes to its Assignee instead.",
+              }),
+            }),
+            Type.Null(),
+          ],
+          { description: "The conflict that last set it aside, out of line; null if none has." },
+        ),
       }),
       Type.Null(),
     ],
@@ -254,13 +281,22 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
     'waiting', tickets.discovery_waits) end as discovered`;
 
 /**
- * SQL for the Ticket `alias`'s first entry in the Merge Queue, one Cronk is merging or updating if any, with its place among the entries whose Pull Requests
- * share its Repository and base branch, in the order they joined.
+ * SQL for the Ticket `alias`'s first entry in the Merge Queue, one Cronk is acting on or that stepped aside if any,
+ * with its place among the entries in line whose Pull Requests share its Repository and base branch (none for one that
+ * stepped aside), and what last set it aside for a conflict. In line, one Cronk is acting on comes first, then the
+ * others in the order they joined, one that rejoined at the front.
  */
 const queueColumn = (alias: string) => `(select json_build_object('pullRequestId', entry.pull_request_id, 'state', entry.state,
-    'position', (select count(*) from merge_queue ahead join pull_requests ahead_pr on ahead_pr.id = ahead.pull_request_id
-      where ahead_pr.repository_id = queued_pr.repository_id
-        and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '') and ahead.seq <= entry.seq))
+    'position', case when entry.aside then null else (select count(*) from merge_queue ahead
+      join pull_requests ahead_pr on ahead_pr.id = ahead.pull_request_id
+      where ahead_pr.repository_id = queued_pr.repository_id and not ahead.aside
+        and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '')
+        and (ahead.state = 'queued', ahead.seq) <= (entry.state = 'queued', entry.seq)) end,
+    'conflict', case when entry.conflict_at is null then null else json_build_object(
+      'merge', (select json_build_object('repository', merged.repository_full_name, 'number', merged.number, 'url', merged.url)
+        from pull_requests merged where merged.id = entry.conflict_merged_pull_request_id),
+      'baseSha', entry.conflict_base_sha,
+      'at', to_char(entry.conflict_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'count', entry.conflict_count) end)
   from merge_queue entry join pull_requests queued_pr on queued_pr.id = entry.pull_request_id
   where entry.ticket_id = ${alias}.id order by entry.state <> 'queued' desc, entry.seq limit 1)`;
 

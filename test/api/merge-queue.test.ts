@@ -130,7 +130,7 @@ async function queueSetting() {
     ((await ok("GET", `/api/tickets/${ticketId}/runs`, ada)) as { step: { name: string } }[]).map((r) => r.step.name);
   return {
     workspace, user, ada, project, status, app, installation, cronker, website, deliver, open, inReview, produced, failCheck,
-    merge, read, cronkComments, runs,
+    merge, read, cronkComments, runs, agentOf: () => agent!,
   };
 }
 
@@ -994,5 +994,239 @@ describe("Autonomous Delegation joins the queue", () => {
 
     expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
     expect(await read(byAda.ticket.id)).toMatchObject({ statusId: status("Done"), verification: "verified" });
+  });
+});
+
+describe("a head conflicting with its base branch", () => {
+  /**
+   * Four Tickets Implement produced for claude-max, each queued by Ada in turn: CRONK-1's #101 merging makes CRONK-2's
+   * #102 conflict with `main`. claude-max has a token, `finish` ends the Ticket's running Run as it, and `resolve` has
+   * it push a resolution to #102 as `sha`, GitHub saying it merges cleanly again, then finish *resolved*.
+   */
+  async function conflictSetting() {
+    const setting = await queueSetting();
+    const { ada, produced, merge, deliver, cronker, agentOf } = setting;
+    const tickets = [await produced(), await produced(), await produced(), await produced()];
+    tickets[0]!.onGitHub.conflicts = [tickets[1]!.onGitHub];
+    for (const { ticket } of tickets) await merge(ticket.id);
+    const { secret } = await ok("POST", `/api/agents/${agentOf().id}/tokens`, ada, { name: "cloud", access: "full" });
+    const asAgent = { headers: { authorization: `Bearer ${secret}` } };
+    const running = async (ticketId: string) =>
+      ((await ok("GET", `/api/tickets/${ticketId}/runs`, ada)) as { id: string; state: string; step: { name: string } }[]).find(
+        (r) => r.state === "running",
+      );
+    const finish = async (ticketId: string, outcome: string, extra: Record<string, unknown> = {}) =>
+      call("POST", `/api/runs/${(await running(ticketId))!.id}/finish`, asAgent, { outcome, ...extra });
+    const [, conflicting] = tickets as [(typeof tickets)[0], (typeof tickets)[0]];
+    const push = async (sha: string) => {
+      await deliver(cronker, "pull_request", {
+        action: "synchronize",
+        pull_request: { ...conflicting.pullRequest, head: { ...conflicting.pullRequest.head, sha }, updated_at: "2026-01-01T09:10:00Z" },
+      });
+      Object.assign(conflicting.onGitHub, { headSha: sha, mergeable: true });
+    };
+    const check = (sha: string, conclusion: "success" | "failure" | null, name = "test") =>
+      deliver(cronker, "check_run", {
+        action: conclusion === null ? "created" : "completed",
+        check_run: {
+          id: 2000 + sha.length,
+          name,
+          head_sha: sha,
+          status: conclusion === null ? "in_progress" : "completed",
+          conclusion,
+          html_url: null,
+        },
+      });
+    const resolve = async (sha: string) => {
+      await push(sha);
+      const finished = await finish(conflicting.ticket.id, "resolved");
+      expect(finished.status, JSON.stringify(finished.json)).toBe(200);
+    };
+    return { ...setting, tickets, conflicting, asAgent, running, finish, push, check, resolve };
+  }
+
+  test("steps aside with Cronk's Comment naming the merge and a Merge Run, and the next Ticket merges meanwhile", async () => {
+    const { tickets, conflicting, read, status, cronkComments, running } = await conflictSetting();
+
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
+    expect(await read(conflicting.ticket.id)).toMatchObject({
+      statusId: status("Merge"),
+      queue: {
+        state: "resolving-conflict",
+        position: null,
+        pullRequestId: 602,
+        conflict: {
+          merge: { repository: "cronkcorp/cronker", number: 101, url: "https://github.com/cronkcorp/cronker/pull/101" },
+          baseSha: "m101",
+          count: 1,
+        },
+      },
+    });
+    expect((await cronkComments(conflicting.ticket.id)).at(-1)).toBe(
+      "[cronkcorp/cronker#102](https://github.com/cronkcorp/cronker/pull/102) conflicts with `main` since " +
+        "[cronkcorp/cronker#101](https://github.com/cronkcorp/cronker/pull/101) merged, so CRONK-2 stepped aside in the " +
+        "Merge Queue, which moves on meanwhile; a Run of Merge resolves the conflict (1 of 3). Once the resolution's " +
+        "checks are green, CRONK-2 rejoins the queue at the front.",
+    );
+    // A Merge Run, though the Project has agents may merge off and the Ticket has no Autonomous Delegation.
+    expect((await running(conflicting.ticket.id))?.step.name).toBe("Merge");
+    expect(cronk.runner.starts.at(-1)!.brief).toContain("**resolved**");
+    expect(await read(tickets[2]!.ticket.id)).toMatchObject({ queue: { position: 1, state: "queued" } });
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101, 103]);
+    expect(await read(conflicting.ticket.id)).toMatchObject({ queue: { state: "resolving-conflict" } });
+  });
+
+  test("resolved, then green checks, puts it back at the front of its queue, and it merges next", async () => {
+    const { tickets, conflicting, read, status, resolve, check, runs } = await conflictSetting();
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+
+    await resolve("r1");
+
+    expect(await read(conflicting.ticket.id)).toMatchObject({
+      statusId: status("Merge"),
+      queue: { state: "waiting-for-checks", position: null, conflict: { count: 1 } },
+    });
+    // No other Run starts on it, and it waits out of line while the resolution's checks are pending.
+    expect((await runs(conflicting.ticket.id)).filter((s) => s === "Merge")).toHaveLength(1);
+    await check("r1", null);
+    await cronk.checkQueue();
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101, 103]);
+    expect(await read(conflicting.ticket.id)).toMatchObject({ queue: { state: "waiting-for-checks", position: null } });
+
+    // The green check has it rejoin at the front, ahead of CRONK-4, and merge at once.
+    await check("r1", "success");
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101, 103, 102]);
+    expect(await read(conflicting.ticket.id)).toMatchObject({ statusId: status("Done"), verification: "verified", queue: null });
+    expect(await read(tickets[3]!.ticket.id)).toMatchObject({ queue: { position: 1, state: "queued" } });
+  });
+
+  test("a resolved Ticket rejoins ahead of the Tickets waiting, behind none", async () => {
+    const { tickets, conflicting, read, resolve, check } = await conflictSetting();
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+    // GitHub is still working out whether CRONK-3 merges, so it waits as the head while CRONK-2 is resolved.
+    tickets[2]!.onGitHub.mergeable = null;
+    await resolve("r1");
+    // Nor does GitHub know yet whether CRONK-2 merges, so it rejoins without merging.
+    conflicting.onGitHub.mergeable = null;
+    await check("r1", "success");
+
+    expect(await read(conflicting.ticket.id)).toMatchObject({ queue: { position: 1, state: "queued" } });
+    expect(await read(tickets[2]!.ticket.id)).toMatchObject({ queue: { position: 2, state: "queued" } });
+    expect(await read(tickets[3]!.ticket.id)).toMatchObject({ queue: { position: 3, state: "queued" } });
+  });
+
+  test("failing checks on the resolution send it back to Implement as a round", async () => {
+    const { conflicting, read, status, resolve, check, cronkComments } = await conflictSetting();
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+    await resolve("r1");
+
+    await check("r1", "failure", "lint");
+
+    expect(await read(conflicting.ticket.id)).toMatchObject({ statusId: status("Implement"), queue: null });
+    expect((await cronkComments(conflicting.ticket.id)).at(-1)).toContain("The check **lint** failed on");
+  });
+
+  test("sending it back to Implement from the Merge Run works with a Comment and counts as no round", async () => {
+    const { ada, project, status, conflicting, read, finish, cronkComments } = await conflictSetting();
+    // With no rounds left, a send-back counting as one would hand it to its Assignee instead.
+    const { step } = (await ok("GET", `/api/projects/${project.id}`, ada)).statuses.find((s: { name: string }) => s.name === "Merge");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Merge")}/step`, ada, { ...step, roundLimit: 0 });
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+    const comments = (await cronkComments(conflicting.ticket.id)).length;
+
+    const sent = await finish(conflicting.ticket.id, "send back");
+
+    expect(sent.json).toMatchObject({ state: "finished", outcome: "send back", questionBy: null });
+    expect(await read(conflicting.ticket.id)).toMatchObject({ statusId: status("Implement"), queue: null });
+    expect(await cronkComments(conflicting.ticket.id)).toHaveLength(comments);
+  });
+
+  test("a fourth conflict hands it to its Assignee with Cronk's Question instead, none of them a round", async () => {
+    const { workspace, ada, user, project, status, conflicting, read, resolve, check, runs } = await conflictSetting();
+    await ok("PATCH", `/api/tickets/${conflicting.ticket.id}`, ada, { assigneeId: user.id });
+    const { step } = (await ok("GET", `/api/projects/${project.id}`, ada)).statuses.find((s: { name: string }) => s.name === "Merge");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${status("Merge")}/step`, ada, { ...step, roundLimit: 0 });
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+    for (const round of [1, 2, 3]) {
+      expect(await read(conflicting.ticket.id)).toMatchObject({ queue: { state: "resolving-conflict", conflict: { count: round } } });
+      await resolve(`r${round}`);
+      // It rejoins, but conflicts again before it merges.
+      conflicting.onGitHub.mergeable = false;
+      conflicting.onGitHub.baseSha = `b${round}`;
+      await check(`r${round}`, "success");
+      await cronk.checkQueue();
+    }
+
+    expect(await read(conflicting.ticket.id)).toMatchObject({ statusId: status("In Review"), queue: null });
+    expect((await runs(conflicting.ticket.id)).filter((s) => s === "Merge")).toHaveLength(3);
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.filter((i: { kind: string }) => i.kind === "needsYou")).toEqual([
+      expect.objectContaining({
+        ticket: expect.objectContaining({ key: "CRONK-2" }),
+        outcome: "needs you",
+        question:
+          "cronkcorp/cronker#102 conflicts with main, and CRONK-2 already stepped aside for conflicts 3 times, so it left " +
+          "the Merge Queue. Resolve the conflict yourself, or send it back to work, then press Merge again.",
+      }),
+    ]);
+  });
+
+  test("a Ticket with no Delegate to resolve it comes to its Assignee instead, the queue moving on", async () => {
+    const { workspace, ada, user, inReview, merge, read, status } = await queueSetting();
+    const first = await inReview();
+    const second = await inReview();
+    await ok("PATCH", `/api/tickets/${second.ticket.id}`, ada, { assigneeId: user.id });
+    first.onGitHub.conflicts = [second.onGitHub];
+    const third = await inReview();
+    for (const { ticket } of [first, second, third]) await merge(ticket.id);
+
+    await cronk.checkQueue();
+    await cronk.checkQueue();
+
+    expect(await read(second.ticket.id)).toMatchObject({ statusId: status("In Review"), queue: null });
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.find((i: { kind: string }) => i.kind === "needsYou")).toMatchObject({
+      question: expect.stringContaining("CRONK-2 isn't delegated, so no Run can resolve it"),
+    });
+    await cronk.checkQueue();
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101, 103]);
+  });
+
+  test("resolved is refused to a Merge Run with no conflict to resolve", async () => {
+    const setting = await queueSetting();
+    const { workspace, ada, project, status, deliver, cronker } = setting;
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: true });
+    const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
+    await deliver(cronker, "pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 601, number: 101, title: `${ticket.key}: make it so`, state: "open", draft: true, merged: false,
+        html_url: "https://github.com/cronkcorp/cronker/pull/101", head: { ref: "cronk-1", sha: "c101" }, base: { ref: "main" },
+        created_at: "2026-01-01T09:00:00Z", updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, autonomousDelegation: true, statusId: status("Merge") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+
+    const refused = await call("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` } }, { outcome: "resolved" });
+
+    expect(refused.status).toBe(409);
+    expect(refused.json).toMatchObject({ error: { code: "nothing_to_resolve" } });
   });
 });

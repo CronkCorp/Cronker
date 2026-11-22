@@ -637,3 +637,66 @@ test("a queued head behind its base branch shows Updating branch, then Waiting f
   expect(cronk.github.merges.map((m) => m.sha)).toEqual(["c1u1"]);
 });
 
+
+test("a queued head conflicting with its base branch shows Resolving conflict, then Waiting for checks, live", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call("POST", `/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const created = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  const agent = await call("PATCH", `/api/agents/${created.id}`, { runnerId: runner.id });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const deliver = async (event: string, payload: Record<string, unknown>) => {
+    const delivered = await cronk.github.deliver(app, event, {
+      installation: { id: installation.id },
+      repository: { id: cronker.id, full_name: cronker.fullName },
+      ...payload,
+    });
+    expect(delivered.status).toBe(200);
+  };
+  // CRONK-1 and CRONK-2 in In Review, delegated, their Pull Requests green; CRONK-1 merging makes CRONK-2 conflict.
+  const onGitHub: ReturnType<typeof cronk.github.pullRequest>[] = [];
+  const tickets: { id: string }[] = [];
+  for (const number of [1, 2]) {
+    const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: `Change ${number}` });
+    await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: inReview, delegateId: agent.id, autonomousDelegation: false });
+    await deliver("pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 500 + number, number, title: `CRONK-${number}: change ${number}`, state: "open", draft: false, merged: false,
+        html_url: `https://github.com/cronkcorp/cronker/pull/${number}`, head: { ref: `cronk-${number}`, sha: `c${number}` },
+        base: { ref: "main" }, updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await deliver("check_run", {
+      action: "completed",
+      check_run: { id: number, name: "test", head_sha: `c${number}`, status: "completed", conclusion: "success", html_url: null },
+    });
+    onGitHub.push(cronk.github.pullRequest(cronker, number, { headSha: `c${number}`, mergeable: true }));
+    tickets.push(ticket);
+    await call("POST", `/api/tickets/${ticket.id}/merge`);
+  }
+  onGitHub[0]!.conflicts = [onGitHub[1]!];
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const cards = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "Merge", exact: true }).locator(".card-link");
+  await expect(cards).toHaveText([/CRONK-1.*#1 in queue/, /CRONK-2.*#2 in queue/]);
+
+  await cronk.checkQueue();
+  await cronk.checkQueue();
+  await expect(cards).toHaveText([/CRONK-2.*Resolving conflict/]);
+
+  // Its Merge Run pushes a resolution and finishes resolved.
+  const runs = await call("GET", `/api/tickets/${tickets[1]!.id}/runs`);
+  const run = runs.find((r: { state: string }) => r.state === "running");
+  await cronk.request("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` }, body: { outcome: "resolved" } });
+  await expect(cards).toHaveText([/CRONK-2.*Waiting for checks/]);
+});

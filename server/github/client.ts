@@ -252,7 +252,7 @@ export async function mergeOnGitHub(
   fullName: string,
   number: number,
   { method, sha }: { method: MergeMethod | undefined; sha: string },
-): Promise<{ merged: true } | { merged: false; status: number; message: string }> {
+): Promise<{ merged: true; sha: string | null } | { merged: false; status: number; message: string }> {
   const response = await call(under(github.apiUrl, `${pullPath(fullName, number)}/merge`), {
     method: "PUT",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -262,8 +262,8 @@ export async function mergeOnGitHub(
     const body = (await response.json().catch(() => ({}))) as { message?: unknown };
     return { merged: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
   }
-  await jsonOf<unknown>(response, "The merge");
-  return { merged: true };
+  const merged = await jsonOf<{ sha?: unknown }>(response, "The merge");
+  return { merged: true, sha: typeof merged?.sha === "string" ? merged.sha : null };
 }
 
 /**
