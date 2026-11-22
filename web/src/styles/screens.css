@@ -1774,6 +1774,19 @@
   flex-wrap: wrap;
 }
 
+/* Reopen dialog: the Tickets it blocks that moved on */
+.moved-on {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.moved-on-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 /* Webhooks (Account settings): each webhook a bordered block with its last deliveries under it. */
 .webhook {
   border: 1px solid var(--border);

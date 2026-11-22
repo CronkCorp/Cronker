@@ -75,7 +75,7 @@ import type {
   TicketRef,
   TicketSummary,
 } from "../../server/work/tickets.js";
-import type { Completion, TicketReopen } from "../../server/work/verification.js";
+import type { Completion, MovedOnDependent, ReopenPreview, TicketReopen } from "../../server/work/verification.js";
 import type { AddedMember, Member, PendingAdd } from "../../server/workspaces/members.js";
 import type { Membership as WorkspaceSummary, Workspace, WorkspaceSettings } from "../../server/workspaces/workspaces.js";
 import type { Webhook, WebhookDelivery, WebhookKind } from "../../server/webhooks/webhooks.js";
@@ -93,7 +93,7 @@ export type { ComparedLine, Comparison, Document, DocumentSummary, LinkedDocumen
 export type { Term, TermComparison, TermVersion };
 export type { Decision, DecisionComparison, DecisionStatus, DecisionSummary, DecisionVersion, DecisionVersionWithBody };
 export type { Artifact, ArtifactComparison, ArtifactFile, ArtifactSummary, ArtifactVersion, ComparedFile, LinkedArtifact };
-export type { Check, Completion, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
+export type { Check, Completion, MovedOnDependent, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
 export type { ConnectRequest, Inbox, InboxItem, SearchKind, SearchResult };
 export type { Webhook, WebhookDelivery, WebhookKind };
 
@@ -372,6 +372,8 @@ export const api = {
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   completion: (ticketId: string) =>
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
+  reopenPreview: (ticketId: string) =>
+    call<ReopenPreview>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reopen-preview`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkPullRequest: (ticketId: string, pullRequest: string) =>

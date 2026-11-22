@@ -161,6 +161,7 @@ The web client keeps its own small component set, styled with the tokens in plai
   - **An Unverified completion** shows the Report and **Accept** (primary) and **Reopen…**, which asks for a required Comment.
   - **A Ticket to review** shows its Status, its Pull Requests and its latest Report rendered inline, with a link to the Ticket.
   - **A Discovered Ticket** shows where it was found, then **Delegate** (primary), **Move…** and **Dismiss** in the ghost style.
+- **The Reopen dialog** (in the Inbox and on the Ticket) asks for the required Comment. When Tickets the reopened one blocks moved on since it was completed (left a Backlog Status, or had a Run start), a line above the Comment says so and that Cronk tells each of them, quoting the Comment, and lists them: each a link by key and title, with its Status pill and, while one runs, its Run state. With none, the dialog shows only the Comment box.
 - **Keyboard:** J and K move through the list, A focuses the answer box, C Accepts and R opens Reopen…, on items that offer them. None fire while focus is in a text field. A line under the split names them.
 - **Selection** is kept in the address (`item=`), so a reload or a shared link reopens it. Without one, the first item is selected.
 - **Acting on an item** selects the next item, or the previous one when it was the last. It never jumps to the top.
