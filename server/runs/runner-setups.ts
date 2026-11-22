@@ -5,7 +5,7 @@ import { issueToken } from "../agents/tokens.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
-import { mcpPath } from "../mcp/routes.js";
+import { mcpPath } from "../mcp/paths.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";

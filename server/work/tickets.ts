@@ -109,6 +109,11 @@ export const TicketSummary = Type.Object({
       "Done or Canceled Status, Unverified ones included, is finished and no longer listed. Only those the caller " +
       "may read are listed; `blockedByHidden` counts the rest.",
   }),
+  conflicts: Type.Array(Type.String(), {
+    description:
+      "The base branches its open Pull Requests conflict with, as GitHub last answered Cronk asking, for marking the " +
+      "board's card; its Pull Requests say with which commit and merge.",
+  }),
   blockedByHidden: Type.Integer({
     minimum: 0,
     description:
@@ -212,6 +217,10 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
   ${waitingColumn("tickets")} as waiting,
   ${blockersColumns("tickets", reach)},
+  array(select distinct pull_requests.conflict_branch from pull_request_links
+    join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+    where pull_request_links.ticket_id = tickets.id and pull_requests.state in ('open', 'draft')
+      and pull_requests.conflict_sha is not null order by pull_requests.conflict_branch) as conflicts,
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources

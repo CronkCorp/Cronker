@@ -89,7 +89,7 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor, or Cronk itself, writes on a Ticket or an Artifact, possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline. Cronk writes one when a failing check, a review requesting changes or a merge conflict sends a Ticket back, linking it (for a conflict, the merge that caused it).
+A Markdown message an Actor, or Cronk itself, writes on a Ticket or an Artifact, possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it. A merge conflict sends nothing back and writes none: it only marks the Pull Request.
 _Avoid_: Note, message, post
 
 **Change**:
