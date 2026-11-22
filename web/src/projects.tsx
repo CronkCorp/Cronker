@@ -1,4 +1,5 @@
 import { addresses, useAddresses } from "./addresses.js";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
@@ -24,6 +25,7 @@ import {
 import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { keys } from "./live-queries.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate } from "./router.js";
 import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
@@ -228,59 +230,47 @@ export function ProjectScreen({
   view: View;
 }) {
   const to = useAddresses();
-  const [project, setProject] = useState<Project | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
+  const client = useQueryClient();
   const [filter, setFilter] = useState<TicketFilter>({});
   const [group, setGroup] = useState(storedGroupSubTickets);
-  const [failure, setFailure] = useState<string | null>(null);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
 
-  useEffect(() => {
-    api.project(projectId).then(
-      // A Project of another of the User's Workspaces isn't shown under this one's name.
-      (found) => {
-        if (found.workspaceId === workspace.id) setProject(found);
-        else setFailure("No such Project.");
-      },
-      (e: Error) => setFailure(e.message),
-    );
-    api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
-    api.agents(workspace.id).then(setAgents, (e: Error) => setFailure(e.message));
-  }, [projectId, workspace.id]);
+  const projectQuery = useQuery({ queryKey: keys.project(projectId), queryFn: () => api.project(projectId) });
+  // A Project of another of the User's Workspaces isn't shown under this one's name.
+  const elsewhere = projectQuery.data !== undefined && projectQuery.data.workspaceId !== workspace.id;
+  const project = elsewhere ? null : (projectQuery.data ?? null);
+  const membersQuery = useQuery({ queryKey: keys.members(workspace.id), queryFn: () => api.members(workspace.id) });
+  const agentsQuery = useQuery({ queryKey: keys.agents(workspace.id), queryFn: () => api.agents(workspace.id) });
+  // Each filter's list has its own key under the Project's Tickets, so the events that refresh those refresh it; while
+  // a new filter's list loads, the last one stays on screen.
+  const ticketsQuery = useQuery({
+    queryKey: [...keys.projectTickets(projectId), filter],
+    queryFn: () => api.tickets(projectId, filter),
+    placeholderData: keepPreviousData,
+  });
+  const members = membersQuery.data ?? [];
+  const agents = agentsQuery.data ?? [];
+  const tickets = ticketsQuery.data ?? null;
+  const failed = [projectQuery, membersQuery, agentsQuery, ticketsQuery].find((query) => query.error)?.error;
+  const failure = elsewhere ? "No such Project." : (failed?.message ?? null);
 
-  const latestTickets = useLatest();
-  const loadTickets = useCallback(
-    () => latestTickets(api.tickets(projectId, filter), setTickets, (e) => setFailure(e.message)),
-    [projectId, filter, latestTickets],
-  );
-  useEffect(loadTickets, [loadTickets]);
+  const setProject = (changed: Project) => client.setQueryData(keys.project(projectId), changed);
+  const loadProject = () => void client.invalidateQueries({ queryKey: keys.project(projectId) });
+  const loadTickets = () => void client.invalidateQueries({ queryKey: keys.projectTickets(projectId) });
   /**
-   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Fetching again starts
-   * after the edit, so whatever was fetched before it is dropped rather than shown over it; and the card moves without
-   * waiting on that fetch, which the events the edit sets off may start again and again on a busy server.
+   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Invalidating cancels a
+   * fetch started before the edit, so what it would answer isn't shown over the edit; and the card moves without
+   * waiting on the new fetch, which the events the edit sets off may start again and again on a busy server.
    */
   const ticketEdited = (edited?: TicketSummary) => {
-    if (edited) setTickets((shown) => shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)) ?? shown);
+    if (edited) {
+      client.setQueriesData<TicketSummary[]>({ queryKey: keys.projectTickets(projectId) }, (shown) =>
+        shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)),
+      );
+    }
     loadTickets();
   };
-
-  const latestProject = useLatest();
-  const loadProject = () => latestProject(api.project(projectId), setProject, (e) => setFailure(e.message));
-  useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected") {
-      loadProject();
-      loadTickets();
-    } else if (!("projectId" in event) || event.projectId !== projectId) {
-      return;
-    } else if (event.type === "statuses.changed" || event.type === "project.changed") {
-      loadProject();
-    } else if (event.type === "ticket.created" || event.type === "ticket.changed") {
-      loadTickets();
-    }
-  });
 
   if (failure) return <FormError error={failure} />;
   if (!project || !tickets) return <p className="muted">Loading…</p>;
