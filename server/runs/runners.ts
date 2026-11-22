@@ -8,6 +8,7 @@ import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
 import { ModelLabel } from "../workspaces/model-ids.js";
 import { Cost, costTotalsSql } from "./costs.js";
+import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 
@@ -42,6 +43,11 @@ export const RunnerRecord = Type.Object({
   id: Type.String({ format: "uuid" }),
   name: Type.String(),
   kind: Type.String({ description: "Which of this Cronk's kinds of Runner starts its Runs." }),
+  cloud: Type.Boolean({
+    description:
+      "Whether its kind runs Runs in the cloud, as `subscription` and `managed_agents` do: a Ticket labelled " +
+      "`local-only` gets no Run through it. False for a kind this Cronk lacks.",
+  }),
   limit: Type.Integer({
     minimum: 1,
     description: "How many Runs it keeps running at once; Tickets needing a Run beyond it wait for a slot.",
@@ -88,7 +94,7 @@ export const RunnerRecord = Type.Object({
 export type RunnerRecord = Static<typeof RunnerRecord>;
 
 type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
-type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers" | "managedAgents"> & {
+type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers" | "managedAgents" | "cloud"> & {
   managedAgents: Omit<NonNullable<RunnerRecord["managedAgents"]>, "webhookUrl"> | null;
   createdAt: Date;
   pausedUntil: Date | null;
@@ -111,6 +117,7 @@ const columns = (now: string) => `id, name, kind, run_limit as limit,
     from runner_triggers t where t.runner_id = runners.id), '[]') as triggers`;
 const present = (context: Context, row: Row): RunnerRecord => ({
   ...row,
+  cloud: runsInCloud(context.runners, row.kind),
   managedAgents: row.managedAgents && { ...row.managedAgents, webhookUrl: managedAgentsWebhookUrl(context, row.id) },
   pausedUntil: row.pausedUntil?.toISOString() ?? null,
   triggers: row.triggers.map(presentTrigger),

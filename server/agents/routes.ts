@@ -38,7 +38,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
         const caller = await requireCaller(context, request);
         const workspace = await findWorkspace(db, caller, request.params.workspaceId);
         if (!workspace) throw new ApiError(404, "not_found", "No such Workspace.");
-        return agentsOf(db, workspace.id);
+        return agentsOf(context, workspace.id);
       },
     );
 
@@ -57,7 +57,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request, reply) => {
         const user = await requireUser(context, request);
         const workspace = await requireMember(db, user.id, request.params.workspaceId);
-        return reply.code(201).send(await createAgent(db, clock, user.id, workspace.id, request.body.name));
+        return reply.code(201).send(await createAgent(context, clock, user.id, workspace.id, request.body.name));
       },
     );
 
@@ -79,7 +79,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        let agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        let agent = await requireOwnAgent(context, user.id, request.params.agentId);
         const { name, runnerId } = request.body;
         if (name !== undefined) agent = await renameAgent(db, agent, name);
         if (runnerId !== undefined) agent = await setAgentRunner(context, agent, runnerId);
@@ -102,7 +102,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        const agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        const agent = await requireOwnAgent(context, user.id, request.params.agentId);
         await removeAgent(context, agent);
         return reply.code(204).send(null);
       },
@@ -121,7 +121,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return tokensOf(db, context.clock, await requireOwnAgent(db, user.id, request.params.agentId));
+        return tokensOf(db, context.clock, await requireOwnAgent(context, user.id, request.params.agentId));
       },
     );
 
@@ -140,7 +140,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        const agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        const agent = await requireOwnAgent(context, user.id, request.params.agentId);
         return reply.code(201).send(await issueToken(db, clock, agent, request.body));
       },
     );
@@ -158,7 +158,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        const agent = await requireOwnAgent(db, user.id, request.params.agentId);
+        const agent = await requireOwnAgent(context, user.id, request.params.agentId);
         await revokeToken(db, agent, request.params.tokenId);
         return reply.code(204).send(null);
       },
@@ -184,7 +184,7 @@ export function agentRoutes(context: Context): FastifyPluginAsyncTypebox {
           throw new ApiError(403, "not_an_agent", "Only an Agent's token can ask which Agent it is. Users see themselves at /api/me.");
         }
         // Removed since its token was checked: refused like any token of a removed Agent.
-        const agent = await findAgent(db, caller.id);
+        const agent = await findAgent(context, caller.id);
         if (!agent) throw new ApiError(401, "invalid_token", "This token's Agent has been removed.");
         return { agent, workspace: caller.workspace, access: caller.access };
       },

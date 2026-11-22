@@ -42,6 +42,7 @@ describe("Agents", () => {
       name: "claude-max",
       owner: { id: user.id, email: "ada@example.com", githubLogin: null, displayName: null },
       runnerId: null,
+      cloud: false,
       createdAt: expect.any(String),
     });
     const listed = await cronk.request("GET", `/api/workspaces/${workspace.id}/agents`, { cookie });

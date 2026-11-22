@@ -5,7 +5,12 @@ import { z } from "zod";
 import { agentRights } from "../agents/rights.js";
 import type { Guidance } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { ArtifactCreate, ArtifactSave } from "../artifacts/artifacts.js";
+import { AttachmentQuery } from "../attachments/attachments.js";
+import { DecisionCreate, DecisionEdit } from "../knowledge/decisions.js";
+import { DocumentCreate, DocumentEdit, SectionReplace } from "../knowledge/documents.js";
 import { ReportCreate } from "../knowledge/reports.js";
+import { TermCreate, TermEdit } from "../knowledge/terms.js";
 import { CommentCreate } from "../work/comments.js";
 import { AgentTicketEdit, TicketCreate, type TicketSummary } from "../work/tickets.js";
 import { ProjectCreate, type Project, type ProjectSummary } from "../work/projects.js";
@@ -67,6 +72,15 @@ const outcomeName = bodyFields(Type.Pick(Outcome, ["name"]));
 
 /** A new Ticket's own fields; the tools name its parent or source their own way. */
 const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
+
+/**
+ * An Artifact save's fields. The route takes `baseVersion` as optional and its domain function refuses a save
+ * without one; the tools ask for it up front, as they did before.
+ */
+const saveFields = bodyFields(ArtifactSave);
+
+/** A Decision's text: Agents may not change its status, so the tools don't offer it. */
+const decisionTextFields = bodyFields(Type.Pick(DecisionEdit, ["baseVersion", "title", "body"]));
 
 const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
@@ -488,10 +502,8 @@ export function buildMcpServer(api: Api): McpServer {
         "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed.",
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
-        title: z.string().min(1),
-        body: z.string().optional().describe("Markdown."),
+        ...bodyFields(Type.Omit(DocumentCreate, ["parentId"])),
         parent: z.string().optional().describe("The slug or id of a Document of the same page tree to sit under."),
-        position: z.number().int().min(0).optional().describe("A place among its siblings, counting from 0."),
       },
     },
     ({ project, parent, ...input }) =>
@@ -509,15 +521,12 @@ export function buildMcpServer(api: Api): McpServer {
         "moves the Document within its page tree, making no Version. Only Users delete Documents.",
       inputSchema: {
         document: documentArgument,
-        baseVersion: z.number().int().min(1).optional().describe("The number of the Version your save is based on."),
-        title: z.string().min(1).optional(),
-        body: z.string().optional().describe("The whole new body, in Markdown."),
+        ...bodyFields(Type.Omit(DocumentEdit, ["parentId"])),
         parent: z
           .string()
           .nullable()
           .optional()
           .describe("The slug or id of a Document of the same page tree to sit under, or null for the top."),
-        position: z.number().int().min(0).optional().describe("A place among its siblings, counting from 0."),
       },
     },
     ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
@@ -558,9 +567,7 @@ export function buildMcpServer(api: Api): McpServer {
         `carrying the current Version as \`current\`. ${sectionRules}`,
       inputSchema: {
         document: documentArgument,
-        section: sectionArgument,
-        baseVersion: z.number().int().min(1).describe("The number of the Version your replace is based on."),
-        body: z.string().describe("The Section's new Markdown: its heading, of the same level, and everything under it."),
+        ...bodyFields(SectionReplace),
       },
     },
     ({ document, ...replace }) => answer(() => send("PUT", `${documentPath(document)}/sections`, replace)),
@@ -571,7 +578,6 @@ export function buildMcpServer(api: Api): McpServer {
     .min(1)
     .describe("The Term's name, ignoring case, after its Project's key for a Project's (`CRONK/Ticket`); or its id.");
   const termPath = (term: string) => `/api/terms/${encodeURIComponent(term)}`;
-  const avoidArgument = z.array(z.string().min(1)).describe("Words to avoid in the Term's place.");
 
   server.registerTool(
     "read_glossary",
@@ -646,9 +652,7 @@ export function buildMcpServer(api: Api): McpServer {
         "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary.",
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
-        name: z.string().min(1),
-        definition: z.string().optional().describe("Markdown."),
-        avoid: avoidArgument.optional(),
+        ...bodyFields(TermCreate),
       },
     },
     ({ project, ...input }) =>
@@ -666,10 +670,7 @@ export function buildMcpServer(api: Api): McpServer {
         "delete Terms.",
       inputSchema: {
         term: termArgument,
-        baseVersion: z.number().int().min(1).describe("The number of the Version your save is based on."),
-        name: z.string().min(1).optional(),
-        definition: z.string().optional().describe("The whole new definition, in Markdown."),
-        avoid: avoidArgument.optional().describe("The whole new list of words to avoid."),
+        ...bodyFields(TermEdit),
       },
     },
     ({ term, ...edit }) => answer(() => send("PATCH", termPath(term), edit)),
@@ -724,7 +725,7 @@ export function buildMcpServer(api: Api): McpServer {
         ticket: ticketArgument.optional(),
         document: z.string().min(1).optional().describe("A Document's slug or id."),
         comment: z.string().min(1).optional().describe("The id of a Comment you wrote."),
-        name: z.string().min(1).describe("The file's name, such as `screenshot.png`."),
+        ...bodyFields(AttachmentQuery),
         mediaType: z.string().optional().describe("Its media type, such as `image/png`; `application/octet-stream` when left out."),
         contentBase64: z.string().describe("The file's bytes, in base64."),
       },
@@ -765,13 +766,6 @@ export function buildMcpServer(api: Api): McpServer {
     .describe("The Artifact's slug, such as `board-prototype-3f9a1b2c` (its words may be stale), or its id.");
   const artifactPath = (artifact: string) => `/api/artifacts/${encodeURIComponent(artifact)}`;
   const artifactPathArgument = z.string().min(1).describe("A path relative to the Version, such as `index.html` or `scripts/app.js`.");
-  const artifactFiles = z.array(
-    z.object({
-      path: artifactPathArgument,
-      contentBase64: z.string().describe("The file's bytes, in base64."),
-      mediaType: z.string().optional().describe("Its media type; from its extension when left out, such as `text/html` for `.html`."),
-    }),
-  );
   const sizeLimit =
     "A Version's files are at most the Attachments size limit Cronk is configured with (25 MB by default) in all; " +
     "load libraries from a CDN rather than adding them.";
@@ -832,10 +826,7 @@ export function buildMcpServer(api: Api): McpServer {
         sizeLimit,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
-        title: z.string().min(1),
-        description: z.string().optional().describe("What it shows, in a sentence or two."),
-        page: artifactPathArgument.optional().describe("The path of the file that is its page; `index.html` when left out."),
-        files: artifactFiles,
+        ...bodyFields(Type.Omit(ArtifactCreate, ["runId"])),
         run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it: links the Artifact to its Ticket."),
       },
     },
@@ -892,12 +883,8 @@ export function buildMcpServer(api: Api): McpServer {
         sizeLimit,
       inputSchema: {
         artifact: artifactArgument,
-        baseVersion: z.number().int().min(1).describe("The number of the Version the save is based on."),
-        title: z.string().min(1).optional(),
-        description: z.string().optional(),
-        page: artifactPathArgument.optional().describe("The path of the file that is its page."),
-        files: artifactFiles.optional().describe("Files to add, or to replace at their paths."),
-        remove: z.array(artifactPathArgument).optional().describe("Paths of files to remove."),
+        ...saveFields,
+        baseVersion: saveFields.baseVersion.unwrap(),
       },
     },
     ({ artifact, ...save }) => answer(() => send("PATCH", artifactPath(artifact), save)),
@@ -978,8 +965,7 @@ export function buildMcpServer(api: Api): McpServer {
         "its status.",
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
-        title: z.string().min(1),
-        body: z.string().optional().describe("Markdown: the context, the choice and its consequences."),
+        ...bodyFields(Type.Pick(DecisionCreate, ["title", "body"])),
       },
     },
     ({ project, ...input }) => answer(async () => send("POST", await placePath(project, "decisions"), input)),
@@ -996,9 +982,8 @@ export function buildMcpServer(api: Api): McpServer {
         "stay editable. Only Users change a Decision's status, and nobody deletes one.",
       inputSchema: {
         decision: decisionArgument,
-        baseVersion: z.number().int().min(1).describe("The number of the Version your save is based on."),
-        title: z.string().min(1).optional(),
-        body: z.string().optional().describe("The whole new body, in Markdown."),
+        ...decisionTextFields,
+        baseVersion: decisionTextFields.baseVersion.unwrap(),
       },
     },
     ({ decision, ...edit }) => answer(() => send("PATCH", decisionPath(decision), edit)),

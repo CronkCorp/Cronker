@@ -5,7 +5,7 @@ import { issueToken } from "../agents/tokens.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
-import { mcpPath } from "../mcp/routes.js";
+import { mcpPath } from "../mcp/paths.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
@@ -212,13 +212,13 @@ export async function startSetup(
  * Project's Workspace. The one there is, or the one chosen when there are several.
  */
 async function chooseAgent(
-  { db }: Context,
+  context: Context,
   userId: string,
   runner: { id: string; name: string },
   workspaceId: string,
   agentId: string | undefined,
 ): Promise<Agent> {
-  const { rows } = await db.query<{ id: string }>(
+  const { rows } = await context.db.query<{ id: string }>(
     `select id from agents where runner_id = $1 and owner_id = $2 and workspace_id = $3 and removed_at is null
      order by lower(name), id`,
     [runner.id, userId, workspaceId],
@@ -231,7 +231,7 @@ async function chooseAgent(
         `You have no such Agent pointed at ${runner.name} in the Project's Workspace.`,
       );
     }
-    return (await findAgent(db, agentId))!;
+    return (await findAgent(context, agentId))!;
   }
   if (rows.length === 0) {
     throw new ApiError(
@@ -248,7 +248,7 @@ async function chooseAgent(
       `Several of your Agents use ${runner.name}: choose which one's Transcript hook token the setup makes.`,
     );
   }
-  return (await findAgent(db, rows[0]!.id))!;
+  return (await findAgent(context, rows[0]!.id))!;
 }
 
 /** A setup its setup token finds while it can still be used: not used yet, nor expired. */

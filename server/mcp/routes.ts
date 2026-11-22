@@ -5,11 +5,9 @@ import type { Context } from "../context.js";
 import { ApiError, sendError } from "../http/errors.js";
 import { buildMcpServer, type Api } from "./tools.js";
 
-/** Where Cronk's MCP server answers, on its public address. */
-export const mcpPath = "/mcp";
+import { mcpPath, protectedResourcePath } from "./paths.js";
 
-/** Where an MCP client learns which authorization server guards the MCP server (RFC 9728). */
-export const protectedResourcePath = `/.well-known/oauth-protected-resource${mcpPath}`;
+export { mcpPath, protectedResourcePath };
 
 /**
  * Cronk's MCP server over streamable HTTP, without sessions: every request carries an

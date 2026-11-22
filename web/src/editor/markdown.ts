@@ -114,6 +114,10 @@ export const markdownSerializer = new MarkdownSerializer(
     table_row() {},
     table_header() {},
     table_cell() {},
+    embed(state, node) {
+      state.write(node.attrs.markdown);
+      state.closeBlock(node);
+    },
     source_block(state, node) {
       state.text(node.textContent, false);
       state.closeBlock(node);

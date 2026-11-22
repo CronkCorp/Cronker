@@ -13,6 +13,7 @@ import { findProject, projectNotFound, requireProjectWrite } from "./projects.js
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
+import { isLocalOnly, runsInCloud } from "../runs/runner.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 import { userName } from "../identity/user.js";
 import { Description, Label, nullable, title } from "./fields.js";
@@ -805,6 +806,12 @@ export async function editTicket(
     }
     if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
     if (edit.estimate !== undefined) next.estimate = edit.estimate;
+    // A `local-only` Ticket isn't delegated to a cloud Agent: refused when this edit delegates it or adds the Label.
+    // Other routes to the same Delegation, such as a Project's default, meet the same rule when its Run would start.
+    const localOnly = next.delegateId !== null && isLocalOnly(next.labels);
+    if (localOnly && (next.delegateId !== ticket.delegateId || !isLocalOnly(ticket.labels))) {
+      await checkNotCloud(context, tx, ticket.key, next.delegateId!);
+    }
     const now = clock.now();
     // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
@@ -1235,6 +1242,26 @@ async function checkDelegate(
     );
   }
   return agent;
+}
+
+/** Refuses a `local-only` Ticket's Delegation to an Agent whose Runner runs in the cloud. */
+async function checkNotCloud(context: Context, tx: Tx, key: string, agentId: string): Promise<void> {
+  const { rows } = await tx.query<{ agent: string; runner: string | null; kind: string | null }>(
+    `select agents.name as agent, runners.name as runner, runners.kind
+     from agents left join runners on runners.id = agents.runner_id where agents.id = $1`,
+    [agentId],
+  );
+  const found = rows[0];
+  if (!found || !runsInCloud(context.runners, found.kind)) return;
+  throw new ApiError(
+    409,
+    "local_only_ticket",
+    `${key} is labelled local-only: it can't run in a cloud session, and ${found.agent} uses ${found.runner}, a cloud Runner.`,
+    {
+      rule: "A Ticket labelled local-only is never delegated to an Agent whose Runner runs in the cloud.",
+      advice: "Delegate it to an Agent whose Runner isn't in the cloud, or remove the local-only Label first.",
+    },
+  );
 }
 
 /**

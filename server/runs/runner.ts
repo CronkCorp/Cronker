@@ -57,6 +57,11 @@ export interface RunReports {
 }
 
 export interface Runner {
+  /**
+   * Whether its Runs run in the cloud, such as claude.ai or Anthropic's sessions, rather than on a machine of its
+   * Owner's: a Ticket labelled `local-only` gets no Run through a cloud Runner. Every kind says which it is.
+   */
+  cloud: boolean;
   start(run: RunToStart): Promise<StartResult>;
   /**
    * Cronk ended the Run itself (a User took its Ticket away, or it was lost) and asks the Runner to stop its session.
@@ -79,3 +84,13 @@ export interface Runner {
 
 /** Builds a kind of Runner, given where to report its Runs' ends. */
 export type RunnerKind = (reports: RunReports) => Runner;
+
+/** The Label marking a Ticket as work that can't run in a cloud session, matched ignoring case. */
+export const LOCAL_ONLY_LABEL = "local-only";
+
+/** Whether the Labels mark their Ticket as `local-only`. */
+export const isLocalOnly = (labels: readonly string[]): boolean => labels.some((label) => label.toLowerCase() === LOCAL_ONLY_LABEL);
+
+/** Whether a Runner of the kind, among this Cronk's, runs in the cloud; no Runner, or a kind this Cronk lacks, doesn't. */
+export const runsInCloud = (runners: Record<string, Runner>, kind: string | null | undefined): boolean =>
+  kind != null && Object.hasOwn(runners, kind) && runners[kind]!.cloud;

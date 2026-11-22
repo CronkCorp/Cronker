@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
-import { protectedResourcePath } from "../mcp/routes.js";
+import { protectedResourcePath } from "../mcp/paths.js";
 import {
   approveRequest,
   AuthorizationRequest,

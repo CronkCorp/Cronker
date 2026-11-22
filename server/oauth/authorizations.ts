@@ -6,7 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import type { User } from "../identity/user.js";
-import { mcpPath } from "../mcp/routes.js";
+import { mcpPath } from "../mcp/paths.js";
 import { OAuthError, resolveClient, type OAuthClient } from "./clients.js";
 
 /**
@@ -166,7 +166,7 @@ export type RequestApproval = Static<typeof RequestApproval>;
 
 export async function approveRequest(context: Context, user: User, requestId: string, agentId: string): Promise<string> {
   const request = await pendingRequest(context, requestId);
-  const agent = await requireOwnAgent(context.db, user.id, agentId);
+  const agent = await requireOwnAgent(context, user.id, agentId);
   const code = issueSecret("oauth_code");
   const now = context.clock.now();
   const { rowCount } = await context.db.query(

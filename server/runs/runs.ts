@@ -17,7 +17,7 @@ import { moveByCronk } from "../pipeline/cronk-moves.js";
 import { sendBackOnEnteringReview } from "../pipeline/conflicts.js";
 import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
 import { Cost } from "./costs.js";
-import type { RunReports, RunToStart, StartResult } from "./runner.js";
+import { isLocalOnly, type RunReports, type RunToStart, type StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
@@ -265,7 +265,15 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   // Removing a Runner holds this lock while it clears its Agents: if one was removed since the read above, read again.
   if (ticket.runnerId && !(await lockRunnerIfAny(tx, ticket.runnerId))) return enterStatus(context, tx, ticketId, now, skipped);
   const runner = ticket.runnerKind ? context.runners[ticket.runnerKind] : undefined;
-  if (ticket.blocked || (runner && !(await hasSlotFor(tx, ticket.runnerId!, ticketId)))) {
+  const refusal = !ticket.runnerId
+    ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
+    : !runner
+      ? `This Cronk can't start Runs through ${ticket.runnerName}, a Runner of the kind ${ticket.runnerKind}.`
+      : runner.cloud && isLocalOnly(ticket.labels)
+        ? localOnlyRefusal(ticket.key, ticket.agentName!, ticket.runnerName!)
+        : null;
+  // A Run that will be refused takes no slot, so it doesn't wait for one.
+  if (ticket.blocked || (runner && !refusal && !(await hasSlotFor(tx, ticket.runnerId!, ticketId)))) {
     await waitForRun(true);
     return "waiting";
   }
@@ -279,11 +287,6 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     status as Status & { step: Step },
     { autonomous: ticket.autonomousDelegation === true, conciseReports: ticket.conciseReports, runId },
   );
-  const refusal = !ticket.runnerId
-    ? `${ticket.agentName} uses no Runner: its Owner points it at one of their Runners for it to start Runs.`
-    : !runner
-      ? `This Cronk can't start Runs through ${ticket.runnerName}, a Runner of the kind ${ticket.runnerKind}.`
-      : null;
   // At most one running Run per Ticket: a second is never recorded, even by requests racing this one.
   const inserted = await tx.query(
     `insert into runs (id, workspace_id, ticket_id, status_id, status_name, model, agent_id, runner_id, state, brief,
@@ -307,7 +310,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     ],
   );
   if (inserted.rowCount === 0) return "none";
-  if (!runner) return "started";
+  if (!runner || refusal) return "started";
   runnerChanged(context, tx, { runnerId: ticket.runnerId!, ownerId: ticket.runnerOwnerId! });
 
   const { rows: repositories } = await tx.query<{ id: string; fullName: string }>(
@@ -370,6 +373,14 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     });
   });
   return "started";
+}
+
+/** Why a `local-only` Ticket gets no Run through its Delegate's cloud Runner. */
+function localOnlyRefusal(key: string, agentName: string, runnerName: string): string {
+  return (
+    `${key} is labelled local-only: it can't run in a cloud session, and ${agentName} uses ${runnerName}, a cloud Runner. ` +
+    "Delegate it to an Agent whose Runner isn't in the cloud, or remove the label."
+  );
 }
 
 /**
