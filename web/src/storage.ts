@@ -56,6 +56,18 @@ export function keepSidebarHidden(hidden: boolean): void {
   safely(() => (hidden ? localStorage.setItem(sidebarHiddenKey, "true") : localStorage.removeItem(sidebarHiddenKey)));
 }
 
+const groupSubTicketsKey = "cronk_group_sub_tickets";
+
+/** Whether the board folds Sub-Tickets into their parent's card on this browser; off when never turned on. */
+export function storedGroupSubTickets(): boolean {
+  return safely(() => localStorage.getItem(groupSubTicketsKey)) === "true";
+}
+
+/** Keeps whether the board folds Sub-Tickets on this browser, like the sidebar, so each device can differ. */
+export function keepGroupSubTickets(group: boolean): void {
+  safely(() => (group ? localStorage.setItem(groupSubTicketsKey, "true") : localStorage.removeItem(groupSubTicketsKey)));
+}
+
 /** How the rich editor edits Markdown: as formatted text, or as its Markdown source. */
 export type EditorMode = "rich" | "source";
 

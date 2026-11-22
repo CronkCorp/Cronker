@@ -307,6 +307,25 @@ textarea.markdown-source {
   color: var(--accent);
   font-weight: 600;
 }
+/* An on/off view setting in a page head, such as Group Sub-Tickets: a lone segment, highlighted while on. */
+.toggle-button {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.toggle-button:hover {
+  background: var(--surface-2);
+}
+.toggle-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
 
 /* Scope dropdown of a knowledge page's head: one line, its name cut short rather than wrapping. */
 .scope-switch {
