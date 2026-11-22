@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
-import { attachmentUrl, isAttachmentUrl, type ArtifactMention, type Mention, type TicketMention } from "./api.js";
+import { attachmentUrl, isAttachmentUrl, type ArtifactMention, type DecisionMention, type Mention, type TicketMention } from "./api.js";
 import { Embed } from "./embed.js";
 import { Link } from "./router.js";
 import { useAddresses, type Addresses } from "./addresses.js";
@@ -45,20 +45,45 @@ function markEmbeds(embeds: ArtifactMention[]) {
   };
 }
 
-/** Turns each mentioned Ticket key in the text into a link to its Ticket. */
-function linkMentions(mentions: TicketMention[], to: Addresses) {
+/** A Mention by a key, which links in place: a Ticket's or a Decision's. */
+type KeyMention = TicketMention | DecisionMention;
+
+/** The page a Mention leads to: its Ticket's or its Decision's. */
+function mentionedPage(to: Addresses, mention: KeyMention): string {
+  return mention.kind === "ticket"
+    ? to.ticket(mention)
+    : to.decision({ id: mention.decisionId, projectId: mention.projectId, number: mention.number });
+}
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Turns each mentioned Ticket or Decision key in the text into a link to it, with the server's boundaries: a
+ * Decision key never inside a longer word or key, so `D7` doesn't link inside `WEB-D7`, nor before `-3`, where
+ * `D7-3` is a Ticket key.
+ */
+function linkMentions(mentions: KeyMention[], to: Addresses) {
   const byText = new Map(mentions.map((m) => [m.text, m]));
-  const escaped = mentions.map((m) => m.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`\\b(${escaped.join("|")})\\b`, "g");
+  const alternation = (kind: KeyMention["kind"]) =>
+    mentions
+      .filter((m) => m.kind === kind)
+      .map((m) => m.text)
+      .sort((a, b) => b.length - a.length)
+      .map(escape)
+      .join("|") || "(?!)";
+  const pattern = new RegExp(
+    `\\b(${alternation("ticket")})\\b|(?<![\\w-])(${alternation("decision")})(?!\\w|-[1-9])`,
+    "g",
+  );
 
   const split = (text: string): Node[] =>
     text
       .split(pattern)
-      .filter((part) => part !== "")
+      .filter((part): part is string => part !== undefined && part !== "")
       .map((part) => {
         const mention = byText.get(part);
         return mention
-          ? { type: "link", url: to.ticket(mention), children: [{ type: "text", value: part }] }
+          ? { type: "link", url: mentionedPage(to, mention), children: [{ type: "text", value: part }] }
           : { type: "text", value: part };
       });
 
@@ -98,12 +123,12 @@ const links: Components = {
 };
 
 /**
- * Markdown as written by Users, without raw HTML, with Ticket keys as links, the Artifacts it embeds shown in place
- * and `attachment:` references resolved.
+ * Markdown as written by Users, without raw HTML, with Ticket and Decision keys as links, the Artifacts it embeds
+ * shown in place and `attachment:` references resolved.
  */
 export function Markdown({ text, mentions }: { text: string; mentions: Mention[] }) {
   const to = useAddresses();
-  const keys = mentions.filter((m): m is TicketMention => m.kind === "ticket");
+  const keys = mentions.filter((m): m is KeyMention => m.kind !== "artifact");
   const embeds = mentions.filter((m): m is ArtifactMention => m.kind === "artifact");
   const components = useMemo<Components>(
     () => ({

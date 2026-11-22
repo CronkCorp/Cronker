@@ -282,7 +282,8 @@ describe("MCP with an Agent token", () => {
     expect(neither).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
     expect(both).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
     const read = await call(client, "read_artifact", { artifact: artifact.id });
-    expect(read.json.comments).toEqual([byAda, reply.json]);
+    const { avoidedWords: _, ...replied } = reply.json;
+    expect(read.json.comments).toEqual([byAda, replied]);
     const readTicket = await call(client, "read_ticket", { ticket: "CRONK-1" });
     expect(readTicket.json.comments.map((c: { body: string; artifact: { title: string } | null }) => [c.body, c.artifact?.title ?? null])).toEqual([
       ["First thoughts.", null],

@@ -1,12 +1,14 @@
 /**
  * Who did something: a User (round, neutral avatar), an Agent (square, violet avatar and name, "for <Owner>"
- * where the Owner isn't obvious) or Cronk itself (muted text with a round "C").
+ * where the Owner isn't obvious), Cronk itself (muted text with a round "C") or, for an imported Comment, a GitHub
+ * account no User has linked ("@login on GitHub", round and neutral like a User, its name in plain weight).
  */
 
 export type ActorRef =
   | { kind: "user"; name: string }
   | { kind: "agent"; name: string; owner?: string | null }
-  | { kind: "cronk"; name?: string };
+  | { kind: "cronk"; name?: string }
+  | { kind: "github"; name: string };
 
 /** Two letters for an avatar: the first of two words, else the first two letters, of a name or an email's local part. */
 export function initials(name: string): string {

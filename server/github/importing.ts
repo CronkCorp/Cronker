@@ -12,7 +12,18 @@ import { lockTickets, writeTicket } from "../work/ticket-writes.js";
 import { distinctLabels, findTicketRef } from "../work/tickets.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { appToken } from "./app.js";
-import { appInstallations, issuesPage, linkedIssues, type IssueLinks, type IssueOnGitHub, type RateLimited } from "./client.js";
+import { userName } from "../identity/user.js";
+import {
+  appInstallations,
+  issueCommentsPage,
+  issuesPage,
+  linkedIssues,
+  type AccountOnGitHub,
+  type IssueCommentOnGitHub,
+  type IssueLinks,
+  type IssueOnGitHub,
+  type RateLimited,
+} from "./client.js";
 import { installationCovering, tokenFor } from "./installations.js";
 import { referencedNumbers, rewriteMarkdown, rewritePlain } from "./issue-references.js";
 
@@ -23,6 +34,12 @@ import { referencedNumbers, rewriteMarkdown, rewritePlain } from "./issue-refere
  * the Admin: open ones in the Project's first Backlog Status, those closed as not planned in its first Canceled
  * Status and other closed ones in its first Done Status, Verified. Pull Requests GitHub lists among the issues are
  * left out, and an issue imported before, known by its node id, is skipped, so an import can run again.
+ *
+ * Each issue brings its Comments, oldest first at GitHub's times, and its people: the issue's author, its Comments'
+ * authors and its assignees are matched to Users of the Workspace by linked GitHub account. A matched author
+ * creates the Ticket or writes the Comment; an unmatched one is kept as the GitHub login, shown as "@login on
+ * GitHub", and listed in the import's summary. The first matched assignee becomes the Ticket's Assignee; unmatched
+ * ones are dropped. No User is ever created.
  *
  * Each page's Tickets are written in one transaction with the page the next pass reads, so a pass cut short is read
  * again whole. A page GitHub rate-limits is read again once the limit lifts: until then the import waits, saying
@@ -54,6 +71,9 @@ export const Import = Type.Object({
   waitingUntil: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
     description: "While a running import waits out GitHub's rate limit, when it carries on; null otherwise.",
   }),
+  unmatchedAuthors: Type.Array(Type.String(), {
+    description: "The GitHub logins of the issue and Comment authors so far that no User of the Workspace has linked, alphabetical.",
+  }),
   startedBy: Type.String({ format: "uuid", description: "The Admin who started it, whose Changes create its Tickets." }),
   startedAt: Type.String({ format: "date-time" }),
   finishedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
@@ -73,6 +93,7 @@ interface ImportRow {
   imported: number;
   skipped: number;
   error: string | null;
+  unmatchedAuthors: string[];
   pausedUntil: Date | null;
   startedAt: Date;
   finishedAt: Date | null;
@@ -80,7 +101,7 @@ interface ImportRow {
 
 const importColumns = `id, project_id as "projectId", workspace_id as "workspaceId", repository_id as "repositoryId",
   repository_full_name as "repositoryFullName", started_by as "startedBy", state, phase, next_page as "nextPage", imported,
-  skipped, error, paused_until as "pausedUntil", started_at as "startedAt", finished_at as "finishedAt"`;
+  skipped, error, unmatched_authors as "unmatchedAuthors", paused_until as "pausedUntil", started_at as "startedAt", finished_at as "finishedAt"`;
 
 const importOf = (row: ImportRow): Import => ({
   id: row.id,
@@ -91,6 +112,7 @@ const importOf = (row: ImportRow): Import => ({
   imported: row.imported,
   skipped: row.skipped,
   error: row.error,
+  unmatchedAuthors: row.unmatchedAuthors,
   waitingUntil: row.state === "running" ? (row.pausedUntil?.toISOString() ?? null) : null,
   startedBy: row.startedBy,
   startedAt: row.startedAt.toISOString(),
@@ -234,11 +256,37 @@ async function importNextPage(context: Context, importId: string): Promise<void>
     const statuses = await statusesOf(tx, job.projectId);
     const first = (kind: string) => statuses.find((s) => s.kind === kind)!.id;
     const places = { open: first("backlog"), done: first("done"), canceled: first("canceled") };
+    const issues = page.issues.filter((issue) => issue.pull_request === undefined || issue.pull_request === null);
+    const { rows: known } = await tx.query<{ nodeId: string }>(
+      `select github_issue_node_id as "nodeId" from tickets where project_id = $1 and github_issue_node_id = any($2)`,
+      [job.projectId, issues.map((issue) => issue.node_id)],
+    );
+    const before = new Set(known.map((row) => row.nodeId));
+    const fresh = issues.filter((issue) => !before.has(issue.node_id));
+    // Every Comment is read before anything is written, so a refusal fails the import, and a rate limit makes it wait,
+    // with nothing of the page kept.
+    const comments = new Map<string, IssueCommentOnGitHub[]>();
+    for (const issue of fresh) {
+      const read = await commentsOf(context, token, fullName, issue.number);
+      if (read.kind === "rate_limited") return void (await wait(read));
+      if (read.kind === "refused") {
+        return void (await fail(
+          read.status === 403
+            ? `GitHub refused to list the Comments of ${fullName}#${issue.number} to the App. ${permissionAdvice}`
+            : `GitHub no longer shows the Comments of ${fullName}#${issue.number} to the App.`,
+        ));
+      }
+      comments.set(issue.node_id, read.comments);
+    }
+    const people = await usersOf(tx, job.workspaceId, [
+      ...fresh.flatMap((issue) => [issue.user, ...(issue.assignees ?? [])]),
+      ...[...comments.values()].flat().map((comment) => comment.user),
+    ]);
+    const unmatched = new Set<string>();
     let imported = 0;
     let skipped = 0;
-    for (const issue of page.issues) {
-      if (issue.pull_request !== undefined && issue.pull_request !== null) continue;
-      const ticket = await importIssue(context, tx, job, places, issue);
+    for (const issue of issues) {
+      const ticket = await importIssue(context, tx, job, places, people, unmatched, issue, comments.get(issue.node_id) ?? []);
       if (ticket.imported) imported++;
       else skipped++;
       await queueLinks(tx, job, ticket, issue);
@@ -251,9 +299,10 @@ async function importNextPage(context: Context, importId: string): Promise<void>
     await tx.query(
       `update github_imports set imported = imported + $2, skipped = skipped + $3, next_page = next_page + 1, paused_until = null,
          phase = case when $4 or $5 then 'issues' else 'linking' end,
-         state = case when $5 then 'done' else 'running' end, finished_at = case when $5 then $6::timestamptz end
+         state = case when $5 then 'done' else 'running' end, finished_at = case when $5 then $6::timestamptz end,
+         unmatched_authors = array(select distinct login from unnest(unmatched_authors || $7::text[]) as login order by login)
        where id = $1`,
-      [job.id, imported, skipped, page.more, ends, clock.now()],
+      [job.id, imported, skipped, page.more, ends, clock.now(), [...unmatched]],
     );
   });
 }
@@ -278,16 +327,61 @@ interface Places {
   canceled: string;
 }
 
+/** Every Comment on an issue, oldest first, reading each page GitHub has. */
+async function commentsOf(
+  { config }: Context,
+  token: string,
+  fullName: string,
+  number: number,
+): Promise<
+  | { kind: "comments"; comments: IssueCommentOnGitHub[] }
+  | { kind: "refused"; status: number }
+  | RateLimited
+> {
+  const comments: IssueCommentOnGitHub[] = [];
+  for (let page = 1; ; page++) {
+    const read = await issueCommentsPage(config, token, fullName, number, page);
+    if (read.kind !== "page") return read;
+    comments.push(...read.comments);
+    if (!read.more) return { kind: "comments", comments };
+  }
+}
+
+/** A User of the Workspace, as an imported Ticket or Comment names them. */
+interface Person {
+  id: string;
+  name: string;
+}
+
+/** The Users of the Workspace who linked these GitHub accounts, by GitHub's id for the account. */
+async function usersOf(tx: Tx, workspaceId: string, accounts: (AccountOnGitHub | null | undefined)[]): Promise<Map<number, Person>> {
+  const ids = [...new Set(accounts.flatMap((account) => (account ? [account.id] : [])))];
+  if (ids.length === 0) return new Map();
+  const { rows } = await tx.query<{ githubId: string; id: string; name: string }>(
+    `select users.github_id as "githubId", users.id, ${userName()} as name from users
+     join memberships on memberships.user_id = users.id and memberships.workspace_id = $1
+     where users.github_id = any($2::bigint[])`,
+    [workspaceId, ids],
+  );
+  return new Map(rows.map((row) => [Number(row.githubId), { id: row.id, name: row.name }]));
+}
+
+/** The login GitHub shows for an account it has since deleted. */
+const deletedAccount = "ghost";
+
 /**
- * Makes a Ticket of an issue, unless one was made of it before; the Ticket, and whether it made it. A Ticket made
- * before learns the issue's number and Repository if it lacks them, so `#123` resolves to it.
+ * Makes a Ticket of an issue, with its Comments, unless one was made of it before; the Ticket, and whether it made
+ * it. A Ticket made before learns the issue's number and Repository if it lacks them, so `#123` resolves to it.
  */
 async function importIssue(
   context: Context,
   tx: Tx,
   job: ImportRow,
   places: Places,
+  people: Map<number, Person>,
+  unmatched: Set<string>,
   issue: IssueOnGitHub,
+  comments: IssueCommentOnGitHub[],
 ): Promise<{ id: string; imported: boolean }> {
   const { rows: before } = await tx.query<{ id: string }>(
     `update tickets set github_repository_id = coalesce(github_repository_id, $3),
@@ -307,6 +401,9 @@ async function importIssue(
   const title = issue.title.trim() || `Issue #${issue.number}`;
   const description = issue.body ?? "";
   const createdAt = new Date(issue.created_at);
+  const author = issue.user ? people.get(issue.user.id) : undefined;
+  if (!author) unmatched.add(issue.user?.login ?? deletedAccount);
+  const assignee = (issue.assignees ?? []).map((account) => people.get(account.id)).find((person) => person !== undefined);
   const { rows } = await tx.query<{ id: string }>(
     `with numbered as (
        update projects set next_ticket_number = next_ticket_number + 1 where id = $2
@@ -314,8 +411,8 @@ async function importIssue(
      )
      insert into tickets (workspace_id, project_id, number, title, description, status_id, labels, verification,
        created_by, created_at, status_entered_at, github_issue_node_id, github_issue_url, github_repository_id,
-       github_issue_number, github_import_id)
-     select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14 from numbered
+       github_issue_number, github_import_id, assignee_id)
+     select $1, $2, number, $3, $4, $5, $6, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15 from numbered
      returning id`,
     [
       job.workspaceId,
@@ -325,20 +422,38 @@ async function importIssue(
       statusId,
       labels,
       statusId === places.done ? "verified" : null,
-      job.startedBy,
+      author?.id ?? job.startedBy,
       createdAt,
       issue.node_id,
       issue.html_url,
       job.repositoryId,
       issue.number,
       job.id,
+      assignee?.id ?? null,
     ],
   );
   const ticket = { id: rows[0]!.id, workspaceId: job.workspaceId };
   await indexMentions(tx, "ticket", ticket, description);
   await recordChanges(tx, ticket, job.startedBy, createdAt, [
-    { field: "created", from: null, to: { source: "github", url: issue.html_url } },
+    {
+      field: "created",
+      from: null,
+      to: { source: "github", url: issue.html_url, author: author ?? { login: issue.user?.login ?? deletedAccount } },
+    },
+    ...(assignee ? [{ field: "assignee" as const, from: null, to: assignee }] : []),
   ]);
+  for (const comment of comments) {
+    const writer = comment.user ? people.get(comment.user.id) : undefined;
+    const login = writer ? null : (comment.user?.login ?? deletedAccount);
+    if (login !== null) unmatched.add(login);
+    const body = comment.body ?? "";
+    const { rows: written } = await tx.query<{ id: string }>(
+      `insert into comments (workspace_id, ticket_id, actor_user_id, body, created_at, github_author_login)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [job.workspaceId, ticket.id, writer?.id ?? null, body, new Date(comment.created_at), login],
+    );
+    await indexMentions(tx, "comment", { id: written[0]!.id, workspaceId: job.workspaceId }, body);
+  }
   context.live.publish(tx, job.workspaceId, { type: "ticket.created", projectId: job.projectId, ticketId: ticket.id });
   return { id: ticket.id, imported: true };
 }

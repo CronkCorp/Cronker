@@ -62,7 +62,7 @@ import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work
 import type { Actor, ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
 import type { Comment, CommentCreate } from "../../server/work/comments.js";
-import type { ArtifactMention, Mention, TicketMention } from "../../server/work/mentions.js";
+import type { ArtifactMention, DecisionMention, Mention, TicketMention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
 import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type { LabelRule, Outcome, Step, StepKind } from "../../server/work/steps.js";
@@ -103,7 +103,7 @@ import type { StatusAdd, StatusEdit } from "../../server/work/statuses.js";
 import type { StepPut } from "../../server/work/steps.js";
 import type { Webhook, WebhookCreate, WebhookDelivery, WebhookEdit, WebhookKind } from "../../server/webhooks/webhooks.js";
 
-export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
+export type { ArtifactMention, Change, Comment, Cost, DecisionMention, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 export type { ProjectCreate, ProjectEdit, StatusAdd, StatusEdit, StepPut, SetupInput, WorkspaceCreate, WorkspaceSettingsEdit };
