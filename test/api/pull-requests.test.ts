@@ -183,6 +183,7 @@ describe("Pull Requests linking to Tickets", () => {
       producingStep: null,
       reviewState: null,
       sentBack: null,
+      conflict: null,
       manual: false,
     };
     expect(await pullRequestsOf(first.id, cookie)).toEqual([shown]);
@@ -1266,7 +1267,7 @@ describe("Failures sending work back", () => {
         outcome: "needs you",
         step: { statusId: status("Implement"), name: "Implement" },
         question:
-          "Failing checks, requested changes and merge conflicts sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
+          "Failing checks and requested changes sent CRONK-1 back to Implement once, its round limit, so it comes to you " +
           "instead. Read the latest Comments, then move it on yourself.",
       }),
     ]);
@@ -1552,7 +1553,9 @@ describe("Send-back Comments written before they were marked", () => {
     cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
     // Setting up and creating a Project, as today's API does, needs Workspace slugs and the Merge Step's columns;
     // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access; reading a User needs display
-    // names; creating a Ticket needs the Mention index; finding a Project needs Concise Reports; any Access needs archived Projects.
+    // names; creating a Ticket needs the Mention index; finding a Project needs Concise Reports; any Access needs archived Projects;
+    // reading a Ticket needs conflict markers, and its place in the Merge Queue with its Pull Request's base branch and
+    // the conflict that last set it aside.
     await cronk.applyAhead("0033_merge_step.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
     await cronk.applyAhead("0049_run_costs.sql");
@@ -1561,6 +1564,10 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.applyAhead("0055_mentions.sql");
     await cronk.applyAhead("0056_concise_reports.sql");
     await cronk.applyAhead("0057_archived_projects.sql");
+    await cronk.applyAhead("0059_conflict_markers.sql");
+    await cronk.applyAhead("0042_merge_conflicts.sql");
+    await cronk.applyAhead("0061_merge_queue.sql");
+    await cronk.applyAhead("0065_merge_queue_conflicts.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

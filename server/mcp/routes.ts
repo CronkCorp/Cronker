@@ -3,11 +3,8 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { agentOfToken, offersBearer } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError, sendError } from "../http/errors.js";
-import { buildMcpServer, type Api } from "./tools.js";
-
 import { mcpPath, protectedResourcePath } from "./paths.js";
-
-export { mcpPath, protectedResourcePath };
+import { buildMcpServer, type Api } from "./tools.js";
 
 /**
  * Cronk's MCP server over streamable HTTP, without sessions: every request carries an

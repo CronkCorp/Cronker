@@ -1,7 +1,4 @@
-/**
- * Where Cronk's MCP server answers. Apart from the routes, so that the Brief, Runner setups and OAuth can name it
- * without loading the MCP tools, which load the domain modules' body schemas.
- */
+/** Where Cronk's MCP server answers, on its public address. */
 export const mcpPath = "/mcp";
 
 /** Where an MCP client learns which authorization server guards the MCP server (RFC 9728). */

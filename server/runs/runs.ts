@@ -22,6 +22,8 @@ import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 import { userName } from "../identity/user.js";
+import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
+import { sessionIdOf } from "./session-ids.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -170,9 +172,11 @@ export type RunNeed = "started" | "waiting" | "none";
  * goes to the highest Priority waiting Ticket first, then to the one that entered its Status first.
  *
  * A delegated Ticket that doesn't pass the Step's Label rule, or a Merge Step's rule (Autonomous Delegation in a
- * Project with agents may merge on), gets no Run: Cronk moves it on by the Step's default Outcome, which counts as
+ * Project with agents may merge on and Pull Request automation on, unless a User queued it in the Merge Queue), gets
+ * no Run: Cronk moves it on by the Step's default Outcome, which counts as
  * entering that Status in turn. A chain of skips that comes back to a Status it already passed stops there, so the
- * Ticket waits for a User.
+ * Ticket waits for a User. A Ticket that passes a Merge Step's rule joins the Merge Queue instead of getting a Run,
+ * when it has an open Pull Request to queue; a queued Ticket gets no Merge Run, Cronk merging it (ADR 0011).
  */
 export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<RunNeed> {
   return enterStatus(context, tx, ticketId, now, new Set());
@@ -233,9 +237,25 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.
   if (!status.step || !mayHaveStep(status.kind)) return needsNone();
-  // A Merge Step skips itself unless an agent may merge this Ticket; otherwise the Label rule decides.
-  const mergeRule = status.step.kind === "merge" ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true) : null;
-  if (mergeRule || !passes(status.step.labelRule, ticket.labels)) {
+  // A Ticket queued in the Merge Queue waits there for Cronk to merge it, with no Merge Run (ADR 0011), unless one of its
+  // entries stepped aside for a conflict: then it gets a Run to resolve it, whatever the Step's rules say.
+  let resolving = false;
+  if (status.step.kind === "merge") {
+    const { rowCount: queued } = await tx.query("select from merge_queue where ticket_id = $1 and status_id = $2", [ticketId, status.id]);
+    if (queued && !(await resolvingConflict(tx, ticketId))) return needsNone();
+    resolving = queued !== 0;
+  }
+  // A Merge Step skips itself unless an agent may merge this Ticket, or a User queued it; otherwise the Label rule decides.
+  const mergeRule =
+    status.step.kind === "merge" && !resolving
+      ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true, await pullRequestAutomation(tx, ticket.projectId))
+      : null;
+  // An agent may merge it: it joins the Merge Queue for its Agent, with no Merge Run, if it has a Pull Request to queue.
+  // One with none gets a Run, to find out why.
+  if (status.step.kind === "merge" && !resolving && !mergeRule && passes(status.step.labelRule, ticket.labels)) {
+    if (await joinQueueAutonomously(context, tx, { id: ticketId, ...ticket }, status.id, ticket.delegateId, now)) return needsNone();
+  }
+  if (!resolving && (mergeRule || !passes(status.step.labelRule, ticket.labels))) {
     const outcome = status.step.outcomes.find((o) => o.default)!;
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
     skipped.add(status.id);
@@ -342,7 +362,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
       if (result.started) {
         await tx.query("update runs set session_id = $2, session_url = $3 where id = $1", [
           runId,
-          result.reference.sessionId ?? null,
+          result.reference.sessionId ? sessionIdOf(result.reference.sessionId) : null,
           result.reference.url ?? null,
         ]);
       } else if (result.refusal.kind === "rate_limited") {
@@ -605,9 +625,20 @@ function tellRunner(context: Context, tx: Tx, run: EndedRun, what: "stop" | "end
  * Why a Merge Step skips itself for a Ticket, if it does: its Project has agents may merge off, or the Ticket lacks
  * Autonomous Delegation (ADR 0005).
  */
-function mergeRefusal(agentsMayMerge: boolean, autonomous: boolean): "agentsMayMergeOff" | "noAutonomousDelegation" | null {
+async function pullRequestAutomation(tx: Tx, projectId: string): Promise<boolean> {
+  const { rows } = await tx.query<{ automation: boolean }>("select pull_request_automation as automation from projects where id = $1", [projectId]);
+  return rows[0]!.automation;
+}
+
+function mergeRefusal(
+  agentsMayMerge: boolean,
+  autonomous: boolean,
+  pullRequestAutomation: boolean,
+): "agentsMayMergeOff" | "noAutonomousDelegation" | "pullRequestAutomationOff" | null {
   if (!agentsMayMerge) return "agentsMayMergeOff";
   if (!autonomous) return "noAutonomousDelegation";
+  // With Pull Request automation off a merge completes nothing, so there is no Merge Queue to join.
+  if (!pullRequestAutomation) return "pullRequestAutomationOff";
   return null;
 }
 
@@ -711,7 +742,19 @@ export async function finishRun(
     const statuses = await statusesOf(tx, ticket.projectId);
     const step = statuses.find((s) => s.id === run.statusId)?.step;
     const offered = step ? offeredOutcomes(step, statuses, ticket.autonomousDelegation === true) : [];
-    const outcome = offered.find((o) => o.name.toLowerCase() === input.outcome.trim().toLowerCase());
+    const chosen = offered.find((o) => o.name.toLowerCase() === input.outcome.trim().toLowerCase());
+    // A Run of a Merge Step resolving a conflict: sending the Ticket back counts as no round, the conflict cap
+    // counting instead; its resolving Outcome is for that Run only.
+    const stepStatus = statuses.find((s) => s.id === run.statusId);
+    const resolving = step?.kind === "merge" && (await resolvingConflict(tx, ticket.id));
+    const resolves = chosen !== undefined && stepStatus !== undefined && resolvingOutcome(stepStatus)?.name === chosen.name;
+    if (resolves && !resolving) {
+      throw new ApiError(409, "nothing_to_resolve", `${ticket.key} has no conflict in the Merge Queue to resolve, so it can't finish ${chosen.name}.`, {
+        rule: `${chosen.name} is for a Run resolving a conflict that set its Ticket aside in the Merge Queue.`,
+        advice: `Finish with another Outcome: ${offered.filter((o) => o !== chosen).map((o) => o.name).join(", ")}.`,
+      });
+    }
+    const outcome = chosen && resolving && chosen.countsAsRound ? { ...chosen, countsAsRound: false } : chosen;
     if (!outcome) {
       throw new ApiError(400, "outcome_not_offered", `${input.outcome} isn't an Outcome this Run may choose.`, {
         rule: finishRule,
@@ -745,6 +788,8 @@ export async function finishRun(
           [run.id, applied!.name, question, questionBy, now],
         );
         await tellRunnerEnded(context, tx, run.id);
+        // Resolved: the entry waits, out of line, for the resolution's checks, so the Ticket gets no other Run here.
+        if (resolves) await conflictResolved(context, tx, ticket);
         if (input.report !== undefined) {
           await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
         }

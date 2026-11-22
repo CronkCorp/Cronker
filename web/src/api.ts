@@ -707,14 +707,14 @@ export interface PullRequest {
   sentBack:
     | { kind: "check"; name: string; sha: string; url: string | null; at: string }
     | { kind: "review"; reviewer: string | null; url: string | null; at: string }
-    | {
-        kind: "conflict";
-        branch: string;
-        sha: string;
-        merge: { repository: string; number: number; url: string } | null;
-        at: string;
-      }
     | null;
+  /** While it is open, GitHub's last answer that it conflicts with its base branch; null when it merges cleanly. */
+  conflict: {
+    branch: string;
+    sha: string;
+    merge: { repository: string; number: number; url: string } | null;
+    at: string;
+  } | null;
   /** Whether a User linked it by hand; only such a link can be unlinked. */
   manual: boolean;
 }
@@ -947,6 +947,8 @@ export const api = {
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
   acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
+  mergeTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/merge`),
+  removeFromQueue: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/queue/remove`),
   reopenTicket: (id: string, comment: string) =>
     call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment } satisfies TicketReopen),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),

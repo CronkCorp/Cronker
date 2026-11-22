@@ -74,6 +74,20 @@ const everyFiveSeconds = setInterval(() => {
     });
 }, 5_000);
 
+// Every five seconds too: the Merge Queue merges each queue's head that is clean and green. One pass at a time, since a
+// pass waits on GitHub.
+let checkingQueue = false;
+const everyFiveSecondsForTheQueue = setInterval(() => {
+  if (checkingQueue) return;
+  checkingQueue = true;
+  cronk
+    .checkQueue()
+    .catch((error: unknown) => cronk.app.log.error(error))
+    .finally(() => {
+      checkingQueue = false;
+    });
+}, 5_000);
+
 // Every five seconds too: each running import of a Repository's GitHub issues reads its next page. One pass at a time,
 // since a pass waits on GitHub.
 let importing = false;
@@ -91,6 +105,7 @@ const everyFiveSecondsForImports = setInterval(() => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     clearInterval(everyFiveSeconds);
+    clearInterval(everyFiveSecondsForTheQueue);
     clearInterval(everyFiveSecondsForImports);
     clearInterval(everyMinute);
     clearInterval(everyMinuteForTokens);

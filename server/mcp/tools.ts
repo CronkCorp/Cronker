@@ -62,29 +62,30 @@ type BodyFields<B> = {
   [K in keyof B]-?: undefined extends B[K] ? z.ZodOptional<z.ZodType<Exclude<B[K], undefined>>> : z.ZodType<B[K]>;
 };
 
-/**
- * `set_step`'s fields but its Outcomes. The tool's Outcomes are the documented exception to building inputs from the
- * route's body: they name their Status by name or id, where the route takes `statusId`, and their flags default to
- * false; so the array keeps its own zod, reusing only the route's Outcome name and the route's item limits.
- */
-const stepFields = bodyFields(Type.Omit(StepPut, ["outcomes"]));
-const outcomeName = bodyFields(Type.Pick(Outcome, ["name"]));
-
-/** A new Ticket's own fields; the tools name its parent or source their own way. */
-const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
-
-/**
- * An Artifact save's fields. The route takes `baseVersion` as optional and its domain function refuses a save
- * without one; the tools ask for it up front, as they did before.
- */
-const saveFields = bodyFields(ArtifactSave);
-
-/** A Decision's text: Agents may not change its status, so the tools don't offer it. */
-const decisionTextFields = bodyFields(Type.Pick(DecisionEdit, ["baseVersion", "title", "body"]));
-
-const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
-
 export function buildMcpServer(api: Api): McpServer {
+  // Built here rather than when this module loads: a module importing it may sit in an import cycle with the routes'
+  // bodies, which are then not yet defined.
+  /** A new Ticket's own fields; the tools name its parent or source their own way. */
+  const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
+
+  /**
+   * An Artifact save's fields. The route takes `baseVersion` as optional and its domain function refuses a save
+   * without one; the tools ask for it up front, as they did before.
+   */
+  const saveFields = bodyFields(ArtifactSave);
+
+  /** A Decision's text: Agents may not change its status, so the tools don't offer it. */
+  const decisionTextFields = bodyFields(Type.Pick(DecisionEdit, ["baseVersion", "title", "body"]));
+
+  const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
+
+  /**
+   * `set_step`'s fields but its Outcomes. The tool's Outcomes are the documented exception to building inputs from the
+   * route's body: they name their Status by name or id, where the route takes `statusId`, and their flags default to
+   * false; so the array keeps its own zod, reusing only the route's Outcome name and the route's item limits.
+   */
+  const stepFields = bodyFields(Type.Omit(StepPut, ["outcomes"]));
+  const outcomeName = bodyFields(Type.Pick(Outcome, ["name"]));
   const server = new McpServer(
     { name: "Cronk", version: "0.0.0" },
     {
@@ -146,7 +147,8 @@ export function buildMcpServer(api: Api): McpServer {
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
-        "changes requested, and by whom), the Step that produced it and the failing check, review requesting changes or merge conflict that last sent the Ticket back to that Step, which Cronk's Comment also links; " +
+        "changes requested, and by whom), the Step that produced it and the failing check or review requesting changes that last sent the Ticket back to that Step, which Cronk's Comment also links, " +
+        "and, while it is open, the conflict with its base branch GitHub last reported (`conflict`: the base commit and the merge that made it conflict), which sends nothing back; " +
         "its Linked Documents, " +
         "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; its " +
         "Linked Artifacts, which you read with `read_artifact`; and the " +
@@ -346,7 +348,10 @@ export function buildMcpServer(api: Api): McpServer {
         "Discovered Ticket: in the Project's first Backlog Status, undelegated, assigned to the Assignee of your Run's " +
         "Ticket (or, without a Run, to your Owner) and waiting in their Inbox. Until a User delegates, moves or " +
         "dismisses it you may edit it with `edit_ticket`, add blocks from it, or to it from any Ticket, with `add_block` and split it into " +
-        "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead.",
+        "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead. " +
+        "File only what isn't tracked yet: `search` first, and if an open Ticket already covers it, `comment` on that " +
+        "one instead; check a fault in the code still happens on the Repository's default branch, not only on your " +
+        "own branch; and name any related Tickets in the description.",
       inputSchema: {
         project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
         ...newTicketFields,

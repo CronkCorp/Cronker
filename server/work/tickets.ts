@@ -109,6 +109,61 @@ export const TicketSummary = Type.Object({
       "Done or Canceled Status, Unverified ones included, is finished and no longer listed. Only those the caller " +
       "may read are listed; `blockedByHidden` counts the rest.",
   }),
+  conflicts: Type.Array(Type.String(), {
+    description:
+      "The base branches its open Pull Requests conflict with, as GitHub last answered Cronk asking, for marking the " +
+      "board's card; its Pull Requests say with which commit and merge.",
+  }),
+  queue: Type.Union(
+    [
+      Type.Object({
+        position: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+          description: "Its place in its queue, the head being 1; null while it has stepped aside for a conflict, out of line.",
+        }),
+        state: Type.Union(
+          [
+            Type.Literal("queued"),
+            Type.Literal("merging"),
+            Type.Literal("updating-branch"),
+            Type.Literal("resolving-conflict"),
+            Type.Literal("waiting-for-checks"),
+          ],
+          {
+            description:
+              "`merging` while Cronk asks GitHub to merge it; `updating-branch` while Cronk asks GitHub to bring its branch, " +
+              "behind its base branch, up to date; `resolving-conflict` while, stepped aside for a conflict with its base " +
+              "branch, a Run of the Merge Step resolves it; `waiting-for-checks` until the updated or resolving commit's " +
+              "checks are green; `queued` while it waits.",
+          },
+        ),
+        pullRequestId: Type.Number({ description: "GitHub's id for the queued Pull Request." }),
+        conflict: Type.Union(
+          [
+            Type.Object({
+              merge: Type.Union(
+                [Type.Object({ repository: Type.String(), number: Type.Integer(), url: Type.String() }), Type.Null()],
+                { description: "The merged Pull Request that caused the conflict, or null when Cronk knows none." },
+              ),
+              baseSha: Type.Union([Type.String(), Type.Null()], { description: "The base branch's commit it conflicted with." }),
+              at: Type.String({ format: "date-time" }),
+              count: Type.Integer({
+                minimum: 1,
+                description: "How many times this entry stepped aside for a conflict; past 3 its Ticket comes to its Assignee instead.",
+              }),
+            }),
+            Type.Null(),
+          ],
+          { description: "The conflict that last set it aside, out of line; null if none has." },
+        ),
+      }),
+      Type.Null(),
+    ],
+    {
+      description:
+        "Its entry in the Merge Queue for its Pull Request's Repository and base branch, while a User's Merge has it " +
+        "waiting for Cronk to merge it; null otherwise.",
+    },
+  ),
   blockedByHidden: Type.Integer({
     minimum: 0,
     description:
@@ -212,6 +267,11 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
   ${waitingColumn("tickets")} as waiting,
   ${blockersColumns("tickets", reach)},
+  array(select distinct pull_requests.conflict_branch from pull_request_links
+    join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+    where pull_request_links.ticket_id = tickets.id and pull_requests.state in ('open', 'draft')
+      and pull_requests.conflict_sha is not null order by pull_requests.conflict_branch) as conflicts,
+  ${queueColumn("tickets")} as queue,
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources
@@ -219,6 +279,29 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
       where sources.id = tickets.discovered_from_ticket_id and ${reach("sources")}),
     'runId', tickets.discovered_in_run_id,
     'waiting', tickets.discovery_waits) end as discovered`;
+
+/**
+ * SQL for the Ticket `alias`'s first entry in the Merge Queue, one Cronk is acting on or that stepped aside if any,
+ * with its place among the entries in line whose Pull Requests share its Repository and base branch (none for one that
+ * stepped aside), and what last set it aside for a conflict. In line, one Cronk is acting on comes first, then the
+ * others in the order they joined, one that rejoined at the front.
+ */
+const queueColumn = (alias: string) => `(select json_build_object('pullRequestId', entry.pull_request_id, 'state', entry.state,
+    'position', case when entry.aside then null else (select count(*) from merge_queue ahead
+      join pull_requests ahead_pr on ahead_pr.id = ahead.pull_request_id
+      where ahead_pr.repository_id = queued_pr.repository_id and not ahead.aside
+        and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '')
+        and (ahead.state = 'queued', ahead.seq) <= (entry.state = 'queued', entry.seq)) end,
+    'conflict', case when entry.conflict_at is null then null else json_build_object(
+      'merge', (select json_build_object('repository', merged.repository_full_name, 'number', merged.number, 'url', merged.url)
+        from pull_requests merged where merged.id = entry.conflict_merged_pull_request_id),
+      'baseSha', entry.conflict_base_sha,
+      'at', to_char(entry.conflict_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'count', entry.conflict_count) end)
+  from merge_queue entry join pull_requests queued_pr on queued_pr.id = entry.pull_request_id
+  where entry.ticket_id = ${alias}.id order by entry.state <> 'queued' desc, entry.seq limit 1)`;
+
+/** SQL ordering a Status's Tickets: those in the Merge Queue first, by their place in it. */
+const queueOrder = (alias: string) => `(${queueColumn(alias)} ->> 'position')::int nulls last`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -634,7 +717,7 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, ${runningFirstThenBlocked("tickets")}, tickets.number`,
+     order by statuses.position, ${queueOrder("tickets")}, ${runningFirstThenBlocked("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
@@ -709,8 +792,19 @@ export async function editTicket(
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
-  const { db, clock, live } = context;
-  return transaction(db, async (tx) => {
+  return transaction(context.db, (tx) => editTicketIn(context, tx, editor, ticketId, edit));
+}
+
+/** Edits the Ticket as `editTicket` says, in the caller's transaction. */
+export async function editTicketIn(
+  context: Context,
+  tx: Tx,
+  editor: Caller,
+  ticketId: string,
+  edit: TicketEdit,
+): Promise<Ticket> {
+  const { clock, live } = context;
+  {
     const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     await requireWrite(tx, editor, ticket);
@@ -887,7 +981,7 @@ export async function editTicket(
     else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
     return fullTicket(tx, editor, (await findTicketRow(tx, editor, ticket.id))!);
-  });
+  }
 }
 
 /**

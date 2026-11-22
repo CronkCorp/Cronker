@@ -57,8 +57,12 @@ The agent work a Status asks for: a brief and the model it wants. A delegated Ti
 _Avoid_: Stage, phase, pipeline step, job
 
 **Merge Step**:
-A Step whose Run may merge its Ticket's Pull Request. It skips itself, passing the Ticket on by its default Outcome as with a Label rule, unless the Ticket has Autonomous Delegation and its Project has **agents may merge** on, a setting off by default that only an Admin changes. New Projects' boards have one on a Merge Status between Code review and In Review.
+The Step on a Merge Status, where Tickets wait in the Merge Queue. It skips itself, passing the Ticket on by its default Outcome as with a Label rule, unless the Ticket has Autonomous Delegation and its Project has **agents may merge** on, a setting off by default that only an Admin changes, or a User queued it in the Merge Queue. An Autonomous Delegation Ticket joins the Merge Queue as it enters; its Run starts only when it has no open Pull Request to queue. New Projects' boards have one on a Merge Status between Code review and In Review.
 _Avoid_: Merge job, auto-merge
+
+**Merge Queue**:
+The Tickets waiting in a Merge Status for Cronk to merge their Pull Requests: one queue per Repository and base branch, in the order they joined, never reordered by hand. Cronk merges each queue's head once it is clean and green, one at a time, as the merge of the User who queued it by pressing **Merge** on it in a Review Status, completing it as Verified, or, for a Ticket Autonomous Delegation queued, as its Agent's, completing it as Unverified. A Ticket with several open Pull Requests queues each in its own queue and stays in Merge until the last of them merges. **Remove from queue** sends it back to its Project's first Review Status, and a Pull Request merged or closed on GitHub leaves its queue.
+_Avoid_: merge train, merge list
 
 **Outcome**:
 One of the named ways a Step's Run may end, each moving the Ticket to a set Status, such as *approve → In Review* or *changes → Implement*. A Run moves its Ticket only by choosing an Outcome. An Outcome that sends work back counts as a round; past the Step's round limit it goes to the Step's *needs you* Outcome instead.
@@ -89,7 +93,7 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor, or Cronk itself, writes on a Ticket or an Artifact, possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline. Cronk writes one when a failing check, a review requesting changes or a merge conflict sends a Ticket back, linking it (for a conflict, the merge that caused it).
+A Markdown message an Actor, or Cronk itself, writes on a Ticket or an Artifact, possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it. A merge conflict sends nothing back and writes none: it only marks the Pull Request.
 _Avoid_: Note, message, post
 
 **Change**:
