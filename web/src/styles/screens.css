@@ -104,11 +104,7 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
-.filter input {
-  width: auto;
-  min-width: 140px;
-}
-/* A filter's button looks like the Label box beside it; an active filter has an --accent border. */
+/* A filter's button opens its list; an active filter has an --accent border. */
 .filter-trigger {
   display: inline-flex;
   align-items: center;
