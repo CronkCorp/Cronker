@@ -1,4 +1,4 @@
-import { afterCommit, beforeCommit, type Tx } from "../db.js";
+import { afterCommit, beforeCommit, firstInTransaction, type Tx } from "../db.js";
 import { readersIn } from "../identity/viewers.js";
 
 /**
@@ -126,11 +126,14 @@ export class Live {
   /**
    * Tells the Workspace's streams about the event once the transaction commits, and never if it rolls back: only
    * those of Users who may read where it happened, as the transaction leaves Access. An event that names its Project
-   * goes to that Project's readers; any other says who it goes to.
+   * goes to that Project's readers; any other says who it goes to. The same event published again in the same
+   * transaction is sent once: it tells nothing more, so a write that publishes and a caller that publishes after it
+   * never send it twice.
    */
   publish(tx: Tx, workspaceId: string, event: PlacedEvent): void;
   publish(tx: Tx, workspaceId: string, event: LiveEvent, audience: Audience): void;
   publish(tx: Tx, workspaceId: string, event: LiveEvent, audience?: Audience): void {
+    if (!firstInTransaction(tx, JSON.stringify([workspaceId, event, audience ?? null]))) return;
     const to = audience ?? { readersOf: [(event as PlacedEvent).projectId] };
     let recipients: Set<string> | "all" = new Set(to.users);
     // The Workspace's own knowledge is for every User of it, so that needs no lookup.

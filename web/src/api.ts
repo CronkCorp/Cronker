@@ -1,5 +1,40 @@
 /** A thin client for Cronk's HTTP API. The web client holds no rules of its own. */
 
+// The Ticket area's response and request types are the server's own, from its schemas: type-only, so no server code
+// reaches the browser bundle (the build refuses any that does). Screens import them from here.
+import type { ArtifactLink } from "../../server/artifacts/linked-artifacts.js";
+import type { DecisionCreate, DecisionEdit } from "../../server/knowledge/decisions.js";
+import type { DocumentCreate, DocumentEdit } from "../../server/knowledge/documents.js";
+import type { DocumentLink } from "../../server/knowledge/linked-documents.js";
+import type { Report } from "../../server/knowledge/reports.js";
+import type { TermCreate, TermEdit } from "../../server/knowledge/terms.js";
+import type { Cost } from "../../server/runs/costs.js";
+import type { RunState } from "../../server/runs/states.js";
+import type { ActorOrCronk } from "../../server/work/actors.js";
+import type { Change } from "../../server/work/changes.js";
+import type { Comment, CommentCreate } from "../../server/work/comments.js";
+import type { ArtifactMention, Mention, TicketMention } from "../../server/work/mentions.js";
+import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
+import type {
+  MentioningText,
+  Priority,
+  Ticket,
+  TicketCreate,
+  TicketEdit,
+  TicketList,
+  TicketRef,
+  TicketSummary,
+} from "../../server/work/tickets.js";
+import type { TicketReopen } from "../../server/work/verification.js";
+
+export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
+export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
+export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
+export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
+
+/** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
+export type ChangeActor = ActorOrCronk;
+
 export interface User {
   id: string;
   /** Unknown for a User added by GitHub login until they first sign in. */
@@ -41,6 +76,21 @@ export interface Repository {
   fullName: string;
   /** Whether a Project of another Workspace lists it under the same key, so its Pull Requests link there too. */
   keyClash: boolean;
+}
+
+/** An import of a Repository's GitHub issues into a Project, running as a background job. */
+export interface GitHubImport {
+  id: string;
+  repository: { id: number; fullName: string };
+  state: "running" | "done" | "failed";
+  imported: number;
+  skipped: number;
+  error: string | null;
+  /** While it waits out GitHub's rate limit, when it carries on; null otherwise. */
+  waitingUntil: string | null;
+  startedBy: string;
+  startedAt: string;
+  finishedAt: string | null;
 }
 
 export interface WorkspaceSummary {
@@ -145,8 +195,12 @@ export interface ProjectSummary {
   name: string;
   key: string;
   visibility: Visibility;
-  /** What the signed-in User may do in the Project. */
+  /** What the signed-in User may do in the Project; Read for everyone while it is archived. */
   access: "write" | "read";
+  /** When an Admin archived it, making it read-only for everyone until unarchived; null if it isn't. */
+  archivedAt: string | null;
+  /** The Admin who archived it. */
+  archivedBy: string | null;
 }
 
 /** Who may see a Project: open or private, and the Users it lists. Only Admins read and set it. */
@@ -163,6 +217,8 @@ export interface Project extends ProjectSummary {
   pullRequestAutomation: boolean;
   /** Whether Merge Steps let agents merge Autonomous Delegation Tickets' Pull Requests; only Admins change it. */
   agentsMayMerge: boolean;
+  /** Whether Briefs in this Project ask Runs to keep their Reports concise. */
+  conciseReports: boolean;
   statuses: Status[];
 }
 
@@ -172,9 +228,8 @@ export interface ProjectEdit {
   autonomousDelegationDefault?: boolean;
   pullRequestAutomation?: boolean;
   agentsMayMerge?: boolean;
+  conciseReports?: boolean;
 }
-
-export type Priority = "urgent" | "high" | "medium" | "low" | "none";
 
 export const priorities: { priority: Priority; label: string }[] = [
   { priority: "urgent", label: "Urgent" },
@@ -183,107 +238,6 @@ export const priorities: { priority: Priority; label: string }[] = [
   { priority: "low", label: "Low" },
   { priority: "none", label: "None" },
 ];
-
-/** A Ticket key written in Markdown that names a Ticket of the Workspace, outside code and links. */
-export interface Mention {
-  kind: "ticket";
-  /** The key as written, such as `cronk-12`. */
-  text: string;
-  key: string;
-  ticketId: string;
-}
-
-export interface TicketSummary {
-  id: string;
-  projectId: string;
-  key: string;
-  title: string;
-  description: string;
-  statusId: string;
-  priority: Priority;
-  labels: string[];
-  assigneeId: string | null;
-  delegateId: string | null;
-  /** Null until a User sets it or the Ticket is first delegated. */
-  autonomousDelegation: boolean | null;
-  /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
-  verification: "unverified" | "verified" | null;
-  parentId: string | null;
-  /** For a Discovered Ticket: the Agent that filed it, from which Ticket and Run, and whether it waits for a User. */
-  discovered: { agentId: string; sourceTicket: TicketRef | null; runId: string | null; waiting: boolean } | null;
-  dueDate: string | null;
-  estimate: number | null;
-  createdBy: string;
-  createdAt: string;
-  lastRun: { id: string; state: RunState } | null;
-  /** What it waits for before it gets the Run it needs, if it needs one. */
-  waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
-  /** The unfinished Tickets blocking it, of any Project of the Workspace, oldest block first. */
-  blockedBy: TicketRef[];
-  /** How many more unfinished Tickets block it that the User can't read: counted, never named. */
-  blockedByHidden: number;
-}
-
-/** A text that mentions a Ticket, as its Mentioned in lists it. */
-export interface MentioningText {
-  kind: "ticket" | "comment" | "document" | "report" | "term" | "decision";
-  id: string;
-  /** Null for the Workspace's own knowledge. */
-  projectId: string | null;
-  /** Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's. */
-  title: string;
-  /** The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge. */
-  ticket: TicketRef | null;
-  /** A Document's or Report's slug, or for a Comment on an Artifact the Artifact's. */
-  slug: string | null;
-  /** A Decision's number. */
-  number: number | null;
-}
-
-export interface Ticket extends TicketSummary {
-  mentions: Mention[];
-  /** The other texts mentioning it that the User may read, most recently saved first. */
-  mentionedIn: MentioningText[];
-  /** What its Runs cost in all, one total per currency; empty when none reported a cost. */
-  cost: Cost[];
-}
-
-export interface TicketEdit {
-  title?: string;
-  description?: string;
-  statusId?: string;
-  priority?: Priority;
-  labels?: string[];
-  assigneeId?: string | null;
-  delegateId?: string | null;
-  autonomousDelegation?: boolean;
-  dueDate?: string | null;
-  estimate?: number | null;
-  parentId?: string | null;
-}
-
-/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
-export interface TicketRef {
-  id: string;
-  projectId: string;
-  key: string;
-  title: string;
-}
-
-/** A Relation as seen from one of its Tickets. */
-export type RelationKind = "blocks" | "blockedBy" | "relatesTo";
-
-export interface Relation {
-  id: string;
-  kind: RelationKind;
-  ticket: TicketRef;
-}
-
-export interface TicketRelations {
-  parent: TicketRef | null;
-  subTickets: TicketRef[];
-  relations: Relation[];
-}
 
 export interface TicketFilter {
   statusId?: string;
@@ -298,6 +252,8 @@ export interface Agent {
   name: string;
   owner: User;
   runnerId: string | null;
+  /** Whether its Runner runs in the cloud, so a `local-only` Ticket can't be delegated to it. */
+  cloud: boolean;
   createdAt: string;
 }
 
@@ -339,17 +295,13 @@ export interface StartedSetup {
   };
 }
 
-/** What something cost: an amount in the currency's minor units, such as US cents. */
-export interface Cost {
-  amount: number;
-  currency: string;
-}
-
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
 export interface Runner {
   id: string;
   name: string;
   kind: string;
+  /** Whether its kind runs Runs in the cloud: a `local-only` Ticket gets no Run through it. */
+  cloud: boolean;
   limit: number;
   /** How many of its Runs are running now, counted against its limit. */
   running: number;
@@ -394,26 +346,6 @@ export interface Actor {
   name: string;
 }
 
-export interface Comment {
-  id: string;
-  /** The Ticket it is on; null for a Comment on an Artifact. */
-  ticketId: string | null;
-  /** The Artifact it is on; null for a Comment on a Ticket. A Ticket's Comments include those on its Linked Artifacts. */
-  artifactId: string | null;
-  artifact: { id: string; projectId: string | null; title: string; slug: string } | null;
-  replyToId: string | null;
-  body: string;
-  /** Who wrote it: a User, an Agent, or Cronk itself, as when a failing check sent the Ticket back. */
-  actor: ChangeActor;
-  createdAt: string;
-  mentions: Mention[];
-  /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
-  questionId: string | null;
-  /** Whether this is Cronk's Comment on a send-back, linking the failing check or the review requesting changes. */
-  sentBack: boolean;
-  attachments: Attachment[];
-}
-
 /** What an Attachment is attached to. */
 export interface AttachmentOwner {
   kind: "ticket" | "document" | "comment";
@@ -445,58 +377,6 @@ export function exportUrl(place: Place): string {
 export function isAttachmentUrl(url: string): boolean {
   return /^\/api\/attachments\/[^/]+\/content$/.test(url);
 }
-
-/** Markdown a Run wrote on its Ticket. */
-export interface Report {
-  id: string;
-  ticketId: string;
-  runId: string;
-  agent: { id: string; name: string };
-  title: string;
-  /** Its readable form, as its address takes it: the words of its title, then its short id. */
-  slug: string;
-  body: string;
-  createdAt: string;
-  mentions: Mention[];
-}
-
-/** Who made a Change: a User, an Agent, or Cronk itself. */
-export type ChangeActor = Actor | { kind: "cronk"; name: "Cronk" };
-
-export interface Change {
-  id: string;
-  actor: ChangeActor;
-  at: string;
-  field:
-    | "created"
-    | "title"
-    | "description"
-    | "status"
-    | "priority"
-    | "labels"
-    | "assignee"
-    | "dueDate"
-    | "estimate"
-    | "parent"
-    | "subTicket"
-    | "delegate"
-    | "stepSkipped"
-    | "autonomousDelegation"
-    | "verification"
-    | "dismissed"
-    | "linkedDocument"
-    | "linkedArtifact"
-    | "merged"
-    | "sentBack"
-    | "transcriptDeleted"
-    | RelationKind;
-  from: unknown;
-  to: unknown;
-  /** The Run an Agent made the Change in; null for a User's, or an Agent's outside a Run. */
-  runId: string | null;
-}
-
-export type RunState = "running" | "finished" | "failed" | "lost" | "stopped" | "refused";
 
 /** One agent execution Cronk started for a Ticket. */
 export interface Run {
@@ -538,6 +418,8 @@ export interface Transcript {
   /** Where entries were left out of a Transcript past 50 MB: after which position, how many and how large. */
   gap: { after: number; entries: number; bytes: number } | null;
   uploadedAt: string;
+  /** The Redactions Users added, oldest first: who and when, never the string redacted. */
+  redactions: { id: string; addedBy: { id: string; name: string }; addedAt: string }[];
 }
 
 /** A Transcript as a Ticket it names lists it: placed when its Cronk tool calls first named the Ticket. */
@@ -644,12 +526,12 @@ export interface DiscoveredItem {
   since: string;
 }
 
-/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
+/** A Ticket whose Assignee was removed from the Workspace or lost Write in its Project, waiting for an Admin to assign it. */
 export interface ReassignItem {
   kind: "reassign";
   ticket: TicketSummary;
   formerAssignee: User;
-  /** When it began waiting: when the Assignee of the Ticket was removed from the Workspace. */
+  /** When it began waiting: when the Assignee of the Ticket was taken off it. */
   since: string;
 }
 
@@ -714,14 +596,6 @@ export interface DocumentSummary {
 export interface Document extends DocumentSummary {
   body: string;
   mentions: Mention[];
-}
-
-export interface DocumentEdit {
-  baseVersion?: number;
-  title?: string;
-  body?: string;
-  parentId?: string | null;
-  position?: number;
 }
 
 /** A file of an Artifact's Version, by its path relative to the Version. */
@@ -823,14 +697,14 @@ export interface PullRequest {
   sentBack:
     | { kind: "check"; name: string; sha: string; url: string | null; at: string }
     | { kind: "review"; reviewer: string | null; url: string | null; at: string }
-    | {
-        kind: "conflict";
-        branch: string;
-        sha: string;
-        merge: { repository: string; number: number; url: string } | null;
-        at: string;
-      }
     | null;
+  /** While it is open, GitHub's last answer that it conflicts with its base branch; null when it merges cleanly. */
+  conflict: {
+    branch: string;
+    sha: string;
+    merge: { repository: string; number: number; url: string } | null;
+    at: string;
+  } | null;
   /** Whether a User linked it by hand; only such a link can be unlinked. */
   manual: boolean;
 }
@@ -891,12 +765,6 @@ export interface TermComparison {
   avoid: ComparedLine[];
 }
 
-export interface TermContent {
-  name: string;
-  definition: string;
-  avoid: string[];
-}
-
 /** Where knowledge is kept: a Project, or the Workspace. */
 export type Place = Tree;
 
@@ -926,14 +794,6 @@ export interface DecisionSummary {
 export interface Decision extends DecisionSummary {
   body: string;
   mentions: Mention[];
-}
-
-export interface DecisionEdit {
-  baseVersion: number;
-  title?: string;
-  body?: string;
-  status?: DecisionStatus;
-  supersededById?: string | null;
 }
 
 /** An app's request to act in Cronk as one of the signed-in User's Agents, for the consent screen. */
@@ -1026,14 +886,23 @@ export const api = {
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: ProjectEdit) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
+  archiveProject: (id: string) => call<Project>("POST", `/api/projects/${encodeURIComponent(id)}/archive`),
+  unarchiveProject: (id: string) => call<Project>("POST", `/api/projects/${encodeURIComponent(id)}/unarchive`),
   projectAccess: (id: string) => call<ProjectAccess>("GET", `/api/projects/${encodeURIComponent(id)}/access`),
   setProjectAccess: (id: string, access: ProjectAccess) =>
     call<ProjectAccess>("PUT", `/api/projects/${encodeURIComponent(id)}/access`, access),
+  /** How many Tickets setting the Access would unassign or undelegate, changing nothing. */
+  previewProjectAccess: (id: string, access: ProjectAccess) =>
+    call<{ tickets: number }>("POST", `/api/projects/${encodeURIComponent(id)}/access/preview`, access),
   repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
   addRepository: (projectId: string, id: number) =>
     call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
   removeRepository: (projectId: string, id: number) =>
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
+  startImport: (projectId: string, repositoryId: number) =>
+    call<GitHubImport>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
+  latestImport: (projectId: string, repositoryId: number) =>
+    call<{ import: GitHubImport | null }>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories/${repositoryId}/import`),
   addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
   editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>
@@ -1061,17 +930,19 @@ export const api = {
   tickets: (projectId: string, filter: TicketFilter = {}) => {
     const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value));
     const search = query.size ? `?${query}` : "";
-    return call<TicketSummary[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
+    return call<TicketList>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
   },
-  createTicket: (projectId: string, input: { title: string; description?: string }) =>
+  createTicket: (projectId: string, input: TicketCreate) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
   acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
+  mergeTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/merge`),
+  removeFromQueue: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/queue/remove`),
   reopenTicket: (id: string, comment: string) =>
-    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment }),
+    call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment } satisfies TicketReopen),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
-  comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
+  comment: (ticketId: string, input: CommentCreate) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
   artifactComments: (artifactId: string) =>
     call<Comment[]>("GET", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`),
@@ -1107,7 +978,7 @@ export const api = {
     call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
   relations: (ticketId: string) =>
     call<TicketRelations>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/relations`),
-  relate: (ticketId: string, input: { kind: RelationKind } & ({ ticketId: string } | { ticketKey: string })) =>
+  relate: (ticketId: string, input: RelationCreate) =>
     call<Relation>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/relations`, input),
   removeRelation: (ticketId: string, relationId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/relations/${encodeURIComponent(relationId)}`),
@@ -1125,6 +996,8 @@ export const api = {
       `/api/transcripts/${encodeURIComponent(id)}/entries${after === undefined ? "" : `?after=${after}`}`,
     ),
   deleteTranscript: (id: string) => call<void>("DELETE", `/api/transcripts/${encodeURIComponent(id)}`),
+  redactTranscript: (id: string, text: string) =>
+    call<Transcript>("POST", `/api/transcripts/${encodeURIComponent(id)}/redactions`, { text }),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
@@ -1142,22 +1015,25 @@ export const api = {
   linkedDocuments: (ticketId: string) =>
     call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>
-    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId }),
+    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId } satisfies DocumentLink),
   unlinkDocument: (ticketId: string, documentId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/documents/${encodeURIComponent(documentId)}`),
   documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
-  createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
+  createDocument: (tree: Tree, input: DocumentCreate) =>
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
-  artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
+  artifact: (id: string, version?: number | null) =>
+    call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}${version ? `?version=${version}` : ""}`),
   artifactVersions: (id: string) => call<ArtifactVersion[]>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions`),
   compareArtifactVersions: (id: string, from: number, to: number) =>
     call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),
   deleteArtifact: (id: string) => call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}`),
+  deleteArtifactVersion: (id: string, number: number) =>
+    call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}/versions/${number}`),
   linkedArtifacts: (ticketId: string) =>
     call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),
   linkArtifact: (ticketId: string, artifactId: string) =>
-    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId }),
+    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId } satisfies ArtifactLink),
   unlinkArtifact: (ticketId: string, artifactId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts/${encodeURIComponent(artifactId)}`),
   editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
@@ -1168,9 +1044,9 @@ export const api = {
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
   terms: (place: Place) => call<Term[]>("GET", `${placePath(place)}/terms`),
   glossary: (projectId: string) => call<Term[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/glossary`),
-  createTerm: (place: Place, input: TermContent) => call<Term>("POST", `${placePath(place)}/terms`, input),
+  createTerm: (place: Place, input: TermCreate) => call<Term>("POST", `${placePath(place)}/terms`, input),
   term: (id: string) => call<Term>("GET", term(id)),
-  editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
+  editTerm: (id: string, edit: TermEdit) => call<Term>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
   termVersion: (termId: string, number: number) => call<TermVersion>("GET", `${term(termId)}/versions/${number}`),
@@ -1182,7 +1058,7 @@ export const api = {
   removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
   decisions: (place: Place) => call<DecisionSummary[]>("GET", `${placePath(place)}/decisions`),
   artifacts: (place: Place) => call<ArtifactSummary[]>("GET", `${placePath(place)}/artifacts`),
-  createDecision: (place: Place, input: { title: string; body?: string }) =>
+  createDecision: (place: Place, input: DecisionCreate) =>
     call<Decision>("POST", `${placePath(place)}/decisions`, input),
   decision: (id: string) => call<Decision>("GET", decision(id)),
   editDecision: (id: string, edit: DecisionEdit) => call<Decision>("PATCH", decision(id), edit),

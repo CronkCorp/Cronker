@@ -2,15 +2,16 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { pullRequestOnGitHub } from "../github/client.js";
 import { installationCovering, tokenFor } from "../github/installations.js";
-import { listsPullRequestsRepository } from "./cronk-moves.js";
-import { sendBackForFailure, sendBackForKnownFailures } from "./sending-back.js";
+import { sendBackForKnownFailures } from "./sending-back.js";
 
 /**
- * Pipeline: a Pull Request conflicting with its base branch sends the Tickets it links back to work, as a failing
- * check does (`sending-back.ts`). GitHub sends no event when a Pull Request becomes conflicting, so Cronk asks it:
- * after a merge into a Repository, about the other open Pull Requests on that base branch linking a Ticket in a
- * Review Status, and once an Outcome moves a Ticket into a Review Status, about its open Pull Requests. Each ask
- * waits in `mergeability_checks` until `checkMergeability` asks GitHub; while GitHub answers that it is still
+ * Pipeline: a Pull Request conflicting with its base branch is marked as conflicting, with the base commit and the
+ * merge it conflicts with; it sends nothing back, unlike a failing check (`sending-back.ts`), so a merge never sets off
+ * a wave of send-backs. A later answer that it merges cleanly clears the marker. GitHub sends no event when a Pull
+ * Request becomes conflicting, so Cronk asks it: after a merge into a Repository, about the other open Pull Requests on
+ * that base branch linking a Ticket in a Review Status; once an Outcome moves a Ticket into a Review Status, about its
+ * open Pull Requests; and after a push to a marked Pull Request, about it, since the push may resolve the conflict.
+ * Each ask waits in `mergeability_checks` until `checkMergeability` asks GitHub; while GitHub answers that it is still
  * working mergeability out, it is asked again shortly, a bounded number of times. Direct pushes to a base branch
  * aren't watched.
  */
@@ -53,21 +54,19 @@ export async function askMergeability(
 }
 
 /**
- * SQL condition, for a query over `pull_requests`: the Pull Request links a Ticket that a conflict would send back,
- * one in a Review Status with a producing Step, in a Project with Pull Request automation on that lists its Repository.
- * `sendBackForFailure` applies the same rule when the answer comes; this only spares GitHub the other asks.
+ * SQL condition, for a query over `pull_requests`: the Pull Request links a Ticket whose conflict marker matters, one
+ * in a Review Status, in an unarchived Project with Pull Request automation on that lists its Repository. This only
+ * spares GitHub the other asks.
  */
-const linksTicketToSendBack = `exists (
+const linksTicketInReview = `exists (
   select from pull_request_links
   join tickets on tickets.id = pull_request_links.ticket_id
   join projects on projects.id = tickets.project_id
   join statuses on statuses.id = tickets.status_id
-  join runs on runs.id = pull_request_links.producing_run_id
-  join steps on steps.status_id = runs.status_id
   join project_repositories on project_repositories.project_id = tickets.project_id
     and project_repositories.repository_id = pull_requests.repository_id
   where pull_request_links.pull_request_id = pull_requests.id and projects.pull_request_automation
-    and statuses.kind = 'review')`;
+    and projects.archived_at is null and statuses.kind = 'review')`;
 
 /** Asks for the Pull Requests chosen by `where` over `pull_requests` to be checked, now, naming the merge, if any. */
 async function queue(context: Context, tx: Tx, where: string, params: unknown[], mergedPullRequestId: number | null): Promise<void> {
@@ -76,7 +75,7 @@ async function queue(context: Context, tx: Tx, where: string, params: unknown[],
   await tx.query(
     `insert into mergeability_checks (pull_request_id, merged_pull_request_id, tries, due_at)
      select pull_requests.id, ${mergedParam}::bigint, 0, ${nowParam} from pull_requests
-     where pull_requests.state in ('open', 'draft') and ${linksTicketToSendBack} and ${where}
+     where pull_requests.state in ('open', 'draft') and ${linksTicketInReview} and ${where}
      on conflict (pull_request_id) do update set merged_pull_request_id = excluded.merged_pull_request_id, tries = 0,
        due_at = excluded.due_at, generation = mergeability_checks.generation + 1`,
     [...params, mergedPullRequestId, context.clock.now()],
@@ -84,8 +83,8 @@ async function queue(context: Context, tx: Tx, where: string, params: unknown[],
 }
 
 /**
- * After a merge into a base branch, asks for the other open Pull Requests on that branch linking a Ticket a conflict
- * would send back to be checked, and those whose base branch Cronk wasn't told. Call it in the transaction that
+ * After a merge into a base branch, asks for the other open Pull Requests on that branch linking a Ticket in a Review
+ * Status to be checked, and those whose base branch Cronk wasn't told. Call it in the transaction that
  * recorded the merge.
  */
 export async function checkAfterMerge(context: Context, tx: Tx, mergedPullRequestId: number): Promise<void> {
@@ -106,9 +105,17 @@ export async function checkAfterMerge(context: Context, tx: Tx, mergedPullReques
 }
 
 /**
+ * After a push to a Pull Request marked as conflicting, asks for it to be checked again, as the push may have resolved
+ * the conflict. Call it in the transaction that recorded the push.
+ */
+export async function checkAfterPush(context: Context, tx: Tx, pullRequestId: number): Promise<void> {
+  await queue(context, tx, "pull_requests.id = $1 and pull_requests.conflict_sha is not null", [pullRequestId], null);
+}
+
+/**
  * An Outcome moved the Ticket into a Review Status: a failure Cronk already knows on one of its open Pull Requests
- * sends it back, and this says so; otherwise Cronk is to ask GitHub whether they conflict. Call it in the
- * transaction that moved the Ticket, before a Run starts in the Review Status.
+ * sends it back, and this says so; otherwise Cronk is to ask GitHub whether they conflict, which only marks them. Call
+ * it in the transaction that moved the Ticket, before a Run starts in the Review Status.
  */
 export async function sendBackOnEnteringReview(context: Context, tx: Tx, ticketId: string): Promise<boolean> {
   if (await sendBackForKnownFailures(context, tx, ticketId)) return true;
@@ -139,8 +146,8 @@ interface Waiting {
 }
 
 /**
- * Asks GitHub about each Pull Request waiting to be checked whose time has come. One that conflicts sends the Tickets
- * it links back; one GitHub is still working out, couldn't answer about, or answered for the base before the merge
+ * Asks GitHub about each Pull Request waiting to be checked whose time has come. One that conflicts is marked so, and
+ * one that merges cleanly loses its marker; one GitHub is still working out, couldn't answer about, or answered for the base before the merge
  * that had Cronk ask, is asked again shortly, until it has been asked `maxTries` times.
  */
 export async function checkMergeability(context: Context): Promise<void> {
@@ -191,33 +198,50 @@ async function settle(context: Context, tx: Tx, waiting: Waiting, asked: Mergeab
     return;
   }
   const { rowCount } = await tx.query(`delete from mergeability_checks where ${stillThisAsk}`, params);
-  if (!rowCount || asked.kind !== "answered" || asked.mergeable) return;
+  if (!rowCount || asked.kind !== "answered") return;
+  if (asked.mergeable) {
+    const { rowCount: cleared } = await tx.query(
+      `update pull_requests set conflict_branch = null, conflict_sha = null, conflict_merged_pull_request_id = null,
+         conflict_at = null
+       where id = $1 and conflict_sha is not null`,
+      [waiting.id],
+    );
+    if (cleared) await markerChanged(context, tx, waiting.id);
+    return;
+  }
   // Without a merge that had Cronk ask, the merge named is one whose commit GitHub compared against, if Cronk knows it.
   const named =
     merge ??
     (
-      await tx.query<{ repository: string; number: number; url: string; sha: string }>(
-        `select repository_full_name as repository, number, url, merge_commit_sha as sha from pull_requests
+      await tx.query<{ id: string; sha: string }>(
+        `select id::text, merge_commit_sha as sha from pull_requests
          where repository_id = $1 and state = 'merged' and merge_commit_sha = $2 order by id limit 1`,
         [waiting.repositoryId, asked.base.sha],
       )
     ).rows[0];
-  const pullRequest = { id: Number(waiting.id), repository: waiting.repository, number: waiting.number, url: waiting.url };
-  const sent = await sendBackForFailure(context, tx, pullRequest, {
-    kind: "conflict",
-    branch: asked.base.ref,
-    sha: named?.sha ?? asked.base.sha,
-    merge: named ? { repository: named.repository, number: named.number, url: named.url } : null,
-  });
-  if (!sent) return;
-  // What last sent the Ticket back shows on its Pull Request.
+  // The same conflict asked about again is no change.
+  const { rowCount: marked } = await tx.query(
+    `update pull_requests set conflict_branch = $2, conflict_sha = $3, conflict_merged_pull_request_id = $4, conflict_at = $5
+     where id = $1 and (conflict_branch, conflict_sha, conflict_merged_pull_request_id)
+       is distinct from ($2, $3, $4::bigint)`,
+    [waiting.id, asked.base.ref, named?.sha ?? asked.base.sha, named?.id ?? null, context.clock.now()],
+  );
+  if (marked) await markerChanged(context, tx, waiting.id);
+}
+
+/**
+ * Tells each Workspace with a Ticket the Pull Request links to that the Pull Request's conflict marker changed: its
+ * Pull Requests, and its board card, which shows the marker too.
+ */
+export async function markerChanged(context: Context, tx: Tx, pullRequestId: string | number): Promise<void> {
   const { rows } = await tx.query<{ ticketId: string; projectId: string; workspaceId: string }>(
     `select tickets.id as "ticketId", tickets.project_id as "projectId", tickets.workspace_id as "workspaceId"
      from pull_request_links join tickets on tickets.id = pull_request_links.ticket_id
-     where pull_request_links.pull_request_id = $1 and ${listsPullRequestsRepository}`,
-    [waiting.id],
+     where pull_request_links.pull_request_id = $1 order by tickets.id`,
+    [pullRequestId],
   );
   for (const { ticketId, projectId, workspaceId } of rows) {
     context.live.publish(tx, workspaceId, { type: "pull_requests.changed", projectId, ticketId });
+    context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
   }
 }

@@ -688,6 +688,13 @@ textarea.markdown-source {
   border-radius: var(--radius-panel);
   font-size: 13px;
 }
+.archived-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
 .banner-info {
   border-color: var(--info);
   background: var(--info-soft);
@@ -1118,7 +1125,8 @@ textarea.markdown-source {
   opacity: 0.75;
 }
 
-/* Rich editor: the toolbar and mode switch over the text, which reads as a Document reads (15px at 1.65, 720px). */
+/* Rich editor: the toolbar and mode switch over the text, which reads as a Document reads (15px at 1.65). The text
+   fills the frame, so a line wraps at the frame's edge and never short of it (CRONK-60). */
 .rich-editor-frame {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -1215,7 +1223,7 @@ textarea.markdown-source {
 }
 .rich-editor-text {
   position: relative;
-  max-width: 720px;
+  min-width: 0;
   min-height: 320px;
   padding: var(--space-4) var(--space-5);
   outline: none;
@@ -1223,6 +1231,7 @@ textarea.markdown-source {
   font-size: 15px;
   line-height: 1.65;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   white-space: break-spaces;
   font-variant-ligatures: none;
@@ -1274,6 +1283,31 @@ textarea.markdown-source {
 .rich-editor-text li.ProseMirror-selectednode {
   outline: none;
   background: var(--accent-soft);
+}
+/* An Embed in the text: one block, selected whole, its address edited in the Markdown source. */
+.rich-editor-embed {
+  margin: var(--space-3) 0;
+  border-radius: var(--radius-panel);
+}
+.rich-editor-embed .embed {
+  margin: 0;
+}
+.rich-editor-embed.ProseMirror-selectednode {
+  outline-offset: 2px;
+}
+.rich-editor-dragging .embed-frame {
+  pointer-events: none;
+}
+.rich-editor-embed-address {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 .rich-editor-text.ProseMirror-hideselection *::selection {
   background: transparent;

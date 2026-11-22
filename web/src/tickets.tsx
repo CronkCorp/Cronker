@@ -1,23 +1,21 @@
-import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access.js";
+import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.js";
 import { useAddresses, type Addresses } from "./addresses.js";
+import { useQueries, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
 import {
   api,
   nameOf,
   priorities,
   type Agent,
-  type Attachment,
   type Change,
   type Completion,
   type Comment,
   labelRuleShown,
   type LabelRule,
-  type LinkedArtifact,
-  type LinkedDocument,
-  type PullRequest,
   type Member,
   type Priority,
   type Project,
+  type PullRequest,
   type RelationKind,
   type Report,
   type Run,
@@ -36,9 +34,10 @@ import { costsText, costText } from "./costs.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { shortcutStandsAside } from "./keys.js";
-import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { useArrivals } from "./live.js";
+import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
-import { priorityLabel } from "./projects.js";
+import { priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
@@ -65,41 +64,87 @@ export function TicketScreen({
   ticketId: string;
 }) {
   const to = useAddresses();
-  const [ticket, setTicket] = useState<Ticket | null>(null);
-  const [project, setProject] = useState<Project | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [reports, setReports] = useState<Report[]>([]);
-  const [reportFiles, setReportFiles] = useState<Attachment[]>([]);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [timeline, setTimeline] = useState<Change[]>([]);
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [transcripts, setTranscripts] = useState<TicketTranscript[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [relations, setRelations] = useState<TicketRelations | null>(null);
-  const [documentLinks, setDocumentLinks] = useState<LinkedDocument[] | null>(null);
-  const [artifactLinks, setArtifactLinks] = useState<LinkedArtifact[] | null>(null);
-  const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
-  const [projectTickets, setProjectTickets] = useState<TicketSummary[]>([]);
-  const [failure, setFailure] = useState<string | null>(null);
+  const client = useQueryClient();
+  const ticketQuery = useQuery({ queryKey: keys.ticket(ticketId), queryFn: () => api.ticket(ticketId) });
+  const ticket = ticketQuery.data ?? null;
+  // The screen waits for the Ticket's Project too.
+  const projectId = ticket?.projectId ?? "";
+  const projectQuery = useQuery({ queryKey: keys.project(projectId), queryFn: () => api.project(projectId), enabled: projectId !== "" });
+  // A Ticket of another of the User's Workspaces isn't shown under this one's name.
+  const elsewhere = projectQuery.data !== undefined && projectQuery.data.workspaceId !== workspace.id;
+  const project = elsewhere ? null : (projectQuery.data ?? null);
+  const projectTicketsQuery = useQuery({
+    queryKey: keys.projectTickets(projectId),
+    queryFn: () => api.tickets(projectId),
+    enabled: project !== null,
+  });
+  const membersQuery = useQuery({ queryKey: keys.members(workspace.id), queryFn: () => api.members(workspace.id) });
+  const agentsQuery = useQuery({ queryKey: keys.agents(workspace.id), queryFn: () => api.agents(workspace.id) });
+  const commentsQuery = useQuery({ queryKey: keys.comments(ticketId), queryFn: () => api.comments(ticketId) });
+  const reportsQuery = useQuery({ queryKey: keys.reports(ticketId), queryFn: () => api.reports(ticketId) });
+  const attachmentsQuery = useQuery({ queryKey: keys.attachments(ticketId), queryFn: () => api.attachments({ kind: "ticket", id: ticketId }) });
+  const timelineQuery = useQuery({ queryKey: keys.timeline(ticketId), queryFn: () => api.timeline(ticketId) });
+  const runsQuery = useQuery({ queryKey: keys.runs(ticketId), queryFn: () => api.runs(ticketId) });
+  const transcriptsQuery = useQuery({ queryKey: keys.transcripts(ticketId), queryFn: () => api.ticketTranscripts(ticketId) });
+  const relationsQuery = useQuery({ queryKey: keys.relations(ticketId), queryFn: () => api.relations(ticketId) });
+  const documentLinksQuery = useQuery({ queryKey: keys.documentLinks(ticketId), queryFn: () => api.linkedDocuments(ticketId) });
+  const artifactLinksQuery = useQuery({ queryKey: keys.artifactLinks(ticketId), queryFn: () => api.linkedArtifacts(ticketId) });
+  const pullRequestsQuery = useQuery({ queryKey: keys.pullRequests(ticketId), queryFn: () => api.pullRequests(ticketId) });
+  // A Report is a Document, so its files are the Document's.
+  const reportFiles = useQueries({
+    queries: (reportsQuery.data ?? []).map((report) => ({
+      queryKey: keys.documentAttachments(report.id),
+      queryFn: () => api.attachments({ kind: "document", id: report.id }),
+    })),
+    combine: (results) => results.flatMap((result) => result.data ?? []),
+  });
+  const members = membersQuery.data ?? [];
+  const agents = agentsQuery.data ?? [];
+  const comments = commentsQuery.data ?? [];
+  const reports = reportsQuery.data ?? [];
+  const attachments = attachmentsQuery.data ?? [];
+  const timeline = timelineQuery.data ?? [];
+  const runs = runsQuery.data ?? [];
+  const transcripts = transcriptsQuery.data ?? [];
+  const pullRequests = pullRequestsQuery.data ?? [];
+  const projectTickets = projectTicketsQuery.data ?? [];
+  const relations = relationsQuery.data ?? null;
+  const documentLinks = documentLinksQuery.data ?? null;
+  const artifactLinks = artifactLinksQuery.data ?? null;
+  const failed = [
+    ticketQuery,
+    projectQuery,
+    projectTicketsQuery,
+    membersQuery,
+    agentsQuery,
+    commentsQuery,
+    reportsQuery,
+    attachmentsQuery,
+    timelineQuery,
+    runsQuery,
+    transcriptsQuery,
+    relationsQuery,
+    documentLinksQuery,
+    artifactLinksQuery,
+    pullRequestsQuery,
+  ].find((query) => query.error)?.error;
+  const failure = elsewhere ? "No such Ticket." : (failed?.message ?? null);
+  // Whether the timeline's first load since the screen opened is in, after which new entries are marked as they arrive.
+  const loaded = [commentsQuery, timelineQuery, runsQuery, transcriptsQuery].every((query) => query.isFetchedAfterMount);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [dropping, setDropping] = useState(false);
-  // Whether the timeline's first load is in, after which new entries are marked as they arrive.
-  const [loaded, setLoaded] = useState(false);
   // The Comment box stays at the end of the timeline; the Comment button and C take the User there.
   const commentBox = useRef<RichEditorHandle>(null);
-  const toCommentBox = () => {
-    const box = commentBox.current?.textbox();
-    if (box) scrollToAndFocus(box);
-  };
+  // While the editor still loads, its focus waits for it.
+  const toCommentBox = () => commentBox.current?.focus({ scroll: true });
   useEffect(() => {
     // Once C has focused the box, its repeats while held land in the box, and must not type there either.
     let held = false;
     const onKey = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== "c") return;
       if (held && event.repeat) return event.preventDefault();
-      if (shortcutStandsAside(event) || !commentBox.current?.textbox()) return;
+      if (shortcutStandsAside(event) || !commentBox.current) return;
       event.preventDefault();
       held = true;
       toCommentBox();
@@ -116,121 +161,22 @@ export function TicketScreen({
   }, []);
   usePlace("project", project?.id ?? null);
 
-  const latestTicket = useLatest();
-  const latestProject = useLatest();
-  const latestComments = useLatest();
-  const latestReports = useLatest();
-  const latestAttachments = useLatest();
-  const latestTimeline = useLatest();
-  const latestRuns = useLatest();
-  const latestTranscripts = useLatest();
-  const latestRelations = useLatest();
-  const latestLinkedDocuments = useLatest();
-  const latestLinkedArtifacts = useLatest();
-  const latestPullRequests = useLatest();
-  const latestProjectTickets = useLatest();
-  const latestReportFiles = useLatest();
-  const fail = (e: Error) => setFailure(e.message);
-  const loadTimeline = useCallback(() => {
-    latestTimeline(api.timeline(ticketId), setTimeline);
-    latestRuns(api.runs(ticketId), setRuns);
-    latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
-  }, [ticketId, latestTimeline, latestRuns, latestTranscripts]);
-  const loadAttachments = useCallback(
-    () => latestAttachments(api.attachments({ kind: "ticket", id: ticketId }), setAttachments, fail),
-    [ticketId, latestAttachments],
-  );
-  const loadComments = useCallback(
-    () => latestComments(api.comments(ticketId), setComments, fail),
-    [ticketId, latestComments],
-  );
-  const loadReports = useCallback(() => {
-    const loaded = api.reports(ticketId);
-    latestReports(loaded, setReports, fail);
-    // A Report is a Document, so its files are the Document's.
-    latestReportFiles(
-      loaded.then((all) => Promise.all(all.map((r) => api.attachments({ kind: "document", id: r.id })))).then((lists) => lists.flat()),
-      setReportFiles,
-    );
-  }, [ticketId, latestReports, latestReportFiles]);
-  const loadPullRequests = useCallback(
-    () => latestPullRequests(api.pullRequests(ticketId), setPullRequests, fail),
-    [ticketId, latestPullRequests],
-  );
-  const loadLinks = useCallback(() => {
-    latestRelations(api.relations(ticketId), setRelations, fail);
-    latestLinkedDocuments(api.linkedDocuments(ticketId), setDocumentLinks, fail);
-    latestLinkedArtifacts(api.linkedArtifacts(ticketId), setArtifactLinks, fail);
-  }, [ticketId, latestRelations, latestLinkedDocuments, latestLinkedArtifacts]);
-
-  useEffect(() => {
-    const first = api.ticket(ticketId);
-    // Shown only until a later fetch of the Ticket answers; the screen waits for its Project too.
-    latestTicket(first, setTicket, fail);
-    first.then(async (found) => {
-      const ticketProject = await api.project(found.projectId);
-      // A Ticket of another of the User's Workspaces isn't shown under this one's name.
-      if (ticketProject.workspaceId !== workspace.id) {
-        setFailure("No such Ticket.");
-        return;
-      }
-      setProject(ticketProject);
-      latestProjectTickets(api.tickets(ticketProject.id), setProjectTickets, fail);
-    }, fail);
-    api.members(workspace.id).then(setMembers, fail);
-    api.agents(workspace.id).then(setAgents, fail);
-    const comments = api.comments(ticketId);
-    const changes = api.timeline(ticketId);
-    const runs = api.runs(ticketId);
-    const transcripts = api.ticketTranscripts(ticketId);
-    latestComments(comments, setComments, fail);
-    latestTimeline(changes, setTimeline, fail);
-    latestRuns(runs, setRuns, fail);
-    latestTranscripts(transcripts, setTranscripts, fail);
-    void Promise.allSettled([comments, changes, runs, transcripts]).then(() => setLoaded(true));
-    loadReports();
-    loadAttachments();
-    loadLinks();
-    loadPullRequests();
-  }, [ticketId, workspace.id, latestTicket, latestComments, loadReports, latestTimeline, latestRuns, latestTranscripts, latestProjectTickets, loadAttachments, loadLinks, loadPullRequests]);
-
-  // What others change shows up as it happens; what this screen saves comes back the same way.
-  useLiveEvents(workspace.id, (event) => {
-    const all = event.type === "reconnected";
-    const thisTicket = !all && "ticketId" in event && event.ticketId === ticketId;
-    if (all || (thisTicket && event.type === "ticket.changed")) {
-      latestTicket(api.ticket(ticketId), setTicket, fail);
-      loadTimeline();
-      loadLinks();
-      // Linking or unlinking an Artifact brings its Comments onto the timeline, or takes them off.
-      loadComments();
-    }
-    if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
-    if (all || (thisTicket && event.type === "transcripts.changed")) latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
-    if (all || (thisTicket && event.type === "comment.added")) loadComments();
-    if (all || (thisTicket && (event.type === "report.added" || event.type === "report.changed"))) loadReports();
-    // A Comment's Attachments come with the Comments.
-    if (all || (thisTicket && event.type === "attachments.changed")) {
-      loadAttachments();
-      loadComments();
-      loadReports();
-    }
-    if (project && (all || (event.type === "statuses.changed" && event.projectId === project.id))) {
-      latestProject(api.project(project.id), setProject, fail);
-    }
-    // The Project's Tickets are offered as parents and Relations; keys and titles may have changed.
-    const projectTicket = (event.type === "ticket.created" || event.type === "ticket.changed") && event;
-    if (project && (all || (projectTicket && projectTicket.projectId === project.id))) {
-      latestProjectTickets(api.tickets(project.id), setProjectTickets, fail);
-    }
-  });
+  // What others change shows up as it happens, through the Live invalidation table (`live-queries.ts`); what this
+  // screen saves it refetches at once.
+  const refresh = (...queryKeys: QueryKey[]) => queryKeys.forEach((queryKey) => void client.invalidateQueries({ queryKey }));
+  const loadAttachments = () => refresh(keys.attachments(ticketId));
+  const loadComments = () => refresh(keys.comments(ticketId));
+  const loadPullRequests = () => refresh(keys.pullRequests(ticketId));
+  const loadLinks = () => refresh(keys.relations(ticketId), keys.documentLinks(ticketId), keys.artifactLinks(ticketId));
+  const loadTimeline = () => refresh(keys.timeline(ticketId), keys.runs(ticketId), keys.transcripts(ticketId));
 
   /** Shows the Ticket a change returns, and what else it changed; or why it was refused. */
   const apply = async (saved: Promise<Ticket>) => {
     setError(null);
     try {
-      latestTicket(saved, setTicket);
-      await saved;
+      client.setQueryData(keys.ticket(ticketId), await saved);
+      // A load already under way may predate the change: refetching drops it.
+      refresh(keys.ticket(ticketId));
       loadTimeline();
       loadLinks();
     } catch (e) {
@@ -240,9 +186,10 @@ export function TicketScreen({
   const save = (edit: TicketEdit) => apply(api.editTicket(ticketId, edit));
 
   // The live refetch may have shown the new Comment already.
-  const addComment = (comment: Comment) =>
-    setComments((shown) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
-
+  const addComment = (comment: Comment) => {
+    client.setQueryData<Comment[]>(keys.comments(ticketId), (shown = []) => (shown.some((c) => c.id === comment.id) ? shown : [...shown, comment]));
+    loadComments();
+  };
   /** Dropping or pasting files anywhere on the page attaches them to the Ticket. */
   const attachToTicket = (files: File[]) => {
     if (files.length === 0) return;
@@ -317,7 +264,7 @@ export function TicketScreen({
           )
         }
       />
-      <ReadOnlyNote access={project.access} />
+      <ProjectNote project={project} />
       <FormError error={error} />
       <div className="page-split">
         <div className="page ticket-main">
@@ -387,6 +334,13 @@ export function TicketScreen({
             )}
           </Fields>
           <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
+          <MergeQueueCard
+            ticket={ticket}
+            project={project}
+            pullRequests={pullRequests}
+            onMerge={() => apply(api.mergeTicket(ticket.id))}
+            onRemove={() => apply(api.removeFromQueue(ticket.id))}
+          />
           <PullRequestRows pullRequests={pullRequests} linking={canWrite ? { ticketId: ticket.id, onChanged: loadPullRequests } : undefined} />
           <Relations
             ticket={ticket}
@@ -841,6 +795,90 @@ function RunCard({
   );
 }
 
+/** The muted line under a queued Ticket's chip, by its state in the queue and whether it stepped aside for a conflict. */
+function queueLine(queue: NonNullable<TicketSummary["queue"]>): string {
+  switch (queue.state) {
+    case "queued":
+      return "Cronk merges it once it reaches the front and is clean and green.";
+    case "merging":
+      return "Cronk is merging it now.";
+    case "updating-branch":
+      return "Its branch is behind its base branch, so Cronk is asking GitHub to update it.";
+    case "resolving-conflict":
+      return "It conflicts with its base branch, so it stepped aside while a Merge Run resolves the conflict; the queue moves on meanwhile.";
+    case "waiting-for-checks":
+      return queue.position === null
+        ? "Its conflict was resolved: it rejoins the queue at the front once the new commit's checks are green."
+        : "Cronk updated its branch and merges it once the new commit's checks are green.";
+  }
+}
+
+/**
+ * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, *Updating branch*, *Resolving conflict*,
+ * *Waiting for checks* or *Merging*) with Remove from queue while it waits; otherwise Merge, where it applies: with Write, in a Review Status
+ * with an open Pull Request, in a Project with Pull Request automation on and a Merge Status. Hidden otherwise.
+ */
+function MergeQueueCard({
+  ticket,
+  project,
+  pullRequests,
+  onMerge,
+  onRemove,
+}: {
+  ticket: Ticket;
+  project: Project;
+  pullRequests: PullRequest[];
+  onMerge: () => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const canWrite = useCanWrite();
+  const act = (action: () => Promise<void>) => {
+    setBusy(true);
+    action().finally(() => setBusy(false));
+  };
+  const { queue } = ticket;
+  if (queue) {
+    return (
+      <section aria-label="Merge Queue" className="panel side-section">
+        <h2 className="side-title">Merge Queue</h2>
+        <p>
+          <QueueChip queue={queue} />
+        </p>
+        <p className="small muted">
+          {queueLine(queue)}
+        </p>
+        {canWrite && (queue.state === "queued" || queue.state === "waiting-for-checks" || queue.state === "resolving-conflict") && (
+          <Actions>
+            <Button size="small" disabled={busy} onClick={() => act(onRemove)}>
+              Remove from queue
+            </Button>
+          </Actions>
+        )}
+      </section>
+    );
+  }
+  const status = project.statuses.find((s) => s.id === ticket.statusId);
+  const applies =
+    canWrite &&
+    status?.kind === "review" &&
+    project.pullRequestAutomation &&
+    project.statuses.some((s) => s.step?.kind === "merge") &&
+    pullRequests.some((pr) => pr.state === "open");
+  if (!applies) return null;
+  return (
+    <section aria-label="Merge Queue" className="panel side-section">
+      <h2 className="side-title">Merge Queue</h2>
+      <p className="small muted">Cronk merges it in turn, once it is clean and green, as your merge, completing it as Verified.</p>
+      <Actions>
+        <Button variant="primary" size="small" disabled={busy} onClick={() => act(onMerge)}>
+          Merge
+        </Button>
+      </Actions>
+    </section>
+  );
+}
+
 const relationGroups: { kind: RelationKind; label: string }[] = [
   { kind: "blockedBy", label: "Blocked by" },
   { kind: "blocks", label: "Blocks" },
@@ -1179,13 +1217,6 @@ function MentionedIn({ texts }: { texts: MentioningText[] }) {
   );
 }
 
-/** Scrolls an element into view as the User asked, smoothly unless they prefer reduced motion, and focuses it. */
-function scrollToAndFocus(element: HTMLElement) {
-  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  element.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
-  element.focus({ preventScroll: true });
-}
-
 export function CommentForm({
   label,
   button,
@@ -1239,7 +1270,18 @@ export function CommentForm({
 const fieldNames: Record<
   Exclude<
     Change["field"],
-    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | "transcriptDeleted" | RelationKind
+    | "created"
+    | "subTicket"
+    | "stepSkipped"
+    | "dismissed"
+    | "linkedDocument"
+    | "linkedArtifact"
+    | "merged"
+    | "queueJoined"
+    | "queueLeft"
+    | "sentBack"
+    | "transcriptDeleted"
+    | RelationKind
   >,
   string
 > = {
@@ -1274,19 +1316,25 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
 interface StepSkipped {
   status: { id: string; name: string };
   labelRule: LabelRule | null;
-  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation";
+  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation" | "pullRequestAutomationOff";
   outcome: string;
 }
 
 const mergeRulesShown = {
   agentsMayMergeOff: "agents may not merge in this Project",
   noAutonomousDelegation: "no Autonomous Delegation",
+  pullRequestAutomationOff: "Pull Request automation is off in this Project",
 };
 
 /** What a `merged` Change records: the Pull Request as it was then, and the login of the GitHub account that merged it. */
 interface Merged {
   pullRequest: { repository: string; number: number; title: string };
   mergedBy: string | null;
+}
+
+/** What a `queueJoined` Change goes to, and a `queueLeft` Change from: the Pull Request in the Merge Queue. */
+interface Queued {
+  pullRequest: { repository: string; number: number; url: string };
 }
 
 /**
@@ -1312,6 +1360,19 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
+/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
+function describedWithLink(change: Change): ReactNode {
+  const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
+  if (imported?.source === "github" && typeof imported.url === "string") {
+    return (
+      <>
+        imported the Ticket from <ExternalLink url={imported.url}>its GitHub issue</ExternalLink>
+      </>
+    );
+  }
+  return described(change);
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
@@ -1332,6 +1393,12 @@ function described(change: Change): string {
     return failure.kind === "check"
       ? `sent it back: the check ${failure.name} failed on ${name}`
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
+  }
+  if (change.field === "queueJoined") {
+    return `queued ${pullRequestName((change.to as Queued).pullRequest)} in the Merge Queue`;
+  }
+  if (change.field === "queueLeft") {
+    return `took ${pullRequestName((change.from as Queued).pullRequest)} out of the Merge Queue`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "transcriptDeleted") {
@@ -1409,6 +1476,11 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
 function describedWithReason(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
+    // A merge of one of several Pull Requests a Ticket has in the Merge Queue leaves it waiting for the others.
+    if (!moved) {
+      const { pullRequest } = change.to as Merged;
+      return `merged ${pullRequestName(pullRequest)} ${pullRequest.title}, waiting in the Merge Queue for its other Pull Requests`;
+    }
     const verification = related.find((c) => c.field === "verification")?.to;
     return (
       <>
@@ -1582,7 +1654,7 @@ function Timeline({
           </span>
           <p className="entry-line">
             <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
-            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : described(change)}
+            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : describedWithLink(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,

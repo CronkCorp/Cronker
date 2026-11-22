@@ -53,7 +53,7 @@ async function workspaceWithRun() {
 
 /**
  * Uploads a Claude Code transcript of the session as the Transcript hook does, its lines alternating the user's and
- * the assistant's messages. The fake Runner's first Run ran in `session_1`.
+ * the assistant's messages. The fake Runner's first Run ran in `cse_1`, which an upload may name `session_1`.
  */
 async function uploadTranscript(sessionId: string, messages: string[], as: As) {
   const lines = messages.map((text, n) =>

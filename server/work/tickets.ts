@@ -4,17 +4,20 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn } from "../http/readable.js";
-import { accessOf, inReach, readAccessRefusal, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessOf, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
-import { findProject, projectNotFound } from "./projects.js";
+import { lockTickets, writeTicket } from "./ticket-writes.js";
+import { findProject, projectNotFound, requireProjectWrite } from "./projects.js";
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
+import { isLocalOnly, runsInCloud } from "../runs/runner.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 import { userName } from "../identity/user.js";
-import { indexMentions, keysWritten, Mention, mentionsOfOne } from "./mentions.js";
+import { Description, Label, nullable, title } from "./fields.js";
+import { indexMentions, keysWritten, Mention, mentionsOfOne, type TicketMention } from "./mentions.js";
 
 export { keysWritten, Mention };
 
@@ -106,6 +109,61 @@ export const TicketSummary = Type.Object({
       "Done or Canceled Status, Unverified ones included, is finished and no longer listed. Only those the caller " +
       "may read are listed; `blockedByHidden` counts the rest.",
   }),
+  conflicts: Type.Array(Type.String(), {
+    description:
+      "The base branches its open Pull Requests conflict with, as GitHub last answered Cronk asking, for marking the " +
+      "board's card; its Pull Requests say with which commit and merge.",
+  }),
+  queue: Type.Union(
+    [
+      Type.Object({
+        position: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+          description: "Its place in its queue, the head being 1; null while it has stepped aside for a conflict, out of line.",
+        }),
+        state: Type.Union(
+          [
+            Type.Literal("queued"),
+            Type.Literal("merging"),
+            Type.Literal("updating-branch"),
+            Type.Literal("resolving-conflict"),
+            Type.Literal("waiting-for-checks"),
+          ],
+          {
+            description:
+              "`merging` while Cronk asks GitHub to merge it; `updating-branch` while Cronk asks GitHub to bring its branch, " +
+              "behind its base branch, up to date; `resolving-conflict` while, stepped aside for a conflict with its base " +
+              "branch, a Run of the Merge Step resolves it; `waiting-for-checks` until the updated or resolving commit's " +
+              "checks are green; `queued` while it waits.",
+          },
+        ),
+        pullRequestId: Type.Number({ description: "GitHub's id for the queued Pull Request." }),
+        conflict: Type.Union(
+          [
+            Type.Object({
+              merge: Type.Union(
+                [Type.Object({ repository: Type.String(), number: Type.Integer(), url: Type.String() }), Type.Null()],
+                { description: "The merged Pull Request that caused the conflict, or null when Cronk knows none." },
+              ),
+              baseSha: Type.Union([Type.String(), Type.Null()], { description: "The base branch's commit it conflicted with." }),
+              at: Type.String({ format: "date-time" }),
+              count: Type.Integer({
+                minimum: 1,
+                description: "How many times this entry stepped aside for a conflict; past 3 its Ticket comes to its Assignee instead.",
+              }),
+            }),
+            Type.Null(),
+          ],
+          { description: "The conflict that last set it aside, out of line; null if none has." },
+        ),
+      }),
+      Type.Null(),
+    ],
+    {
+      description:
+        "Its entry in the Merge Queue for its Pull Request's Repository and base branch, while a User's Merge has it " +
+        "waiting for Cronk to merge it; null otherwise.",
+    },
+  ),
   blockedByHidden: Type.Integer({
     minimum: 0,
     description:
@@ -114,6 +172,10 @@ export const TicketSummary = Type.Object({
   }),
 });
 export type TicketSummary = Static<typeof TicketSummary>;
+
+/** A Project's Tickets, as its board lists them. */
+export const TicketList = Type.Array(TicketSummary);
+export type TicketList = Static<typeof TicketList>;
 
 /** A text that mentions a Ticket, as the Ticket's Mentioned in lists it, with what linking to it takes. */
 export const MentioningText = Type.Object({
@@ -149,7 +211,7 @@ export type MentioningText = Static<typeof MentioningText>;
 /** A Ticket with the Ticket keys its description mentions, the texts mentioning it and what its Runs cost. */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
-  mentions: Type.Array(Mention, { description: "The Ticket keys its description mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its description mentions and the Artifacts it embeds that the caller may read." }),
   mentionedIn: Type.Array(MentioningText, {
     description:
       "Mentioned in: each other text whose Markdown mentions its key, outside code and links, that the caller may " +
@@ -210,6 +272,11 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
   ${waitingColumn("tickets")} as waiting,
   ${blockersColumns("tickets", reach)},
+  array(select distinct pull_requests.conflict_branch from pull_request_links
+    join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+    where pull_request_links.ticket_id = tickets.id and pull_requests.state in ('open', 'draft')
+      and pull_requests.conflict_sha is not null order by pull_requests.conflict_branch) as conflicts,
+  ${queueColumn("tickets")} as queue,
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources
@@ -217,6 +284,29 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
       where sources.id = tickets.discovered_from_ticket_id and ${reach("sources")}),
     'runId', tickets.discovered_in_run_id,
     'waiting', tickets.discovery_waits) end as discovered`;
+
+/**
+ * SQL for the Ticket `alias`'s first entry in the Merge Queue, one Cronk is acting on or that stepped aside if any,
+ * with its place among the entries in line whose Pull Requests share its Repository and base branch (none for one that
+ * stepped aside), and what last set it aside for a conflict. In line, one Cronk is acting on comes first, then the
+ * others in the order they joined, one that rejoined at the front.
+ */
+const queueColumn = (alias: string) => `(select json_build_object('pullRequestId', entry.pull_request_id, 'state', entry.state,
+    'position', case when entry.aside then null else (select count(*) from merge_queue ahead
+      join pull_requests ahead_pr on ahead_pr.id = ahead.pull_request_id
+      where ahead_pr.repository_id = queued_pr.repository_id and not ahead.aside
+        and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '')
+        and (ahead.state = 'queued', ahead.seq) <= (entry.state = 'queued', entry.seq)) end,
+    'conflict', case when entry.conflict_at is null then null else json_build_object(
+      'merge', (select json_build_object('repository', merged.repository_full_name, 'number', merged.number, 'url', merged.url)
+        from pull_requests merged where merged.id = entry.conflict_merged_pull_request_id),
+      'baseSha', entry.conflict_base_sha,
+      'at', to_char(entry.conflict_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'), 'count', entry.conflict_count) end)
+  from merge_queue entry join pull_requests queued_pr on queued_pr.id = entry.pull_request_id
+  where entry.ticket_id = ${alias}.id order by entry.state <> 'queued' desc, entry.seq limit 1)`;
+
+/** SQL ordering a Status's Tickets: those in the Merge Queue first, by their place in it. */
+const queueOrder = (alias: string) => `(${queueColumn(alias)} ->> 'position')::int nulls last`;
 
 /** A Ticket as stored, with the Workspace it belongs to. */
 export type TicketRow = Omit<TicketSummary, "createdAt"> & { createdAt: Date; workspaceId: string };
@@ -322,7 +412,7 @@ async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket
  * Ticket keys in plain text that name Tickets of the Workspace, each once, in order of first mention; given a Viewer,
  * only those it may read. Markdown texts are indexed instead (`mentions.ts`).
  */
-export async function mentionsIn(db: Db | Tx, workspaceId: string, text: string, viewer?: Viewer): Promise<Mention[]> {
+export async function mentionsIn(db: Db | Tx, workspaceId: string, text: string, viewer?: Viewer): Promise<TicketMention[]> {
   return (await mentionsInEach(db, workspaceId, [text], viewer))[0]!;
 }
 
@@ -332,12 +422,12 @@ export async function mentionsInEach(
   workspaceId: string,
   texts: string[],
   viewer?: Viewer,
-): Promise<Mention[][]> {
+): Promise<TicketMention[][]> {
   const written = texts.map(keysWritten);
   const all = [...new Set(written.flat())];
   if (all.length === 0) return texts.map(() => []);
   const reach = viewer && inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, "$3");
-  const { rows } = await db.query<Mention>(
+  const { rows } = await db.query<TicketMention>(
     `select 'ticket' as kind, written.text, projects.key || '-' || tickets.number as key, tickets.id as "ticketId"
      from unnest($2::text[]) as written (text)
      join projects on projects.workspace_id = $1
@@ -418,15 +508,21 @@ async function mentionedIn(db: Db | Tx, viewer: Viewer, ticket: Row): Promise<Me
   return rows.map(({ seq: _seq, ...text }: MentioningText & { seq?: unknown }) => text);
 }
 
-/** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. */
-export interface NewTicket {
-  title: string;
-  description?: string;
-  /** Makes it a Sub-Ticket of this Ticket of the same Project, with the parent's Assignee and Delegation. */
-  parentId?: string;
-  /** For an Agent filing a Discovered Ticket: its running Run, whose Ticket is the source. */
-  runId?: string;
-}
+/** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. The create route's body. */
+export const TicketCreate = Type.Object({
+  title: title("The Ticket's title."),
+  description: Type.Optional(Description),
+  parentId: Type.Optional(
+    Type.String({ format: "uuid", description: "Makes it a Sub-Ticket of this Ticket of the same Project." }),
+  ),
+  runId: Type.Optional(
+    Type.String({
+      format: "uuid",
+      description: "For an Agent filing a Discovered Ticket: its running Run, whose Ticket it records as the source.",
+    }),
+  ),
+});
+export type TicketCreate = Static<typeof TicketCreate>;
 
 /**
  * Creates a Ticket in the Project's first Backlog Status. A Sub-Ticket takes its parent's Assignee, Delegation and
@@ -440,13 +536,13 @@ export async function createTicket(
   context: Context,
   creator: Caller,
   projectId: string,
-  input: NewTicket,
+  input: TicketCreate,
 ): Promise<Ticket> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const project = await findProject(tx, creator, projectId, { lock: true });
     if (!project) throw projectNotFound();
-    if (project.access !== "write") throw readAccessRefusal();
+    requireProjectWrite(project);
     if (input.parentId !== undefined && input.runId !== undefined) {
       throw new ApiError(400, "parent_or_run", "Give a parent for a Sub-Ticket or a Run for a Discovered Ticket, not both.");
     }
@@ -463,8 +559,10 @@ export async function createTicket(
     let discovery: { runId: string | null; sourceTicketId: string | null } | null = null;
     let parent: TicketRow | undefined;
     if (input.parentId !== undefined) {
-      // Held, for an Agent, so a User settling its waiting Discovered Ticket meanwhile settles the new Sub-Ticket too.
-      parent = await findTicketRow(tx, creator, input.parentId, { lock: creator.kind === "agent" });
+      // Held, so a User settling an Agent's waiting Discovered Ticket meanwhile settles the new Sub-Ticket too, and
+      // so the parent is taken before its Delegate below: the order removing an Agent takes them in, which would
+      // otherwise deadlock with it.
+      parent = await findTicketRow(tx, creator, input.parentId, { lock: true });
       if (!parent) throw unknownTicket();
       if (parent.projectId !== project.id) {
         throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
@@ -630,25 +728,65 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, ${runningFirstThenBlocked("tickets")}, tickets.number`,
+     order by statuses.position, ${queueOrder("tickets")}, ${runningFirstThenBlocked("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
 }
 
-export interface TicketEdit {
-  title?: string;
-  description?: string;
-  priority?: Priority;
-  labels?: string[];
-  assigneeId?: string | null;
-  delegateId?: string | null;
-  autonomousDelegation?: boolean;
-  dueDate?: string | null;
-  estimate?: number | null;
-  statusId?: string;
-  parentId?: string | null;
-}
+/** The edit route's body: whichever fields are given change, and `null` clears a field. */
+export const TicketEdit = Type.Object({
+  title: Type.Optional(title("The Ticket's title. An Agent edits it only on a Discovered Ticket it filed.")),
+  description: Type.Optional(Type.String({ ...Description, description: "The whole new description, in Markdown." })),
+  priority: Type.Optional(Priority),
+  labels: Type.Optional(
+    Type.Array(Label, { maxItems: 50, description: "The Ticket's Labels, all of them, replacing those it has." }),
+  ),
+  assigneeId: Type.Optional(nullable(Type.String({ format: "uuid" }))),
+  delegateId: Type.Optional(
+    nullable(
+      Type.String({
+        format: "uuid",
+        description:
+          "Delegates the Ticket to one of your own Agents, or `null` undelegates it. Only the Assignee " +
+          "delegates a Ticket; delegating an unassigned Ticket assigns you. A new Assignee who doesn't " +
+          "own the Delegate removes it.",
+      }),
+    ),
+  ),
+  autonomousDelegation: Type.Optional(
+    Type.Boolean({
+      description:
+        "Lets a Step complete the Ticket itself, as Unverified, or stops that. Only Users set it; " +
+        "its Sub-Tickets take it too.",
+    }),
+  ),
+  dueDate: Type.Optional(
+    nullable(Type.String({ format: "date" }), "A date such as `2026-02-01`, or null to clear it."),
+  ),
+  estimate: Type.Optional(
+    nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }), "A number, or null to clear it."),
+  ),
+  statusId: Type.Optional(
+    Type.String({ format: "uuid", description: "Moves the Ticket to this Status of its Project." }),
+  ),
+  parentId: Type.Optional(
+    nullable(
+      Type.String({
+        format: "uuid",
+        description:
+          "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; " +
+          "never of itself or of one of its own Sub-Tickets. Under a delegated parent it takes the parent's " +
+          "Assignee and Delegate, replacing its own and stopping its running Run, unless `assigneeId` or " +
+          "`delegateId` is given too; under an undelegated parent it keeps its own.",
+      }),
+    ),
+  ),
+});
+export type TicketEdit = Static<typeof TicketEdit>;
+
+/** The fields of a Ticket an Agent may edit: during its running Run on it, and the title only on a Discovered Ticket it filed. */
+export const AgentTicketEdit = Type.Pick(TicketEdit, ["title", "description", "priority", "labels", "dueDate", "estimate"]);
 
 /** The fields of a Ticket an Agent may edit, during its running Run on it. */
 const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate"]);
@@ -656,7 +794,7 @@ const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "lab
 /**
  * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
  * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
- * each of its Changes names. Assigning a Ticket whose Assignee was removed from the Workspace takes it out
+ * each of its Changes names. Assigning a Ticket whose Assignee was removed from the Workspace, or lost Write in its Project, takes it out
  * of the Admins' Inbox.
  */
 export async function editTicket(
@@ -665,8 +803,19 @@ export async function editTicket(
   ticketId: string,
   edit: TicketEdit,
 ): Promise<Ticket> {
-  const { db, clock, live } = context;
-  return transaction(db, async (tx) => {
+  return transaction(context.db, (tx) => editTicketIn(context, tx, editor, ticketId, edit));
+}
+
+/** Edits the Ticket as `editTicket` says, in the caller's transaction. */
+export async function editTicketIn(
+  context: Context,
+  tx: Tx,
+  editor: Caller,
+  ticketId: string,
+  edit: TicketEdit,
+): Promise<Ticket> {
+  const { clock, live } = context;
+  {
     const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
     await requireWrite(tx, editor, ticket);
@@ -682,25 +831,10 @@ export async function editTicket(
     // Only Users get this far with fields that name a User.
     const userId = editor.id;
     const next = { ...ticket };
-    const changes: NewChange[] = [];
-    /** Sets a field and records the Change, if the value differs; `shown` gives how the Change shows a value. */
-    const change = async <K extends keyof Row & keyof TicketEdit>(
-      key: K,
-      field: NewChange["field"],
-      value: Row[K],
-      shown: (value: Row[K]) => unknown = (v) => v,
-    ) => {
-      if (JSON.stringify(value) === JSON.stringify(ticket[key])) return;
-      next[key] = value;
-      changes.push({ field, from: await shown(ticket[key]), to: await shown(value) });
-    };
-    const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
-    const userNamed = (id: string | null) => named(tx, `select id, ${userName()} as name from users where id = $1`, id);
-    const agentNamed = (id: string | null) => named(tx, "select id, name from agents where id = $1", id);
-    const ticketRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
+    // `next` holds the Ticket as the edit leaves it; the write records a Change for each field that differs.
 
-    if (edit.title !== undefined) await change("title", "title", edit.title.trim());
-    if (edit.description !== undefined) await change("description", "description", edit.description);
+    if (edit.title !== undefined) next.title = edit.title.trim();
+    if (edit.description !== undefined) next.description = edit.description;
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
       if (edit.statusId !== ticket.statusId && ticket.verification === "unverified") {
@@ -714,33 +848,32 @@ export async function editTicket(
           },
         );
       }
-      await change("statusId", "status", edit.statusId, statusNamed);
+      next.statusId = edit.statusId;
       // Leaving its Done Status, an Accepted Ticket is no longer Verified: Verification is of that completion.
       if (next.statusId !== ticket.statusId && ticket.verification !== null) {
         next.verification = null;
-        changes.push({ field: "verification", from: ticket.verification, to: null });
       }
     }
-    if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
-    if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
+    if (edit.priority !== undefined) next.priority = edit.priority;
+    if (edit.labels !== undefined) next.labels = distinctLabels(edit.labels);
     if (edit.assigneeId !== undefined) {
       if (edit.assigneeId !== null && edit.assigneeId !== ticket.assigneeId) {
         await checkMember(tx, ticket.workspaceId, edit.assigneeId);
         await checkAssigneeWrites(tx, ticket, edit.assigneeId);
       }
-      await change("assigneeId", "assignee", edit.assigneeId, userNamed);
+      next.assigneeId = edit.assigneeId;
     }
     if (edit.delegateId !== undefined && edit.delegateId !== null) {
       const delegate = await checkDelegate(tx, ticket, userId, edit.delegateId, next.assigneeId);
       // Delegating an unassigned Ticket assigns the delegating User.
-      if (next.assigneeId === null) await change("assigneeId", "assignee", userId, userNamed);
-      await change("delegateId", "delegate", delegate.id, agentNamed);
+      if (next.assigneeId === null) next.assigneeId = userId;
+      next.delegateId = delegate.id;
     } else if (edit.delegateId === null) {
-      await change("delegateId", "delegate", null, agentNamed);
+      next.delegateId = null;
     } else if (next.delegateId !== null && next.assigneeId !== ticket.assigneeId) {
       // A new Assignee who doesn't own the Delegate removes it.
       const owner = await ownerOf(tx, next.delegateId);
-      if (owner !== next.assigneeId) await change("delegateId", "delegate", null, agentNamed);
+      if (owner !== next.assigneeId) next.delegateId = null;
     }
     /** The parent the Ticket was just put under, if any. */
     let newParent: TicketRef | null = null;
@@ -748,7 +881,7 @@ export async function editTicket(
     let delegationInherited = false;
     if (edit.parentId !== undefined) {
       const parent = edit.parentId === null ? null : await checkParent(tx, ticket, edit.parentId);
-      await change("parentId", "parent", parent?.id ?? null, (id) => (id === null ? null : ticketRef(id)));
+      next.parentId = parent?.id ?? null;
       if (parent && parent.id !== ticket.parentId) newParent = parent;
       // A new Sub-Ticket takes a delegated parent's Delegation, and so its Assignee, whose Agent the Delegate is,
       // even over a Delegation of its own; under an undelegated parent it keeps its own. An Assignee or Delegate
@@ -756,69 +889,57 @@ export async function editTicket(
       const delegationGiven = edit.assigneeId !== undefined || edit.delegateId !== undefined;
       const delegation = newParent && !delegationGiven ? await heldDelegationOf(tx, newParent.id) : null;
       if (delegation) {
-        await change("assigneeId", "assignee", delegation.assigneeId, userNamed);
-        await change("delegateId", "delegate", delegation.delegateId, agentNamed);
+        next.assigneeId = delegation.assigneeId;
+        next.delegateId = delegation.delegateId;
         delegationInherited = true;
       }
     }
     if (edit.autonomousDelegation !== undefined) {
-      await change("autonomousDelegation", "autonomousDelegation", edit.autonomousDelegation);
+      next.autonomousDelegation = edit.autonomousDelegation;
     } else {
       // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
       const inherited = newParent ? await autonomousDelegationOf(tx, newParent.id) : null;
       if (inherited !== null) {
-        await change("autonomousDelegation", "autonomousDelegation", inherited);
+        next.autonomousDelegation = inherited;
       } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
         const { rows } = await tx.query<{ value: boolean }>(
           "select autonomous_delegation_default as value from projects where id = $1",
           [ticket.projectId],
         );
-        await change("autonomousDelegation", "autonomousDelegation", rows[0]!.value);
+        next.autonomousDelegation = rows[0]!.value;
       }
     }
-    if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
-    if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
-    if (changes.length === 0) return fullTicket(tx, editor, ticket);
-
+    if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
+    if (edit.estimate !== undefined) next.estimate = edit.estimate;
+    // A `local-only` Ticket isn't delegated to a cloud Agent: refused when this edit delegates it or adds the Label.
+    // Other routes to the same Delegation, such as a Project's default, meet the same rule when its Run would start.
+    const localOnly = next.delegateId !== null && isLocalOnly(next.labels);
+    if (localOnly && (next.delegateId !== ticket.delegateId || !isLocalOnly(ticket.labels))) {
+      await checkNotCloud(context, tx, ticket.key, next.delegateId!);
+    }
     const now = clock.now();
     // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
     const delegated = next.delegateId !== null && next.delegateId !== ticket.delegateId;
-    if (next.discovered?.waiting && (next.statusId !== ticket.statusId || delegated)) {
-      next.discovered = { ...next.discovered, waiting: false };
-    }
-    await tx.query(
-      `update tickets set title = $2, description = $3, priority = $4, labels = $5, assignee_id = $6,
-       former_assignee_id = case when $6::uuid is null then former_assignee_id end,
-       due_date = $7, estimate = $8, status_id = $9, parent_id = $10, delegate_id = $11,
-       status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
-       autonomous_delegation = $13, verification = $14,
-       completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end,
-       discovery_waits = $15
-       where id = $1`,
-      [
-        ticket.id,
-        next.title,
-        next.description,
-        next.priority,
-        next.labels,
-        next.assigneeId,
-        next.dueDate,
-        next.estimate,
-        next.statusId,
-        next.parentId,
-        next.delegateId,
-        now,
-        next.autonomousDelegation,
-        next.verification,
-        next.discovered?.waiting ?? false,
-      ],
-    );
+    const takenUp = ticket.discovered?.waiting === true && (next.statusId !== ticket.statusId || delegated);
+    const { written, changes } = await writeTicket(context, tx, ticket, actor, {
+      title: next.title,
+      description: next.description,
+      statusId: next.statusId,
+      verification: next.verification,
+      priority: next.priority,
+      labels: next.labels,
+      assigneeId: next.assigneeId,
+      delegateId: next.delegateId,
+      parentId: next.parentId,
+      autonomousDelegation: next.autonomousDelegation,
+      dueDate: next.dueDate,
+      estimate: next.estimate,
+      ...(takenUp ? { discoveryWaits: false } : {}),
+    }, { at: now });
+    if (!written) return fullTicket(tx, editor, ticket);
+
     if (next.description !== ticket.description) await indexMentions(tx, "ticket", ticket, next.description);
-    if (ticket.discovered?.waiting && !next.discovered?.waiting) await settleDiscoveredSubTickets(context, tx, ticket);
-    // Moving the Ticket ends its waiting from a needs you Outcome.
-    if (next.statusId !== ticket.statusId) await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
-    await recordChanges(tx, ticket, actor, now, changes);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    if (takenUp) await settleDiscoveredSubTickets(context, tx, ticket, actor, now);
     if (next.parentId !== ticket.parentId) {
       // Each parent's timeline shows the Sub-Ticket it gained or lost, as the Sub-Ticket is now.
       const self = (await findTicketRef(tx, ticket.workspaceId, ticket.id))!;
@@ -871,7 +992,7 @@ export async function editTicket(
     else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
     return fullTicket(tx, editor, (await findTicketRow(tx, editor, ticket.id))!);
-  });
+  }
 }
 
 /**
@@ -887,19 +1008,12 @@ export async function undelegateTickets(
   reason: string,
   now: Date,
 ): Promise<void> {
-  const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string; delegateId: string; agentName: string }>(
-    `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId",
-       tickets.delegate_id as "delegateId", agents.name as "agentName"
-     from tickets join agents on agents.id = tickets.delegate_id
-     where tickets.delegate_id = any($1::uuid[]) order by tickets.id for update of tickets`,
+  const { rows } = await tx.query<{ id: string }>(
+    "select id from tickets where delegate_id = any($1::uuid[])",
     [agentIds],
   );
-  for (const ticket of rows) {
-    await tx.query("update tickets set delegate_id = null where id = $1", [ticket.id]);
-    await recordChanges(tx, ticket, userId, now, [
-      { field: "delegate", from: { id: ticket.delegateId, name: ticket.agentName }, to: null },
-    ]);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  for (const ticket of await lockTickets(tx, rows.map((row) => row.id))) {
+    await writeTicket(context, tx, ticket, userId, { delegateId: null }, { at: now });
     await stopRunningRun(context, tx, ticket.id, reason, now);
     // Losing its Delegate ends the Ticket's wait for a Run.
     await startRunIfNeeded(context, tx, ticket.id, now);
@@ -916,33 +1030,30 @@ async function autonomousDelegationOf(tx: Tx, ticketId: string): Promise<boolean
 
 /** Gives the Ticket's Sub-Tickets, however deep, its Autonomous Delegation, recording a Change on each that differed. */
 async function passAutonomousDelegationDown(
-  { live }: Context,
+  context: Context,
   tx: Tx,
   ticket: TicketRow,
   value: boolean,
   userId: string,
   now: Date,
 ): Promise<void> {
-  const { rows } = await tx.query<{ id: string; from: boolean | null }>(
+  for (const subTicket of await lockTickets(tx, await descendantsOf(tx, ticket.id))) {
+    await writeTicket(context, tx, subTicket, userId, { autonomousDelegation: value }, { at: now });
+  }
+}
+
+/** The ids of the Ticket's Sub-Tickets, however deep. */
+async function descendantsOf(tx: Tx, ticketId: string): Promise<string[]> {
+  const { rows } = await tx.query<{ id: string }>(
     `with recursive descendants (id) as (
        select id from tickets where parent_id = $1
        union
        select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
-     ),
-     changed as (
-       select tickets.id, tickets.autonomous_delegation as from from tickets join descendants using (id)
-       where tickets.autonomous_delegation is distinct from $2
-       for update of tickets
      )
-     update tickets set autonomous_delegation = $2 from changed where tickets.id = changed.id
-     returning tickets.id, changed.from`,
-    [ticket.id, value],
+     select id from descendants`,
+    [ticketId],
   );
-  for (const row of rows) {
-    const subTicket = { id: row.id, workspaceId: ticket.workspaceId };
-    await recordChanges(tx, subTicket, userId, now, [{ field: "autonomousDelegation", from: row.from, to: value }]);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: row.id });
-  }
+  return rows.map((row) => row.id);
 }
 
 /**
@@ -960,55 +1071,43 @@ async function passDelegationDown(
   now: Date,
 ): Promise<void> {
   const undelegated = next.delegateId === null;
-  const { rows } = await tx.query<{
-    id: string;
-    key: string;
-    assigneeId: string | null;
-    assignee: string | null;
-    delegateId: string | null;
-    delegate: string | null;
-  }>(
-    `with recursive descendants (id) as (
-       select id from tickets where parent_id = $1
-       union
-       select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
-     )
-     select tickets.id, projects.key || '-' || tickets.number as key,
-       tickets.assignee_id as "assigneeId", ${userName()} as assignee,
-       tickets.delegate_id as "delegateId", agents.name as delegate
-     from tickets join descendants using (id) join projects on projects.id = tickets.project_id
-     left join users on users.id = tickets.assignee_id left join agents on agents.id = tickets.delegate_id
-     where ${undelegated ? "tickets.delegate_id = $2" : "tickets.assignee_id is distinct from $3 or tickets.delegate_id is distinct from $2"}
-     order by tickets.id for update of tickets`,
-    undelegated ? [ticket.id, ticket.delegateId] : [ticket.id, next.delegateId, next.assigneeId],
+  const subTickets = (await lockTickets(tx, await descendantsOf(tx, ticket.id))).filter((subTicket) =>
+    undelegated
+      ? subTicket.delegateId === ticket.delegateId
+      : subTicket.assigneeId !== next.assigneeId || subTicket.delegateId !== next.delegateId,
   );
-  if (rows.length === 0) return;
-  const assignee = undelegated ? null : await named(tx, `select id, ${userName()} as name from users where id = $1`, next.assigneeId);
+  if (subTickets.length === 0) return;
   const delegate = await named(tx, "select id, name from agents where id = $1", next.delegateId);
   const who = await nameOfUser(tx, userId);
-  for (const subTicket of rows) {
-    const assigneeId = undelegated ? subTicket.assigneeId : next.assigneeId;
-    await tx.query(
-      `update tickets set assignee_id = $2, delegate_id = $3,
-       discovery_waits = case when $3::uuid is not null and delegate_id is distinct from $3 then false else discovery_waits end
-       where id = $1`,
-      [subTicket.id, assigneeId, next.delegateId],
+  const keys = new Map(
+    (
+      await tx.query<{ id: string; key: string }>(
+        `select tickets.id, projects.key || '-' || tickets.number as key
+         from tickets join projects on projects.id = tickets.project_id where tickets.id = any($1::uuid[])`,
+        [subTickets.map((subTicket) => subTicket.id)],
+      )
+    ).rows.map((row) => [row.id, row.key]),
+  );
+  for (const subTicket of subTickets) {
+    const delegateChanged = subTicket.delegateId !== next.delegateId;
+    await writeTicket(
+      context,
+      tx,
+      subTicket,
+      userId,
+      {
+        assigneeId: undelegated ? subTicket.assigneeId : next.assigneeId,
+        delegateId: next.delegateId,
+        // Delegated to a new Agent, a waiting Discovered Sub-Ticket is taken up.
+        ...(next.delegateId !== null && delegateChanged ? { discoveryWaits: false } : {}),
+      },
+      { at: now },
     );
-    const changes: NewChange[] = [];
-    if (subTicket.assigneeId !== assigneeId) {
-      const from = subTicket.assigneeId === null ? null : { id: subTicket.assigneeId, name: subTicket.assignee };
-      changes.push({ field: "assignee", from, to: assignee });
-    }
-    if (subTicket.delegateId !== next.delegateId) {
-      const from = subTicket.delegateId === null ? null : { id: subTicket.delegateId, name: subTicket.delegate };
-      changes.push({ field: "delegate", from, to: delegate });
-    }
-    await recordChanges(tx, { id: subTicket.id, workspaceId: ticket.workspaceId }, userId, now, changes);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: subTicket.id });
-    if (subTicket.delegateId !== next.delegateId) {
+    if (delegateChanged) {
+      const key = keys.get(subTicket.id)!;
       const reason = delegate
-        ? `${who} delegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}, to ${delegate.name}.`
-        : `${who} undelegated ${ticket.key}, and so its Sub-Ticket ${subTicket.key}.`;
+        ? `${who} delegated ${ticket.key}, and so its Sub-Ticket ${key}, to ${delegate.name}.`
+        : `${who} undelegated ${ticket.key}, and so its Sub-Ticket ${key}.`;
       await stopRunningRun(context, tx, subTicket.id, reason, now);
       // Gaining a Delegate may get the Sub-Ticket a Run; losing it ends its wait for one.
       await startRunIfNeeded(context, tx, subTicket.id, now);
@@ -1021,7 +1120,7 @@ async function passDelegationDown(
  * Refused for any other Ticket.
  */
 export async function dismissTicket(context: Context, userId: string, ticketId: string): Promise<Ticket> {
-  const { db, clock, live } = context;
+  const { db, clock } = context;
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
@@ -1033,10 +1132,12 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
         `${ticket.key} isn't a Discovered Ticket waiting for a User: only those are dismissed.`,
       );
     }
-    await tx.query("update tickets set discovery_waits = false where id = $1", [ticket.id]);
-    await settleDiscoveredSubTickets(context, tx, ticket);
-    await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    const now = clock.now();
+    await writeTicket(context, tx, ticket, userId, { discoveryWaits: false }, {
+      at: now,
+      changes: [{ field: "dismissed", from: null, to: null }],
+    });
+    await settleDiscoveredSubTickets(context, tx, ticket, userId, now);
     return fullTicket(tx, userViewer(userId), { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
 }
@@ -1045,7 +1146,13 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
  * A User took up a waiting Discovered Ticket: the Sub-Tickets its Agent split it into, waiting with it, are settled
  * with it, leaving the Agent's hands. Call it in the transaction that settles the Ticket.
  */
-async function settleDiscoveredSubTickets(context: Context, tx: Tx, ticket: TicketRow): Promise<void> {
+async function settleDiscoveredSubTickets(
+  context: Context,
+  tx: Tx,
+  ticket: TicketRow,
+  actor: ChangeActor,
+  now: Date,
+): Promise<void> {
   const { rows } = await tx.query<{ id: string }>(
     `with recursive settled (id) as (
        select id from tickets where parent_id = $1 and discovery_waits and discovered_by_agent_id = $2
@@ -1053,12 +1160,11 @@ async function settleDiscoveredSubTickets(context: Context, tx: Tx, ticket: Tick
        select tickets.id from tickets join settled on tickets.parent_id = settled.id
        where tickets.discovery_waits and tickets.discovered_by_agent_id = $2
      )
-     update tickets set discovery_waits = false from settled where tickets.id = settled.id
-     returning tickets.id`,
+     select id from settled`,
     [ticket.id, ticket.discovered!.agentId],
   );
-  for (const { id } of rows) {
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: id });
+  for (const subTicket of await lockTickets(tx, rows.map((row) => row.id))) {
+    await writeTicket(context, tx, subTicket, actor, { discoveryWaits: false }, { at: now });
   }
 }
 
@@ -1194,7 +1300,7 @@ async function named(tx: Tx, query: string, id: string | null): Promise<{ id: st
 }
 
 /** Labels are matched ignoring case: one of each, kept as first written. */
-function distinctLabels(labels: string[]): string[] {
+export function distinctLabels(labels: string[]): string[] {
   const seen = new Map<string, string>();
   for (const label of labels) {
     const trimmed = label.trim();
@@ -1241,6 +1347,26 @@ async function checkDelegate(
     );
   }
   return agent;
+}
+
+/** Refuses a `local-only` Ticket's Delegation to an Agent whose Runner runs in the cloud. */
+async function checkNotCloud(context: Context, tx: Tx, key: string, agentId: string): Promise<void> {
+  const { rows } = await tx.query<{ agent: string; runner: string | null; kind: string | null }>(
+    `select agents.name as agent, runners.name as runner, runners.kind
+     from agents left join runners on runners.id = agents.runner_id where agents.id = $1`,
+    [agentId],
+  );
+  const found = rows[0];
+  if (!found || !runsInCloud(context.runners, found.kind)) return;
+  throw new ApiError(
+    409,
+    "local_only_ticket",
+    `${key} is labelled local-only: it can't run in a cloud session, and ${found.agent} uses ${found.runner}, a cloud Runner.`,
+    {
+      rule: "A Ticket labelled local-only is never delegated to an Agent whose Runner runs in the cloud.",
+      advice: "Delegate it to an Agent whose Runner isn't in the cloud, or remove the local-only Label first.",
+    },
+  );
 }
 
 /**

@@ -344,3 +344,119 @@ describe("texts written before the Mention index", () => {
     expect((await ok("GET", `/api/tickets/${ticket.id}/comments`, s.ada))[0].mentions).toEqual([mentionOf(s.target)]);
   });
 });
+
+describe("Embeds", () => {
+  const page = (text: string) => ({ path: "index.html", contentBase64: Buffer.from(`<h1>${text}</h1>`).toString("base64") });
+
+  /** The setting with an Artifact of the Project at Version 2, and the Workspace's slug its address starts with. */
+  async function withArtifact() {
+    const s = await workspaceWithTicket();
+    const workspace = await ok("GET", `/api/workspaces/${s.workspace.id}`, s.ada);
+    const created = await ok("POST", `/api/projects/${s.project.id}/artifacts`, s.ada, { title: "Board prototype", files: [page("One")] });
+    const latest = await ok("PATCH", `/api/artifacts/${created.id}`, s.ada, { baseVersion: 1, title: "Board", files: [page("Two")] });
+    const first = await ok("GET", `/api/artifacts/${created.id}?version=1`, s.ada);
+    const address = `/${workspace.slug}/artifacts/${latest.slug}`;
+    return { ...s, slug: workspace.slug as string, artifact: latest, first, address };
+  }
+
+  const embedOf = (artifact: { id: string; slug: string; title: string; url: string }, text: string, version: number | null) => ({
+    kind: "artifact",
+    text,
+    artifactId: artifact.id,
+    slug: artifact.slug,
+    title: artifact.title,
+    version,
+    url: artifact.url,
+  });
+
+  test("an Artifact's address alone in its paragraph is a Mention of the Artifact, at the Version it names or the latest", async () => {
+    const s = await withArtifact();
+    const absolute = `${cronk.url}${s.address}`;
+    const pinned = `${cronk.url}${s.address}?version=1`;
+    const byId = `${cronk.url}/artifacts/${s.artifact.id}`;
+    const markdown = [absolute, "", "Before CRONK-1.", "", `<${pinned}>`, "", byId, "", `> ${s.address}`].join("\n");
+
+    for (const kind of Object.keys(kinds) as (keyof typeof kinds)[]) {
+      const { written, read } = await kinds[kind].write(s, markdown);
+      const mentions = [
+        mentionOf(s.target),
+        embedOf(s.artifact, absolute, null),
+        // Its slug is the Artifact's, from its latest title; the rest the pinned Version's.
+        { ...embedOf(s.first, pinned, 1), slug: s.artifact.slug },
+        embedOf(s.artifact, byId, null),
+        embedOf(s.artifact, s.address, null),
+      ];
+      expect(written.mentions, kind).toEqual(mentions);
+      expect((await read()).mentions, kind).toEqual(mentions);
+    }
+    // The pinned Version is the one it shows: its own title and page, not the latest's.
+    expect(s.first).toMatchObject({ title: "Board prototype", version: { number: 1 } });
+    expect(s.first.url).not.toBe(s.artifact.url);
+  });
+
+  test("an address with anything beside it, as a link with words, in code, or naming nothing, doesn't embed", async () => {
+    const s = await withArtifact();
+    const other = await ok("POST", "/api/workspaces", s.ada, { name: "Other", slug: "other" });
+    const markdown = [
+      `See ${s.address} for the board.`,
+      "",
+      `[The board](${s.address})`,
+      "",
+      `\`${s.address}\``,
+      "",
+      "```",
+      s.address,
+      "```",
+      "",
+      `${s.address}`,
+      "and a second line",
+      "",
+      `${s.address}?version=3`,
+      "",
+      `${s.address}?v=1`,
+      "",
+      `${s.address}#top`,
+      "",
+      `/${other.slug}/artifacts/${s.artifact.slug}`,
+      "",
+      `/${s.slug}/artifacts/nothing-0000beef`,
+      "",
+      `/${s.slug}/documents/${s.artifact.slug}`,
+    ].join("\n");
+    const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Plan", body: markdown });
+    expect(document.mentions).toEqual([]);
+    expect(await call("GET", `/api/artifacts/${s.artifact.id}?version=3`, s.ada)).toMatchObject({ status: 404 });
+  });
+
+  test("an Artifact the reader can't read stays plain text, and a deleted one is no longer embedded", async () => {
+    const s = await withArtifact();
+    const grace = { cookie: (await addMember(cronk, s.ada.cookie, s.workspace.id, "grace@example.com")).cookie };
+    const secret = await ok("POST", `/api/workspaces/${s.workspace.id}/projects`, s.ada, { name: "Secret", key: "SECRET" });
+    const hidden = await ok("POST", `/api/projects/${secret.id}/artifacts`, s.ada, { title: "Hidden", files: [page("Hidden")] });
+    await ok("PUT", `/api/projects/${secret.id}/access`, s.ada, { visibility: "private", users: [] });
+    const hiddenAddress = `/${s.slug}/artifacts/${hidden.slug}`;
+    const document = await ok("POST", `/api/workspaces/${s.workspace.id}/documents`, s.ada, {
+      title: "Plan",
+      body: `${hiddenAddress}\n\n${s.address}`,
+    });
+
+    expect(document.mentions).toEqual([embedOf(hidden, hiddenAddress, null), embedOf(s.artifact, s.address, null)]);
+    expect((await ok("GET", `/api/documents/${document.id}`, grace)).mentions).toEqual([embedOf(s.artifact, s.address, null)]);
+
+    await ok("DELETE", `/api/artifacts/${s.artifact.id}`, s.ada);
+    expect((await ok("GET", `/api/documents/${document.id}`, s.ada)).mentions).toEqual([embedOf(hidden, hiddenAddress, null)]);
+  });
+
+  test("texts written before Embeds were indexed are indexed on the next start", async () => {
+    const s = await withArtifact();
+    const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Plan", body: s.address });
+    // As a Cronk before migration 0057 left them: no Embeds recorded, with their indexing still to do.
+    await cronk.stage("delete from mentions");
+    await cronk.stage("insert into pending_backfills (name) values ('embeds')");
+    expect((await ok("GET", `/api/documents/${document.id}`, s.ada)).mentions).toEqual([]);
+
+    await cronk.upgrade();
+
+    expect((await ok("GET", `/api/documents/${document.id}`, s.ada)).mentions).toEqual([embedOf(s.artifact, s.address, null)]);
+  });
+});

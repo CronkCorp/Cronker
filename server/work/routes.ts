@@ -7,6 +7,7 @@ import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
+import { requireProjectCreator } from "./board-rights.js";
 import { changeStatuses } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
 import { defaultRoundLimit, LabelRule, Outcome, StepKind } from "./steps.js";
@@ -87,7 +88,10 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Create a Project",
-          description: "Creates a Project with the default board's Statuses.",
+          description:
+            "Creates a Project with the default board's Statuses and Steps. Users and Agents alike; an Agent needs a " +
+            "token that isn't read-only and its Owner to be an Admin of the Workspace, since the default Steps are " +
+            "what later Runs work by.",
           params: Type.Object({ workspaceId: Type.String() }),
           body: Type.Object({
             name: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }),
@@ -96,11 +100,12 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
               description: "2 to 10 letters and digits, starting with a letter; kept in capitals.",
             }),
           }),
-          response: { 201: Project, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: { 201: Project, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request, reply) => {
-        const workspace = await requireWorkspace(request, request.params.workspaceId);
+        const workspace = await requireWorkspace(request, request.params.workspaceId, { agents: true });
+        await requireProjectCreator(db, await requireCaller(context, request), workspace.id);
         return reply.code(201).send(await createProject(context, workspace.id, request.body));
       },
     );
@@ -151,6 +156,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
                   "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation. Only an Admin " +
                   "may give it, whatever its value.",
               }),
+            ),
+            conciseReports: Type.Optional(
+              Type.Boolean({ description: "Whether the Briefs of Runs in this Project ask them to keep their Reports concise." }),
             ),
           }),
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },

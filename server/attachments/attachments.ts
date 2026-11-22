@@ -26,6 +26,12 @@ export const Owner = Type.Object({
 export type Owner = Static<typeof Owner>;
 export type OwnerKind = Owner["kind"];
 
+/** The attach-a-file route's query: the body is the file itself. */
+export const AttachmentQuery = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 255, pattern: "\\S", description: "The file's name, such as `screenshot.png`." }),
+});
+export type AttachmentQuery = Static<typeof AttachmentQuery>;
+
 export const Attachment = Type.Object({
   id: Type.String({ format: "uuid", description: "Markdown refers to the Attachment as `attachment:<id>`." }),
   name: Type.String({ description: "The file's name, as it was attached." }),

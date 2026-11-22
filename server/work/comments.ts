@@ -25,6 +25,7 @@ export const CommentArtifact = Type.Object(
   },
   { description: "The Artifact the Comment is on; null for a Comment on a Ticket." },
 );
+import { markdown } from "./fields.js";
 
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -41,7 +42,7 @@ export const Comment = Type.Object({
   body: Type.String({ description: "Markdown." }),
   actor: ActorOrCronk,
   createdAt: Type.String({ format: "date-time" }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions and the Artifacts it embeds that the caller may read." }),
   attachments: Type.Array(Attachment, { description: "The files attached to the Comment, oldest first." }),
   questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
@@ -114,11 +115,18 @@ export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Prom
   return present(db, viewer, await rowsOf(db, viewer, ticket.id));
 }
 
+/** The comment route's body: a Comment, or a reply to one. */
+export const CommentCreate = Type.Object({
+  body: markdown(100_000),
+  replyToId: Type.Optional(Type.String({ description: "The id of the Comment on this Ticket or Artifact being replied to." })),
+});
+export type CommentCreate = Static<typeof CommentCreate>;
+
 export async function addComment(
   context: Context,
   actor: Caller,
   ticketId: string,
-  input: { body: string; replyToId?: string },
+  input: CommentCreate,
 ): Promise<Comment> {
   return transaction(context.db, async (tx) => {
     // A reply may answer a Question, moving the Ticket, so it locks the Ticket as moves do.

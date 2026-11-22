@@ -6,9 +6,11 @@ import { VersionMeta, Versions } from "./documents.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
-import { Link, navigate } from "./router.js";
+import { ArtifactFrame } from "./embed.js";
+import { Link, navigate, useQuery } from "./router.js";
 import { Actor, Avatar } from "./ui/actor.js";
 import {
+  Banner,
   buttonClass,
   DeletedElsewhere,
   EmptyState,
@@ -21,7 +23,7 @@ import {
 } from "./ui/controls.js";
 import { Diff } from "./ui/diff.js";
 import { Chip, type Tone } from "./ui/labels.js";
-import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access.js";
+import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.js";
 import { CommentForm, CommentThread } from "./tickets.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
@@ -126,22 +128,33 @@ export function ArtifactScreen({
   const [failure, setFailure] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
+  // Counts the Artifact's changes, so its Versions are read again when one is deleted elsewhere.
+  const [revision, setRevision] = useState(0);
   usePlace("artifacts", artifact?.projectId ?? null);
+  // An Embed's Open, or any address, may name a Version (`?version=N`): shown in place of the current one.
+  const asked = Number(useQuery().get("version"));
+  const pinned = Number.isInteger(asked) && asked > 0 ? asked : null;
 
   useEffect(() => {
-    api.artifact(artifactId).then(
+    api.artifact(artifactId, pinned).then(
       (found) => {
         if (found.workspaceId === workspace.id) setArtifact(found);
         else setFailure("No such Artifact.");
       },
       (e: Error) => setFailure(e.message),
     );
-  }, [artifactId, workspace.id]);
+  }, [artifactId, workspace.id, pinned]);
   const latest = useLatest();
   /** Fetches the shown Artifact again after a live event, keeping it on screen if it went meanwhile. */
-  const reload = useCallback(() => latest(api.artifact(artifactId), setArtifact, failed), [artifactId, latest, failed]);
+  const reload = useCallback(
+    () => latest(api.artifact(artifactId, pinned), setArtifact, failed),
+    [artifactId, pinned, latest, failed],
+  );
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected" || (event.type === "artifact.changed" && event.artifactId === artifactId)) reload();
+    if (event.type === "reconnected" || (event.type === "artifact.changed" && event.artifactId === artifactId)) {
+      reload();
+      setRevision((n) => n + 1);
+    }
   });
   const projectId = artifact?.projectId ?? null;
   useEffect(() => {
@@ -184,19 +197,16 @@ export function ArtifactScreen({
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       {gone && <DeletedElsewhere back={{ to: list, label: "Back to Artifacts" }}>this Artifact is no longer kept.</DeletedElsewhere>}
+      {pinned !== null && (
+        <Banner tone="info">
+          This is Version {pinned}, as the address names it. <Link to={to.artifact(artifact)}>Show the latest</Link>
+        </Banner>
+      )}
       {artifact.description && <p className="artifact-description">{artifact.description}</p>}
       <div className="page-split">
-        {/* Each Version has its own address, so a save shows afresh. */}
-        <iframe
-          key={artifact.url}
-          className="artifact-frame"
-          title={artifact.title}
-          src={artifact.url}
-          sandbox="allow-scripts"
-          referrerPolicy="no-referrer"
-        />
+        <ArtifactFrame url={artifact.url} title={artifact.title} className="artifact-frame" />
         <aside className="side">
           <Panel title="Files" className="panel-flush">
             <ul className="artifact-files">
@@ -211,6 +221,16 @@ export function ArtifactScreen({
           </Panel>
           <Versions<VersionWithBody, ArtifactComparison>
             current={artifact.version.number}
+            revision={revision}
+            // With Read in its Project, or once it is gone, no Version is deleted.
+            deleting={
+              !gone && (!project || project.access === "write")
+                ? {
+                    run: (number) => api.deleteArtifactVersion(artifact.id, number),
+                    note: "It goes with its files, which are no longer served, and its number is never used again. The other Versions stay. It can't be brought back.",
+                  }
+                : undefined
+            }
             source={{
               list: () => api.artifactVersions(artifact.id),
               compare: (from, to) => api.compareArtifactVersions(artifact.id, from, to),

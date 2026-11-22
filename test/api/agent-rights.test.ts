@@ -152,7 +152,6 @@ describe("what an Agent may change", () => {
       ["POST", "/api/workspaces", { name: "Mine" }],
       ["PATCH", `/api/workspaces/${workspace.id}`, { name: "Mine" }],
       ["POST", `/api/workspaces/${workspace.id}/members`, { email: "eve@example.com" }],
-      ["POST", `/api/workspaces/${workspace.id}/projects`, { name: "Mine", key: "MINE" }],
       ["POST", `/api/workspaces/${workspace.id}/agents`, { name: "mine" }],
       ["DELETE", `/api/agents/${agent.id}`],
       ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "full" }],
@@ -163,7 +162,7 @@ describe("what an Agent may change", () => {
       expect((await response.json()).error, `${method} ${path}`).toEqual({
         code: "agent_not_allowed",
         message: expect.any(String),
-        rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; with Write in a Project they may change its Statuses and take a Step off one, and give a Status a Step or change one when their Owner is an Admin; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit a Discovered Ticket they filed, add blocks from it, and link Documents and Artifacts to it and unlink them, until a User takes it up. Everything else needs a User.",
+        rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; when their Owner is an Admin they may create Projects; with Write in a Project they may change its Statuses and take a Step off one, and give a Status a Step or change one when their Owner is an Admin; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit a Discovered Ticket they filed, add blocks from it, and link Documents and Artifacts to it and unlink them, until a User takes it up. Everything else needs a User.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
