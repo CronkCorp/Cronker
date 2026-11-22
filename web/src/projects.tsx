@@ -52,6 +52,7 @@ import {
   MenuSeparator,
   MenuSub,
 } from "./ui/overlays.js";
+import { FilterPicker } from "./ui/picker.js";
 import { ReadOnlyNote } from "./write-access.js";
 
 /** The Workspace's Projects, and a form to create one. */
@@ -368,43 +369,34 @@ function Filters({
   const set = (change: TicketFilter) => onChange({ ...filter, ...change });
   return (
     <div className="filters" role="group" aria-label="Filters">
-      <label className="filter">
-        <span className="sr-only">Filter by Status</span>
-        <select value={filter.statusId ?? ""} onChange={(e) => set({ statusId: e.target.value || undefined })}>
-          <option value="">Any Status</option>
-          {project.statuses.map((status) => (
-            <option key={status.id} value={status.id}>
-              {status.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="filter">
-        <span className="sr-only">Filter by Assignee</span>
-        <select value={filter.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || undefined })}>
-          <option value="">Anyone</option>
-          <option value="none">Nobody</option>
-          {members.map(({ user }) => (
-            <option key={user.id} value={user.id}>
-              {nameOf(user)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="filter">
-        <span className="sr-only">Filter by Priority</span>
-        <select
-          value={filter.priority ?? ""}
-          onChange={(e) => set({ priority: (e.target.value || undefined) as Priority | undefined })}
-        >
-          <option value="">Any Priority</option>
-          {priorities.map(({ priority, label }) => (
-            <option key={priority} value={priority}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <FilterPicker
+        label="Status"
+        anyLabel="Any Status"
+        options={project.statuses.map((s) => ({ value: s.id, label: s.name, content: <StatusPill kind={s.kind} name={s.name} /> }))}
+        value={filter.statusId}
+        onChange={(statusId) => set({ statusId })}
+      />
+      <FilterPicker
+        label="Assignee"
+        anyLabel="Anyone"
+        options={[
+          { value: "none", label: "Nobody" },
+          ...members.map(({ user }) => ({ value: user.id, label: nameOf(user), content: <Actor actor={{ kind: "user", name: nameOf(user) }} /> })),
+        ]}
+        value={filter.assigneeId}
+        onChange={(assigneeId) => set({ assigneeId })}
+      />
+      <FilterPicker
+        label="Priority"
+        anyLabel="Any Priority"
+        options={priorities.map(({ priority, label }) => ({
+          value: priority,
+          label,
+          content: priority === "none" ? undefined : <PriorityTag priority={priority} />,
+        }))}
+        value={filter.priority}
+        onChange={(priority) => set({ priority: priority as Priority | undefined })}
+      />
       <label className="filter">
         <span className="sr-only">Filter by Label</span>
         <input placeholder="Label" value={filter.label ?? ""} onChange={(e) => set({ label: e.target.value.trim() || undefined })} />

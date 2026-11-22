@@ -24,6 +24,12 @@ export async function pick(page: Page, label: string, option: string) {
   await page.getByRole("listbox", { name: label }).getByRole("option", { name: option, exact: true }).click();
 }
 
+/** Sets a filter above the board or List by picking from its list, as "Filter by Priority" → "High". */
+export async function pickFilter(page: Page, label: string, option: string) {
+  await page.getByRole("button", { name: new RegExp(`^Filter by ${label}`) }).click();
+  await page.getByRole("listbox", { name: label }).getByRole("option", { name: option, exact: true }).click();
+}
+
 /** Creates a Ticket from the Project's page head, as New Ticket does. */
 export async function newTicket(page: Page, title: string) {
   await page.getByRole("button", { name: "New Ticket" }).click();
