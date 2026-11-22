@@ -2,9 +2,9 @@ import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { accessOf, type Viewer } from "../identity/viewers.js";
-import { decisionsWithBodiesOf, type Decision } from "./decisions.js";
+import { decisionsWithBodiesOf, type DecisionRecord as Decision } from "./decisions.js";
 import type { Place } from "./places.js";
-import { glossaryOf, termsOf, type Term } from "./terms.js";
+import { glossaryOf, termsOf, type TermRecord as Term } from "./terms.js";
 
 /**
  * A Project's or the Workspace's knowledge as files for a Repository: `GLOSSARY.md` with its glossary, and

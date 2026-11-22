@@ -177,6 +177,7 @@ describe("Reports", () => {
       slug: expect.stringMatching(/^findings-[0-9a-f]{8}$/),
       body: "The bug is in **parsing**.",
       createdAt: "2026-01-01T09:00:00.000Z",
+      mentions: [],
     };
     expect(written.json).toEqual(findings);
     const reports = await ok("GET", `/api/tickets/${ticket.id}/reports`, ada);
@@ -222,6 +223,7 @@ describe("Reports", () => {
         slug: expect.stringMatching(/^triage-report-[0-9a-f]{8}$/),
         body: "Clear enough to start.",
         createdAt: "2026-01-01T09:00:00.000Z",
+        mentions: [],
       },
     ]);
   });

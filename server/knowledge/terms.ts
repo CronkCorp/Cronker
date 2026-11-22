@@ -11,6 +11,7 @@ import { Actor, actorColumn } from "../work/actors.js";
 import type { Place } from "./places.js";
 import { ComparedLine, compareLines, compareWords } from "./compare.js";
 import { outdatedVersion } from "./versions.js";
+import { indexMentions, Mention, mentionsOf } from "../work/mentions.js";
 
 /**
  * Terms: each names one concept, with its definition and the words to avoid, kept by a Project or by the Workspace. Each save makes a Version
@@ -41,10 +42,14 @@ export const Term = Type.Object({
     },
     { description: "The current Version, which a save names as its base." },
   ),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its definition mentions that the caller may read." }),
 });
 export type Term = Static<typeof Term>;
 
-type Row = Omit<Term, "version"> & { version: Omit<Term["version"], "savedAt"> & { savedAt: string } };
+/** A Term as stored, without what its definition mentions. */
+export type TermRecord = Omit<Term, "mentions">;
+
+type Row = Omit<TermRecord, "version"> & { version: Omit<Term["version"], "savedAt"> & { savedAt: string } };
 
 const columns = `terms.id, terms.workspace_id as "workspaceId", terms.project_id as "projectId", versions.name,
   versions.definition, versions.avoid,
@@ -56,7 +61,7 @@ const fromTerms = `terms
   left join users on users.id = versions.actor_user_id
   left join agents on agents.id = versions.actor_agent_id`;
 
-const present = (row: Row): Term => ({
+const present = (row: Row): TermRecord => ({
   ...row,
   version: { ...row.version, savedAt: new Date(row.version.savedAt).toISOString() },
 });
@@ -69,7 +74,13 @@ export async function findTerm(db: Db | Tx, viewer: Viewer, termId: string): Pro
     termId,
     view.value,
   ]);
-  return rows[0] && present(rows[0]);
+  return rows[0] && (await withMentions(db, viewer, [present(rows[0])]))[0];
+}
+
+/** Terms with the Ticket keys their definitions mention that the Viewer may read. */
+export async function withMentions(db: Db | Tx, viewer: Viewer, terms: TermRecord[]): Promise<Term[]> {
+  const mentions = await mentionsOf(db, viewer, "term", terms.map((term) => term.id));
+  return terms.map((term) => ({ ...term, mentions: mentions.get(term.id)! }));
 }
 
 export function termNotFound(): ApiError {
@@ -105,6 +116,8 @@ async function insertVersion(
       now,
     ],
   );
+  // Each Version saved becomes the current one, whose Mentions count.
+  await indexMentions(tx, "term", term, content.definition);
 }
 
 /**
@@ -268,7 +281,7 @@ export async function compareTermVersions(
 }
 
 /** The glossary's own Terms, by name ignoring case. */
-export async function termsOf(db: Db, glossary: Glossary): Promise<Term[]> {
+export async function termsOf(db: Db, glossary: Glossary): Promise<TermRecord[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromTerms}
      where terms.workspace_id = $1 and terms.project_id is not distinct from $2
@@ -282,7 +295,7 @@ export async function termsOf(db: Db, glossary: Glossary): Promise<Term[]> {
  * A Project's glossary: its own Terms over the Workspace's, each Project Term replacing a Workspace Term of the same
  * name ignoring case; by name ignoring case.
  */
-export async function glossaryOf(db: Db, project: Glossary & { projectId: string }): Promise<Term[]> {
+export async function glossaryOf(db: Db, project: Glossary & { projectId: string }): Promise<TermRecord[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromTerms}
      where terms.workspace_id = $1
@@ -307,6 +320,7 @@ export async function deleteTerm({ db, live }: Context, actor: Caller, termId: s
         advice: `Leave the Term as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
       });
     }
+    await tx.query("delete from mentions where source_term_id = $1", [term.id]);
     await tx.query("delete from terms where id = $1", [term.id]);
     termChanged(live, tx, term);
   });

@@ -9,6 +9,7 @@ import { systemClock, type Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Context } from "./context.js";
 import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection } from "./db.js";
+import { backfillMentions } from "./work/mentions.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
@@ -63,6 +64,7 @@ export async function createCronk({
   });
   try {
     await migrate(db, { before: migrateBefore });
+    await backfillMentions(db);
     const context: Context = {
       config,
       db,
