@@ -24,6 +24,10 @@ export const keys = {
   documentAttachments: (documentId: string) => ["document", documentId, "attachments"] as const,
   members: (workspaceId: string) => ["workspace", workspaceId, "members"] as const,
   agents: (workspaceId: string) => ["workspace", workspaceId, "agents"] as const,
+  /** An Agent's Record, page by page. */
+  agentRecord: (agentId: string) => ["agent", agentId, "record"] as const,
+  /** Every Agent's Record: any of their doings may be what an event names. */
+  agentRecords: ["agent"] as const,
   /** Everything loaded of one record, for the events that name only the record. */
   everythingOf: (kind: "project" | "document" | "term" | "decision" | "artifact" | "transcript", id: string) => [kind, id] as const,
   /** Every query: `[]` is a prefix of every key. */
@@ -61,13 +65,17 @@ export function invalidations(event: StreamEvent): QueryKey[] {
         // Linking or unlinking an Artifact brings its Comments onto the timeline, or takes them off.
         keys.comments(event.ticketId),
         keys.projectTickets(event.projectId),
+        // A Run starting or ending, or a Change made, is an Agent's doing.
+        keys.agentRecords,
       ];
     case "comment.added":
       // A Comment on a Document names only the Document.
-      return "ticketId" in event ? [keys.comments(event.ticketId)] : [keys.everythingOf("document", event.documentId)];
+      return "ticketId" in event
+        ? [keys.comments(event.ticketId), keys.agentRecords]
+        : [keys.everythingOf("document", event.documentId), keys.agentRecords];
     case "report.added":
     case "report.changed":
-      return [keys.reports(event.ticketId), keys.documentAttachments(event.reportId)];
+      return [keys.reports(event.ticketId), keys.documentAttachments(event.reportId), keys.agentRecords];
     case "attachments.changed":
       // A Comment's files come with its Comments; a Report's are its Document's.
       return "ticketId" in event
@@ -76,18 +84,19 @@ export function invalidations(event: StreamEvent): QueryKey[] {
     case "pull_requests.changed":
       return [keys.pullRequests(event.ticketId)];
     case "transcripts.changed":
-      return [keys.transcripts(event.ticketId)];
+      return [keys.transcripts(event.ticketId), keys.agentRecords];
+    // Saving any of these makes a Version, which may be an Agent's.
     case "document.changed":
-      return [keys.everythingOf("document", event.documentId)];
+      return [keys.everythingOf("document", event.documentId), keys.agentRecords];
     case "term.changed":
-      return [keys.everythingOf("term", event.termId)];
+      return [keys.everythingOf("term", event.termId), keys.agentRecords];
     case "decision.changed":
-      return [keys.everythingOf("decision", event.decisionId)];
+      return [keys.everythingOf("decision", event.decisionId), keys.agentRecords];
     case "artifact.changed":
     case "artifact.comments.changed":
-      return [keys.everythingOf("artifact", event.artifactId)];
+      return [keys.everythingOf("artifact", event.artifactId), keys.agentRecords];
     case "transcript.changed":
-      return [keys.everythingOf("transcript", event.transcriptId)];
+      return [keys.everythingOf("transcript", event.transcriptId), keys.agentRecords];
     default:
       return unlisted(event);
   }

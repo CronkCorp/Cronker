@@ -2,13 +2,13 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { User } from "../identity/user.js";
 import { startRunIfNeeded, blockingChanged } from "../runs/runs.js";
 import { insertComment } from "./comment-writes.js";
 import { markdown } from "./fields.js";
 import { writeTicket } from "./ticket-writes.js";
-import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "./tickets.js";
+import { findTicket, findTicketRow, ticketNotFound, TicketRef, ticketRefColumn, type Ticket, type TicketRow } from "./tickets.js";
 
 /**
  * Verification: a User's judgement on a Ticket a Run completed. It stays Unverified, in its Done Status,
@@ -67,10 +67,15 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
           "Accept it, then move it where it should go.",
       );
     }
+    // Read before the move, while its Status still says when it was completed.
+    const movedOn = await dependentsMovedOn(tx, userViewer(user.id), ticket.id);
     const now = clock.now();
     // Sent back by a User, like a move by hand, it starts its rounds afresh.
     await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     await insertComment(context, tx, ticket, { kind: "user", id: user.id }, comment, null);
+    for (const dependent of movedOn) {
+      await insertComment(context, tx, dependent.ticket, { kind: "cronk" }, reopenedNotice(ticket.key, comment), null);
+    }
     // Its Status's Changes come after the Comment saying why, and clearing `verification` forgets where it came from.
     await writeTicket(
       context,
@@ -85,6 +90,19 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     await blockingChanged(context, tx, [ticket.id]);
   });
   return (await findTicket(db, userViewer(user.id), ticketId))!;
+}
+
+/**
+ * What Cronk writes on a dependent that moved on when the Ticket it builds on is Reopened: names that Ticket, so
+ * the Mention links it, and quotes the reason.
+ */
+export function reopenedNotice(reopenedKey: string, reason: string): string {
+  const quoted = reason
+    .trim()
+    .split("\n")
+    .map((line) => (line === "" ? ">" : `> ${line}`))
+    .join("\n");
+  return `${reopenedKey}, which blocks this Ticket, was Reopened after this one moved on, so the work this one builds on may change:\n\n${quoted}`;
 }
 
 /** The Ticket, locked, if it is Unverified; otherwise a refusal saying it can't be Accepted or Reopened. */
@@ -167,4 +185,75 @@ export async function completionOf(db: Db, viewer: Viewer, ticketId: string): Pr
     merge,
     reopen: back ? { kind: "back", status: back } : withoutStep ? { kind: "stays" } : { kind: "refused" },
   };
+}
+
+/** A Ticket the completed Ticket blocks that moved on since its completion, as Reopen lists it. */
+export const MovedOnDependent = Type.Object({
+  ticket: TicketRef,
+  status: Type.Object({
+    id: Type.String({ format: "uuid" }),
+    name: Type.String(),
+    kind: Type.Union([
+      Type.Literal("backlog"),
+      Type.Literal("active"),
+      Type.Literal("review"),
+      Type.Literal("done"),
+      Type.Literal("canceled"),
+    ]),
+  }),
+  running: Type.Boolean({ description: "Whether a Run is running on it." }),
+});
+export type MovedOnDependent = Static<typeof MovedOnDependent>;
+
+export const ReopenPreview = Type.Object({
+  dependents: Type.Array(MovedOnDependent, {
+    description:
+      "The Tickets it blocks that moved on since it was completed: they left a Backlog Status, or had a Run start, then " +
+      "or later. Only those the caller may read; by key. Empty for a Ticket that isn't Unverified.",
+  }),
+});
+export type ReopenPreview = Static<typeof ReopenPreview>;
+
+/** What Reopening the Ticket would touch besides itself: the dependents that moved on since it was completed. */
+export async function reopenPreview(db: Db, viewer: Viewer, ticketId: string): Promise<ReopenPreview> {
+  const ticket = await findTicketRow(db, viewer, ticketId);
+  if (!ticket) throw ticketNotFound();
+  if (ticket.verification !== "unverified") return { dependents: [] };
+  return { dependents: await dependentsMovedOn(db, viewer, ticket.id) };
+}
+
+/**
+ * The Tickets an Unverified Ticket blocks, that the Viewer may read, which moved on since it was completed: a Change
+ * out of a Backlog Status, or a Run started, at its completion or later. It was completed when it entered its Done
+ * Status, which it can't leave by hand while Unverified. A Run starting at the completion itself counts, as one
+ * waiting on it starts the moment it is completed.
+ */
+async function dependentsMovedOn(
+  db: Db | Tx,
+  viewer: Viewer,
+  ticketId: string,
+): Promise<(MovedOnDependent & { ticket: { workspaceId: string } })[]> {
+  const reach = inReach(viewer, { project: "dependent.project_id", workspace: "dependent.workspace_id" }, "$2");
+  const { rows } = await db.query<MovedOnDependent & { workspaceId: string }>(
+    `select ${ticketRefColumn("dependent", "dependent_projects")} as ticket, dependent.workspace_id as "workspaceId",
+       json_build_object('id', status.id, 'name', status.name, 'kind', status.kind) as status,
+       exists (select 1 from runs where runs.ticket_id = dependent.id and runs.state = 'running') as running
+     from tickets completed
+     join relations on relations.kind = 'blocks' and relations.ticket_id = completed.id
+     join tickets dependent on dependent.id = relations.other_ticket_id
+     join projects dependent_projects on dependent_projects.id = dependent.project_id
+     join statuses status on status.id = dependent.status_id
+     where completed.id = $1 and ${reach.sql}
+       and (
+         exists (select 1 from runs where runs.ticket_id = dependent.id and runs.started_at >= completed.status_entered_at)
+         or exists (
+           select 1 from changes join statuses left_status on left_status.id::text = changes.from_value ->> 'id'
+           where changes.ticket_id = dependent.id and changes.field = 'status' and left_status.kind = 'backlog'
+             and changes.at >= completed.status_entered_at
+         )
+       )
+     order by dependent_projects.key, dependent.number`,
+    [ticketId, reach.value],
+  );
+  return rows.map(({ workspaceId, ...dependent }) => ({ ...dependent, ticket: { ...dependent.ticket, workspaceId } }));
 }
