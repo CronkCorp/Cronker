@@ -182,8 +182,10 @@ export const priorities: { priority: Priority; label: string }[] = [
   { priority: "none", label: "None" },
 ];
 
-/** A Ticket key written in Markdown that names a Ticket of the Workspace. */
+/** A Ticket key written in Markdown that names a Ticket of the Workspace, outside code and links. */
 export interface Mention {
+  kind: "ticket";
+  /** The key as written, such as `cronk-12`. */
   text: string;
   key: string;
   ticketId: string;
@@ -220,8 +222,26 @@ export interface TicketSummary {
   blockedByHidden: number;
 }
 
+/** A text that mentions a Ticket, as its Mentioned in lists it. */
+export interface MentioningText {
+  kind: "ticket" | "comment" | "document" | "report" | "term" | "decision";
+  id: string;
+  /** Null for the Workspace's own knowledge. */
+  projectId: string | null;
+  /** Its title; a Term's name; for a Comment, its Ticket's title. */
+  title: string;
+  /** The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for other knowledge. */
+  ticket: TicketRef | null;
+  /** A Document's or Report's slug. */
+  slug: string | null;
+  /** A Decision's number. */
+  number: number | null;
+}
+
 export interface Ticket extends TicketSummary {
   mentions: Mention[];
+  /** The other texts mentioning it that the User may read, most recently saved first. */
+  mentionedIn: MentioningText[];
   /** What its Runs cost in all, one total per currency; empty when none reported a cost. */
   cost: Cost[];
 }
@@ -431,6 +451,7 @@ export interface Report {
   slug: string;
   body: string;
   createdAt: string;
+  mentions: Mention[];
 }
 
 /** Who made a Change: a User, an Agent, or Cronk itself. */
@@ -686,6 +707,7 @@ export interface DocumentSummary {
 
 export interface Document extends DocumentSummary {
   body: string;
+  mentions: Mention[];
 }
 
 export interface DocumentEdit {
@@ -840,6 +862,7 @@ export interface Term {
   definition: string;
   avoid: string[];
   version: { number: number; actor: Actor; savedAt: string };
+  mentions: Mention[];
 }
 
 /** One saved state of a Term, recording the Actor who saved it. */
@@ -894,6 +917,7 @@ export interface DecisionSummary {
 
 export interface Decision extends DecisionSummary {
   body: string;
+  mentions: Mention[];
 }
 
 export interface DecisionEdit {

@@ -563,7 +563,7 @@ function LatestReport({ ticketId, workspaceId }: { ticketId: string; workspaceId
         <Actor actor={{ kind: "agent", name: report.agent.name }} />
       </header>
       <div className="markdown-compact">
-        <Markdown text={report.body} mentions={[]} />
+        <Markdown text={report.body} mentions={report.mentions} />
       </div>
     </div>
   );

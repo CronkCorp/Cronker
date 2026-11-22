@@ -1,0 +1,346 @@
+import { afterEach, describe, expect, test } from "vitest";
+import { addMember, setUp, signIn } from "../harness/flows.js";
+import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+
+/**
+ * Mentions (CRONK-11): every Markdown text, a Ticket's description, a Comment, a Document, a Report, a Term's
+ * definition and a Decision's body, links the Ticket keys it mentions outside code and links, and each Ticket lists
+ * the texts mentioning it under Mentioned in; both only as far as the reader may read.
+ */
+
+let cronk: StartedCronk;
+afterEach(async () => {
+  await cronk?.stop();
+});
+
+interface As {
+  cookie?: string;
+  headers?: Record<string, string>;
+}
+
+async function call(method: string, path: string, as: As, body?: unknown) {
+  const response = await cronk.request(method, path, { ...as, body });
+  return { status: response.status, json: response.status === 204 ? null : await response.json() };
+}
+
+async function ok(method: string, path: string, as: As, body?: unknown) {
+  const response = await call(method, path, as, body);
+  expect(response.status, `${method} ${path}: ${JSON.stringify(response.json)}`).toBeLessThan(300);
+  return response.json;
+}
+
+/** Ada with a Project CRONK holding CRONK-1, the Ticket the texts mention. */
+async function workspaceWithTicket() {
+  cronk = await startCronk();
+  const { workspace, user } = await setUp(cronk);
+  const ada = { cookie: await signIn(cronk) };
+  const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
+  const target = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "The one mentioned" });
+  return { workspace, user, ada, project, target };
+}
+
+type Setting = Awaited<ReturnType<typeof workspaceWithTicket>>;
+
+/** A Run of an Agent on a Ticket of the Project, for writing a Report. */
+async function runningRun({ workspace, ada, project }: Setting) {
+  const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Investigate" });
+  const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+  const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+  const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
+  await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
+  return { ticket, asAgent: { headers: { authorization: `Bearer ${secret}` } } };
+}
+
+const mentionOf = (target: { id: string }, text = "CRONK-1") => ({
+  kind: "ticket",
+  text,
+  key: "CRONK-1",
+  ticketId: target.id,
+});
+
+const mentionedIn = async (as: As, ticketId: string) => (await ok("GET", `/api/tickets/${ticketId}`, as)).mentionedIn;
+
+/**
+ * Each kind of text: writing it with the Markdown given, then reading it back, through the API that shows it, as the
+ * response and later read show it.
+ */
+const kinds = {
+  ticket: {
+    async write(s: Setting, markdown: string) {
+      const ticket = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Mentions", description: markdown });
+      return { written: ticket, read: () => ok("GET", `/api/tickets/${ticket.id}`, s.ada) };
+    },
+    async edit(s: Setting, id: string, markdown: string) {
+      return ok("PATCH", `/api/tickets/${id}`, s.ada, { description: markdown });
+    },
+  },
+  comment: {
+    async write(s: Setting, markdown: string) {
+      const comment = await ok("POST", `/api/tickets/${s.target.id}/comments`, s.ada, { body: markdown });
+      const read = async () =>
+        (await ok("GET", `/api/tickets/${s.target.id}/comments`, s.ada)).find((c: { id: string }) => c.id === comment.id);
+      return { written: comment, read };
+    },
+    edit: undefined,
+  },
+  document: {
+    async write(s: Setting, markdown: string) {
+      const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Notes", body: markdown });
+      return { written: document, read: () => ok("GET", `/api/documents/${document.id}`, s.ada) };
+    },
+    async edit(s: Setting, id: string, markdown: string) {
+      const { version } = await ok("GET", `/api/documents/${id}`, s.ada);
+      return ok("PATCH", `/api/documents/${id}`, s.ada, { baseVersion: version.number, body: markdown });
+    },
+  },
+  report: {
+    async write(s: Setting, markdown: string) {
+      const { ticket, asAgent } = await runningRun(s);
+      const report = await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: markdown });
+      const read = async () =>
+        (await ok("GET", `/api/tickets/${ticket.id}/reports`, s.ada)).find((r: { id: string }) => r.id === report.id);
+      return { written: report, read };
+    },
+    async edit(s: Setting, id: string, markdown: string) {
+      const { version } = await ok("GET", `/api/documents/${id}`, s.ada);
+      return ok("PATCH", `/api/documents/${id}`, s.ada, { baseVersion: version.number, body: markdown });
+    },
+  },
+  term: {
+    async write(s: Setting, markdown: string) {
+      const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Run", definition: markdown });
+      return { written: term, read: () => ok("GET", `/api/terms/${term.id}`, s.ada) };
+    },
+    async edit(s: Setting, id: string, markdown: string) {
+      const { version } = await ok("GET", `/api/terms/${id}`, s.ada);
+      return ok("PATCH", `/api/terms/${id}`, s.ada, { baseVersion: version.number, definition: markdown });
+    },
+  },
+  decision: {
+    async write(s: Setting, markdown: string) {
+      const decision = await ok("POST", `/api/projects/${s.project.id}/decisions`, s.ada, { title: "Use Postgres", body: markdown });
+      return { written: decision, read: () => ok("GET", `/api/decisions/${decision.id}`, s.ada) };
+    },
+    async edit(s: Setting, id: string, markdown: string) {
+      const { version } = await ok("GET", `/api/decisions/${id}`, s.ada);
+      return ok("PATCH", `/api/decisions/${id}`, s.ada, { baseVersion: version.number, body: markdown });
+    },
+  },
+};
+
+describe("Ticket Mentions in each kind of text", () => {
+  test.each(Object.keys(kinds) as (keyof typeof kinds)[])(
+    "a %s links the Ticket keys it mentions, whatever their case, and its Ticket lists it under Mentioned in",
+    async (kind) => {
+      const s = await workspaceWithTicket();
+      const ops = await ok("POST", `/api/workspaces/${s.workspace.id}/projects`, s.ada, { name: "Operations", key: "OPS" });
+      const opsOne = await ok("POST", `/api/projects/${ops.id}/tickets`, s.ada, { title: "Ops one" });
+
+      const { written, read } = await kinds[kind].write(
+        s,
+        "After CRONK-1 and ops-1, again CRONK-1; not CRONK-99, NOPE-1, XCRONK-1x or CRONK-1x.",
+      );
+
+      const expected = [mentionOf(s.target), { kind: "ticket", text: "ops-1", key: "OPS-1", ticketId: opsOne.id }];
+      expect(written.mentions).toEqual(expected);
+      expect((await read()).mentions).toEqual(expected);
+      expect((await mentionedIn(s.ada, s.target.id)).map((t: { kind: string; id: string }) => [t.kind, t.id])).toEqual([
+        [kind, written.id],
+      ]);
+      expect((await mentionedIn(s.ada, opsOne.id)).map((t: { id: string }) => t.id)).toEqual([written.id]);
+    },
+  );
+
+  test.each(Object.keys(kinds).filter((kind) => kinds[kind as keyof typeof kinds].edit) as (keyof typeof kinds)[])(
+    "saving a %s again indexes it as it now reads",
+    async (kind) => {
+      const s = await workspaceWithTicket();
+      const other = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Other" });
+      const { written, read } = await kinds[kind].write(s, "About CRONK-1.");
+
+      const edited = await kinds[kind].edit!(s, written.id, `Now about ${other.key} only.`);
+
+      const now = [{ kind: "ticket", text: other.key, key: other.key, ticketId: other.id }];
+      expect(edited.mentions).toEqual(now);
+      expect((await read()).mentions).toEqual(now);
+      expect(await mentionedIn(s.ada, s.target.id)).toEqual([]);
+      expect((await mentionedIn(s.ada, other.id)).map((t: { id: string }) => t.id)).toEqual([written.id]);
+    },
+  );
+
+  test("Mentioned in says what links to each text, most recently saved first, leaving out the Ticket's own description", async () => {
+    const s = await workspaceWithTicket();
+    await ok("PATCH", `/api/tickets/${s.target.id}`, s.ada, { description: "I am CRONK-1." });
+    const ticket = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Follow-up", description: "After CRONK-1." });
+    const comment = await ok("POST", `/api/tickets/${ticket.id}/comments`, s.ada, { body: "Needs CRONK-1 first." });
+    const document = await ok("POST", `/api/workspaces/${s.workspace.id}/documents`, s.ada, { title: "Plan", body: "CRONK-1" });
+    const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Lane", definition: "See CRONK-1." });
+    const decision = await ok("POST", `/api/projects/${s.project.id}/decisions`, s.ada, { title: "Lanes", body: "Per CRONK-1." });
+
+    const ref = { id: ticket.id, projectId: s.project.id, key: "CRONK-2", title: "Follow-up" };
+    expect(await mentionedIn(s.ada, s.target.id)).toEqual([
+      { kind: "decision", id: decision.id, projectId: s.project.id, title: "Lanes", ticket: null, slug: null, number: 1 },
+      { kind: "term", id: term.id, projectId: s.project.id, title: "Lane", ticket: null, slug: null, number: null },
+      { kind: "document", id: document.id, projectId: null, title: "Plan", ticket: null, slug: document.slug, number: null },
+      { kind: "comment", id: comment.id, projectId: s.project.id, title: "Follow-up", ticket: ref, slug: null, number: null },
+      { kind: "ticket", id: ticket.id, projectId: s.project.id, title: "Follow-up", ticket: ref, slug: null, number: null },
+    ]);
+    // Its own description still links the key.
+    expect((await ok("GET", `/api/tickets/${s.target.id}`, s.ada)).mentions).toEqual([mentionOf(s.target)]);
+  });
+
+  test("a Report under Mentioned in names its Ticket and slug", async () => {
+    const s = await workspaceWithTicket();
+    const { ticket, asAgent } = await runningRun(s);
+    const report = await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: "CRONK-1." });
+
+    expect(await mentionedIn(s.ada, s.target.id)).toEqual([
+      {
+        kind: "report",
+        id: report.id,
+        projectId: s.project.id,
+        title: "Findings",
+        ticket: { id: ticket.id, projectId: s.project.id, key: ticket.key, title: "Investigate" },
+        slug: report.slug,
+        number: null,
+      },
+    ]);
+  });
+
+  test("Terms listed in a glossary carry their Mentions", async () => {
+    const s = await workspaceWithTicket();
+    await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Lane", definition: "See CRONK-1." });
+
+    for (const path of [`/api/projects/${s.project.id}/terms`, `/api/projects/${s.project.id}/glossary`]) {
+      expect((await ok("GET", path, s.ada)).map((t: { mentions: unknown }) => t.mentions), path).toEqual([
+        [mentionOf(s.target)],
+      ]);
+    }
+  });
+});
+
+describe("what isn't a Mention", () => {
+  test("keys in code spans, code blocks, raw HTML, links and link definitions stay plain text", async () => {
+    const s = await workspaceWithTicket();
+    const markdown = [
+      "Run `CRONK-1` here, see [CRONK-1](https://example.com/CRONK-1), <https://example.com/CRONK-1> and [ref][CRONK-1].",
+      "",
+      "```",
+      "CRONK-1",
+      "```",
+      "",
+      "    CRONK-1 indented",
+      "",
+      "<div>CRONK-1</div>",
+      "",
+      "[CRONK-1]: https://example.com",
+    ].join("\n");
+
+    for (const kind of Object.keys(kinds) as (keyof typeof kinds)[]) {
+      const { written } = await kinds[kind].write(s, markdown);
+      expect(written.mentions, kind).toEqual([]);
+    }
+    expect(await mentionedIn(s.ada, s.target.id)).toEqual([]);
+
+    const { written } = await kinds.document.write(s, "But *CRONK-1* in emphasis, a **CRONK-1** and > CRONK-1 are.");
+    expect(written.mentions).toEqual([mentionOf(s.target)]);
+  });
+
+  test("a key naming no Ticket stays plain text until a Ticket takes it, and a deleted text drops out of Mentioned in", async () => {
+    const s = await workspaceWithTicket();
+    const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Plan", body: "Then CRONK-2." });
+    expect(document.mentions).toEqual([]);
+
+    const later = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Later" });
+
+    expect((await ok("GET", `/api/documents/${document.id}`, s.ada)).mentions).toEqual([
+      { kind: "ticket", text: "CRONK-2", key: "CRONK-2", ticketId: later.id },
+    ]);
+    expect((await mentionedIn(s.ada, later.id)).map((t: { id: string }) => t.id)).toEqual([document.id]);
+
+    await ok("DELETE", `/api/documents/${document.id}`, s.ada);
+    const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Lane", definition: "CRONK-2" });
+    await ok("DELETE", `/api/terms/${term.id}`, s.ada);
+    expect(await mentionedIn(s.ada, later.id)).toEqual([]);
+  });
+});
+
+describe("Mentions and Access", () => {
+  /** A private Project SECRET only Ada and Linus may read, next to the open CRONK; Grace may read only CRONK. */
+  async function privateProject() {
+    const s = await workspaceWithTicket();
+    const grace = await addMember(cronk, s.ada.cookie, s.workspace.id, "grace@example.com");
+    const linus = await addMember(cronk, s.ada.cookie, s.workspace.id, "linus@example.com");
+    const secret = await ok("POST", `/api/workspaces/${s.workspace.id}/projects`, s.ada, { name: "Secret", key: "SECRET" });
+    const hidden = await ok("POST", `/api/projects/${secret.id}/tickets`, s.ada, { title: "Hidden" });
+    await ok("PUT", `/api/projects/${secret.id}/access`, s.ada, {
+      visibility: "private",
+      users: [{ userId: linus.user.id, level: "write" }],
+    });
+    return { ...s, secret, hidden, grace: { cookie: grace.cookie }, linus: { cookie: linus.cookie } };
+  }
+
+  test("a Mention of a Ticket the reader can't read stays plain text", async () => {
+    const s = await privateProject();
+    const ticket = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, {
+      title: "Open",
+      description: "Waits on SECRET-1 and CRONK-1.",
+    });
+    const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Plan", body: "SECRET-1" });
+
+    const secretMention = { kind: "ticket", text: "SECRET-1", key: "SECRET-1", ticketId: s.hidden.id };
+    for (const [who, as, mentions] of [
+      ["Ada", s.ada, [secretMention, mentionOf(s.target)]],
+      ["Linus", s.linus, [secretMention, mentionOf(s.target)]],
+      ["Grace", s.grace, [mentionOf(s.target)]],
+    ] as const) {
+      expect((await ok("GET", `/api/tickets/${ticket.id}`, as)).mentions, who).toEqual(mentions);
+    }
+    expect((await ok("GET", `/api/documents/${document.id}`, s.grace)).mentions).toEqual([]);
+    expect((await ok("GET", `/api/documents/${document.id}`, s.linus)).mentions).toEqual([secretMention]);
+  });
+
+  test("Mentioned in leaves out the texts the reader can't read", async () => {
+    const s = await privateProject();
+    const hiddenDoc = await ok("POST", `/api/projects/${s.secret.id}/documents`, s.ada, { title: "Hidden plan", body: "CRONK-1" });
+    await ok("POST", `/api/tickets/${s.hidden.id}/comments`, s.ada, { body: "Also CRONK-1." });
+    const openDoc = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Open plan", body: "CRONK-1" });
+
+    const ids = async (as: As) => (await mentionedIn(as, s.target.id)).map((t: { kind: string }) => t.kind);
+    expect(await ids(s.linus)).toEqual(["document", "comment", "document"]);
+    expect(await ids(s.grace)).toEqual(["document"]);
+    expect((await mentionedIn(s.grace, s.target.id))[0].id).toBe(openDoc.id);
+    expect((await mentionedIn(s.ada, s.target.id)).map((t: { id: string }) => t.id)).toContain(hiddenDoc.id);
+  });
+});
+
+describe("texts written before the Mention index", () => {
+  test("are indexed once on the next start", async () => {
+    const s = await workspaceWithTicket();
+    const ticket = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Then", description: "After CRONK-1." });
+    const comment = await ok("POST", `/api/tickets/${ticket.id}/comments`, s.ada, { body: "CRONK-1 `CRONK-2`" });
+    const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Plan", body: "v1" });
+    await ok("PATCH", `/api/documents/${document.id}`, s.ada, { baseVersion: 1, body: "v2 is about CRONK-1" });
+    const term = await ok("POST", `/api/projects/${s.project.id}/terms`, s.ada, { name: "Lane", definition: "CRONK-1" });
+    const decision = await ok("POST", `/api/projects/${s.project.id}/decisions`, s.ada, { title: "Lanes", body: "CRONK-1" });
+    // As a Cronk before migration 0053 left them: no Mentions recorded, with their indexing still to do.
+    await cronk.stage("delete from mentions");
+    await cronk.stage("insert into pending_backfills (name) values ('mentions')");
+    expect(await mentionedIn(s.ada, s.target.id)).toEqual([]);
+
+    await cronk.upgrade();
+
+    expect((await mentionedIn(s.ada, s.target.id)).map((t: { kind: string; id: string }) => [t.kind, t.id]).sort()).toEqual(
+      [
+        ["comment", comment.id],
+        ["decision", decision.id],
+        ["document", document.id],
+        ["term", term.id],
+        ["ticket", ticket.id],
+      ].sort(),
+    );
+    expect((await ok("GET", `/api/tickets/${ticket.id}/comments`, s.ada))[0].mentions).toEqual([mentionOf(s.target)]);
+  });
+});

@@ -18,6 +18,7 @@ import {
   TermComparison,
   termNotFound,
   termsOf,
+  withMentions,
   TermVersion,
   versionsOf,
 } from "./terms.js";
@@ -60,7 +61,10 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             response: { 200: Type.Array(Term), 401: ErrorBody, 404: ErrorBody },
           },
         },
-        async (request) => termsOf(db, await place.find(request, await requireCaller(context, request))),
+        async (request) => {
+          const caller = await requireCaller(context, request);
+          return withMentions(db, caller, await termsOf(db, await place.find(request, caller)));
+        },
       );
 
       app.post(
@@ -100,9 +104,10 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const project = await findProject(db, await requireCaller(context, request), request.params.projectId);
+        const caller = await requireCaller(context, request);
+        const project = await findProject(db, caller, request.params.projectId);
         if (!project) throw projectNotFound();
-        return glossaryOf(db, { workspaceId: project.workspaceId, projectId: project.id });
+        return withMentions(db, caller, await glossaryOf(db, { workspaceId: project.workspaceId, projectId: project.id }));
       },
     );
 

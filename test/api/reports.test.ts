@@ -50,7 +50,7 @@ async function runningRun(options: StartCronkOptions = {}) {
   // Setting up, creating a Project and starting its Runs, as today's API does, needs Workspace slugs and the Merge
   // Step's columns and the Repositories a Project lists; setting up a Runner needs the columns of a Managed Agents
   // Runner's setup; reading a Ticket or a Runner needs the columns of Runs' costs; finding a Project or a Ticket
-  // needs Access.
+  // needs Access; writing a Ticket's description or a Comment needs the Mention index.
   if (options.migrateBefore !== undefined) {
     await cronk.applyAhead("0022_repositories.sql");
     await cronk.applyAhead("0033_merge_step.sql");
@@ -59,6 +59,7 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0047_managed_agents_webhooks.sql");
     await cronk.applyAhead("0049_run_costs.sql");
     await cronk.applyAhead("0051_access.sql");
+    await cronk.applyAhead("0053_mentions.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
@@ -110,6 +111,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         slug: `findings-${findings.slice(0, 8)}`,
         body: "The bug is in **parsing**.",
         createdAt: "2026-01-01T09:30:00.000Z",
+        mentions: [],
       },
       {
         id: plan,
@@ -120,6 +122,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         slug: `plan-${plan.slice(0, 8)}`,
         body: "Fix the parser.",
         createdAt: "2026-01-01T09:30:00.000Z",
+        mentions: [],
       },
     ]);
     expect(await ok("GET", `/api/documents/${findings}/versions`, ada)).toEqual([
@@ -152,6 +155,7 @@ describe("Reports as Documents", () => {
       slug: `findings-${report.id.slice(0, 8)}`,
       body: "The bug is in **parsing**.",
       version: { number: 1, title: "Findings", actor: byAgent, savedAt: "2026-01-01T09:00:00.000Z" },
+      mentions: [],
     });
   });
 
@@ -173,6 +177,7 @@ describe("Reports as Documents", () => {
         slug: `findings-${report.id.slice(0, 8)}`,
         body: "Parsing, in `lex()`.",
         createdAt: "2026-01-01T09:00:00.000Z",
+        mentions: [],
       },
     ]);
     const versions = await ok("GET", `/api/documents/${report.id}/versions`, ada);

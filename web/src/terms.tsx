@@ -1,6 +1,6 @@
 import { useAddresses, useCanonicalAddress } from "./addresses.js";
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type Place, type ProjectSummary, type Term, type TermComparison, type TermVersion, type Workspace } from "./api.js";
+import { api, ApiError, type Mention, type Place, type ProjectSummary, type Term, type TermComparison, type TermVersion, type Workspace } from "./api.js";
 import { DocumentBody, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
@@ -126,7 +126,7 @@ function Glossary({
                   <span className="term-scope">{term.projectId === null ? "Workspace" : (project?.key ?? "Project")}</span>
                   <span className="term-version">Version {term.version.number}</span>
                 </header>
-                {term.definition.trim() && <Markdown text={term.definition} mentions={[]} />}
+                {term.definition.trim() && <Markdown text={term.definition} mentions={term.mentions} />}
                 <Avoid words={term.avoid} />
               </article>
             );
@@ -316,7 +316,7 @@ export function TermScreen({
         />
       ) : (
         <div className="page-split">
-          <TermBody name={term.name} definition={term.definition} avoid={term.avoid} />
+          <TermBody name={term.name} definition={term.definition} avoid={term.avoid} mentions={term.mentions} />
           <aside className="side" aria-label="Term details">
             <Versions current={term.version.number} source={termVersions(term.id)} />
           </aside>
@@ -422,10 +422,21 @@ function Editor({
 }
 
 /** A Term as it reads, drawn as a Document's body is: its definition, then the words to avoid. Named, it is an article. */
-function TermBody({ name, definition, avoid }: { name?: string; definition: string; avoid: string[] }) {
+function TermBody({
+  name,
+  definition,
+  avoid,
+  mentions,
+}: {
+  name?: string;
+  definition: string;
+  avoid: string[];
+  mentions?: Mention[];
+}) {
   return (
     <DocumentBody
       body={definition}
+      mentions={mentions}
       label={name}
       after={<Avoid words={avoid} />}
       empty={

@@ -14,6 +14,7 @@ import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
 import { findSection, pathOf, replaceSection, sectionsOf, sectionText, type Section } from "./sections.js";
 import { outdatedVersion } from "./versions.js";
+import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace, or, as a Report,
@@ -51,13 +52,14 @@ export const Document = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
 });
 export type Document = Static<typeof Document>;
 
 /** Which page tree a Document is in: a Project's, or the Workspace's when `projectId` is null. */
 export type Tree = Place;
 
-type Row = Omit<Document, "version"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
+type Row = Omit<Document, "version" | "mentions"> & { version: Omit<Version, "savedAt"> & { savedAt: string } };
 
 const columns = `documents.id, documents.workspace_id as "workspaceId", documents.project_id as "projectId",
   documents.ticket_id as "ticketId", documents.run_id as "runId", documents.parent_id as "parentId", documents.position, versions.title,
@@ -70,7 +72,7 @@ const fromDocuments = `documents
   left join users on users.id = versions.actor_user_id
   left join agents on agents.id = versions.actor_agent_id`;
 
-const present = (row: Row): Document => ({
+const present = (row: Row): Omit<Document, "mentions"> => ({
   ...row,
   version: { ...row.version, savedAt: new Date(row.version.savedAt).toISOString() },
 });
@@ -83,7 +85,7 @@ export async function findDocument(db: Db | Tx, viewer: Viewer, documentId: stri
     documentId,
     view.value,
   ]);
-  return rows[0] && present(rows[0]);
+  return rows[0] && { ...present(rows[0]), mentions: await mentionsOfOne(db, viewer, "document", rows[0].id) };
 }
 
 export function documentNotFound(): ApiError {
@@ -124,9 +126,11 @@ export async function insertVersion(
       now,
     ],
   );
+  // Each Version saved becomes the current one, whose Mentions count.
+  await indexMentions(tx, "document", document, content.body);
 }
 
-export const DocumentSummary = Type.Omit(Document, ["body"]);
+export const DocumentSummary = Type.Omit(Document, ["body", "mentions"]);
 export type DocumentSummary = Static<typeof DocumentSummary>;
 
 /** A page tree's Documents in tree order: each right after its parent, siblings by their place; without bodies. */

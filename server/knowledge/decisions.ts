@@ -11,6 +11,7 @@ import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
 import { outdatedVersion } from "./versions.js";
+import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
 
 /**
  * Decisions: recorded choices with their reasoning and a status, of a Project or of the Workspace, numbered in
@@ -54,11 +55,15 @@ export const Decision = Type.Object({
   status: DecisionStatus,
   supersededById: SupersededById,
   version: Type.Object(DecisionVersion.properties, { description: "The current Version, which a save names as its base." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
 });
 export type Decision = Static<typeof Decision>;
 
+/** A Decision as stored, without what its body mentions. */
+export type DecisionRecord = Omit<Decision, "mentions">;
 
-type Row = Omit<Decision, "version"> & { version: DecisionVersion };
+
+type Row = Omit<DecisionRecord, "version"> & { version: DecisionVersion };
 
 const columns = `decisions.id, decisions.workspace_id as "workspaceId", decisions.project_id as "projectId",
   decisions.number, versions.title, versions.body, versions.status, versions.superseded_by_id as "supersededById",
@@ -71,7 +76,7 @@ const fromDecisions = `decisions
   left join users on users.id = versions.actor_user_id
   left join agents on agents.id = versions.actor_agent_id`;
 
-const present = (row: Row): Decision => ({
+const present = (row: Row): DecisionRecord => ({
   ...row,
   version: { ...row.version, savedAt: new Date(row.version.savedAt).toISOString() },
 });
@@ -84,7 +89,7 @@ export async function findDecision(db: Db | Tx, viewer: Viewer, decisionId: stri
     decisionId,
     view.value,
   ]);
-  return rows[0] && present(rows[0]);
+  return rows[0] && { ...present(rows[0]), mentions: await mentionsOfOne(db, viewer, "decision", rows[0].id) };
 }
 
 export function decisionNotFound(): ApiError {
@@ -131,6 +136,8 @@ async function insertVersion(
       now,
     ],
   );
+  // Each Version saved becomes the current one, whose Mentions count.
+  await indexMentions(tx, "decision", decision, content.body);
 }
 
 /** A Decision's status, and the Decision replacing it while superseded. */
@@ -247,11 +254,11 @@ export async function createDecision(
   });
 }
 
-export const DecisionSummary = Type.Omit(Decision, ["body"]);
+export const DecisionSummary = Type.Omit(Decision, ["body", "mentions"]);
 export type DecisionSummary = Static<typeof DecisionSummary>;
 
 /** The scope's Decisions by number, with their bodies. */
-export async function decisionsWithBodiesOf(db: Db, scope: Place): Promise<Decision[]> {
+export async function decisionsWithBodiesOf(db: Db, scope: Place): Promise<DecisionRecord[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromDecisions}
      where decisions.workspace_id = $1 and decisions.project_id is not distinct from $2

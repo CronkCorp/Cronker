@@ -9,6 +9,7 @@ import {
   type Comparison,
   type Document,
   type DocumentSummary,
+  type Mention,
   type ProjectSummary,
   type Ticket,
   type Tree,
@@ -64,11 +65,14 @@ export const versionLine = (version: { number: number; actor: { name: string } }
  */
 export function DocumentBody({
   body,
+  mentions = [],
   label,
   empty,
   after,
 }: {
   body: string;
+  /** The Ticket keys it mentions, linked; only the current Version's are known, so a past Version's are plain text. */
+  mentions?: Mention[];
   label?: string;
   empty?: ReactNode;
   /** What follows the body at the same measure, such as a Term's words to avoid. */
@@ -79,7 +83,7 @@ export function DocumentBody({
       empty
     ) : (
       <div className="prose">
-        <Markdown text={body} mentions={[]} />
+        <Markdown text={body} mentions={mentions} />
         {after}
       </div>
     );
@@ -322,6 +326,7 @@ export function DocumentScreen({
           <div className="page">
             <DocumentBody
               body={document.body}
+              mentions={document.mentions}
               label={document.title}
               empty={<EmptyState title="Nothing written yet.">Edit adds the first words, and saving makes a new Version.</EmptyState>}
             />
