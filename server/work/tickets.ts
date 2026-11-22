@@ -118,9 +118,15 @@ export const TicketSummary = Type.Object({
     [
       Type.Object({
         position: Type.Integer({ minimum: 1, description: "Its place in its queue, the head being 1." }),
-        state: Type.Union([Type.Literal("queued"), Type.Literal("merging")], {
-          description: "`merging` while Cronk asks GitHub to merge it; `queued` while it waits.",
-        }),
+        state: Type.Union(
+          [Type.Literal("queued"), Type.Literal("merging"), Type.Literal("updating-branch"), Type.Literal("waiting-for-checks")],
+          {
+            description:
+              "`merging` while Cronk asks GitHub to merge it; `updating-branch` while Cronk asks GitHub to bring its branch, " +
+              "behind its base branch, up to date; `waiting-for-checks` until the updated commit's checks are green; " +
+              "`queued` while it waits.",
+          },
+        ),
         pullRequestId: Type.Number({ description: "GitHub's id for the queued Pull Request." }),
       }),
       Type.Null(),

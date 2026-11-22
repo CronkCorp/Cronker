@@ -517,3 +517,64 @@ test("Merge queues Tickets: the Merge column lists them in queue order with thei
   await expect(cards).toHaveCount(0);
   await expect(board.getByRole("region", { name: "In Review", exact: true })).toContainText("CRONK-1");
 });
+
+test("a queued head behind its base branch shows Updating branch, then Waiting for checks, live, until it merges", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call("POST", `/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  const deliver = async (event: string, payload: Record<string, unknown>) => {
+    const delivered = await cronk.github.deliver(app, event, {
+      installation: { id: installation.id },
+      repository: { id: cronker.id, full_name: cronker.fullName },
+      ...payload,
+    });
+    expect(delivered.status).toBe(200);
+  };
+  const check = (sha: string, id: number) =>
+    deliver("check_run", {
+      action: "completed",
+      check_run: { id, name: "test", head_sha: sha, status: "completed", conclusion: "success", html_url: null },
+    });
+  // CRONK-1 in In Review, its Pull Request green and merging cleanly but behind main; a User queues it.
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Change 1" });
+  await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: inReview });
+  const pullRequest = {
+    id: 501, number: 1, title: "CRONK-1: change 1", state: "open", draft: false, merged: false,
+    html_url: "https://github.com/cronkcorp/cronker/pull/1", head: { ref: "cronk-1", sha: "c1" }, base: { ref: "main" },
+    updated_at: "2026-01-01T09:00:00Z",
+  };
+  await deliver("pull_request", { action: "opened", pull_request: pullRequest });
+  await check("c1", 1);
+  cronk.github.pullRequest(cronker, 1, { headSha: "c1", mergeable: true, behind: true });
+  await call("POST", `/api/tickets/${ticket.id}/merge`);
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const cards = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "Merge", exact: true }).locator(".card-link");
+  await expect(cards).toHaveText([/CRONK-1.*#1 in queue/]);
+
+  // The pass asks GitHub to update its branch: the card says so while GitHub is asked, then waits for the checks.
+  cronk.github.onUpdate = async () => {
+    await expect(cards).toHaveText([/CRONK-1.*Updating branch/]);
+  };
+  await cronk.checkQueue();
+  await expect(cards).toHaveText([/CRONK-1.*Waiting for checks/]);
+  expect(cronk.github.merges).toEqual([]);
+
+  // GitHub reports the new commit and its green check, which merges it at once.
+  await deliver("pull_request", {
+    action: "synchronize",
+    pull_request: { ...pullRequest, head: { ref: "cronk-1", sha: "c1u1" }, updated_at: "2026-01-01T09:10:00Z" },
+  });
+  await check("c1u1", 2);
+  await expect(cards).toHaveCount(0);
+  expect(cronk.github.merges.map((m) => m.sha)).toEqual(["c1u1"]);
+});
+

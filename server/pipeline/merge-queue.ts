@@ -1,5 +1,5 @@
 import type { Context } from "../context.js";
-import { transaction, type Tx } from "../db.js";
+import { afterCommit, transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import type { Caller } from "../identity/callers.js";
 import { userName } from "../identity/user.js";
@@ -7,7 +7,15 @@ import { requireWrite } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf } from "../work/projects.js";
 import { editTicketIn, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
-import { askMerge, linkedPullRequest, mergeAsAsked, type AskedMerge, type MergeAdvice } from "./pull-request-merging.js";
+import {
+  askMerge,
+  behindCode,
+  linkedPullRequest,
+  mergeAsAsked,
+  updateBranch,
+  type AskedMerge,
+  type MergeAdvice,
+} from "./pull-request-merging.js";
 
 /**
  * Pipeline: the Merge Queue (ADR 0011, amending ADR 0005). A User with Write presses Merge on a Ticket in a Review
@@ -21,8 +29,13 @@ import { askMerge, linkedPullRequest, mergeAsAsked, type AskedMerge, type MergeA
  * An entry leaves the queue when its Ticket leaves the Merge Status it waits in (`ticket-writes.ts`), as Remove from
  * queue, a User's move or the merge completing it do, and when its Pull Request merges or closes on GitHub.
  *
+ * A head GitHub says is behind its base branch but merges cleanly, as in a Repository requiring up-to-date branches,
+ * isn't merged: Cronk asks GitHub to update its branch (*updating branch*), then waits for the new commit's checks
+ * (*waiting for checks*), the Tickets behind it waiting too, and merges it on a pass once they are green. Deliveries
+ * of checks and reviews on a queued Pull Request have the queue act on it at once (`queueDue`).
+ *
  * For now a Ticket queues only its first open linked Pull Request (Merge Queue 8 queues each), and a head that
- * conflicts, falls behind, fails its checks or that GitHub refuses waits (Merge Queues 5 and 6).
+ * conflicts, fails its checks or that GitHub refuses waits (Merge Queues 6 and 7).
  */
 
 const rules = {
@@ -139,21 +152,29 @@ export async function dropFromQueue(context: Context, tx: Tx, pullRequestId: num
   }
 }
 
+/** Where an entry is: waiting, being merged, having its branch updated, or waiting for its new commit's checks. */
+export type QueueState = "queued" | "merging" | "updating-branch" | "waiting-for-checks";
+
 /** The head of one queue, as the pass read it. */
 interface Head {
   pullRequestId: string;
   ticketId: string;
-  state: "queued" | "merging";
+  state: QueueState;
   queuedBy: string;
 }
 
+/** The states in which a head waits for the pass to act on it, rather than Cronk asking GitHub about it now. */
+const waiting: QueueState[] = ["queued", "waiting-for-checks"];
+
 /**
  * One pass of the Merge Queue: per Repository and base branch, asks Cronk's merge for the head, the entry that joined
- * first, unless it is already merging. A head Cronk's rules or GitHub refuse waits for a later pass. Heads of
- * Projects archived or with Pull Request automation off since wait too.
+ * first, unless Cronk is already asking GitHub about it. A head Cronk's rules or GitHub refuse waits for a later pass;
+ * one GitHub says is behind its base branch has its branch updated, then waits for the new commit's checks. Heads of
+ * Projects archived or with Pull Request automation off since wait too. Given Pull Requests, it acts only on the heads
+ * among them, as a delivery about them asks.
  */
-export async function queuePass(context: Context): Promise<void> {
-  const { rows: heads } = await context.db.query<Head>(
+export async function queuePass(context: Context, only?: { pullRequestIds: number[] }): Promise<void> {
+  const { rows: heads } = await context.db.query<Head & { active: boolean }>(
     `select distinct on (pull_requests.repository_id, coalesce(pull_requests.base_branch, ''))
        merge_queue.pull_request_id::text as "pullRequestId", merge_queue.ticket_id as "ticketId", merge_queue.state,
        merge_queue.queued_by_user_id as "queuedBy",
@@ -162,15 +183,59 @@ export async function queuePass(context: Context): Promise<void> {
      join tickets on tickets.id = merge_queue.ticket_id join projects on projects.id = tickets.project_id
      order by pull_requests.repository_id, coalesce(pull_requests.base_branch, ''), merge_queue.seq`,
   );
-  for (const head of heads as (Head & { active: boolean })[]) {
-    if (head.state !== "queued" || !head.active) continue;
+  for (const head of heads) {
+    if (!waiting.includes(head.state) || !head.active) continue;
+    if (only && !only.pullRequestIds.includes(Number(head.pullRequestId))) continue;
     await mergeHead(context, head);
   }
 }
 
-/** Asks Cronk's merge for the head as its queuing User's, marking it *merging* while GitHub is asked. */
+/**
+ * Has the queue act at once on those of the Pull Requests that are queued, once the transaction commits, as a delivery
+ * of their checks or reviews asks; the periodic pass acts on them anyway if this one fails.
+ */
+export async function queueDue(context: Context, tx: Tx, pullRequestIds: number[]): Promise<void> {
+  if (pullRequestIds.length === 0) return;
+  const { rows } = await tx.query<{ id: string }>(
+    "select pull_request_id::text as id from merge_queue where pull_request_id = any($1::bigint[])",
+    [pullRequestIds],
+  );
+  if (rows.length === 0) return;
+  const due = rows.map((row) => Number(row.id));
+  afterCommit(tx, () => queuePass(context, { pullRequestIds: due }).catch(() => undefined));
+}
+
+/** Whether GitHub reported any check, or check suite, on the commit. */
+async function hasChecks(tx: Tx, repositoryId: string, sha: string): Promise<boolean> {
+  const { rowCount } = await tx.query(
+    `select from commit_checks where repository_id = $1 and sha = $2
+     union all select from commit_check_suites where repository_id = $1 and sha = $2 limit 1`,
+    [repositoryId, sha],
+  );
+  return rowCount !== 0;
+}
+
+/** Sets the entry's state, if it is still in one of `from`, telling its Workspace. */
+async function setState(context: Context, tx: Tx, head: Head, to: QueueState, from: QueueState[], updatedFrom?: string): Promise<boolean> {
+  const { rows } = await tx.query<{ workspaceId: string; projectId: string }>(
+    `update merge_queue set state = $2, updated_from_sha = case when $4::text is null then updated_from_sha else $4 end
+     from tickets where merge_queue.pull_request_id = $1 and merge_queue.state = any($3::text[]) and tickets.id = merge_queue.ticket_id
+     returning tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"`,
+    [head.pullRequestId, to, from, updatedFrom ?? null],
+  );
+  for (const { workspaceId, projectId } of rows) {
+    context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId: head.ticketId });
+  }
+  return rows.length > 0;
+}
+
+/**
+ * Asks Cronk's merge for the head as its queuing User's, marking it *merging* while GitHub is asked. A head whose branch
+ * Cronk updated waits until GitHub reports the new commit and, if the old one had checks, some checks on it; then
+ * Cronk's rules hold it until they are green.
+ */
 async function mergeHead(context: Context, head: Head): Promise<void> {
-  const asked = await transaction(context.db, async (tx): Promise<AskedMerge | null> => {
+  const asked = await transaction(context.db, async (tx): Promise<{ asked: AskedMerge; from: QueueState } | null> => {
     const { rows: tickets } = await tx.query<{ id: string; projectId: string; workspaceId: string; key: string }>(
       `select tickets.id, tickets.project_id as "projectId", tickets.workspace_id as "workspaceId",
          projects.key || '-' || tickets.number as key
@@ -178,15 +243,25 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
       [head.ticketId],
     );
     const ticket = tickets[0];
-    // Read again under the Ticket's lock: it may have left the queue since the pass read it.
-    const { rowCount } = await tx.query(
-      "select from merge_queue where pull_request_id = $1 and ticket_id = $2 and state = 'queued' for update",
-      [head.pullRequestId, head.ticketId],
+    // Read again under the Ticket's lock: it may have left the queue, or another pass taken it, since the pass read it.
+    const { rows: entries } = await tx.query<{ state: QueueState; updatedFrom: string | null }>(
+      `select state, updated_from_sha as "updatedFrom" from merge_queue
+       where pull_request_id = $1 and ticket_id = $2 and state = any($3::text[]) for update`,
+      [head.pullRequestId, head.ticketId, waiting],
     );
-    if (!ticket || !rowCount) return null;
+    const entry = entries[0];
+    if (!ticket || !entry) return null;
     const pullRequest = await linkedPullRequest(tx, ticket, Number(head.pullRequestId));
     const { rows: users } = await tx.query<{ name: string }>(`select ${userName()} as name from users where id = $1`, [head.queuedBy]);
     if (!pullRequest || !users[0]) return null;
+    if (entry.state === "waiting-for-checks" && entry.updatedFrom !== null) {
+      // GitHub hasn't reported the updated commit yet, so the old one's checks would be judged.
+      if (pullRequest.sha === entry.updatedFrom) return null;
+      // Nor any check on it yet, where the old one had some.
+      if ((await hasChecks(tx, pullRequest.repositoryId, entry.updatedFrom)) && !(await hasChecks(tx, pullRequest.repositoryId, pullRequest.sha))) {
+        return null;
+      }
+    }
     let asked: AskedMerge;
     try {
       asked = await askMerge(tx, {
@@ -200,27 +275,38 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
       if (error instanceof ApiError) return null;
       throw error;
     }
-    await tx.query("update merge_queue set state = 'merging' where pull_request_id = $1", [head.pullRequestId]);
-    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-    return asked;
+    await setState(context, tx, head, "merging", [entry.state]);
+    return { asked, from: entry.state };
   });
   if (!asked) return;
   try {
     // The merge completes the Ticket, taking it out of the Merge Status and so out of the queue; whatever kept it
     // there, such as automation turned off meanwhile, the merged Pull Request leaves the queue all the same.
-    await mergeAsAsked(context, asked, (tx) => dropFromQueue(context, tx, Number(head.pullRequestId)));
+    await mergeAsAsked(context, asked.asked, (tx) => dropFromQueue(context, tx, Number(head.pullRequestId)), { refuseBehind: true });
   } catch (error) {
-    await transaction(context.db, async (tx) => {
-      const { rows } = await tx.query<{ workspaceId: string; projectId: string }>(
-        `update merge_queue set state = 'queued' from tickets
-         where merge_queue.pull_request_id = $1 and merge_queue.state = 'merging' and tickets.id = merge_queue.ticket_id
-         returning tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"`,
-        [head.pullRequestId],
-      );
-      for (const { workspaceId, projectId } of rows) {
-        context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId: head.ticketId });
-      }
-    });
+    if (error instanceof ApiError && error.code === behindCode) return updateHead(context, head, asked.asked);
+    await transaction(context.db, (tx) => setState(context, tx, head, asked.from, ["merging"]));
     if (!(error instanceof ApiError)) throw error;
+  }
+}
+
+/**
+ * Has GitHub update the branch of a head that is behind its base branch, marking it *updating branch* while GitHub is
+ * asked, then *waiting for checks* on the commit GitHub makes. A head GitHub won't update, as when the head moved
+ * meanwhile, goes back to waiting for a later pass.
+ */
+async function updateHead(context: Context, head: Head, asked: AskedMerge): Promise<void> {
+  if (!(await transaction(context.db, (tx) => setState(context, tx, head, "updating-branch", ["merging"])))) return;
+  let updated = false;
+  try {
+    updated = await updateBranch(context, asked);
+  } catch (error) {
+    if (!(error instanceof ApiError)) throw error;
+  } finally {
+    await transaction(context.db, (tx) =>
+      updated
+        ? setState(context, tx, head, "waiting-for-checks", ["updating-branch"], asked.pullRequest.sha)
+        : setState(context, tx, head, "queued", ["updating-branch"]),
+    ).catch(() => undefined);
   }
 }

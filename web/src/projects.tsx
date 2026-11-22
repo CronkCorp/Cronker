@@ -500,9 +500,21 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * read included. Hovering or focusing it names them, each a link to its Ticket, and lists each unreadable one as "a
  * Ticket you can't see". An unblocked Ticket shows nothing.
  */
-/** A queued Ticket's place in the Merge Queue: *#2 in queue*, or *Merging* while Cronk merges it. */
+/**
+ * A queued Ticket's place in the Merge Queue: *#2 in queue*; *Updating branch* while GitHub brings its branch, behind its
+ * base branch, up to date, then *Waiting for checks* on the new commit; or *Merging* while Cronk merges it.
+ */
 export function QueueChip({ queue }: { queue: NonNullable<TicketSummary["queue"]> }) {
-  return queue.state === "merging" ? <Chip tone="ok">Merging</Chip> : <Chip tone="info">#{queue.position} in queue</Chip>;
+  switch (queue.state) {
+    case "merging":
+      return <Chip tone="ok">Merging</Chip>;
+    case "updating-branch":
+      return <Chip tone="info">Updating branch</Chip>;
+    case "waiting-for-checks":
+      return <Chip tone="info">Waiting for checks</Chip>;
+    default:
+      return <Chip tone="info">#{queue.position} in queue</Chip>;
+  }
 }
 
 /** A *Conflicts with `<base>`* marker for each base branch the Ticket's open Pull Requests conflict with. */

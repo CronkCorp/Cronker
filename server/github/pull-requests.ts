@@ -5,7 +5,7 @@ import type { Viewer } from "../identity/viewers.js";
 import { checkAfterMerge, checkAfterPush, markerChanged } from "../pipeline/conflicts.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
 import { recordAskedMerge } from "../pipeline/pull-request-merging.js";
-import { dropFromQueue } from "../pipeline/merge-queue.js";
+import { dropFromQueue, queueDue } from "../pipeline/merge-queue.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
@@ -414,7 +414,7 @@ const statusStates: Record<string, CheckState> = { pending: "pending", success: 
  * Keeps one check of a commit, unless Cronk knows a later one of that name: a newer check run
  * or status by GitHub's id, or a later stage of the same check run. Commits of Repositories no
  * Project lists are ignored. The Pull Requests whose latest commit it is are announced, and a
- * failed check sends the Tickets an open one links back to work.
+ * failed check sends the Tickets an open one links back to work. A queued one the Merge Queue acts on at once.
  */
 async function recordCheck(
   context: Context,
@@ -449,6 +449,7 @@ async function recordCheck(
     }
   }
   await announce(context, tx, rows.map((r) => Number(r.id)));
+  await queueDue(context, tx, rows.filter((r) => r.open).map((r) => Number(r.id)));
 }
 
 /** GitHub's `check_run` event: a check run on a commit was created, progressed or completed. */
@@ -501,7 +502,7 @@ export const onStatusEvent: EventHandler = async (context, tx, { payload }) => {
  * GitHub's `check_suite` event: a check suite on a commit was requested, rerequested or completed. A completed
  * suite is kept, and a rerequested one kept as no longer failing, unless Cronk knows a later delivery about it. One
  * that completed failing sends the Tickets an open Pull Request whose latest commit it is links back to work, as a
- * failing check does, though it ran no failing check run.
+ * failing check does, though it ran no failing check run. A queued one the Merge Queue acts on at once.
  */
 export const onCheckSuiteEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, check_suite: suite } = payload as {
@@ -523,12 +524,14 @@ export const onCheckSuiteEvent: EventHandler = async (context, tx, { payload }) 
      where commit_check_suites.updated_at <= excluded.updated_at`,
     [repository.id, suite.head_sha, suite.id, name, failed, url, suite.updated_at],
   );
-  if (!rowCount || !failed) return;
+  if (!rowCount) return;
   const { rows } = await tx.query<{ id: string; repository: string; number: number; url: string }>(
     `select id, repository_full_name as repository, number, url from pull_requests
      where repository_id = $1 and head_sha = $2 and state in ('open', 'draft') order by id`,
     [repository.id, suite.head_sha],
   );
+  await queueDue(context, tx, rows.map((pr) => Number(pr.id)));
+  if (!failed) return;
   const sent: number[] = [];
   for (const pr of rows) {
     const failure = { kind: "check", name, sha: suite.head_sha, url } as const;
@@ -542,7 +545,7 @@ export const onCheckSuiteEvent: EventHandler = async (context, tx, { payload }) 
  * Repository some Project lists. Each reviewer's latest approval or request for changes is kept, whatever the
  * Tickets' Statuses and whoever opened the Pull Request, even before Cronk hears of the Pull Request, until a
  * later one replaces it or GitHub dismisses it; reviews that only comment change nothing. A request for changes, whoever wrote it, also sends the Tickets an open Pull Request links
- * back to work.
+ * back to work. A queued one the Merge Queue acts on at once.
  */
 export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payload }) => {
   const { action, repository, review, pull_request: pr } = payload as {
@@ -591,4 +594,5 @@ export const onPullRequestReviewEvent: EventHandler = async (context, tx, { payl
     changed ||= sent;
   }
   if (changed) await announce(context, tx, [pr.id]);
+  if (changed && known?.open) await queueDue(context, tx, [pr.id]);
 };
