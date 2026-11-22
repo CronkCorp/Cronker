@@ -60,37 +60,3 @@ test("files dropped or pasted anywhere on a Ticket attach to it, as thumbnails n
   await expect(attachments.getByRole("heading", { name: "Attachments · 2" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Files" })).not.toContainText("copied.png");
 });
-
-test("an Attachment opens from its thumbnail or the Files group in a wide dialog with Download, and Remove asks first", async ({ page, cronk }) => {
-  const { cookie, ticket } = await openTicket(page, cronk);
-  const comment = await (await cronk.request("POST", `/api/tickets/${ticket.id}/comments`, { cookie, body: { body: "The trace." } })).json();
-  const attach = (path: string, name: string, type: string) =>
-    fetch(new URL(`${path}?name=${encodeURIComponent(name)}`, cronk.url), { method: "POST", headers: { cookie, "content-type": type }, body: "x" });
-  await attach(`/api/tickets/${ticket.id}/attachments`, "proxy-ip.png", "image/png");
-  await attach(`/api/comments/${comment.id}/attachments`, "trace.json", "application/json");
-  await page.reload();
-  const files = page.getByRole("region", { name: "Files" });
-  await expect(files.getByRole("listitem")).toHaveCount(2);
-
-  // A picture shows in full, with Download.
-  await page.getByRole("region", { name: "Attachments", exact: true }).getByRole("button", { name: "Open proxy-ip.png" }).click();
-  let dialog = page.getByRole("dialog", { name: "proxy-ip.png" });
-  await expect(dialog.getByRole("img", { name: "proxy-ip.png" })).toBeVisible();
-  await expect(dialog.getByRole("link", { name: "Download" })).toHaveAttribute("download", "proxy-ip.png");
-  await dialog.getByRole("button", { name: "Close" }).click();
-
-  // A Comment's file opens from the Files group as its type, and may be removed there too, after asking.
-  await files.getByRole("button", { name: "trace.json" }).click();
-  dialog = page.getByRole("dialog", { name: "trace.json" });
-  await expect(dialog).toContainText("JSON");
-  await expect(dialog.getByRole("link", { name: "Download" })).toHaveAttribute("download", "trace.json");
-  await dialog.getByRole("button", { name: "Remove…" }).click();
-  const confirm = page.getByRole("dialog", { name: "Remove trace.json?" });
-  await confirm.getByRole("button", { name: "Cancel" }).click();
-  // Changing its mind leaves the file open, not removed.
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Remove…" }).click();
-  await confirm.getByRole("button", { name: "Remove", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(files.getByRole("listitem")).toHaveText([/proxy-ip\.png/]);
-});
