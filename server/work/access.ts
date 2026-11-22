@@ -188,11 +188,11 @@ export async function archiveProject(
       throw new ApiError(409, "project_not_archived", `${project.key} isn't archived.`);
     }
     const now = clock.now();
-    await tx.query("update projects set archived_at = $2, archived_by = $3 where id = $1", [
-      project.id,
-      archived ? now : null,
-      archived ? userId : null,
-    ]);
+    // Unarchiving records when, so the notifier doesn't send webhooks for what waited from before it.
+    await tx.query(
+      "update projects set archived_at = $2, archived_by = $3, unarchived_at = coalesce($4, unarchived_at) where id = $1",
+      [project.id, archived ? now : null, archived ? userId : null, archived ? null : now],
+    );
     // An archived Project spends nothing: its running Runs stop and its Tickets wait until it is unarchived.
     if (archived) await stopRunsOfArchivedProject(context, tx, project, userId, now);
     else await resumeRunsOfUnarchivedProject(context, tx, project.id);
