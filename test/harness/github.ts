@@ -71,6 +71,29 @@ export interface StandInPullRequest {
    * merged (null while GitHub works it out), alone or worked out against another base commit than `baseSha`.
    */
   answers: (boolean | null | { mergeable: boolean | null; baseSha: string })[];
+  /**
+   * Whether its base branch has commits its head lacks, though it merges cleanly: GitHub then answers `mergeable_state`
+   * `behind` and, as in a Repository requiring up-to-date branches, refuses to merge it until its branch is updated.
+   */
+  behind: boolean;
+  /**
+   * The other Pull Requests its merge makes conflict with their base branch: once it merges, each answers it can't be
+   * merged, worked out against the merge commit.
+   */
+  conflicts: StandInPullRequest[];
+  /** The merge commit GitHub made merging it, `m<number>`; null until it merges. */
+  mergeCommit: string | null;
+}
+
+/** A branch update GitHub made at the App's request, moving a Pull Request's head to a new commit. */
+export interface StandInBranchUpdate {
+  /** `owner/name`. */
+  repository: string;
+  number: number;
+  /** The head commit before, and the one GitHub made merging the base branch into it. */
+  from: string;
+  to: string;
+  installationId: number;
 }
 
 /** An issue as GitHub's issues list answers about it; a Pull Request is listed among them too, marked as one. */
@@ -198,6 +221,10 @@ export interface StandInGitHub {
   rateLimitIssues(until: Date, options?: { status?: 403 | 429; header?: "reset" | "retry-after"; only?: "comments" }): void;
   /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
   merges: StandInMerge[];
+  /** The branch updates GitHub made at the App's request, in order; each clears `behind` and moves the head. */
+  updates: StandInBranchUpdate[];
+  /** Called while GitHub updates a branch, before it answers, as a test's look at Cronk mid-update. */
+  onUpdate: ((update: StandInBranchUpdate) => void | Promise<void>) | null;
   /**
    * Called once GitHub has made a merge, before it answers the request, as when GitHub's webhook delivery of the
    * merge reaches Cronk before the answer does.
@@ -346,6 +373,9 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         base: "main",
         baseSha: "b0",
         answers: [],
+        behind: false,
+        conflicts: [],
+        mergeCommit: null,
       };
       Object.assign(pullRequest, fields);
       pullRequests.set(key, pullRequest);
@@ -378,6 +408,8 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       issuesLimit = { until, status, header, only };
     },
     merges: [],
+    updates: [],
+    onUpdate: null,
     onMerge: null,
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
       return send(app, { guid: id, event, payload, redelivery: false }, secret, fails);
@@ -744,8 +776,8 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       );
     }
 
-    // API: a Pull Request, and merging it, with a token of an installation that covers its repository.
-    const pulls = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/merge)?$/.exec(path);
+    // API: a Pull Request, merging it and updating its branch, with a token of an installation that covers its repository.
+    const pulls = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)(\/merge|\/update-branch)?$/.exec(path);
     if (pulls && ((request.method === "GET" && !pulls[3]) || (request.method === "PUT" && pulls[3]))) {
       const issued = bearer ? installationTokens.get(bearer) : undefined;
       const installation = github.installations.find((i) => i.id === issued?.installationId);
@@ -768,10 +800,30 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
           draft: pullRequest.draft,
           merged: pullRequest.merged,
           mergeable,
-          mergeable_state: mergeable === null ? "unknown" : mergeable ? "clean" : "dirty",
+          mergeable_state: mergeable === null ? "unknown" : !mergeable ? "dirty" : pullRequest.behind ? "behind" : "clean",
           head: { sha: pullRequest.headSha },
           base: { ref: pullRequest.base, sha: answer.baseSha },
         });
+      }
+      if (pulls[3] === "/update-branch") {
+        const { expected_head_sha: expected } = JSON.parse((await readBody(request)) || "{}") as { expected_head_sha?: string };
+        if (pullRequest.state !== "open") return json(response, 422, { message: "Pull Request is not open" });
+        if (expected !== undefined && expected !== pullRequest.headSha) {
+          return json(response, 422, { message: "expected head sha didn't match current head ref." });
+        }
+        if (pullRequest.mergeable === false) return json(response, 422, { message: "merge conflict between base and head" });
+        const update = {
+          repository: repository.fullName,
+          number: pullRequest.number,
+          from: pullRequest.headSha,
+          to: `${pullRequest.headSha}u${github.updates.length + 1}`,
+          installationId: installation.id,
+        };
+        pullRequest.headSha = update.to;
+        pullRequest.behind = false;
+        github.updates.push(update);
+        await github.onUpdate?.(update);
+        return json(response, 202, { message: "Updating pull request branch.", url: `${github.url}/${repository.fullName}/pull/${pullRequest.number}` });
       }
       const body = JSON.parse((await readBody(request)) || "{}") as { merge_method?: MergeMethod; sha?: string };
       const method = body.merge_method ?? "merge";
@@ -781,15 +833,21 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       if (pullRequest.state !== "open" || pullRequest.draft || pullRequest.mergeable !== true) {
         return json(response, 405, { message: "Pull Request is not mergeable" });
       }
+      if (pullRequest.behind) return json(response, 405, { message: "Head branch is out of date" });
       if (body.sha !== undefined && body.sha !== pullRequest.headSha) {
         return json(response, 409, { message: "Head branch was modified. Review and try the merge again." });
       }
       pullRequest.state = "closed";
       pullRequest.merged = true;
+      pullRequest.mergeCommit = `m${pullRequest.number}`;
+      for (const other of pullRequest.conflicts) {
+        other.mergeable = false;
+        other.baseSha = pullRequest.mergeCommit;
+      }
       const merge = { repository: repository.fullName, number: pullRequest.number, method, sha: body.sha ?? null, installationId: installation.id };
       github.merges.push(merge);
       await github.onMerge?.(merge);
-      return json(response, 200, { sha: randomBytes(20).toString("hex"), merged: true, message: "Pull Request successfully merged" });
+      return json(response, 200, { sha: pullRequest.mergeCommit, merged: true, message: "Pull Request successfully merged" });
     }
 
     return json(response, 404, { message: "Not Found" });

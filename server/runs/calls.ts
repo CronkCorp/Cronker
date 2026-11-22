@@ -4,6 +4,7 @@ import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { reviveLostRun, type NamedInCall } from "./runs.js";
+import { sessionIdOf } from "./session-ids.js";
 
 /**
  * Refuses every call an Agent makes naming one of its Runs that a User stopped, whichever route it reaches,
@@ -38,7 +39,7 @@ export function namedInCall(request: FastifyRequest): NamedInCall {
     runId: params.runId,
     ticketId: params.ticketId,
     ticketKey: params.key,
-    sessionId: params.sessionId,
+    sessionId: params.sessionId === undefined ? undefined : sessionIdOf(params.sessionId),
   };
   // Filing a Ticket names a Run in its body: the Run it is filed from, or a Sub-Ticket's parent, its Run's Ticket.
   if (request.method === "POST" && request.routeOptions.url === "/api/projects/:projectId/tickets") {
