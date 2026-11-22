@@ -89,17 +89,15 @@ export function TicketScreen({
   const [loaded, setLoaded] = useState(false);
   // The Comment box stays at the end of the timeline; the Comment button and C take the User there.
   const commentBox = useRef<RichEditorHandle>(null);
-  const toCommentBox = () => {
-    const box = commentBox.current?.textbox();
-    if (box) scrollToAndFocus(box);
-  };
+  // While the editor still loads, its focus waits for it.
+  const toCommentBox = () => commentBox.current?.focus({ scroll: true });
   useEffect(() => {
     // Once C has focused the box, its repeats while held land in the box, and must not type there either.
     let held = false;
     const onKey = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() !== "c") return;
       if (held && event.repeat) return event.preventDefault();
-      if (shortcutStandsAside(event) || !commentBox.current?.textbox()) return;
+      if (shortcutStandsAside(event) || !commentBox.current) return;
       event.preventDefault();
       held = true;
       toCommentBox();
@@ -1174,13 +1172,6 @@ function MentionedIn({ texts }: { texts: MentioningText[] }) {
       </ul>
     </section>
   );
-}
-
-/** Scrolls an element into view as the User asked, smoothly unless they prefer reduced motion, and focuses it. */
-function scrollToAndFocus(element: HTMLElement) {
-  const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  element.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
-  element.focus({ preventScroll: true });
 }
 
 function CommentForm({
