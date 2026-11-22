@@ -2,7 +2,7 @@ import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import { userName } from "../identity/user.js";
 import { startRunIfNeeded, stopRunningRun } from "../runs/runs.js";
-import { recordChanges } from "./changes.js";
+import { lockTickets, writeTicket, type TicketPatch } from "./ticket-writes.js";
 
 /**
  * Where a User lets go of their Tickets: a whole Workspace when they leave it, or one Project of it when they lose
@@ -56,23 +56,19 @@ export async function releaseTickets(
   reason: string,
   now: Date,
 ): Promise<number> {
-  const { workspaceId, userId } = releasing;
+  const { userId } = releasing;
   const tickets = await heldBy(tx, releasing, { lock: true });
+  const locked = new Map((await lockTickets(tx, tickets.map((t) => t.id))).map((row) => [row.id, row]));
   for (const ticket of tickets) {
     if (ticket.delegate) await stopRunningRun(context, tx, ticket.id, reason, now);
-    await tx.query(
-      `update tickets set assignee_id = case when $2 then null else assignee_id end,
-         former_assignee_id = case when $2 then $4::uuid else former_assignee_id end,
-         delegate_id = case when $3 then null else delegate_id end where id = $1`,
-      [ticket.id, ticket.assignee !== null, ticket.delegate !== null, userId],
-    );
-    await recordChanges(tx, { id: ticket.id, workspaceId }, adminId, now, [
-      ...(ticket.assignee ? [{ field: "assignee" as const, from: ticket.assignee, to: null }] : []),
-      ...(ticket.delegate ? [{ field: "delegate" as const, from: ticket.delegate, to: null }] : []),
-    ]);
+    // A Ticket left without an Assignee remembers whom it had, for the Admins' Inbox.
+    const patch: TicketPatch = {
+      ...(ticket.assignee ? { assigneeId: null, formerAssigneeId: userId } : {}),
+      ...(ticket.delegate ? { delegateId: null } : {}),
+    };
+    await writeTicket(context, tx, locked.get(ticket.id)!, adminId, patch, { at: now });
     // Losing its Delegate ends a Ticket's wait for a Run.
     if (ticket.delegate) await startRunIfNeeded(context, tx, ticket.id, now);
-    context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   }
   return tickets.length;
 }

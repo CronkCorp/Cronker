@@ -34,6 +34,13 @@ export interface TicketPatch {
   completedFromStatusId?: string | null;
   /** Whether a Run completed the Ticket without a Step. */
   completedWithoutStep?: boolean;
+  /** The merged Pull Request that completed the Ticket, by GitHub's id. */
+  completedByPullRequestId?: number | null;
+  /**
+   * The User the Ticket remembers as its former Assignee, for the Admins' Inbox. Giving an Assignee forgets it
+   * without this; a caller clearing the Assignee for good, as releasing a member does, gives it.
+   */
+  formerAssigneeId?: string | null;
 }
 
 /**
@@ -62,6 +69,8 @@ export type LockedTicket = Pick<
   waitsForRun?: boolean;
   completedFromStatusId?: string | null;
   completedWithoutStep?: boolean;
+  completedByPullRequestId?: number | null;
+  formerAssigneeId?: string | null;
 };
 
 type Shown = (tx: Tx, workspaceId: string, value: unknown) => Promise<unknown>;
@@ -117,6 +126,8 @@ const columns: { [K in keyof Required<TicketPatch>]: Column } = {
   waitsForRun: { column: "waits_for_run" },
   completedFromStatusId: { column: "completed_from_status_id" },
   completedWithoutStep: { column: "completed_without_step" },
+  completedByPullRequestId: { column: "completed_by_pull_request_id" },
+  formerAssigneeId: { column: "former_assignee_id" },
 };
 
 /** Bookkeeping a LockedTicket may lack, read when a patch gives it. */
@@ -124,6 +135,9 @@ const bookkeeping = {
   waitsForRun: `waits_for_run as "waitsForRun"`,
   completedFromStatusId: `completed_from_status_id as "completedFromStatusId"`,
   completedWithoutStep: `completed_without_step as "completedWithoutStep"`,
+  // `bigint` comes back as a string; GitHub's ids fit in a JavaScript number.
+  completedByPullRequestId: `completed_by_pull_request_id::float8 as "completedByPullRequestId"`,
+  formerAssigneeId: `former_assignee_id as "formerAssigneeId"`,
 } as const;
 
 /** What a write wrote and recorded. */
@@ -165,14 +179,19 @@ export async function writeTicket(
   for (const key of differs) set(columns[key].column, patch[key], columns[key].cast);
   const statusChanged = differs.includes("statusId");
   if (statusChanged) set("status_entered_at", at);
-  if (differs.includes("assigneeId") && patch.assigneeId !== null) set("former_assignee_id", null);
+  if (differs.includes("assigneeId") && patch.assigneeId !== null && !differs.includes("formerAssigneeId")) {
+    set("former_assignee_id", null);
+  }
   if (differs.includes("verification") && patch.verification === null && !differs.includes("completedFromStatusId")) {
     set("completed_from_status_id", null);
   }
   if (sets.length > 0) await tx.query(`update tickets set ${sets.join(", ")} where id = $1`, params);
   if (statusChanged) await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
+  // Leaving the Merge Status its Pull Requests were queued in takes them out of the Merge Queue. Completing it for a
+  // merge records the merge instead, so it shows no leaving.
+  const left = statusChanged ? await leaveMergeQueue(tx, ticket.id, patch.statusId!) : [];
 
-  const changes = [...given];
+  const changes = [...given, ...left];
   for (const key of differs) {
     const { field, shown } = columns[key];
     if (!field) continue;
@@ -182,6 +201,25 @@ export async function writeTicket(
   await recordChanges(tx, ticket, actor, at, changes);
   live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   return { written: true, changes };
+}
+
+/**
+ * Takes the Ticket's Pull Requests out of the Merge Queue unless they wait in the Status it now enters, returning a
+ * `queueLeft` Change for each, unless that Status is a Done one.
+ */
+async function leaveMergeQueue(tx: Tx, ticketId: string, statusId: string): Promise<NewChange[]> {
+  const { rows } = await tx.query<{ pullRequest: unknown; done: boolean }>(
+    `with left_queue as (
+       delete from merge_queue where ticket_id = $1 and status_id <> $2 returning pull_request_id
+     )
+     select json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
+         'number', pull_requests.number, 'url', pull_requests.url) as "pullRequest",
+       (select kind = 'done' from statuses where id = $2) as done
+     from left_queue join pull_requests on pull_requests.id = left_queue.pull_request_id
+     order by pull_requests.id`,
+    [ticketId, statusId],
+  );
+  return rows.filter((row) => !row.done).map((row) => ({ field: "queueLeft", from: { pullRequest: row.pullRequest }, to: null }));
 }
 
 /** The Ticket's current value of each field, from the locked row, reading the bookkeeping it lacks that the patch gives. */

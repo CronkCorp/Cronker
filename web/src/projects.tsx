@@ -1,4 +1,5 @@
 import { addresses, useAddresses } from "./addresses.js";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
@@ -24,6 +25,7 @@ import {
 import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { keys } from "./live-queries.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate } from "./router.js";
 import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
@@ -35,7 +37,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Actor, Avatar } from "./ui/actor.js";
-import { Actions, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
   ConfirmDialog,
@@ -70,7 +72,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
   useEffect(load, [load]);
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "project.created" || event.type === "reconnected") load();
+    if (event.type === "project.created" || event.type === "project.changed" || event.type === "reconnected") load();
   });
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
@@ -92,6 +94,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
                 <li key={project.id}>
                   <Link to={to.project(project)} className="row">
                     <span className="row-title">{project.name}</span> <span className="ticket-key">{project.key}</span>
+                    {project.archivedAt !== null && <Chip>Archived</Chip>}
                   </Link>
                 </li>
               ))}
@@ -131,18 +134,82 @@ type View = "board" | "list" | "settings" | "documents" | "glossary" | "decision
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** The Project's other pages, in the page head's "…" menu. */
-export function ProjectMenu({ project }: { project: ProjectSummary }) {
+/** The Project's other pages, in the page head's "…" menu, and, for an Admin, Archive… after them. */
+export function ProjectMenu({
+  project,
+  workspace,
+  onChange,
+}: {
+  project: ProjectSummary;
+  workspace: WorkspaceSummary;
+  onChange: (project: Project) => void;
+}) {
   const to = useAddresses();
   const base = to.project(project);
+  const [archiving, setArchiving] = useState(false);
   return (
-    <Menu label="More of this Project">
-      <MenuLink to={`${base}/documents`}>Documents</MenuLink>
-      <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
-      <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
-      <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
-      <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
-    </Menu>
+    <>
+      <Menu label="More of this Project">
+        <MenuLink to={`${base}/documents`}>Documents</MenuLink>
+        <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
+        <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
+        <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
+        <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
+        {workspace.isAdmin && project.archivedAt === null && (
+          <>
+            <MenuSeparator />
+            <MenuItem onSelect={() => setArchiving(true)}>Archive…</MenuItem>
+          </>
+        )}
+      </Menu>
+      <ConfirmDialog
+        open={archiving}
+        onOpenChange={setArchiving}
+        title={`Archive ${project.key}?`}
+        confirm="Archive"
+        onConfirm={async () => {
+          onChange(await api.archiveProject(project.id));
+          setArchiving(false);
+        }}
+      >
+        It becomes read-only for everyone, Admins and Agents included, and moves to Archived in the sidebar. Its key and
+        addresses keep working, and an Admin can unarchive it.
+      </ConfirmDialog>
+    </>
+  );
+}
+
+/** Says an archived Project is read-only, with Unarchive for an Admin. */
+function ArchivedBanner({
+  project,
+  workspace,
+  onChange,
+}: {
+  project: Project;
+  workspace: WorkspaceSummary;
+  onChange: (project: Project) => void;
+}) {
+  const { busy, error, save } = useSave();
+  if (project.archivedAt === null) return null;
+  return (
+    <Banner tone="warn" label="Archived">
+      <div className="archived-banner">
+        <span>
+          This Project is archived: everyone reads it, but nothing in it changes until an Admin unarchives it.
+        </span>
+        {workspace.isAdmin && (
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={busy}
+            onClick={() => save(async () => onChange(await api.unarchiveProject(project.id)))}
+          >
+            Unarchive
+          </Button>
+        )}
+      </div>
+      <FormError error={error} />
+    </Banner>
   );
 }
 
@@ -163,59 +230,47 @@ export function ProjectScreen({
   view: View;
 }) {
   const to = useAddresses();
-  const [project, setProject] = useState<Project | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
+  const client = useQueryClient();
   const [filter, setFilter] = useState<TicketFilter>({});
   const [group, setGroup] = useState(storedGroupSubTickets);
-  const [failure, setFailure] = useState<string | null>(null);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
 
-  useEffect(() => {
-    api.project(projectId).then(
-      // A Project of another of the User's Workspaces isn't shown under this one's name.
-      (found) => {
-        if (found.workspaceId === workspace.id) setProject(found);
-        else setFailure("No such Project.");
-      },
-      (e: Error) => setFailure(e.message),
-    );
-    api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
-    api.agents(workspace.id).then(setAgents, (e: Error) => setFailure(e.message));
-  }, [projectId, workspace.id]);
+  const projectQuery = useQuery({ queryKey: keys.project(projectId), queryFn: () => api.project(projectId) });
+  // A Project of another of the User's Workspaces isn't shown under this one's name.
+  const elsewhere = projectQuery.data !== undefined && projectQuery.data.workspaceId !== workspace.id;
+  const project = elsewhere ? null : (projectQuery.data ?? null);
+  const membersQuery = useQuery({ queryKey: keys.members(workspace.id), queryFn: () => api.members(workspace.id) });
+  const agentsQuery = useQuery({ queryKey: keys.agents(workspace.id), queryFn: () => api.agents(workspace.id) });
+  // Each filter's list has its own key under the Project's Tickets, so the events that refresh those refresh it; while
+  // a new filter's list loads, the last one stays on screen.
+  const ticketsQuery = useQuery({
+    queryKey: [...keys.projectTickets(projectId), filter],
+    queryFn: () => api.tickets(projectId, filter),
+    placeholderData: keepPreviousData,
+  });
+  const members = membersQuery.data ?? [];
+  const agents = agentsQuery.data ?? [];
+  const tickets = ticketsQuery.data ?? null;
+  const failed = [projectQuery, membersQuery, agentsQuery, ticketsQuery].find((query) => query.error)?.error;
+  const failure = elsewhere ? "No such Project." : (failed?.message ?? null);
 
-  const latestTickets = useLatest();
-  const loadTickets = useCallback(
-    () => latestTickets(api.tickets(projectId, filter), setTickets, (e) => setFailure(e.message)),
-    [projectId, filter, latestTickets],
-  );
-  useEffect(loadTickets, [loadTickets]);
+  const setProject = (changed: Project) => client.setQueryData(keys.project(projectId), changed);
+  const loadProject = () => void client.invalidateQueries({ queryKey: keys.project(projectId) });
+  const loadTickets = () => void client.invalidateQueries({ queryKey: keys.projectTickets(projectId) });
   /**
-   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Fetching again starts
-   * after the edit, so whatever was fetched before it is dropped rather than shown over it; and the card moves without
-   * waiting on that fetch, which the events the edit sets off may start again and again on a busy server.
+   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Invalidating cancels a
+   * fetch started before the edit, so what it would answer isn't shown over the edit; and the card moves without
+   * waiting on the new fetch, which the events the edit sets off may start again and again on a busy server.
    */
   const ticketEdited = (edited?: TicketSummary) => {
-    if (edited) setTickets((shown) => shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)) ?? shown);
+    if (edited) {
+      client.setQueriesData<TicketSummary[]>({ queryKey: keys.projectTickets(projectId) }, (shown) =>
+        shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)),
+      );
+    }
     loadTickets();
   };
-
-  const latestProject = useLatest();
-  const loadProject = () => latestProject(api.project(projectId), setProject, (e) => setFailure(e.message));
-  useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected") {
-      loadProject();
-      loadTickets();
-    } else if (!("projectId" in event) || event.projectId !== projectId) {
-      return;
-    } else if (event.type === "statuses.changed" || event.type === "project.changed") {
-      loadProject();
-    } else if (event.type === "ticket.created" || event.type === "ticket.changed") {
-      loadTickets();
-    }
-  });
 
   if (failure) return <FormError error={failure} />;
   if (!project || !tickets) return <p className="muted">Loading…</p>;
@@ -232,9 +287,10 @@ export function ProjectScreen({
         <PageHead
           crumbs={[home, { label: <span className="mono">{project.key}</span>, to: base }]}
           title="Project settings"
-          actions={<ProjectMenu project={project} />}
+          actions={<ProjectMenu project={project} workspace={workspace} onChange={setProject} />}
         />
-        <ReadOnlyNote access={project.access} />
+        <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
+        {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
         <SettingsLayout
           sections={[
             {
@@ -258,7 +314,7 @@ export function ProjectScreen({
               label: "Delegation defaults",
               children: <DelegationSettings project={project} onChange={setProject} />,
             },
-            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} /> },
+            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} isAdmin={workspace.isAdmin} /> },
             {
               id: "pull-request-automation",
               label: "Pull Request automation",
@@ -314,12 +370,13 @@ export function ProjectScreen({
         }
         actions={
           <>
-            <ProjectMenu project={project} />
+            <ProjectMenu project={project} workspace={workspace} onChange={setProject} />
             {project.access === "write" && <NewTicket project={project} onCreated={loadTickets} />}
           </>
         }
       />
-      <ReadOnlyNote access={project.access} />
+      <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
+      {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
       {view === "board" && (
         <Board project={project} members={members} agents={agents} user={user} tickets={tickets} group={group} onChanged={ticketEdited} />
@@ -443,6 +500,35 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * read included. Hovering or focusing it names them, each a link to its Ticket, and lists each unreadable one as "a
  * Ticket you can't see". An unblocked Ticket shows nothing.
  */
+/**
+ * A queued Ticket's place in the Merge Queue: *#2 in queue*; *Updating branch* while GitHub brings its branch, behind its
+ * base branch, up to date, then *Waiting for checks* on the new commit; *Resolving conflict* while, stepped aside for
+ * a conflict, a Merge Run resolves it, then *Waiting for checks* on the resolution; or *Merging* while Cronk merges it.
+ */
+export function QueueChip({ queue }: { queue: NonNullable<TicketSummary["queue"]> }) {
+  switch (queue.state) {
+    case "merging":
+      return <Chip tone="ok">Merging</Chip>;
+    case "updating-branch":
+      return <Chip tone="info">Updating branch</Chip>;
+    case "resolving-conflict":
+      return <Chip tone="warn">Resolving conflict</Chip>;
+    case "waiting-for-checks":
+      return <Chip tone="info">Waiting for checks</Chip>;
+    default:
+      return <Chip tone="info">#{queue.position} in queue</Chip>;
+  }
+}
+
+/** A *Conflicts with `<base>`* marker for each base branch the Ticket's open Pull Requests conflict with. */
+function ConflictChips({ ticket }: { ticket: TicketSummary }) {
+  return ticket.conflicts.map((branch) => (
+    <Chip key={branch} tone="warn" title={`A Pull Request of ${ticket.key} conflicts with ${branch}`}>
+      Conflicts with <span className="mono">{branch}</span>
+    </Chip>
+  ));
+}
+
 function BlockedChip({ ticket }: { ticket: TicketSummary }) {
   const to = useAddresses();
   const blockers = ticket.blockedBy;
@@ -702,6 +788,8 @@ function Card({
           {ticket.labels.map((label) => (
             <Chip key={label}>{label}</Chip>
           ))}
+          {ticket.queue && <QueueChip queue={ticket.queue} />}
+          <ConflictChips ticket={ticket} />
           <TicketRunState ticket={ticket} />
           <People ticket={ticket} members={members} agents={agents} />
         </span>
