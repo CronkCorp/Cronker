@@ -231,6 +231,9 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   const card = (name: string) => lane(name).locator(".card").filter({ hasText: "Ship it" });
   await expect(link("Backlog")).toBeVisible();
   const selected = () => page.evaluate(() => window.getSelection()?.toString() ?? "");
+  // Vivaldi and Opera, which Playwright can't run, select a link's text on a sideways drag unless the link says
+  // draggable="true"; draggable="false" makes them select it always, user-select notwithstanding.
+  await expect(link("Backlog"), "the card's link is explicitly draggable").toHaveAttribute("draggable", "true");
 
   /** Presses at a point of the card, moves to the middle of a column and lets go there. */
   const dragFrom = async (x: number, y: number, column: string) => {
