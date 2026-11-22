@@ -267,6 +267,11 @@ export function ProjectScreen({
               label: "Merges by agents",
               children: <MergesByAgentsSettings workspace={workspace} project={project} onChange={setProject} />,
             },
+            {
+              id: "reports",
+              label: "Reports",
+              children: <ReportsSettings project={project} onChange={setProject} />,
+            },
             // With Read, the settings show only the User's own Access: nothing else here is theirs to change.
           ].filter((section) => project.access === "write" || section.id === "access")}
         />
@@ -1168,6 +1173,29 @@ function PullRequestAutomationSettings({ project, onChange }: { project: Project
           onChange={(e) => void toggle({ pullRequestAutomation: e.target.checked })}
         />
         Merges complete their Tickets, and failures send them back
+      </label>
+      <FormError error={error} />
+      <Saved shown={saved} />
+    </Panel>
+  );
+}
+
+function ReportsSettings({ project, onChange }: { project: Project; onChange: (project: Project) => void }) {
+  const { error, busy, saved, toggle } = useProjectEdit(project, onChange);
+  return (
+    <Panel
+      title="Reports"
+      id="reports"
+      description="With concise Reports on, every Brief in this Project tells its Run to keep its Reports short: the outcome, the findings, what it verified and what the next Run or User needs, without the working. The Brief preview shows the rule. Nothing stored is cut."
+    >
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={project.conciseReports}
+          disabled={busy}
+          onChange={(e) => void toggle({ conciseReports: e.target.checked })}
+        />
+        Runs keep their Reports concise
       </label>
       <FormError error={error} />
       <Saved shown={saved} />

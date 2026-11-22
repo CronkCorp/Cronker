@@ -157,6 +157,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
                   "may give it, whatever its value.",
               }),
             ),
+            conciseReports: Type.Optional(
+              Type.Boolean({ description: "Whether the Briefs of Runs in this Project ask them to keep their Reports concise." }),
+            ),
           }),
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
