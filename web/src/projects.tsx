@@ -24,6 +24,7 @@ import {
 import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate } from "./router.js";
 import { ProjectArtifacts } from "./artifacts.js";
 import { ProjectDecisions } from "./decisions.js";
@@ -519,19 +520,39 @@ function useEdgeScroll() {
 /**
  * A card's context menu: Move to its Project's Statuses, Delegate to the User's own Agents or Undelegate, and, while
  * it is delegated, Autonomous Delegation. Each saves at once through `onEdit`, as a drop does; Cronk keeps the rules.
+ * On a card of a selection of several, it offers only Move to, for the whole selection, through `onMoveSelection`.
  */
 function CardMenu({
   ticket,
   project,
   own,
+  selection,
   onEdit,
+  onMoveSelection,
 }: {
   ticket: TicketSummary;
   project: Project;
   /** The signed-in User's own Agents, the only ones they delegate to. */
   own: Agent[];
+  /** How many Tickets are selected, this one among them; 0 when it isn't selected. */
+  selection: number;
   onEdit: (edit: TicketEdit) => void;
+  onMoveSelection: (statusId: string) => void;
 }) {
+  if (selection > 1) {
+    return (
+      <MenuSub label={`Move ${ticketCount(selection)} to`}>
+        {/* A mixed selection has no one current Status, so none is checked. */}
+        <MenuRadioGroup label="Statuses" value="" onChange={onMoveSelection}>
+          {project.statuses.map((status) => (
+            <MenuRadioItem key={status.id} value={status.id}>
+              <StatusPill kind={status.kind} name={status.name} model={status.step?.model} />
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuSub>
+    );
+  }
   return (
     <>
       <MenuSub label="Move to">
@@ -574,7 +595,9 @@ function CardMenu({
  * which holds links of its own and so sits beside the card's link rather than in it. Pressing anywhere on it and
  * moving drags it, the link included: the card is the only drag source in it, so the drag is the same wherever it
  * starts, and its text is never selected; a click on the link still opens the Ticket.
- * Right-clicking it, long-pressing it or ContextMenu / Shift+F10 on its focused link opens its CardMenu.
+ * Ctrl/Cmd+click or Space on its focused link adds it to the board's selection or takes it out; Shift+click or
+ * Shift+Space selects the range to it in its column. Right-clicking it, long-pressing it or ContextMenu / Shift+F10
+ * on its focused link opens its CardMenu.
  */
 function Card({
   ticket,
@@ -583,7 +606,10 @@ function Card({
   agents,
   own,
   arrived,
+  selection,
   onEdit,
+  onSelect,
+  onMoveSelection,
 }: {
   ticket: TicketSummary;
   project: Project;
@@ -591,14 +617,39 @@ function Card({
   agents: Agent[];
   own: Agent[];
   arrived: boolean;
+  /** How many Tickets are selected, this one among them; 0 when it isn't selected. */
+  selection: number;
   onEdit: (edit: TicketEdit) => void;
+  onSelect: (range: boolean) => void;
+  onMoveSelection: (statusId: string) => void;
 }) {
   const to = useAddresses();
+  const selected = selection > 0;
   return (
-    <ContextMenu label={`${ticket.key} ${ticket.title}`} content={<CardMenu ticket={ticket} project={project} own={own} onEdit={onEdit} />}>
+    <ContextMenu
+      label={`${ticket.key} ${ticket.title}`}
+      content={
+        <CardMenu ticket={ticket} project={project} own={own} selection={selection} onEdit={onEdit} onMoveSelection={onMoveSelection} />
+      }
+    >
       <div
-        className={`card${arrived ? " arrived" : ""}`}
+        className={`card${arrived ? " arrived" : ""}${selected ? " card-selected" : ""}`}
+        data-selected={selected || undefined}
         draggable
+        onClick={(event) => {
+          // The Blocked chip's own links open as links do.
+          if ((event.target as HTMLElement).closest(".chip-blocked")) return;
+          const toggle = event.ctrlKey || event.metaKey;
+          if (!toggle && !event.shiftKey) return;
+          // Selecting, not opening the Ticket in a new tab or window.
+          event.preventDefault();
+          onSelect(!toggle);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== " " || !(event.target as HTMLElement).closest(".card-link")) return;
+          event.preventDefault();
+          onSelect(event.shiftKey);
+        }}
         onDragStart={(event: DragEvent<HTMLDivElement>) => {
           // Show the whole card under the pointer, held where it was pressed.
           const card = event.currentTarget.getBoundingClientRect();
@@ -623,6 +674,7 @@ function Card({
             <TicketRunState ticket={ticket} />
             <People ticket={ticket} members={members} agents={agents} />
           </span>
+          {selected && <span className="sr-only">, selected</span>}
         </Link>
         <BlockedChip ticket={ticket} />
       </div>
@@ -651,7 +703,11 @@ function Board({
   onChanged: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [refusals, setRefusals] = useState<{ total: number; refused: { key: string; message: string }[] } | null>(null);
   const [target, setTarget] = useState<string | null>(null);
+  // The selected Tickets' ids, and the one a range is selected from.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
   // Opened collapsed columns, until the User leaves the page; nothing is stored.
   const [opened, setOpened] = useState<Set<string>>(new Set());
   const arrived = useArrivals(tickets.map((t) => `${t.id} ${t.statusId}`));
@@ -659,9 +715,52 @@ function Board({
 
   const own = agents.filter((agent) => agent.owner.id === user.id);
 
+  // A Ticket that leaves the board, moved away by someone else, filtered out or deleted, leaves the selection.
+  useEffect(() => {
+    setSelected((current) => {
+      const shown = new Set(tickets.map((t) => t.id));
+      return [...current].every((id) => shown.has(id)) ? current : new Set([...current].filter((id) => shown.has(id)));
+    });
+  }, [tickets]);
+
+  // Escape clears the selection, unless it belongs to a field, a dialog or an open menu, which close first.
+  useEffect(() => {
+    if (selected.size === 0) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || keyBelongsElsewhere(event)) return;
+      if (document.querySelector("[role=menu]")) return;
+      setSelected(new Set());
+      setAnchor(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [selected.size]);
+
+  /**
+   * Selects or unselects a card: toggling it, or, for a range, selecting every card from the anchor to it in its
+   * column, as shown. A range from a card of another column, or with no anchor, selects just this one.
+   */
+  const select = (ticket: TicketSummary, range: boolean) => {
+    const from = range ? tickets.find((t) => t.id === anchor) : undefined;
+    const next = new Set(selected);
+    if (from && from.statusId === ticket.statusId) {
+      const column = tickets.filter((t) => t.statusId === ticket.statusId);
+      const [i, j] = [column.indexOf(from), column.indexOf(ticket)];
+      for (const t of column.slice(Math.min(i, j), Math.max(i, j) + 1)) next.add(t.id);
+    } else if (range || !next.has(ticket.id)) {
+      next.add(ticket.id);
+      setAnchor(ticket.id);
+    } else {
+      next.delete(ticket.id);
+      setAnchor(ticket.id);
+    }
+    setSelected(next);
+  };
+
   /** A drop's or a card menu's change, saved at once; a refusal says why above the board. */
   const edit = async (ticketId: string, change: TicketEdit) => {
     setError(null);
+    setRefusals(null);
     try {
       await api.editTicket(ticketId, change);
     } catch (e) {
@@ -670,11 +769,38 @@ function Board({
     onChanged();
   };
 
+  /**
+   * Moves every selected Ticket to the Status, one at a time, each saved as if moved alone, so each is its own Change
+   * and starts Runs as usual. A refused one doesn't stop the rest; the refusals are listed above the board, and those
+   * Tickets stay selected while the moved ones leave the selection.
+   */
+  const moveSelection = async (statusId: string) => {
+    setError(null);
+    setRefusals(null);
+    const moving = tickets.filter((t) => selected.has(t.id) && t.statusId !== statusId);
+    const refused: { key: string; message: string }[] = [];
+    const moved = new Set<string>();
+    for (const ticket of moving) {
+      try {
+        await api.editTicket(ticket.id, { statusId });
+        moved.add(ticket.id);
+      } catch (e) {
+        refused.push({ key: ticket.key, message: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    if (refused.length > 0) setRefusals({ total: moving.length, refused });
+    setSelected((current) => new Set([...current].filter((id) => !moved.has(id))));
+    onChanged();
+  };
+
   const drop = async (event: DragEvent<HTMLElement>, status: Status) => {
     event.preventDefault();
     setTarget(null);
     const ticketId = event.dataTransfer.getData(ticketDrag);
-    if (!ticketId || tickets.find((t) => t.id === ticketId)?.statusId === status.id) return;
+    if (!ticketId) return;
+    // A selected card carries the whole selection with it; any other card moves alone.
+    if (selected.has(ticketId)) return moveSelection(status.id);
+    if (tickets.find((t) => t.id === ticketId)?.statusId === status.id) return;
     await edit(ticketId, { statusId: status.id });
   };
 
@@ -682,6 +808,36 @@ function Board({
   return (
     <>
       <FormError error={error} />
+      {refusals && (
+        <div role="alert" className="form-error board-refusals">
+          <p>
+            {refusals.refused.length} of {ticketCount(refusals.total)} not moved:
+          </p>
+          <ul>
+            {refusals.refused.map((r) => (
+              <li key={r.key}>
+                <span className="ticket-key">{r.key}</span>: {r.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <div role="status" className="board-selection">
+        {selected.size > 0 && (
+          <>
+            <span>{selected.size} selected</span>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSelected(new Set());
+                setAnchor(null);
+              }}
+            >
+              Clear
+            </Button>
+          </>
+        )}
+      </div>
       <section
         aria-label="Board"
         className="board"
@@ -751,7 +907,10 @@ function Board({
                       agents={agents}
                       own={own}
                       arrived={arrived.has(`${ticket.id} ${ticket.statusId}`)}
+                      selection={selected.has(ticket.id) ? selected.size : 0}
                       onEdit={(change) => void edit(ticket.id, change)}
+                      onSelect={(range) => select(ticket, range)}
+                      onMoveSelection={(statusId) => void moveSelection(statusId)}
                     />
                   ))}
                 </div>
