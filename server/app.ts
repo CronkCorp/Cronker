@@ -30,6 +30,7 @@ import { liveRoutes } from "./live/routes.js";
 import { searchRoutes } from "./search/routes.js";
 import { transcriptRoutes } from "./transcripts/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
+import { accessRoutes } from "./work/access.js";
 import { workRoutes } from "./work/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
 
@@ -124,6 +125,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(githubRoutes(context));
   await app.register(workspaceRoutes(context));
   await app.register(workRoutes(context));
+  await app.register(accessRoutes(context));
   await app.register(ticketRoutes(context));
   await app.register(knowledgeRoutes(context));
   await app.register(termRoutes(context));

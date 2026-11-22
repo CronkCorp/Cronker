@@ -28,6 +28,7 @@ test("Project settings list their sections, and a section's link brings it into 
 
   await expect(sections(page).getByRole("link")).toHaveText([
     "Statuses and Steps",
+    "Access",
     "Delegation defaults",
     "Repositories",
     "Pull Request automation",
@@ -94,6 +95,54 @@ test("an Admin lets agents merge; a member who isn't one sees the setting but ca
   await expect(setting).toBeChecked();
   await expect(setting).toBeDisabled();
   await expect(merges).toContainText("Only an Admin of this Workspace changes this.");
+});
+
+test("an Admin makes a Project private and lists Users on it; others lose sight of it and its blockers", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace, project } = await signedIn(page, cronk);
+  const adaCookie = await signIn(cronk);
+  const bea = await addMember(cronk, adaCookie, workspace.id, "bea@example.com");
+  const cal = await addMember(cronk, adaCookie, workspace.id, "cal@example.com");
+  const call = async (path: string, body: unknown) =>
+    (await cronk.request("POST", path, { cookie: adaCookie, body })).json() as Promise<{ id: string }>;
+  const website = await call(`/api/workspaces/${workspace.id}/projects`, { name: "Website", key: "WEB" });
+  const plans = await call(`/api/projects/${project.id}/tickets`, { title: "Secret plans" });
+  const landing = await call(`/api/projects/${website.id}/tickets`, { title: "Landing page" });
+  await call(`/api/tickets/${plans.id}/relations`, { kind: "blocks", ticketId: landing.id });
+  await page.goto(`${cronk.url}/projects/${project.id}/settings`);
+
+  const access = page.getByRole("region", { name: "Access" });
+  await access.getByLabel("Private to the Users listed below").click();
+  await expect(access.getByLabel("Private to the Users listed below")).toBeChecked();
+  await expect(access.getByRole("status")).toHaveText("Saved.");
+  await access.getByLabel(/^bea@example\.com/).click();
+  await expect(access.getByLabel(/^bea@example\.com/)).toBeChecked();
+  await expect(access.getByLabel(/^ada@example\.com/)).toBeDisabled();
+
+  const signInAs = async (email: string, password: string) => {
+    await page.context().clearCookies();
+    await page.goto(cronk.url);
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password").fill(password);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
+  };
+  // Bea, listed, still finds it, and sees it is private without being able to change it.
+  await signInAs("bea@example.com", bea.password);
+  await expect(page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /CRONK/ })).toBeVisible();
+  await page.goto(`${cronk.url}/projects/${project.id}/settings`);
+  await expect(page.getByRole("region", { name: "Access" })).toContainText("This Project is private");
+
+  // Cal, unlisted, finds nothing of it, and WEB-1's chip counts its blocker without naming it.
+  await signInAs("cal@example.com", cal.password);
+  await expect(page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /WEB/ })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /CRONK/ })).toHaveCount(0);
+  await page.goto(`${cronk.url}/projects/${website.id}`);
+  const chip = page.getByRole("button", { name: /^Blocked by/ });
+  await expect(chip).toHaveText("Blocked by 1");
+  await expect(chip).toHaveAccessibleName("Blocked by 1: a Ticket you can't see");
 });
 
 test("saving a Step says Saved. beside its buttons", async ({ page, cronk }) => {

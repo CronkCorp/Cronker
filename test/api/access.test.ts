@@ -3,8 +3,8 @@ import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
- * Access (ADR 0010): what a Viewer may do in a Project, nothing, Read or Write, decided by one rule. No route sets Access
- * yet, so these tests set a Project's visibility, its listed Users and Agent Access in the database, and check what
+ * Access (ADR 0010): what a Viewer may do in a Project, nothing, Read or Write, decided by one rule. No route lists Read
+ * or sets Agent Access yet, so these tests set a Project's visibility, its listed Users and Agent Access in the database, and check what
  * each Viewer then reads through the HTTP API.
  */
 
@@ -113,10 +113,12 @@ describe("with every Project open and Agent Access Write, as after upgrading", (
     const setting = await workspaceWithProject();
     const { ada, grace, adasAgent, gracesAgent, gracesReader } = setting;
 
+    // A Project tells each caller its own Access: Write, but Read for a read-only token.
+    const sameAs = (json: Record<string, unknown>) => ({ ...json, access: undefined });
     for (const path of projectReads(setting)) {
       const asAdmin = await ok("GET", path, ada);
       for (const as of [grace.as, adasAgent.as, gracesAgent.as, gracesReader.as]) {
-        expect(await ok("GET", path, as), path).toEqual(asAdmin);
+        expect(sameAs(await ok("GET", path, as)), path).toEqual(sameAs(asAdmin));
       }
     }
     for (const as of [ada, grace.as, adasAgent.as, gracesAgent.as, gracesReader.as]) {

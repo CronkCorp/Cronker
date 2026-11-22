@@ -49,8 +49,8 @@ async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promis
 }
 
 /** Comments as the API shows them, finding the Ticket keys of all their bodies, and their Attachments, at once. */
-async function present(db: Db | Tx, workspaceId: string, rows: Row[]): Promise<Comment[]> {
-  const mentions = await mentionsInEach(db, workspaceId, rows.map((row) => row.body));
+async function present(db: Db | Tx, viewer: Viewer, workspaceId: string, rows: Row[]): Promise<Comment[]> {
+  const mentions = await mentionsInEach(db, workspaceId, rows.map((row) => row.body), viewer);
   const attachments = await attachmentsOnComments(db, rows.map((row) => row.id));
   return rows.map((row, i) => ({
     ...row,
@@ -63,7 +63,7 @@ async function present(db: Db | Tx, workspaceId: string, rows: Row[]): Promise<C
 export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Comment[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  return present(db, ticket.workspaceId, await rowsOf(db, ticket.id));
+  return present(db, viewer, ticket.workspaceId, await rowsOf(db, ticket.id));
 }
 
 export async function addComment(
@@ -86,7 +86,7 @@ export async function addComment(
     if (actor.kind === "user" && input.replyToId !== undefined) {
       await answerQuestion(context, tx, ticket, actor.id, input.replyToId, commentId);
     }
-    const [comment] = await present(tx, ticket.workspaceId, await rowsOf(tx, ticket.id, commentId));
+    const [comment] = await present(tx, actor, ticket.workspaceId, await rowsOf(tx, ticket.id, commentId));
     return comment!;
   });
 }

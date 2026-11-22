@@ -447,7 +447,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         const caller = await requireCaller(context, request);
         const ticket = await findTicketRow(db, caller, request.params.ticketId);
         if (!ticket) throw ticketNotFound();
-        return changesOf(db, ticket.id);
+        return changesOf(db, caller, ticket.id);
       },
     );
   };

@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { blockingChanged } from "../runs/runs.js";
@@ -57,11 +57,12 @@ export async function addRelation(
       "ticketId" in input
         ? await findTicketRef(tx, ticket.workspaceId, input.ticketId)
         : await findTicketRefByKey(tx, ticket.workspaceId, input.ticketKey);
-    if (!other) throw unknownTicket();
+    // A Ticket the caller can't read answers as if it weren't in the Workspace.
+    const otherRow = other && (await findTicketRow(tx, caller, other.id));
+    if (!other || !otherRow) throw unknownTicket();
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
     let actor: ChangeActor;
     if (caller.kind === "agent") {
-      const otherRow = (await findTicketRow(tx, caller, other.id))!;
       const held = checkAgentRelation(caller, ticket, otherRow, input.kind);
       actor = await discoveringAgent(tx, caller, held);
     } else {
@@ -157,6 +158,9 @@ export async function removeRelation(
     );
     const removed = rows[0];
     if (!removed) throw relationNotFound();
+    // A Relation with a Ticket the User can't read isn't listed for them, so it answers as if it didn't exist.
+    const otherId = removed.ticketId === ticket.id ? removed.otherTicketId : removed.ticketId;
+    if (!(await findTicketRow(tx, userViewer(userId), otherId))) throw relationNotFound();
     const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
@@ -216,9 +220,14 @@ async function blocksTransitively(tx: Tx, workspaceId: string, blocker: string, 
   return (rowCount ?? 0) > 0;
 }
 
+/**
+ * The Ticket's parent, Sub-Tickets and Relations, leaving out the Tickets the Viewer can't read, as if they didn't
+ * exist. Its parent and Sub-Tickets are of its own Project, so the Viewer reads them whenever it reads the Ticket.
+ */
 export async function relationsOf(db: Db, viewer: Viewer, ticketId: string): Promise<TicketRelations> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
+  const reach = inReach(viewer, { project: "others.project_id", workspace: "others.workspace_id" }, "$2");
   const { rows } = await db.query<Relation>(
     `select relations.id,
        case when relations.kind = 'relates' then 'relatesTo'
@@ -228,9 +237,9 @@ export async function relationsOf(db: Db, viewer: Viewer, ticketId: string): Pro
      join tickets others on others.id =
        case when relations.ticket_id = $1 then relations.other_ticket_id else relations.ticket_id end
      join projects on projects.id = others.project_id
-     where $1 in (relations.ticket_id, relations.other_ticket_id)
+     where $1 in (relations.ticket_id, relations.other_ticket_id) and ${reach.sql}
      order by relations.seq`,
-    [ticket.id],
+    [ticket.id, reach.value],
   );
   const parent = ticket.parentId === null ? null : (await findTicketRef(db, ticket.workspaceId, ticket.parentId))!;
   const subTickets = await db.query<{ ref: TicketRef }>(
