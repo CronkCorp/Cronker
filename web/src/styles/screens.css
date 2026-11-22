@@ -231,8 +231,9 @@
 /* A card is its link (key, Priority, title, meta) and, for a blocked Ticket, its Blocked chip under it: the chip holds
    links of its own, so it can't sit inside the card's. Priority follows the key on the first line, wrapping under it
    in a narrow column; title and meta take a line each. It drags from anywhere on it, so none of its text is
-   selectable: pressing on its title and moving drags the card rather than selecting the words. Its link and what is
-   in it are never dragged themselves (the link is draggable="false"), so every drag is the card's. */
+   selectable: pressing on its title and moving drags the card rather than selecting the words. Its link is
+   draggable="true", an element drag whose dragstart the card handles, so every drag is the card's; never
+   draggable="false", which Vivaldi takes as "select this link's text" whatever user-select says. */
 .card {
   -webkit-user-select: none;
   user-select: none;
@@ -306,7 +307,9 @@
   text-decoration: none;
   cursor: inherit;
 }
-.card-link,
+.card-link {
+  -webkit-user-drag: element;
+}
 .card-link * {
   -webkit-user-drag: none;
 }

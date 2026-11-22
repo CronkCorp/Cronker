@@ -188,6 +188,15 @@ export function ProjectScreen({
     [projectId, filter, latestTickets],
   );
   useEffect(loadTickets, [loadTickets]);
+  /**
+   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Fetching again starts
+   * after the edit, so whatever was fetched before it is dropped rather than shown over it; and the card moves without
+   * waiting on that fetch, which the events the edit sets off may start again and again on a busy server.
+   */
+  const ticketEdited = (edited?: TicketSummary) => {
+    if (edited) setTickets((shown) => shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)) ?? shown);
+    loadTickets();
+  };
 
   const latestProject = useLatest();
   const loadProject = () => latestProject(api.project(projectId), setProject, (e) => setFailure(e.message));
@@ -289,7 +298,7 @@ export function ProjectScreen({
       />
       <ReadOnlyNote access={project.access} />
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
-      {view === "board" && <Board project={project} members={members} agents={agents} user={user} tickets={tickets} onChanged={loadTickets} />}
+      {view === "board" && <Board project={project} members={members} agents={agents} user={user} tickets={tickets} onChanged={ticketEdited} />}
       {view === "list" && <List project={project} members={members} agents={agents} tickets={tickets} filtered={filtered} />}
     </div>
   );
@@ -660,9 +669,12 @@ function Card({
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      {/* Not draggable itself: a press on the link starts the card's drag, not the browser's own drag of a link,
-          which browsers start differently from an element's and which would carry the link's address. */}
-      <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
+      {/* Explicitly draggable, as an element rather than as a link: its dragstart bubbles to the card's handler,
+          which sets the card's data and image, so the drag is the card's wherever it starts. Not draggable={false}:
+          Vivaldi (and Opera) take that as "this link's text is always selectable", ignore user-select on it and
+          select the card's text instead of dragging it; draggable="true" is their documented way to say "always drag".
+          With Read the card refuses the drag in its own handler. */}
+      <Link to={to.ticket(ticket)} className="card-link" draggable={canWrite}>
         <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
         <span className="card-priority">
           <PriorityTag priority={ticket.priority} />
@@ -710,7 +722,8 @@ function Board({
   agents: Agent[];
   user: User;
   tickets: TicketSummary[];
-  onChanged: () => void;
+  /** After a change from the board, with the Ticket as it answered; nothing when it was refused or a selection moved. */
+  onChanged: (edited?: TicketSummary) => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [refusals, setRefusals] = useState<{ total: number; refused: { key: string; message: string }[] } | null>(null);
@@ -771,12 +784,13 @@ function Board({
   const edit = async (ticketId: string, change: TicketEdit) => {
     setError(null);
     setRefusals(null);
+    let edited: TicketSummary | undefined;
     try {
-      await api.editTicket(ticketId, change);
+      edited = await api.editTicket(ticketId, change);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-    onChanged();
+    onChanged(edited);
   };
 
   /**
