@@ -325,7 +325,7 @@ test("a card dragged onto another column moves its Ticket there, onto its own co
   await expect(shippedCard("In Review")).toBeHidden();
 });
 
-test("a card picked up by its title or key drags without selecting text, while a click on it still opens its Ticket and a modified click a new tab", { tag: "@every-browser" }, async ({
+test("a card picked up by its title or key drags without selecting text, while a click on it still opens its Ticket and a middle-click a new tab", { tag: "@every-browser" }, async ({
   page,
   cronk,
   browserName,
@@ -363,10 +363,10 @@ test("a card picked up by its title or key drags without selecting text, while a
   await expect(card("Triage")).toBeVisible();
   expect(await selected(), "no text is selected by the drag").toBe("");
 
-  // A Ctrl/Cmd+click on the title opens the Ticket in a new tab and leaves the board where it is.
+  // A middle-click on the title opens the Ticket in a new tab and leaves the board where it is (Ctrl/Cmd+click selects
+  // the card instead, see board-selection.spec.ts).
   if (browserName === "chromium") {
-    const modifier = process.platform === "darwin" ? "Meta" : "Control";
-    const [opened] = await Promise.all([page.context().waitForEvent("page"), card("Triage").locator(".card-title").click({ modifiers: [modifier] })]);
+    const [opened] = await Promise.all([page.context().waitForEvent("page"), card("Triage").locator(".card-title").click({ button: "middle" })]);
     await opened.waitForLoadState();
     await expect(opened.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
     await opened.close();
