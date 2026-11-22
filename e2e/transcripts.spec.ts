@@ -30,7 +30,7 @@ const lines = [
   },
 ];
 
-test("a Run's Transcript opens from the timeline, follows new uploads, expands a tool call and is deleted", async ({ page, cronk }) => {
+test("a Run's Transcript opens from the timeline, follows new uploads, expands a tool call, is redacted and is deleted", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   await signInInBrowser(page, cronk);
   const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
@@ -76,6 +76,22 @@ test("a Run's Transcript opens from the timeline, follows new uploads, expands a
   await expect(toolLine).toHaveAttribute("aria-expanded", "true");
   await expect(entries.getByRole("region", { name: "Input" })).toContainText('"key": "CRONK-1"');
   await expect(entries.getByRole("region", { name: "Result" })).toContainText("CRONK-1 Make it so, in full");
+
+  // The scrubbing missed something: a User selects it and redacts it.
+  await entries.getByText("Reading the Ticket first.").evaluate((element) => {
+    const text = element.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, "Reading the ".length);
+    range.setEnd(text, "Reading the Ticket".length);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+  });
+  await page.getByRole("button", { name: "Redact" }).click();
+  const confirming = page.getByRole("dialog", { name: "Redact this text?" });
+  await expect(confirming).toContainText("Ticket");
+  await confirming.getByRole("button", { name: "Redact" }).click();
+  await expect(entries).toContainText("Reading the [redacted] first.");
+  await expect(page.getByText("1 redaction", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "More of this Transcript" }).click();
   await page.getByRole("menuitem", { name: "Delete Transcript" }).click();

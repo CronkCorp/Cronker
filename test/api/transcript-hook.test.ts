@@ -130,6 +130,26 @@ describe("the Transcript hook on Stop", () => {
     const { entries } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
     expect(entries.map((e: { text: string }) => e.text)).toEqual(["Triage CRONK-1.", "Reading it."]);
   });
+
+  test("a re-upload of the session after a User redacted part of it stays redacted, new turns included", async () => {
+    const { ada, run, sessionEnv } = await adaWithRunningRun();
+    const { Stop } = await hookCommands(ada);
+    const first = [userSays("Triage CRONK-1.", 1), assistantSays("The password is zorblaxquux42.", 2)];
+    await runHook(Stop!, stopInput(await transcriptFile(first)), sessionEnv);
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    await ok("POST", `/api/transcripts/${transcriptId}/redactions`, ada, { text: "zorblaxquux42" });
+
+    const next = [...first, assistantSays("Using zorblaxquux42 again.", 3)];
+    const hook = await runHook(Stop!, stopInput(await transcriptFile(next)), sessionEnv);
+
+    expect(hook).toEqual({ code: 0, stdout: "", stderr: "" });
+    const { entries } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
+    expect(entries.map((e: { text: string }) => e.text)).toEqual([
+      "Triage CRONK-1.",
+      "The password is [redacted].",
+      "Using [redacted] again.",
+    ]);
+  });
 });
 
 describe("when the upload fails", () => {

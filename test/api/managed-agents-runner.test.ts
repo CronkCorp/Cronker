@@ -841,6 +841,36 @@ describe("the Run's Transcript", () => {
     expect((await call("GET", `/api/transcripts/${transcriptId}`, ada)).status).toBe(404);
   });
 
+  test("redacted by a User while its Run runs, stays redacted as later fetches append to it, a late tool result included", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
+    const secret = "zorblaxquux42";
+    cronk.managedAgents.emit(
+      session.id,
+      { type: "agent.message", content: [{ type: "text", text: `The code is ${secret}.` }] },
+      { id: "sevt_unlock", type: "agent.tool_use", name: "bash", input: { command: "unlock" } },
+    );
+    await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+    await ok("POST", `/api/transcripts/${transcriptId}/redactions`, ada, { text: secret });
+
+    cronk.managedAgents.emit(
+      session.id,
+      { type: "agent.tool_result", tool_use_id: "sevt_unlock", content: [{ type: "text", text: `unlocked with ${secret}` }] },
+      { id: "sevt_echo", type: "agent.tool_use", name: "bash", input: { command: `echo ${secret}` } },
+      { type: "agent.message", content: [{ type: "text", text: `Done with ${secret}.` }] },
+    );
+    await ok("GET", `/api/transcripts/${transcriptId}`, ada);
+
+    const { entries } = await transcriptOf(run.id, ada);
+    expect(entries.slice(1)).toEqual([
+      expect.objectContaining({ text: "The code is [redacted]." }),
+      expect.objectContaining({ toolName: "bash", toolInput: { command: "unlock" }, toolResult: "unlocked with [redacted]" }),
+      expect.objectContaining({ toolName: "bash", toolInput: { command: "echo [redacted]" } }),
+      expect.objectContaining({ text: "Done with [redacted]." }),
+    ]);
+  });
+
   test("past 50 MB stays within it when a later result lands on a call in its kept start", async () => {
     const { ada, startRun } = await adaWithManagedAgentsRunner();
     const { run, session } = await startRun();

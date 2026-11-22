@@ -392,6 +392,8 @@ export interface Transcript {
   /** Where entries were left out of a Transcript past 50 MB: after which position, how many and how large. */
   gap: { after: number; entries: number; bytes: number } | null;
   uploadedAt: string;
+  /** The Redactions Users added, oldest first: who and when, never the string redacted. */
+  redactions: { id: string; addedBy: { id: string; name: string }; addedAt: string }[];
 }
 
 /** A Transcript as a Ticket it names lists it: placed when its Cronk tool calls first named the Ticket. */
@@ -978,6 +980,8 @@ export const api = {
       `/api/transcripts/${encodeURIComponent(id)}/entries${after === undefined ? "" : `?after=${after}`}`,
     ),
   deleteTranscript: (id: string) => call<void>("DELETE", `/api/transcripts/${encodeURIComponent(id)}`),
+  redactTranscript: (id: string, text: string) =>
+    call<Transcript>("POST", `/api/transcripts/${encodeURIComponent(id)}/redactions`, { text }),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
