@@ -359,7 +359,10 @@ export function buildMcpServer(api: Api): McpServer {
         "Discovered Ticket: in the Project's first Backlog Status, undelegated, assigned to the Assignee of your Run's " +
         "Ticket (or, without a Run, to your Owner) and waiting in their Inbox. Until a User delegates, moves or " +
         "dismisses it you may edit it with `edit_ticket`, add blocks from it, or to it from any Ticket, with `add_block` and split it into " +
-        "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead.",
+        "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead. " +
+        "File only what isn't tracked yet: `search` first, and if an open Ticket already covers it, `comment` on that " +
+        "one instead; check a fault in the code still happens on the Repository's default branch, not only on your " +
+        "own branch; and name any related Tickets in the description.",
       inputSchema: {
         project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
         ...newTicketFields,
