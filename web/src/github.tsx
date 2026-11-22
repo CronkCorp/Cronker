@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type GitHubApp, type GitHubChecklist, type GitHubInstallation, type WorkspaceSummary } from "./api.js";
+import { api, type GitHubApp, type User, type GitHubChecklist, type GitHubInstallation, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Centered, usePlace } from "./frame.js";
 import { Actions, Banner, Button, buttonClass, Field, FormError, PageHead, Panel } from "./ui/controls.js";
@@ -16,6 +16,9 @@ const githubErrors: Record<string, string> = {
   github_unavailable: "GitHub couldn't be reached. Try again.",
   github_app_exists: "This installation already has its GitHub App.",
   no_secret_key: "Cronk has no CRONK_SECRET_KEY to encrypt the App's credentials with. Whoever runs Cronk must set it first.",
+  github_account_taken: "That GitHub account is linked to another User already, so it wasn't linked to you.",
+  github_already_linked: "You already have a GitHub account linked.",
+  not_signed_in: "Sign in first, then link your GitHub account.",
 };
 
 export function githubErrorMessage(code: string): string {
@@ -33,6 +36,50 @@ export function takeQueryParameter(name: string): string | null {
     window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
   }
   return value;
+}
+
+/**
+ * The signed-in User's GitHub account on their password page: the login once linked, else
+ * a button that links one through GitHub, which sends the browser back here.
+ */
+export function GitHubAccountPanel({ user }: { user: User }) {
+  const [app, setApp] = useState<GitHubApp | null | undefined>(undefined);
+  // Cronk sends the browser back here with `github=linked`, or `github_link_error` when linking failed.
+  const [outcome] = useState(() => {
+    const error = takeQueryParameter("github_link_error");
+    const linked = takeQueryParameter("github");
+    return error ? { error: githubErrorMessage(error) } : { linked: linked === "linked" };
+  });
+  useEffect(() => {
+    api.githubApp().then(setApp, () => setApp(null));
+  }, []);
+  return (
+    <Panel
+      title="GitHub account"
+      id="github-account"
+      description="Once linked, you can sign in with GitHub, and your merges on GitHub complete Tickets as Verified."
+    >
+      {user.githubLogin ? (
+        <p>
+          Linked to <strong className="mono">@{user.githubLogin}</strong>.
+        </p>
+      ) : app === null ? (
+        <p>This installation has no GitHub App yet, so no GitHub account can be linked.</p>
+      ) : app ? (
+        <Actions>
+          <a className={`${buttonClass("secondary")} button-github`} href="/api/github/link">
+            Link GitHub account
+          </a>
+        </Actions>
+      ) : null}
+      {outcome.linked && user.githubLogin ? (
+        <p role="status" className="saved">
+          GitHub account linked.
+        </p>
+      ) : null}
+      <FormError error={outcome.error ?? null} />
+    </Panel>
+  );
 }
 
 /** Posts the manifest to GitHub from the browser, as GitHub's manifest flow needs. GitHub sends the browser back to Cronk. */

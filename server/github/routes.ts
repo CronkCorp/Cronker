@@ -6,6 +6,7 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
+import { beginLink, finishLink, isLinkState } from "./link.js";
 import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
 import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
@@ -15,6 +16,9 @@ import { receiveDelivery } from "./webhooks.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
 const webhookBodyLimit = 25 * 1024 * 1024;
+
+/** The page a User links their GitHub account from. */
+const accountPage = "/password";
 
 /** Where a browser GitHub sent back is sent on: a page of the web client, with an error code if it failed. */
 function pageWith(path: string, error: unknown, fallback: string, parameter = "error"): string {
@@ -60,13 +64,35 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
     );
 
     app.get(
+      "/api/github/link",
+      {
+        schema: {
+          tags: ["GitHub"],
+          summary: "Link a GitHub account to the signed-in User",
+          description:
+            "For a signed-in User's browser to open: redirects to GitHub to authorize the installation's GitHub App, which sends the browser back to Cronk to link the GitHub account to this User. Once linked, the account signs in as the User and its merges are the User's own. Redirects to `/password?github=linked` once linked, or to `/password?github_link_error=<code>`: `github_already_linked` when the User has a GitHub account already, `github_account_taken` when another User has that account, `invalid_state` when the link didn't start in this browser or took too long, `github_denied` when GitHub didn't authorize, `github_not_set_up` while there is no App, and `not_signed_in` when nobody is signed in.",
+          response: { 302: Type.Null() },
+        },
+      },
+      async (request, reply) => {
+        try {
+          const user = await requireUser(context, request);
+          return reply.redirect(await beginLink(context, reply, user));
+        } catch (error) {
+          if (!(error instanceof ApiError)) request.log.error(error);
+          return reply.redirect(pageWith(accountPage, error, "failed", "github_link_error"));
+        }
+      },
+    );
+
+    app.get(
       callbackPath,
       {
         schema: {
           tags: ["GitHub"],
           summary: "Where GitHub sends the browser back to sign in",
           description:
-            "Signs in the User the GitHub account is linked to, linking it first to the User with its verified primary email if it isn't linked yet. Redirects to `/`, or to `/?github_error=<code>`: `unknown_github_user` when no User has the account, `invalid_state` when the sign-in didn't start in this browser, `github_denied` when GitHub didn't sign the User in.",
+            "Signs in the User the GitHub account is linked to, linking it first to the User with its verified primary email if it isn't linked yet. Redirects to `/`, or to `/?github_error=<code>`: `unknown_github_user` when no User has the account, `invalid_state` when the sign-in didn't start in this browser, `github_denied` when GitHub didn't sign the User in. A link started at `GET /api/github/link` finishes here too, and redirects as that says.",
           querystring: Type.Object({
             code: Type.Optional(Type.String()),
             state: Type.Optional(Type.String()),
@@ -76,6 +102,15 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request, reply) => {
+        if (isLinkState(request.query.state)) {
+          try {
+            await finishLink(context, request, reply, request.query);
+            return reply.redirect(`${accountPage}?github=linked`);
+          } catch (error) {
+            if (!(error instanceof ApiError)) request.log.error(error);
+            return reply.redirect(pageWith(accountPage, error, "failed", "github_link_error"));
+          }
+        }
         try {
           await finishSignIn(context, request, reply, request.query);
           return reply.redirect("/");

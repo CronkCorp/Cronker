@@ -4,7 +4,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
  * Secrets Cronk issues: a recognisable `cronk_<kind>_` prefix, so a leaked one is easy
  * to spot and scan for, then 32 random bytes. Cronk stores only their hashes.
  */
-export type SecretKind = "setup" | "sign_in" | "join" | "reset" | "github_state" | "github_sign_in" | "agent" | "oauth_code" | "oauth_refresh" | "runner_setup";
+export type SecretKind = "setup" | "sign_in" | "join" | "reset" | "github_state" | "github_sign_in" | "github_link" | "agent" | "oauth_code" | "oauth_refresh" | "runner_setup";
 
 export function issueSecret(kind: SecretKind): string {
   return `cronk_${kind}_${randomBytes(32).toString("base64url")}`;
