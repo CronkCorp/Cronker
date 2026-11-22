@@ -8,7 +8,7 @@ import { indexMentions } from "../work/mentions.js";
 import { findProject, projectNotFound, statusesOf } from "../work/projects.js";
 import { retryAt } from "../runs/subscription.js";
 import { blocksTransitively, recordRelationChanges } from "../work/relations.js";
-import { lockTickets, writeTicket } from "../work/ticket-writes.js";
+import { lockTickets, writeTicket, type LockedTicket } from "../work/ticket-writes.js";
 import { distinctLabels, findTicketRef } from "../work/tickets.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { appToken } from "./app.js";
@@ -384,12 +384,24 @@ async function importIssue(
   comments: IssueCommentOnGitHub[],
 ): Promise<{ id: string; imported: boolean }> {
   const { rows: before } = await tx.query<{ id: string }>(
-    `update tickets set github_repository_id = coalesce(github_repository_id, $3),
-       github_issue_number = coalesce(github_issue_number, $4)
-     where project_id = $1 and github_issue_node_id = $2 returning id`,
-    [job.projectId, issue.node_id, job.repositoryId, issue.number],
+    "select id from tickets where project_id = $1 and github_issue_node_id = $2",
+    [job.projectId, issue.node_id],
   );
-  if (before[0]) return { id: before[0].id, imported: false };
+  if (before[0]) {
+    const [made] = await lockTickets(tx, [before[0].id]);
+    await writeTicket(
+      context,
+      tx,
+      made!,
+      job.startedBy,
+      {
+        githubRepositoryId: made!.githubRepositoryId ?? Number(job.repositoryId),
+        githubIssueNumber: made!.githubIssueNumber ?? issue.number,
+      },
+      { at: context.clock.now() },
+    );
+    return { id: made!.id, imported: false };
+  }
   const closed = issue.state === "closed";
   const statusId = !closed ? places.open : issue.state_reason === "not_planned" ? places.canceled : places.done;
   const labels = distinctLabels(
@@ -592,11 +604,7 @@ async function linkBlock(context: Context, tx: Tx, job: ImportRow, blocker: Link
  * any run; others stay as written. Part of making the Ticket, so it records no Change.
  */
 async function rewriteReferences(context: Context, tx: Tx, job: ImportRow, ticketId: string): Promise<void> {
-  const { rows } = await tx.query<{ title: string; description: string }>(
-    "select title, description from tickets where id = $1 for update",
-    [ticketId],
-  );
-  const ticket = rows[0]!;
+  const [ticket] = (await lockTickets(tx, [ticketId])) as [Required<LockedTicket>];
   const numbers = referencedNumbers(`${ticket.title}\n${ticket.description}`);
   if (numbers.length === 0) return;
   const { rows: found } = await tx.query<{ number: number; key: string }>(
@@ -610,7 +618,6 @@ async function rewriteReferences(context: Context, tx: Tx, job: ImportRow, ticke
   const title = rewritePlain(ticket.title, keyOf);
   const description = rewriteMarkdown(ticket.description, keyOf);
   if (title === ticket.title && description === ticket.description) return;
-  await tx.query("update tickets set title = $2, description = $3 where id = $1", [ticketId, title, description]);
+  await writeTicket(context, tx, ticket, job.startedBy, { title, description }, { at: context.clock.now(), unrecorded: true });
   if (description !== ticket.description) await indexMentions(tx, "ticket", { id: ticketId, workspaceId: job.workspaceId }, description);
-  context.live.publish(tx, job.workspaceId, { type: "ticket.changed", projectId: job.projectId, ticketId });
 }
