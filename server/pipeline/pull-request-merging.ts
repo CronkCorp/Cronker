@@ -143,6 +143,8 @@ export class GitHubRefusedMerge extends ApiError {
 interface MergeAsked {
   actor: MergeActor;
   completeAs: CompleteAs;
+  /** Set when the Merge Queue asked for it, so the merge completes a Ticket only with its last queued Pull Request. */
+  queue?: true;
 }
 
 /** A merge Cronk's own rules allowed and marked as asked for, for GitHub to be asked. */
@@ -164,6 +166,8 @@ export async function askMerge(
     pullRequest: LinkedPullRequest;
     actor: MergeActor;
     completeAs: CompleteAs;
+    /** Whether the Merge Queue asks for it. */
+    viaQueue?: boolean;
     advice: MergeAdvice;
   },
 ): Promise<AskedMerge> {
@@ -205,7 +209,7 @@ export async function askMerge(
       advice: advice.sendBack(`@${reviewer} requested changes`),
     });
   }
-  const asked: MergeAsked = { actor: request.actor, completeAs: request.completeAs };
+  const asked: MergeAsked = { actor: request.actor, completeAs: request.completeAs, ...(request.viaQueue ? { queue: true } : {}) };
   await tx.query("update pull_requests set merge_asked_by = $2 where id = $1", [pullRequest.id, JSON.stringify(asked)]);
   return { ticketKey: ticket.key, pullRequest: { ...pullRequest, listedAs }, asked, advice };
 }
@@ -284,7 +288,7 @@ export async function recordAskedMerge(context: Context, tx: Tx, pullRequestId: 
   );
   const pullRequest = rows[0];
   if (!pullRequest?.asked) return false;
-  const { actor, completeAs } = pullRequest.asked;
+  const { actor, completeAs, queue } = pullRequest.asked;
   const by = await mergerOf(tx, actor);
   if (!by) {
     await tx.query("update pull_requests set merge_asked_by = null where id = $1", [pullRequestId]);
@@ -303,6 +307,7 @@ export async function recordAskedMerge(context: Context, tx: Tx, pullRequestId: 
     autoMerged: false,
     ...by.merge,
     verification: completeAs,
+    viaQueue: queue === true,
   });
   const { rows: linked } = await tx.query<{ ticketId: string; projectId: string; workspaceId: string }>(
     `select tickets.id as "ticketId", tickets.project_id as "projectId", tickets.workspace_id as "workspaceId"

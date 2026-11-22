@@ -22,10 +22,11 @@ import { failingCheckOn, sendBackForFailure, type Failure } from "./sending-back
 /**
  * Pipeline: the Merge Queue (ADR 0011, amending ADR 0005). A User with Write presses Merge on a Ticket in a Review
  * Status with an open linked Pull Request, in a Project with Pull Request automation on and a Merge Status (a Status
- * with a Merge Step): the Pull Request joins the queue for its Repository and base branch, and the Ticket moves into
- * the Merge Status as the User's move. A queued Ticket gets no Merge Run. Each `queuePass` takes the head of each queue,
- * the entry that joined first, and asks Cronk's merge (`pull-request-merging.ts`) for it as the queuing User's,
- * completing the Ticket as Verified; a head that isn't clean and green yet waits for a later pass. One head per queue
+ * with a Merge Step): each of its open linked Pull Requests joins the queue for its own Repository and base branch, and
+ * the Ticket moves into the Merge Status as the User's move. A queued Ticket gets no Merge Run. Each `queuePass` takes the head of each queue,
+ * the entry that joined first, and asks Cronk's merge (`pull-request-merging.ts`) for it as the queuing User's; a head
+ * that isn't clean and green yet waits for a later pass. A Ticket with several entries stays in the Merge Status until
+ * the last of them merges, which completes it as Verified (`merges.ts`). One head per queue
  * is merged at a time, so queues on other branches or Repositories never wait on each other.
  *
  * An entry leaves the queue when its Ticket leaves the Merge Status it waits in (`ticket-writes.ts`), as Remove from
@@ -35,8 +36,8 @@ import { failingCheckOn, sendBackForFailure, type Failure } from "./sending-back
  * GitHub refuses, such as for branch protection or a ruleset, hands the Ticket to its Assignee by the Merge Step's
  * *needs you* Outcome, Cronk's Question quoting GitHub's reason. Either way the queue moves on to the next entry.
  *
- * For now a Ticket queues only its first open linked Pull Request (Merge Queue 8 queues each), and a head that
- * conflicts or falls behind waits (Merge Queue 5).
+ * Leaving the Merge Status takes all of a Ticket's entries out at once, so one Pull Request sending it back takes the
+ * others with it. For now a head that conflicts or falls behind waits (Merge Queue 5).
  */
 
 const rules = {
@@ -55,7 +56,8 @@ const waitAdvice: MergeAdvice = {
 };
 
 /**
- * Merge: queues the Ticket's first open linked Pull Request and moves the Ticket into its Project's Merge Status, as
+ * Merge: queues each of the Ticket's open linked Pull Requests, each in its own Repository's and base branch's queue,
+ * and moves the Ticket into its Project's Merge Status, as
  * the User's move, refusing, naming the rule, as the module says.
  */
 export async function joinQueue(context: Context, caller: Caller & { kind: "user" }, ticketId: string): Promise<Ticket> {
@@ -91,11 +93,10 @@ export async function joinQueue(context: Context, caller: Caller & { kind: "user
          and project_repositories.project_id = $2
        where pull_request_links.ticket_id = $1 and pull_requests.state = 'open'
          and not exists (select from merge_queue where merge_queue.pull_request_id = pull_requests.id)
-       order by pull_request_links.linked_at, pull_requests.id limit 1`,
+       order by pull_request_links.linked_at, pull_requests.id`,
       [ticket.id, ticket.projectId],
     );
-    const pullRequest = pullRequests[0];
-    if (!pullRequest) {
+    if (pullRequests.length === 0) {
       throw refuse(
         "no_open_pull_request",
         `${ticket.key} has no open Pull Request of a Repository its Project lists, so there's nothing to merge.`,
@@ -103,13 +104,19 @@ export async function joinQueue(context: Context, caller: Caller & { kind: "user
       );
     }
     const now = context.clock.now();
-    await tx.query(
-      `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, entered_at) values ($1, $2, $3, $4, $5)`,
-      [pullRequest.id, ticket.id, mergeStatus.id, caller.id, now],
+    for (const pullRequest of pullRequests) {
+      await tx.query(
+        `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, entered_at) values ($1, $2, $3, $4, $5)`,
+        [pullRequest.id, ticket.id, mergeStatus.id, caller.id, now],
+      );
+    }
+    await recordChanges(
+      tx,
+      ticket,
+      caller.id,
+      now,
+      pullRequests.map((pullRequest) => ({ field: "queueJoined", from: null, to: { pullRequest: { ...pullRequest, id: Number(pullRequest.id) } } })),
     );
-    await recordChanges(tx, ticket, caller.id, now, [
-      { field: "queueJoined", from: null, to: { pullRequest: { ...pullRequest, id: Number(pullRequest.id) } } },
-    ]);
     return editTicketIn(context, tx, caller, ticket.id, { statusId: mergeStatus.id });
   });
 }
@@ -212,6 +219,7 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
         pullRequest,
         actor: { kind: "user", userId: head.queuedBy, name: users[0].name, workspaceId: ticket.workspaceId },
         completeAs: "verified",
+        viaQueue: true,
         advice: waitAdvice,
       });
     } catch (error) {
@@ -232,7 +240,7 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
   });
   if (!asked) return;
   try {
-    // The merge completes the Ticket, taking it out of the Merge Status and so out of the queue; whatever kept it
+    // The merge takes its entry out of the queue, completing the Ticket when it was its last; whatever kept the entry
     // there, such as automation turned off meanwhile, the merged Pull Request leaves the queue all the same.
     await mergeAsAsked(context, asked, (tx) => dropFromQueue(context, tx, Number(head.pullRequestId)));
   } catch (error) {
