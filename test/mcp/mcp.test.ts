@@ -183,6 +183,7 @@ describe("MCP with an Agent token", () => {
         producingStep: null,
         reviewState: null,
         sentBack: null,
+        manual: false,
       },
     ]);
   });
