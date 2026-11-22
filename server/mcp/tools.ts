@@ -191,7 +191,7 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Search",
       description:
         "Finds Tickets, Documents, Reports, Terms, Decisions, Artifacts (by title and description) and Transcripts of " +
-        "your Workspace that you can read, best first with Transcripts last, each with its kind, id, title, Project, " +
+        "your Workspace that you can read, leaving out an archived Project's unless `project` names it, best first with Transcripts last, each with its kind, id, title, Project, " +
         "Ticket key (a Ticket's own, or the Ticket a Report is on or a Transcript's Run was on) and a snippet whose " +
         "matching words are marked. Words match by their stem in English (`merging` finds `merged`); write `\"a phrase\"` for words " +
         "in order, `or` between alternatives and `-word` to leave out what has it. Search before filing a Ticket or " +

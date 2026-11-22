@@ -237,6 +237,16 @@ describe("MCP with an Agent token", () => {
     expect(transcripts).toEqual({ isError: false, json: [] });
   });
 
+  test("an Agent's search leaves out an archived Project's, unless it names the Project", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    expect((await cronk.request("POST", `/api/projects/${ticket.projectId}/archive`, { cookie })).status).toBe(200);
+    const client = await connect(secret);
+
+    expect(await call(client, "search", { query: "read" })).toEqual({ isError: false, json: [] });
+    const named = await call(client, "search", { query: "read", project: "CRONK" });
+    expect(named.json.map((r: { kind: string; id: string }) => [r.kind, r.id])).toEqual([["ticket", ticket.id]]);
+  });
+
   test("an Agent comments on a Ticket as itself", async () => {
     const { cookie, ticket, agent, secret } = await workspaceWithTicket();
     const client = await connect(secret);

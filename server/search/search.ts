@@ -120,7 +120,8 @@ export const perKind = 20;
 
 /**
  * The Workspace's Tickets, knowledge, Artifacts and Transcripts matching the query that the Viewer can read, best first
- * with Transcripts last, at most `perKind` of each kind, each with a snippet.
+ * with Transcripts last, at most `perKind` of each kind, each with a snippet. An archived Project's are left out unless
+ * the Project filter names that Project.
  */
 export async function search(db: Db, viewer: Viewer, workspaceId: string, input: { q: string; project: string | null; kinds: SearchKind[] }): Promise<SearchResult[]> {
   const readable = hits(viewer);
@@ -135,6 +136,9 @@ export async function search(db: Db, viewer: Viewer, workspaceId: string, input:
        select hits.*, row_number() over (partition by kind order by rank desc, title, id) as place
        from hits, q
        where kind = any($5) and ($6::uuid is null or project_id = $6)
+         -- An archived Project's are left out unless the Project filter names it; the Workspace's own always count.
+         and ($6::uuid is not null or project_id is null
+           or not exists (select 1 from projects where projects.id = project_id and projects.archived_at is not null))
      ) found
        cross join q
        cross join lateral (select ts_headline('english', translate(body, $4, ''), query, $3) as in_body) body_headline
