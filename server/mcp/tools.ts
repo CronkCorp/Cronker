@@ -786,6 +786,11 @@ export function buildMcpServer(api: Api): McpServer {
   const sizeLimit =
     "A Version's files are at most the Attachments size limit Cronk is configured with (25 MB by default) in all; " +
     "load libraries from a CDN rather than adding them.";
+  const artifactPolicy =
+    "Its pages load scripts and styles only from its own files, inline code, cdnjs, jsDelivr, unpkg and Google " +
+    "Fonts, and images, media and fonts from those, `data:` and `blob:`; they `fetch` only its own files, and can't " +
+    "frame other pages, submit forms or change their base. Bundle any data a page shows as a file of the Artifact, " +
+    "such as `data.json`, rather than fetching it from elsewhere.";
 
   server.registerTool(
     "list_artifacts",
@@ -829,8 +834,10 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Creates an Artifact, a live page such as an HTML prototype, in a Project or the Workspace when no Project is " +
         "given, at Version 1 by your Agent: its page and the files it refers to by relative paths (scripts, styles, " +
-        "images, data), each with its bytes as base64. It is served sandboxed: its scripts run, and may load from " +
-        "CDNs, but can't call Cronk's API, and `attachment:` references don't work in it. Name your running Run to " +
+        "images, data), each with its bytes as base64. It is served sandboxed: its scripts run but can't call Cronk's " +
+        "API, and `attachment:` references don't work in it. " +
+        artifactPolicy +
+        " Name your running Run to " +
         "link it to the Run's Ticket, where its Users find it; it is then kept in that Ticket's Project or the " +
         "Workspace. " +
         sizeLimit,
@@ -891,6 +898,8 @@ export function buildMcpServer(api: Api): McpServer {
         "with `files` added or replacing those at the same paths and those in `remove` taken out; a new title, " +
         "description or page may come with it. Name the Version it's based on as `baseVersion`; a save based on an " +
         "outdated Version is refused with the current one. " +
+        artifactPolicy +
+        " " +
         sizeLimit,
       inputSchema: {
         artifact: artifactArgument,

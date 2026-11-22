@@ -4,6 +4,14 @@ import { hours } from "../harness/clock.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
 
+const cdns = "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com";
+/** What every sandbox response carries: the sandbox, and a page loading only its own files, inline code and the CDNs. */
+const sandboxHeader =
+  "sandbox allow-scripts; default-src 'none'; " +
+  `script-src 'self' 'unsafe-inline' ${cdns}; style-src 'self' 'unsafe-inline' ${cdns}; ` +
+  `img-src 'self' data: blob: ${cdns}; media-src 'self' data: blob: ${cdns}; font-src 'self' data: blob: ${cdns}; ` +
+  "connect-src 'self'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+
 let cronk: StartedCronk;
 afterEach(async () => {
   await cronk?.stop();
@@ -109,32 +117,33 @@ describe("Artifacts", () => {
       expect(opened.status, path).toBe(200);
       expect(opened.text).toBe(text);
       expect(opened.headers.get("content-type")).toBe(type);
-      expect(opened.headers.get("content-security-policy")).toBe("sandbox allow-scripts");
+      expect(opened.headers.get("content-security-policy")).toBe(sandboxHeader);
       expect(opened.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(opened.headers.get("access-control-allow-origin")).toBe("*");
     }
 
     // A path the Version doesn't hold is not there, and stays sandboxed.
     const missing = await open(new URL("missing.js", pageUrl).href);
     expect(missing.status).toBe(404);
-    expect(missing.headers.get("content-security-policy")).toBe("sandbox allow-scripts");
+    expect(missing.headers.get("content-security-policy")).toBe(sandboxHeader);
     // Nor does a path climb out of the Version.
     expect((await open(new URL("../other/index.html", pageUrl).href)).status).toBe(404);
     // Asked only for its headers, a file is sandboxed all the same.
     const head = await fetch(pageUrl, { method: "HEAD" });
     expect(head.status).toBe(200);
-    expect(head.headers.get("content-security-policy")).toBe("sandbox allow-scripts");
+    expect(head.headers.get("content-security-policy")).toBe(sandboxHeader);
     // The Version's own address, with or without its last slash, leads to its page, sandboxed on the way.
     const key = pageUrl.pathname.split("/")[2];
     for (const path of [`/sandbox/${key}`, `/sandbox/${key}/`]) {
       const response = await fetch(new URL(path, cronk.url), { redirect: "manual" });
       expect(response.status, path).toBe(302);
       expect(response.headers.get("location"), path).toBe(pageUrl.pathname);
-      expect(response.headers.get("content-security-policy"), path).toBe("sandbox allow-scripts");
+      expect(response.headers.get("content-security-policy"), path).toBe(sandboxHeader);
     }
     for (const path of ["/sandbox", "/sandbox/", "/sandbox/unknown"]) {
       const response = await open(path);
       expect(response.status, path).toBe(404);
-      expect(response.headers.get("content-security-policy"), path).toBe("sandbox allow-scripts");
+      expect(response.headers.get("content-security-policy"), path).toBe(sandboxHeader);
     }
   });
 
