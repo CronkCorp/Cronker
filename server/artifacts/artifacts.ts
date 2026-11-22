@@ -98,14 +98,24 @@ export function artifactNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Artifact.");
 }
 
-/** An Artifact in the Viewer's view, at its current Version; otherwise nothing, as if it didn't exist. */
-export async function findArtifact(db: Db | Tx, viewer: Viewer, artifactId: string): Promise<Artifact | undefined> {
+/**
+ * An Artifact in the Viewer's view, at its current Version or the one given; otherwise nothing, as if it didn't
+ * exist, as for a Version it never had.
+ */
+export async function findArtifact(db: Db | Tx, viewer: Viewer, artifactId: string, version?: number): Promise<Artifact | undefined> {
   if (!isUuid(artifactId)) return undefined;
   const view = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
-  const { rows } = await db.query<Row>(`select ${columns} from ${fromArtifacts} where artifacts.id = $1 and ${view.sql}`, [
-    artifactId,
-    view.value,
-  ]);
+  const [select, from] =
+    version === undefined
+      ? [columns, fromArtifacts]
+      : [
+          columns.replace("files.version = artifacts.version", "files.version = versions.number"),
+          fromArtifacts.replace("versions.number = artifacts.version", "versions.number = $3"),
+        ];
+  const { rows } = await db.query<Row>(
+    `select ${select} from ${from} where artifacts.id = $1 and ${view.sql}`,
+    version === undefined ? [artifactId, view.value] : [artifactId, view.value, version],
+  );
   return rows[0] && present(rows[0]);
 }
 
@@ -427,7 +437,8 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
       `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
       [artifact.id],
     );
-    // Its Versions, their files and its links go with it.
+    // Its Versions, their files and its links go with it, and the texts embedding it no longer do.
+    await tx.query("delete from mentions where target_artifact_id = $1", [artifact.id]);
     await tx.query("delete from artifacts where id = $1", [artifact.id]);
     afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
     live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });

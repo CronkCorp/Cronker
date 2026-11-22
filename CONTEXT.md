@@ -131,7 +131,7 @@ Text that names a Ticket's key (`WEB-4`), a Decision's key (`WEB-D7`, or `D7` fo
 _Avoid_: Reference, backlink, tag
 
 **Embed**:
-An Artifact's address alone on its own line of Markdown, which shows the Artifact in place, isolated as on its own page: the Version the address names, else the latest.
+An Artifact's address alone in its paragraph of Markdown, which shows the Artifact in place, isolated as on its own page: the Version the address names, else the latest.
 _Avoid_: Inline Artifact, preview
 
 **Attachment**:
