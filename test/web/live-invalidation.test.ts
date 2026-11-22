@@ -115,3 +115,24 @@ test("the board's events refresh its Project and each filter's list of its Ticke
   }
   expect(stale({ type: "reconnected" }, filtered)).toBe(true);
 });
+
+test("whatever an Agent may have done refreshes the Agent Records, and the rest leave them be", () => {
+  for (const type of [
+    "ticket.changed",
+    "comment.added",
+    "report.added",
+    "report.changed",
+    "transcripts.changed",
+    "document.changed",
+    "term.changed",
+    "decision.changed",
+    "artifact.changed",
+    "artifact.comments.changed",
+    "transcript.changed",
+  ] as const) {
+    expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(true);
+  }
+  for (const type of ["project.changed", "statuses.changed", "pull_requests.changed"] as const) {
+    expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(false);
+  }
+});

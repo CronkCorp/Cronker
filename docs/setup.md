@@ -187,7 +187,7 @@ Each Run records what its session cost at Anthropic's list prices once it ends: 
 
 Each User can add **webhooks** for a Workspace under **Account settings → Webhooks**: a name, an `https` URL and the Inbox kinds it gets. A new webhook gets Questions, *needs you* and Runs gone wrong (failed, lost and unstarted Runs); To review, Unverified, Discovered and, for Admins, To reassign can be added. Plain `http` is accepted only to `localhost`, `127.0.0.1` or `[::1]`, and only when Cronk itself runs on `http://localhost`. Webhooks need `CRONK_SECRET_KEY`, since Cronk keeps each one's secret encrypted to sign with.
 
-Adding one shows its **secret** once, `whsec_` and 32 random bytes in base64. **Send test** sends a delivery about a made-up Ticket, `TEST-1`, within a few seconds, and the webhook lists its last 20 deliveries with the status code your receiver answered. Removing a User from the Workspace removes their webhooks there.
+Adding one shows its **secret** once, `whsec_` and 32 random bytes in base64. **Send test** sends a delivery about a made-up Ticket, `TEST-1`, within a few seconds, and the webhook lists its last 20 deliveries with each try's status code and time. A delivery your receiver doesn't answer with a 2xx in 10 seconds is tried again 30 seconds later, then after 1, 2, 4 minutes and so on, doubling, the last try 24 hours after the first (13 tries in all). Retries repeat the body and `webhook-id`, with a fresh timestamp and signature. If the last try fails too, the webhook shows **Failing** on the settings page until a delivery to it succeeds, such as a Send test once the receiver is fixed. Removing a User from the Workspace removes their webhooks there.
 
 ### The delivery
 

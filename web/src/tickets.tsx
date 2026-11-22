@@ -39,6 +39,7 @@ import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
+import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { fitWindow } from "./ui/fit-window.js";
@@ -695,6 +696,7 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
+          <MovedOnDependents ticketId={ticket.id} open={reopening} />
           <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>
@@ -1361,7 +1363,7 @@ interface TranscriptDeleted {
 }
 
 /** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
-function describedWithLink(change: Change): ReactNode {
+export function describedWithLink(change: Change): ReactNode {
   const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
   if (imported?.source === "github" && typeof imported.url === "string") {
     return (

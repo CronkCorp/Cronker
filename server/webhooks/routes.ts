@@ -151,7 +151,7 @@ export function webhookRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Webhooks"],
           summary: "A webhook's last deliveries",
-          description: `${only} Its last 20 deliveries, newest first, each with the receiver's status code and when it was sent.`,
+          description: `${only} Its last 20 deliveries, newest first, each with every try's status code and time. A failed try is retried with backoff from 30 seconds, doubling, for about 24 hours; then the delivery is \`failed\` and the webhook \`failing\` until a delivery succeeds.`,
           params: WebhookParams,
           response: { 200: Type.Array(WebhookDelivery), ...responses },
         },
