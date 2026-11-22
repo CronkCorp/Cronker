@@ -2,12 +2,13 @@
 -- Mention index as a Mention of the Artifact, at the Version the address names (`?version=N`) or its latest.
 --
 -- Unlike a Ticket key, an address names its Artifact by id, so a Mention of an Artifact is resolved when the text is
--- saved and goes with the Artifact when it is deleted.
+-- saved. Without a foreign key, so a test of an earlier migration can apply this one ahead of Artifacts: deleting an
+-- Artifact removes its rows itself.
 alter table mentions drop constraint mentions_target_kind_check;
 alter table mentions add constraint mentions_target_kind_check check (target_kind in ('ticket', 'artifact'));
 alter table mentions alter column project_key drop not null, alter column number drop not null;
 alter table mentions
-  add column target_artifact_id uuid references artifacts (id) on delete cascade,
+  add column target_artifact_id uuid,
   -- The Version the address names; null for the latest.
   add column target_version integer;
 alter table mentions add constraint mentions_one_target check (

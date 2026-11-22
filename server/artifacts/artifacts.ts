@@ -435,7 +435,8 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
       `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
       [artifact.id],
     );
-    // Its Versions, their files and its links go with it.
+    // Its Versions, their files and its links go with it, and the texts embedding it no longer do.
+    await tx.query("delete from mentions where target_artifact_id = $1", [artifact.id]);
     await tx.query("delete from artifacts where id = $1", [artifact.id]);
     afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
     live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });

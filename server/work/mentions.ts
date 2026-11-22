@@ -230,8 +230,13 @@ export async function mentionsOf(
      where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'ticket' and ${reach.sql}`,
     [ids, reach.value],
   );
+  // Most texts embed nothing, which this finds without reading Artifacts.
+  const { rowCount: embedding } = await db.query(
+    `select 1 from mentions where ${column} = any($1::uuid[]) and target_kind = 'artifact' limit 1`,
+    [ids],
+  );
   const artifactReach = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
-  const artifacts = await db.query<Omit<ArtifactMention, "url"> & { sourceId: string; position: number; serveKey: string; page: string }>(
+  const artifacts = !embedding ? undefined : await db.query<Omit<ArtifactMention, "url"> & { sourceId: string; position: number; serveKey: string; page: string }>(
     `select mentions.${column} as "sourceId", mentions.position, 'artifact' as kind, mentions.written as text,
        artifacts.id as "artifactId", ${slugColumn("artifact", "artifacts.id", "latest.title")} as slug,
        shown.title, mentions.target_version as version, shown.serve_key as "serveKey", shown.page
@@ -245,7 +250,7 @@ export async function mentionsOf(
   );
   const all = [
     ...tickets.rows,
-    ...artifacts.rows.map(({ serveKey, page, ...row }) => ({ ...row, url: sandboxPath(serveKey, page) })),
+    ...(artifacts?.rows ?? []).map(({ serveKey, page, ...row }) => ({ ...row, url: sandboxPath(serveKey, page) })),
   ].sort((a, b) => a.position - b.position);
   for (const { sourceId, position: _, ...mention } of all) found.get(sourceId)?.push(mention);
   return found;
