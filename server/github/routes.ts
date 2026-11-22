@@ -18,7 +18,7 @@ import { receiveDelivery } from "./webhooks.js";
 const webhookBodyLimit = 25 * 1024 * 1024;
 
 /** The page a User links their GitHub account from. */
-const accountPage = "/password";
+const accountPage = "/account";
 
 /** Where a browser GitHub sent back is sent on: a page of the web client, with an error code if it failed. */
 function pageWith(path: string, error: unknown, fallback: string, parameter = "error"): string {
@@ -70,7 +70,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["GitHub"],
           summary: "Link a GitHub account to the signed-in User",
           description:
-            "For a signed-in User's browser to open: redirects to GitHub to authorize the installation's GitHub App, which sends the browser back to Cronk to link the GitHub account to this User. Once linked, the account signs in as the User and its merges are the User's own. Redirects to `/password?github=linked` once linked, or to `/password?github_link_error=<code>`: `github_already_linked` when the User has a GitHub account already, `github_account_taken` when another User has that account, `invalid_state` when the link didn't start in this browser or took too long, `github_denied` when GitHub didn't authorize, `github_not_set_up` while there is no App, and `not_signed_in` when nobody is signed in.",
+            "For a signed-in User's browser to open: redirects to GitHub to authorize the installation's GitHub App, which sends the browser back to Cronk to link the GitHub account to this User. Once linked, the account signs in as the User and its merges are the User's own. Redirects to `/account?github=linked` once linked, or to `/account?github_link_error=<code>`: `github_already_linked` when the User has a GitHub account already, `github_account_taken` when another User has that account, `invalid_state` when the link didn't start in this browser or took too long, `github_denied` when GitHub didn't authorize, `github_not_set_up` while there is no App, and `not_signed_in` when nobody is signed in.",
           response: { 302: Type.Null() },
         },
       },

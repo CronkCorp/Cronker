@@ -5,11 +5,13 @@ export interface User {
   /** Unknown for a User added by GitHub login until they first sign in. */
   email: string | null;
   githubLogin: string | null;
+  /** The name the User chose to be shown by; null when they chose none. */
+  displayName: string | null;
 }
 
-/** How to show a User: their email, else their GitHub login. */
+/** How to show a User: their display name, else their email, else their GitHub login. */
 export function nameOf(user: User): string {
-  return user.email ?? `@${user.githubLogin}`;
+  return user.displayName ?? user.email ?? `@${user.githubLogin}`;
 }
 
 export interface GitHubApp {
@@ -957,6 +959,7 @@ export const api = {
   signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password }),
   signOut: () => call<void>("DELETE", "/api/sign-in"),
   me: () => call<{ user: User; workspaces: WorkspaceSummary[] }>("GET", "/api/me"),
+  changeDisplayName: (displayName: string | null) => call<{ user: User }>("PATCH", "/api/me", { displayName }),
   changePassword: (currentPassword: string, newPassword: string) =>
     call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
   workspace: (id: string) => call<Workspace>("GET", ws(id)),

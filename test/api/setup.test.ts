@@ -20,7 +20,7 @@ describe("setup", () => {
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(body).toEqual({
-      user: { id: expect.any(String), email: "ada@example.com", githubLogin: null },
+      user: { id: expect.any(String), email: "ada@example.com", githubLogin: null, displayName: null },
       workspace: { id: expect.any(String), name: "Ada's Workspace", slug: "adas-workspace" },
     });
     expect(await (await cronk.request("GET", "/api/setup")).json()).toEqual({ needed: false });

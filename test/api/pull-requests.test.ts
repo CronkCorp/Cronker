@@ -623,11 +623,11 @@ describe("Merges", () => {
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
   });
 
-  test("a merge by the GitHub account a password User linked from the password page completes the Ticket as Verified", async () => {
+  test("a merge by the GitHub account a password User linked from their settings page completes the Ticket as Verified", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
     const account = cronk.github.account("bea-gh");
-    expect((await linkGitHub(cronk, bea.cookie, account)).location).toBe("/password?github=linked");
+    expect((await linkGitHub(cronk, bea.cookie, account)).location).toBe("/account?github=linked");
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Merge me" });
     const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
     await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
@@ -1502,11 +1502,12 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
     // Setting up and creating a Project, as today's API does, needs Workspace slugs and the Merge Step's columns;
-    // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access.
+    // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access; reading a User needs display names.
     await cronk.applyAhead("0033_merge_step.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
     await cronk.applyAhead("0049_run_costs.sql");
     await cronk.applyAhead("0051_access.sql");
+    await cronk.applyAhead("0053_display_name.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

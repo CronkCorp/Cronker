@@ -124,7 +124,7 @@ describe("signing in with GitHub", () => {
 
     expect(signedIn.location).toBe("/");
     const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
-    expect(me.user).toEqual({ id: user.id, email: "ada@example.com", githubLogin: "ada-gh" });
+    expect(me.user).toEqual({ id: user.id, email: "ada@example.com", githubLogin: "ada-gh", displayName: null });
     expect((await cronk.request("POST", "/api/sign-in", { body: { email: "ada@example.com", password: "correct horse battery" } })).status).toBe(200);
   });
 
@@ -211,7 +211,7 @@ describe("adding Users by GitHub login", () => {
 
     expect(added.status).toBe(201);
     const { user } = await added.json();
-    expect(user).toEqual({ id: expect.any(String), email: null, githubLogin: "bea" });
+    expect(user).toEqual({ id: expect.any(String), email: null, githubLogin: "bea", displayName: null });
     const before = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
     expect(before.map((m: { user: { id: string } }) => m.user.id)).not.toContain(user.id);
 
@@ -220,7 +220,7 @@ describe("adding Users by GitHub login", () => {
     expect(signedIn.location).toBe("/");
     const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
     expect(me).toEqual({
-      user: { id: user.id, email: "bea@example.com", githubLogin: "bea" },
+      user: { id: user.id, email: "bea@example.com", githubLogin: "bea", displayName: null },
       workspaces: [{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: false }],
     });
     const after = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
@@ -278,7 +278,7 @@ describe("pending adds by GitHub login", () => {
     const pending = await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie });
 
     expect(await pending.json()).toEqual([
-      { user: { id: user.id, email: null, githubLogin: "bea" }, addedVia: "github", addedAt: "2026-01-01T09:00:00.000Z" },
+      { user: { id: user.id, email: null, githubLogin: "bea", displayName: null }, addedVia: "github", addedAt: "2026-01-01T09:00:00.000Z" },
     ]);
     await signInWithGitHub(cronk, bea);
     expect(await (await cronk.request("GET", `/api/workspaces/${workspace.id}/pending-adds`, { cookie })).json()).toEqual([]);
@@ -418,7 +418,7 @@ describe("a password and GitHub sign-in together", () => {
     const signedIn = await signInWithGitHub(cronk, cronk.github.account("bea", "bea@example.com"));
 
     const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
-    expect(me.user).toMatchObject({ email: "bea@example.com", githubLogin: "bea" });
+    expect(me.user).toMatchObject({ email: "bea@example.com", githubLogin: "bea", displayName: null });
     expect(me.workspaces).toEqual([{ id: workspace.id, name: "Ada's Workspace", slug: "adas-workspace", isAdmin: false }]);
   });
 });
@@ -437,7 +437,7 @@ describe("one person, one User", () => {
     const signedIn = await signInWithGitHub(cronk, beaOnGitHub);
 
     const me = await (await cronk.request("GET", "/api/me", { cookie: signedIn.cookie })).json();
-    expect(me.user).toEqual({ id: bea.user.id, email: "bea@example.com", githubLogin: "bea" });
+    expect(me.user).toEqual({ id: bea.user.id, email: "bea@example.com", githubLogin: "bea", displayName: null });
     expect(me.workspaces.map((w: { name: string }) => w.name).sort()).toEqual(["Ada's Workspace", "Other"]);
     expect((await cronk.request("POST", "/api/sign-in", { body: { email: "bea@example.com", password: bea.password } })).status).toBe(200);
   });
