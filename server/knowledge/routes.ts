@@ -9,6 +9,8 @@ import {
   createDocument,
   deleteDocument,
   Document,
+  DocumentCreate,
+  DocumentEdit,
   documentNotFound,
   DocumentSection,
   DocumentSummary,
@@ -17,6 +19,8 @@ import {
   readSection,
   readVersion,
   replaceDocumentSection,
+  SectionName,
+  SectionReplace,
   treeOf,
   Version,
   versionsOf,
@@ -24,26 +28,12 @@ import {
 } from "./documents.js";
 import { knowledgePlaces } from "./places.js";
 import { OutdatedVersionBody } from "./versions.js";
-import { linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
+import { DocumentLink, linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
 
-const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
-const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
 const tags = ["Documents"];
 const DocumentParams = Type.Object({ documentId: Type.String() });
 const VersionNumber = Type.Integer({ minimum: 1 });
-const ParentId = Type.Union([Type.Null(), Type.String()], {
-  description: "A Document of the same page tree to sit under, or null for the top.",
-});
-const Position = Type.Integer({
-  minimum: 0,
-  description: "A place among its siblings, counting from 0; last when left out or past the end.",
-});
 
-const SectionName = Type.String({
-  minLength: 1,
-  maxLength: 1000,
-  description: "Its heading's text, or a path joining headings with `/`, such as `Install/Linux`.",
-});
 /** A Section refused as missing or ambiguous names the Document's headings or the candidates, as paths. */
 const SectionRefusal = Type.Object({
   error: Type.Object({
@@ -97,12 +87,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             description:
               "Creates the Document under a parent of the same page tree, or at its top, at Version 1 by its Actor.",
             params,
-            body: Type.Object({
-              title: Title,
-              body: Type.Optional(Body),
-              parentId: Type.Optional(ParentId),
-              position: Type.Optional(Position),
-            }),
+            body: DocumentCreate,
             response: { 201: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
           },
         },
@@ -146,13 +131,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "its page tree, making no Version; it can't move under itself or one of its own descendants. A Report " +
             "is listed with its Ticket, not in a page tree, so moving one is refused with `report_outside_tree`.",
           params: DocumentParams,
-          body: Type.Object({
-            baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
-            title: Type.Optional(Title),
-            body: Type.Optional(Body),
-            parentId: Type.Optional(ParentId),
-            position: Type.Optional(Position),
-          }),
+          body: DocumentEdit,
           response: { 200: Document, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Document", VersionWithBody) },
         },
       },
@@ -189,14 +168,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "holds no other heading of that level or a higher one, or it is refused with `section_heading_level`. " +
             `Answers the Section as replaced. ${sectionRules}`,
           params: DocumentParams,
-          body: Type.Object({
-            section: SectionName,
-            baseVersion: Type.Integer({ minimum: 1, description: "The Version the replace is based on." }),
-            body: Type.String({
-              maxLength: 500_000,
-              description: "Markdown: the Section's heading, of its own level, and everything under it.",
-            }),
-          }),
+          body: SectionReplace,
           response: {
             200: DocumentSection,
             400: ErrorBody,
@@ -259,7 +231,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "for a User (`no_running_run`; `not_your_discovered_ticket` for another Agent's or a settled one). A " +
             "deleted Document drops out of its links.",
           params: TicketParams,
-          body: Type.Object({ documentId: Type.String({ description: "A Document of the Ticket's Project or Workspace." }) }),
+          body: DocumentLink,
           response: { 201: LinkedDocument, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

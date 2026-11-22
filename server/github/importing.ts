@@ -7,6 +7,7 @@ import { recordChanges } from "../work/changes.js";
 import { indexMentions } from "../work/mentions.js";
 import { findProject, projectNotFound, statusesOf } from "../work/projects.js";
 import { distinctLabels } from "../work/tickets.js";
+import { retryAt } from "../runs/subscription.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { appToken } from "./app.js";
 import { userName } from "../identity/user.js";
@@ -35,7 +36,8 @@ import { installationCovering, tokenFor } from "./installations.js";
  * ones are dropped. No User is ever created.
  *
  * Each page's Tickets are written in one transaction with the page the next pass reads, so a pass cut short is read
- * again whole. Later passes may add to a page's work (Comments, structure, waiting out rate limits) in `importIssue`
+ * again whole. A page GitHub rate-limits is read again once the limit lifts: until then the import waits, saying
+ * until when, and passes leave it be. Later passes may add to a page's work (Comments, structure) in `importIssue`
  * and `importNextPage` without changing how a job runs.
  */
 
@@ -49,6 +51,9 @@ export const Import = Type.Object({
   imported: Type.Integer({ minimum: 0, description: "How many issues became Tickets so far." }),
   skipped: Type.Integer({ minimum: 0, description: "How many issues were skipped, having been imported before." }),
   error: Type.Union([Type.String(), Type.Null()], { description: "Why a failed import stopped; null otherwise." }),
+  waitingUntil: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description: "While a running import waits out GitHub's rate limit, when it carries on; null otherwise.",
+  }),
   unmatchedAuthors: Type.Array(Type.String(), {
     description: "The GitHub logins of the issue and Comment authors so far that no User of the Workspace has linked, alphabetical.",
   }),
@@ -71,13 +76,14 @@ interface ImportRow {
   skipped: number;
   error: string | null;
   unmatchedAuthors: string[];
+  pausedUntil: Date | null;
   startedAt: Date;
   finishedAt: Date | null;
 }
 
 const importColumns = `id, project_id as "projectId", workspace_id as "workspaceId", repository_id as "repositoryId",
   repository_full_name as "repositoryFullName", started_by as "startedBy", state, next_page as "nextPage", imported,
-  skipped, error, unmatched_authors as "unmatchedAuthors", started_at as "startedAt", finished_at as "finishedAt"`;
+  skipped, error, unmatched_authors as "unmatchedAuthors", paused_until as "pausedUntil", started_at as "startedAt", finished_at as "finishedAt"`;
 
 const importOf = (row: ImportRow): Import => ({
   id: row.id,
@@ -88,6 +94,7 @@ const importOf = (row: ImportRow): Import => ({
   skipped: row.skipped,
   error: row.error,
   unmatchedAuthors: row.unmatchedAuthors,
+  waitingUntil: row.state === "running" ? (row.pausedUntil?.toISOString() ?? null) : null,
   startedBy: row.startedBy,
   startedAt: row.startedAt.toISOString(),
   finishedAt: row.finishedAt?.toISOString() ?? null,
@@ -162,11 +169,15 @@ export async function latestImport(context: Context, viewer: Viewer, projectId: 
 }
 
 /**
- * One pass over the running imports: each reads its next page of issues. An import GitHub refuses fails, saying why;
- * one GitHub can't answer is read again on the next pass. The first error is thrown once every import has had its pass.
+ * One pass over the running imports: each reads its next page of issues, except one waiting out GitHub's rate limit.
+ * An import GitHub refuses fails, saying why; one GitHub can't answer is read again on the next pass. The first error
+ * is thrown once every import has had its pass.
  */
 export async function runImports(context: Context): Promise<void> {
-  const { rows } = await context.db.query<{ id: string }>("select id from github_imports where state = 'running' order by seq");
+  const { rows } = await context.db.query<{ id: string }>(
+    "select id from github_imports where state = 'running' and (paused_until is null or paused_until <= $1) order by seq",
+    [context.clock.now()],
+  );
   let failure: unknown;
   for (const { id } of rows) {
     try {
@@ -183,8 +194,9 @@ async function importNextPage(context: Context, importId: string): Promise<void>
   const { config, clock } = context;
   await transaction(context.db, async (tx) => {
     const { rows } = await tx.query<ImportRow>(
-      `select ${importColumns} from github_imports where id = $1 and state = 'running' for update skip locked`,
-      [importId],
+      `select ${importColumns} from github_imports
+       where id = $1 and state = 'running' and (paused_until is null or paused_until <= $2) for update skip locked`,
+      [importId, clock.now()],
     );
     const job = rows[0];
     if (!job) return;
@@ -199,6 +211,11 @@ async function importNextPage(context: Context, importId: string): Promise<void>
     if (installationId === undefined) return void (await fail(`The GitHub App is no longer installed on ${fullName}.`));
     const token = await tokenFor(context, installationId);
     const page = await issuesPage(config, token, fullName, job.nextPage);
+    if (page.kind === "rate_limited") {
+      // Nothing of the page is written, so the pass after the wait reads it again from its first issue.
+      await tx.query("update github_imports set paused_until = $2 where id = $1", [job.id, limitLifts(clock.now(), page)]);
+      return;
+    }
     if (page.kind === "refused") {
       return void (await fail(
         page.status === 403
@@ -216,10 +233,15 @@ async function importNextPage(context: Context, importId: string): Promise<void>
     );
     const before = new Set(known.map((row) => row.nodeId));
     const fresh = issues.filter((issue) => !before.has(issue.node_id));
-    // Every Comment is read before anything is written, so a refusal fails the import with nothing of the page kept.
+    // Every Comment is read before anything is written, so a refusal fails the import, and a rate limit makes it wait,
+    // with nothing of the page kept.
     const comments = new Map<string, IssueCommentOnGitHub[]>();
     for (const issue of fresh) {
       const read = await commentsOf(context, token, fullName, issue.number);
+      if (read.kind === "rate_limited") {
+        await tx.query("update github_imports set paused_until = $2 where id = $1", [job.id, limitLifts(clock.now(), read)]);
+        return;
+      }
       if (read.kind === "refused") {
         return void (await fail(
           read.status === 403
@@ -239,13 +261,26 @@ async function importNextPage(context: Context, importId: string): Promise<void>
       if (await importIssue(context, tx, job, places, people, unmatched, issue, comments.get(issue.node_id)!)) imported++;
     }
     await tx.query(
-      `update github_imports set imported = imported + $2, skipped = skipped + $3, next_page = next_page + 1,
+      `update github_imports set imported = imported + $2, skipped = skipped + $3, next_page = next_page + 1, paused_until = null,
          state = case when $4 then 'running' else 'done' end, finished_at = case when $4 then null else $5::timestamptz end,
          unmatched_authors = array(select distinct login from unnest(unmatched_authors || $6::text[]) as login order by login)
        where id = $1`,
       [job.id, imported, issues.length - imported, page.more, clock.now(), [...unmatched]],
     );
   });
+}
+
+/** The longest wait for GitHub's rate limit to lift, as for `Retry-After`: a day. */
+const longestPauseMs = 24 * 60 * 60 * 1000;
+
+/**
+ * When GitHub's rate limit lifts: its `Retry-After` when it gives one, else its `X-RateLimit-Reset` (seconds since the
+ * epoch), else a minute from now; never in the past, and a day at most.
+ */
+function limitLifts(now: Date, limit: { retryAfter: string | null; reset: string | null }): Date {
+  const reset = limit.reset?.trim() ?? "";
+  if (limit.retryAfter !== null || !/^\d+$/.test(reset)) return retryAt(now, limit.retryAfter);
+  return new Date(Math.min(Math.max(Number(reset) * 1000, now.getTime()), now.getTime() + longestPauseMs));
 }
 
 /** Where an issue goes by its state: open, closed as completed, or closed as not planned. */
@@ -261,11 +296,15 @@ async function commentsOf(
   token: string,
   fullName: string,
   number: number,
-): Promise<{ kind: "comments"; comments: IssueCommentOnGitHub[] } | { kind: "refused"; status: number }> {
+): Promise<
+  | { kind: "comments"; comments: IssueCommentOnGitHub[] }
+  | { kind: "refused"; status: number }
+  | { kind: "rate_limited"; retryAfter: string | null; reset: string | null }
+> {
   const comments: IssueCommentOnGitHub[] = [];
   for (let page = 1; ; page++) {
     const read = await issueCommentsPage(config, token, fullName, number, page);
-    if (read.kind === "refused") return read;
+    if (read.kind !== "page") return read;
     comments.push(...read.comments);
     if (!read.more) return { kind: "comments", comments };
   }

@@ -96,3 +96,20 @@ test("a Ticket's files changing refreshes its Attachments and its Comments, whic
   expect(stale(documentFiles!, keys.documentAttachments("report-1"))).toBe(true);
   expect(stale(documentFiles!, keys.attachments(t))).toBe(false);
 });
+
+test("the board's events refresh its Project and each filter's list of its Tickets, and only that Project's", () => {
+  const filtered = [...keys.projectTickets(p), { priority: "high" }];
+  const elsewhere = [...keys.projectTickets("project-2"), { priority: "high" }];
+  for (const type of ["ticket.created", "ticket.changed"] as const) {
+    const event = samples[type][0]!;
+    expect(stale(event, keys.projectTickets(p)), type).toBe(true);
+    expect(stale(event, filtered), type).toBe(true);
+    expect(stale(event, elsewhere), type).toBe(false);
+  }
+  for (const type of ["statuses.changed", "project.changed"] as const) {
+    const event = samples[type][0]!;
+    expect(stale(event, keys.project(p)), type).toBe(true);
+    expect(stale(event, keys.project("project-2")), type).toBe(false);
+  }
+  expect(stale({ type: "reconnected" }, filtered)).toBe(true);
+});

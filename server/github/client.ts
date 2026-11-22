@@ -320,14 +320,20 @@ export interface IssueCommentOnGitHub {
 /**
  * One page of a repository's issues, open and closed, oldest first, as an installation covering it sees them, with
  * whether GitHub has a page after it. Oldest first keeps the pages steady while new issues are filed, so an import
- * resumes by page number. A refusal (GitHub's 403, 404 or 410) comes back with its status.
+ * resumes by page number. A refusal (GitHub's 403, 404 or 410) comes back with its status. GitHub's rate limit comes
+ * back with the headers saying when it lifts: a 429, or a 403 with no requests remaining or a `Retry-After`, as
+ * GitHub documents; any other 403 is a refusal.
  */
 export async function issuesPage(
   { github }: Config,
   token: string,
   fullName: string,
   page: number,
-): Promise<{ kind: "page"; issues: IssueOnGitHub[]; more: boolean } | { kind: "refused"; status: number }> {
+): Promise<
+  | { kind: "page"; issues: IssueOnGitHub[]; more: boolean }
+  | { kind: "refused"; status: number }
+  | { kind: "rate_limited"; retryAfter: string | null; reset: string | null }
+> {
   const url = under(github.apiUrl, `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/issues`);
   url.searchParams.set("state", "all");
   url.searchParams.set("sort", "created");
@@ -335,14 +341,25 @@ export async function issuesPage(
   url.searchParams.set("per_page", "100");
   url.searchParams.set("page", String(page));
   const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  const limited = rateLimitOf(response);
+  if (limited) return limited;
   if (response.status === 403 || response.status === 404 || response.status === 410) return { kind: "refused", status: response.status };
   const issues = await jsonOf<IssueOnGitHub[]>(response, "The issues list");
   if (!Array.isArray(issues)) throw unavailable("The issues list answered something other than a list");
   return { kind: "page", issues, more: /rel="next"/.test(response.headers.get("link") ?? "") };
 }
 
+/** GitHub's rate limit, if the response is one: a 429, or a 403 with no requests remaining or a `Retry-After`. */
+function rateLimitOf(response: Response): { kind: "rate_limited"; retryAfter: string | null; reset: string | null } | null {
+  const retryAfter = response.headers.get("retry-after");
+  if (response.status === 429 || (response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0" || retryAfter !== null))) {
+    return { kind: "rate_limited", retryAfter, reset: response.headers.get("x-ratelimit-reset") };
+  }
+  return null;
+}
+
 /**
- * A page of an issue's Comments, oldest first, 100 at a time. A refusal answers as `issuesPage`'s does.
+ * A page of an issue's Comments, oldest first, 100 at a time. A rate limit or a refusal answers as `issuesPage`'s does.
  */
 export async function issueCommentsPage(
   { github }: Config,
@@ -350,11 +367,17 @@ export async function issueCommentsPage(
   fullName: string,
   number: number,
   page: number,
-): Promise<{ kind: "page"; comments: IssueCommentOnGitHub[]; more: boolean } | { kind: "refused"; status: number }> {
+): Promise<
+  | { kind: "page"; comments: IssueCommentOnGitHub[]; more: boolean }
+  | { kind: "refused"; status: number }
+  | { kind: "rate_limited"; retryAfter: string | null; reset: string | null }
+> {
   const url = under(github.apiUrl, `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/issues/${number}/comments`);
   url.searchParams.set("per_page", "100");
   url.searchParams.set("page", String(page));
   const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  const limited = rateLimitOf(response);
+  if (limited) return limited;
   if (response.status === 403 || response.status === 404 || response.status === 410) return { kind: "refused", status: response.status };
   const comments = await jsonOf<IssueCommentOnGitHub[]>(response, "An issue's Comments");
   if (!Array.isArray(comments)) throw unavailable("An issue's Comments answered something other than a list");
