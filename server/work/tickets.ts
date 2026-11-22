@@ -194,11 +194,16 @@ export const MentioningText = Type.Object({
   projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Project, or null for the Workspace's own knowledge.",
   }),
-  title: Type.String({ description: "Its title; a Term's name; for a Comment, its Ticket's title." }),
-  ticket: Type.Union([TicketRef, Type.Null()], {
-    description: "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for other knowledge.",
+  title: Type.String({
+    description: "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's.",
   }),
-  slug: Type.Union([Type.String(), Type.Null()], { description: "A Document's or Report's slug; otherwise null." }),
+  ticket: Type.Union([TicketRef, Type.Null()], {
+    description:
+      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge.",
+  }),
+  slug: Type.Union([Type.String(), Type.Null()], {
+    description: "A Document's or Report's slug, or for a Comment on an Artifact the Artifact's; otherwise null.",
+  }),
   number: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], { description: "A Decision's number; otherwise null." }),
 });
 export type MentioningText = Static<typeof MentioningText>;
@@ -471,6 +476,12 @@ async function mentionedIn(db: Db | Tx, viewer: Viewer, ticket: Row): Promise<Me
          ${ref("tickets", "ref_projects")}, null, null
        from hits join comments on comments.id = hits.source_comment_id join tickets on tickets.id = comments.ticket_id
        where ${reach("tickets.project_id", "tickets.workspace_id")}
+       union all
+       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, null,
+         ${slugColumn("artifact", "artifacts.id", "versions.title")}, null
+       from hits join comments on comments.id = hits.source_comment_id join artifacts on artifacts.id = comments.artifact_id
+       join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version
+       where ${reach("artifacts.project_id", "artifacts.workspace_id")}
        union all
        select hits.seq, case when documents.ticket_id is null then 'document' else 'report' end, documents.id,
          documents.project_id, versions.title,

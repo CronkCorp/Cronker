@@ -115,6 +115,7 @@ function reads({ project, ticket, document, term, decision, artifact }: Setting)
     `/api/decisions/${decision.id}`,
     `/api/projects/${project.id}/artifacts`,
     `/api/artifacts/${artifact.id}`,
+    `/api/artifacts/${artifact.id}/comments`,
     `/api/projects/${project.id}/repositories`,
   ];
 }
@@ -159,6 +160,7 @@ function writes(setting: Setting): [string, string, unknown?][] {
     ["POST", `/api/projects/${project.id}/artifacts`, { title: "Mine", files: [{ path: "index.html", contentBase64: base64("x") }] }],
     ["PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, title: "Changed" }],
     ["DELETE", `/api/artifacts/${artifact.id}`],
+    ["POST", `/api/artifacts/${artifact.id}/comments`, { body: "Mine." }],
     ["POST", `/api/tickets/${ticket.id}/artifacts`, { artifactId: artifact.id }],
     ["DELETE", `/api/tickets/${ticket.id}/artifacts/${artifact.id}`],
     // Attachments

@@ -260,3 +260,58 @@ describe("the Inbox, live", () => {
     expect((await inbox(ada.cookie, workspace.id)).count).toBe(1);
   });
 });
+
+describe("an archived Project's Tickets", () => {
+  test("leave the Inbox while it is archived, and those still waiting come back when it is unarchived, told live", async () => {
+    const { ada, workspace, project, statusId } = await workspaceWithProject();
+    const request = async (method: string, path: string, as: { cookie?: string; headers?: Record<string, string> }, body?: unknown) => {
+      const response = await cronk.request(method, path, { ...as, body });
+      expect(response.status, `${method} ${path}`).toBeLessThan(300);
+      return response.json();
+    };
+    const runner = await request("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+    const agent = await request("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    await request("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: runner.id });
+    const { secret } = await request("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const asAgent = { headers: { authorization: `Bearer ${secret}` } };
+
+    const review = await createTicket(ada.cookie, project.id, "Check by hand");
+    await editTicket(ada.cookie, review.id, { statusId: statusId("In Review"), assigneeId: ada.id });
+    const asked = await createTicket(ada.cookie, project.id, "Pick a colour");
+    await editTicket(ada.cookie, asked.id, { delegateId: agent.id, statusId: statusId("Investigate") });
+    const [run] = await request("GET", `/api/tickets/${asked.id}/runs`, ada);
+    await request("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question: "Blue or green?" });
+    const discovered = await request("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Found on the way" });
+    // A Ticket of another Project stays put.
+    const other = await request("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const elsewhere = await createTicket(ada.cookie, other.id, "Elsewhere");
+    const inReview = other.statuses.find((s: { name: string }) => s.name === "In Review").id;
+    await editTicket(ada.cookie, elsewhere.id, { statusId: inReview, assigneeId: ada.id });
+
+    const waiting = (inbox: { items: { kind: string; ticket: { id: string } }[] }) =>
+      inbox.items.map((item) => [item.kind, item.ticket.id]).sort();
+    const before = waiting(await inbox(ada.cookie, workspace.id));
+    expect(before).toEqual(
+      [
+        ["review", review.id],
+        ["question", asked.id],
+        ["needsYou", asked.id],
+        ["discovered", discovered.id],
+        ["review", elsewhere.id],
+      ].sort(),
+    );
+
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+    streams.push(stream);
+    await request("POST", `/api/projects/${project.id}/archive`, ada);
+    expect(await stream.next()).toEqual({ type: "project.changed", data: { projectId: project.id } });
+    expect(await inbox(ada.cookie, workspace.id)).toEqual({
+      count: 1,
+      items: [expect.objectContaining({ kind: "review", ticket: expect.objectContaining({ id: elsewhere.id }) })],
+    });
+
+    await request("POST", `/api/projects/${project.id}/unarchive`, ada);
+    expect(await stream.next()).toEqual({ type: "project.changed", data: { projectId: project.id } });
+    expect(waiting(await inbox(ada.cookie, workspace.id))).toEqual(before);
+  });
+});
