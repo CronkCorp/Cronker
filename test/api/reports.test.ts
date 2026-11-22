@@ -50,7 +50,7 @@ async function runningRun(options: StartCronkOptions = {}) {
   // Setting up, creating a Project and starting its Runs, as today's API does, needs Workspace slugs and the Merge
   // Step's columns and the Repositories a Project lists; setting up a Runner needs the columns of a Managed Agents
   // Runner's setup; reading a Ticket or a Runner needs the columns of Runs' costs; finding a Project or a Ticket
-  // needs Access; finding a Project and starting a Run need Concise Reports.
+  // needs Access; any User read needs display names; finding a Project and starting a Run need Concise Reports.
   if (options.migrateBefore !== undefined) {
     await cronk.applyAhead("0022_repositories.sql");
     await cronk.applyAhead("0033_merge_step.sql");
@@ -59,7 +59,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0047_managed_agents_webhooks.sql");
     await cronk.applyAhead("0049_run_costs.sql");
     await cronk.applyAhead("0051_access.sql");
-    await cronk.applyAhead("0053_concise_reports.sql");
+    await cronk.applyAhead("0053_display_name.sql");
+    await cronk.applyAhead("0055_concise_reports.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

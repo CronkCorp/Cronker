@@ -583,6 +583,8 @@ describe("the address of a setup's instructions", () => {
   test("moves a Workspace that had it as its slug before to another", async () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0045_runner_setups.sql" });
+    // Setting up, as today's API does, reads the User's display name.
+    await cronk.applyAhead("0053_display_name.sql");
     const { user } = await setUp(cronk);
     const id = crypto.randomUUID();
     await cronk.stage("insert into workspaces (id, name, slug, created_at) values ($1, 'Runner setups', 'runner-setups', now())", [id]);

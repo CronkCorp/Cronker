@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
-import { User } from "../identity/user.js";
+import { User, userJson } from "../identity/user.js";
 import { latestReportOf, ReportRef } from "../knowledge/reports.js";
 import { openQuestionsFor, Question } from "../runs/questions.js";
 import { WentWrongState, wentWrongStates } from "../runs/states.js";
@@ -242,7 +242,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     const unassigned = seen("$2");
     const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User; removedAt: Date }>(
       `select ${unassigned.columns}, tickets.workspace_id as "workspaceId",
-         json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee",
+         ${userJson("users")} as "formerAssignee",
          (select max(changes.at) from changes where changes.ticket_id = tickets.id and changes.field = 'assignee') as "removedAt"
        from tickets join projects on projects.id = tickets.project_id
        join users on users.id = tickets.former_assignee_id

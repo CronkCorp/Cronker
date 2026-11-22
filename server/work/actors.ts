@@ -1,10 +1,11 @@
 import { Type, type Static } from "typebox";
+import { userName } from "../identity/user.js";
 
 /** Whoever performed an action: a User or an Agent. */
 export const Actor = Type.Object({
   kind: Type.Union([Type.Literal("user"), Type.Literal("agent")]),
   id: Type.String({ format: "uuid" }),
-  name: Type.String({ description: "How to show the Actor: a User's email, or an Agent's name." }),
+  name: Type.String({ description: "How to show the Actor: a User's display name, else their email or GitHub login; an Agent's name." }),
 });
 export type Actor = Static<typeof Actor>;
 
@@ -13,7 +14,7 @@ export type Actor = Static<typeof Actor>;
  * is joined as, from whichever of the two is there.
  */
 export const actorColumn = (users: string, agents?: string) => {
-  const user = `json_build_object('kind', 'user', 'id', ${users}.id, 'name', ${users}.email)`;
+  const user = `json_build_object('kind', 'user', 'id', ${users}.id, 'name', ${userName(users)})`;
   if (!agents) return user;
   return `case when ${agents}.id is null then ${user}
     else json_build_object('kind', 'agent', 'id', ${agents}.id, 'name', ${agents}.name) end`;

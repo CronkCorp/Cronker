@@ -81,7 +81,7 @@ export async function requireUser(context: Context, request: FastifyRequest): Pr
   const agent = await authenticateAgent(context, request);
   if (agent) {
     throw new ApiError(403, "agent_not_allowed", `${agent.name} is an Agent, and only a User can do that.`, {
-      rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit a Discovered Ticket they filed, add blocks from it, and link Documents and Artifacts to it and unlink them, until a User takes it up. Everything else needs a User.",
+      rule: "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; with Write in a Project they may change its Statuses and take a Step off one, and give a Status a Step or change one when their Owner is an Admin; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit a Discovered Ticket they filed, add blocks from it, and link Documents and Artifacts to it and unlink them, until a User takes it up. Everything else needs a User.",
       advice: `Read the Ticket and its Comments, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, to do it.`,
     });
   }
@@ -137,4 +137,21 @@ export async function changePassword(
     context.live.endAfterCommit(tx, (stream) => stream.userId === user.id && stream.signIn !== thisSignIn);
     await endResetLinks(tx, user.id);
   });
+}
+
+/**
+ * Sets or clears the signed-in User's display name: trimmed, and empty or `null` clearing it. Refused with
+ * `invalid_display_name` for one with line breaks or other control characters.
+ */
+export async function changeDisplayName(context: Context, request: FastifyRequest, displayName: string | null): Promise<User> {
+  const user = await requireUser(context, request);
+  const trimmed = displayName?.trim() || null;
+  if (trimmed !== null && /\p{Cc}/u.test(trimmed)) {
+    throw new ApiError(400, "invalid_display_name", "A display name is one line of text, without control characters.");
+  }
+  const { rows } = await context.db.query<User>(
+    `update users set display_name = $2 where id = $1 returning ${userColumns}`,
+    [user.id, trimmed],
+  );
+  return rows[0]!;
 }

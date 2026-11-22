@@ -8,10 +8,12 @@ import { readersIn, userViewer } from "../identity/viewers.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { findProject, projectNotFound, Visibility } from "./projects.js";
 
-/** A User listed on a Project, with their level there. Read comes later; for now every listed User has Write. */
+/** A User listed on a Project, with their level there: Read to follow its work without changing it, or Write. */
 export const ListedUser = Type.Object({
   userId: Type.String({ format: "uuid" }),
-  level: Type.Literal("write"),
+  level: Type.Union([Type.Literal("write"), Type.Literal("read")], {
+    description: "`write`, or `read` to read everything in the Project and change nothing. Admins have Write whatever it says.",
+  }),
 });
 export type ListedUser = Static<typeof ListedUser>;
 
@@ -21,7 +23,8 @@ export const ProjectAccess = Type.Object({
   users: Type.Array(ListedUser, {
     description:
       "The Users listed on the Project, in the order they were listed. In a private Project only they, and the " +
-      "Workspace's Admins, see it; Admins have Write whatever the list says.",
+      "Workspace's Admins, see it; in an open Project, a User it doesn't list has Write. Admins have Write whatever " +
+      "the list says.",
   }),
 });
 export type ProjectAccess = Static<typeof ProjectAccess>;
@@ -128,7 +131,9 @@ export function accessRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Projects"],
           summary: "Set a Project's Access",
           description:
-            "Makes the Project open or private and replaces the Users it lists, each a User of its Workspace, once. " +
+            "Makes the Project open or private and replaces the Users it lists, each a User of its Workspace, once, " +
+            "with Read or Write. A User with Read reads everything in the Project, and every write of theirs is " +
+            "refused with `read_access`. " +
             "In a private Project, a User it doesn't list, and their Agents, find nothing of it, as if it didn't " +
             "exist; Admins keep Write in every Project. Only an Admin of its Workspace sets it.",
           params,

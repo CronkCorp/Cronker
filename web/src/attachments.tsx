@@ -3,6 +3,7 @@ import { api, attachmentUrl, type Attachment, type AttachmentOwner } from "./api
 import { Actor } from "./ui/actor.js";
 import { buttonClass, Button, FormError, RelativeTime } from "./ui/controls.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
+import { useCanWrite } from "./write-access.js";
 
 /** A size as people read it. */
 export function sized(bytes: number): string {
@@ -36,7 +37,7 @@ export function Attachments({
   owner,
   attachments,
   label,
-  canAttach = true,
+  canAttach: attachable = true,
   compact = false,
   dropHint,
   onChanged,
@@ -54,6 +55,7 @@ export function Attachments({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<Attachment | null>(null);
+  const canAttach = useCanWrite() && attachable;
 
   const attach = (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
@@ -113,6 +115,7 @@ export function Attachments({
 
 /** Every file on a Ticket, in its Comments and Reports too, as a list for the side panel. */
 export function FileList({ attachments, onChanged }: { attachments: Attachment[]; onChanged: () => void }) {
+  const canRemove = useCanWrite();
   const [open, setOpen] = useState<Attachment | null>(null);
   return (
     <section aria-label="Files" className="panel side-section">
@@ -132,7 +135,7 @@ export function FileList({ attachments, onChanged }: { attachments: Attachment[]
         </ul>
       )}
       {/* Users remove any Attachment, wherever it was attached. */}
-      {open && <AttachmentDialog attachment={open} canRemove onClose={() => setOpen(null)} onRemoved={onChanged} />}
+      {open && <AttachmentDialog attachment={open} canRemove={canRemove} onClose={() => setOpen(null)} onRemoved={onChanged} />}
     </section>
   );
 }

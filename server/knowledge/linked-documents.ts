@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { findTicketRow, linkingActor, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findDocument } from "./documents.js";
@@ -60,6 +60,7 @@ export async function linkDocument(
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, caller, ticket);
     const actor = await linkingActor(tx, caller, ticket, "Document");
     // Held until the link is made, so a delete of the Document either went first, and it is unknown, or waits.
     if (isUuid(documentId)) await tx.query("select 1 from documents where id = $1 for key share", [documentId]);
@@ -94,6 +95,7 @@ export async function unlinkDocument(context: Context, caller: Caller, ticketId:
   await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, caller, ticket);
     const actor = await linkingActor(tx, caller, ticket, "Document");
     const { rows } = isUuid(documentId)
       ? await tx.query<LinkedDocument>(

@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { accessIn, inReach, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessIn, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
@@ -221,6 +221,7 @@ export async function editProject(
     const viewer = userViewer(userId);
     const project = await findProject(tx, viewer, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (project.access !== "write") throw readAccessRefusal();
     if (edit.agentsMayMerge !== undefined && !(await requireMember(db, userId, project.workspaceId)).isAdmin) {
       throw new ApiError(403, "not_admin", "Only an Admin of this Workspace can change whether agents may merge.");
     }

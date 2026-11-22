@@ -154,7 +154,7 @@ test("a card dragged onto another column moves its Ticket there, onto its own co
   await expect(shippedCard("In Review")).toBeHidden();
 });
 
-test("a card picked up by its title or key drags without selecting text, while a click on it still opens its Ticket and a modified click a new tab", { tag: "@every-browser" }, async ({
+test("a card picked up by its title or key drags without selecting text, while a click on it still opens its Ticket and a middle-click a new tab", { tag: "@every-browser" }, async ({
   page,
   cronk,
   browserName,
@@ -192,10 +192,10 @@ test("a card picked up by its title or key drags without selecting text, while a
   await expect(card("Triage")).toBeVisible();
   expect(await selected(), "no text is selected by the drag").toBe("");
 
-  // A Ctrl/Cmd+click on the title opens the Ticket in a new tab and leaves the board where it is.
+  // A middle-click on the title opens the Ticket in a new tab and leaves the board where it is (Ctrl/Cmd+click selects
+  // the card instead, see board-selection.spec.ts).
   if (browserName === "chromium") {
-    const modifier = process.platform === "darwin" ? "Meta" : "Control";
-    const [opened] = await Promise.all([page.context().waitForEvent("page"), card("Triage").locator(".card-title").click({ modifiers: [modifier] })]);
+    const [opened] = await Promise.all([page.context().waitForEvent("page"), card("Triage").locator(".card-title").click({ button: "middle" })]);
     await opened.waitForLoadState();
     await expect(opened.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
     await opened.close();
@@ -205,4 +205,132 @@ test("a card picked up by its title or key drags without selecting text, while a
   // A plain click on the title opens the Ticket.
   await card("Triage").locator(".card-title").click();
   await expect(page.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
+});
+
+test("a card drags from anywhere on it: its link's own box, its Labels, its avatars and the empty space beside its Blocked chip", { tag: "@every-browser" }, async ({
+  page,
+  cronk,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const blocker = await call("POST", `/api/projects/${project.id}/tickets`, { title: "First" });
+  await call("PATCH", `/api/tickets/${blocker.id}`, { statusId: status("Ready") });
+  const shipIt = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
+  await call("PATCH", `/api/tickets/${shipIt.id}`, { labels: ["bug", "web"], assigneeId: (await call("GET", "/api/me")).user.id });
+  await call("POST", `/api/tickets/${shipIt.id}/relations`, { kind: "blockedBy", ticketId: blocker.id });
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const lane = (name: string) => board.getByRole("region", { name, exact: true });
+  const link = (name: string) => lane(name).getByRole("link", { name: /CRONK-2 Ship it/ });
+  const card = (name: string) => lane(name).locator(".card").filter({ hasText: "Ship it" });
+  await expect(link("Backlog")).toBeVisible();
+  const selected = () => page.evaluate(() => window.getSelection()?.toString() ?? "");
+  // Vivaldi and Opera, which Playwright can't run, select a link's text on a sideways drag unless the link says
+  // draggable="true"; draggable="false" makes them select it always, user-select notwithstanding.
+  await expect(link("Backlog"), "the card's link is explicitly draggable").toHaveAttribute("draggable", "true");
+
+  /** Presses at a point of the card, moves to the middle of a column and lets go there. */
+  const dragFrom = async (x: number, y: number, column: string) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    const to = (await lane(column).boundingBox())!;
+    await page.mouse.move(to.x + to.width / 2, to.y + 200, { steps: 8 });
+    await page.mouse.up();
+    await expect(link(column), `the card dropped on ${column} is there`).toBeVisible();
+    await expect.poll(async () => (await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status(column));
+    expect(await selected(), "no text is selected by the drag").toBe("");
+  };
+
+  // The link's own box, at its top right, where there is no text: its padding, beside the key.
+  const ownBox = (await link("Backlog").boundingBox())!;
+  await dragFrom(ownBox.x + ownBox.width - 6, ownBox.y + 4, "Triage");
+
+  // A Label in the card's meta row.
+  const label = (await card("Triage").locator(".card-meta .chip").first().boundingBox())!;
+  await dragFrom(label.x + label.width / 2, label.y + label.height / 2, "Ready");
+
+  // The Assignee's avatar at the meta row's right end.
+  const avatar = (await card("Ready").locator(".card-meta .people").boundingBox())!;
+  await dragFrom(avatar.x + avatar.width / 2, avatar.y + avatar.height / 2, "Investigate");
+
+  // The card's own empty space, right of its Blocked chip and outside its link.
+  const box = (await card("Investigate").boundingBox())!;
+  const chip = (await card("Investigate").locator(".chip-blocked").boundingBox())!;
+  await dragFrom(box.x + box.width - 10, chip.y + chip.height / 2, "Backlog");
+
+  // A plain click on the link, away from its text, still opens the Ticket.
+  const again = (await link("Backlog").boundingBox())!;
+  await page.mouse.click(again.x + again.width - 6, again.y + 4);
+  await expect(page.getByRole("heading", { name: "CRONK-2 Ship it" })).toBeVisible();
+});
+
+test("Group Sub-Tickets folds them into their parent's card with a count, unfolds them there, and is remembered", async ({
+  page,
+  cronk,
+}) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const parent = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Board view" });
+  const sub = (title: string, parentId = parent.id) => call("POST", `/api/projects/${project.id}/tickets`, { title, parentId });
+  const columns = await sub("Columns");
+  const cards = await sub("Cards");
+  await sub("Drag and drop");
+  await sub("Card heights", cards.id);
+  await call("PATCH", `/api/tickets/${columns.id}`, { statusId: status("Done") });
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const lane = (name: string) => board.getByRole("region", { name, exact: true });
+  const backlog = lane("Backlog");
+  const toggle = page.getByRole("button", { name: "Group Sub-Tickets" });
+
+  // Off by default: every Sub-Ticket has its own card.
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(backlog.getByRole("link", { name: /^CRONK-3 Cards/ })).toBeVisible();
+  await expect(backlog.getByRole("link", { name: /^CRONK-5 Card heights/ })).toBeVisible();
+  await expect(lane("Done").getByRole("button", { name: "Done, 1 Ticket" })).toBeVisible();
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  // Folded, whatever their Status: only the parent keeps a card, counting its direct Sub-Tickets and the finished ones.
+  await expect(backlog.getByRole("link")).toHaveCount(1);
+  await expect(backlog.locator(".column-count")).toHaveText("1");
+  await expect(lane("Done").getByRole("button", { name: "Done, 0 Tickets" })).toBeVisible();
+  const count = backlog.getByRole("button", { name: "1 / 3 Sub-Tickets" });
+  await expect(count).toHaveAttribute("aria-expanded", "false");
+
+  await count.click();
+  await expect(count).toHaveAttribute("aria-expanded", "true");
+  const list = backlog.getByRole("list", { name: "Sub-Tickets" }).first();
+  for (const name of ["CRONK-2 Columns", "CRONK-3 Cards", "CRONK-4 Drag and drop", "CRONK-5 Card heights"]) {
+    await expect(list.getByRole("link", { name })).toBeVisible();
+  }
+  await list.getByRole("link", { name: "CRONK-3 Cards" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Cards");
+
+  // Remembered on this browser, and the count follows live updates.
+  await page.goBack();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await call("PATCH", `/api/tickets/${cards.id}`, { statusId: status("Done") });
+  await expect(backlog.getByRole("button", { name: "2 / 3 Sub-Tickets" })).toBeVisible();
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(backlog.getByRole("link")).toHaveCount(1);
+
+  // Off again: the board is as before.
+  await toggle.click();
+  await expect(backlog.getByRole("link", { name: /^CRONK-4 Drag and drop/ })).toBeVisible();
+  await expect(backlog.getByRole("button", { name: /Sub-Tickets$/ })).toHaveCount(0);
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
 });

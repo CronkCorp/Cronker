@@ -6,7 +6,7 @@ import type { Db, Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
-import type { User } from "../identity/user.js";
+import { userJson, userNameOf, type User } from "../identity/user.js";
 import type { Workspace } from "../workspaces/workspaces.js";
 import type { Agent } from "./agents.js";
 
@@ -88,7 +88,7 @@ export async function revokeToken(db: Db, agent: Agent, tokenId: string): Promis
 const safeMethods = new Set(["GET", "HEAD"]);
 
 /** How an Agent's refusals name its Owner: by email, or by GitHub login until their email is known. */
-export const ownerName = (agent: { owner: User }): string => agent.owner.email ?? `@${agent.owner.githubLogin}`;
+export const ownerName = (agent: { owner: User }): string => userNameOf(agent.owner);
 
 const agentsOfRequests = new WeakMap<FastifyRequest, AgentCaller>();
 
@@ -128,7 +128,7 @@ export async function agentOfToken({ db, clock }: Context, header: string): Prom
     ? await db.query<AgentCaller>(
         `select 'agent' as kind, agents.id, agents.name, agent_tokens.access,
            json_build_object('id', workspaces.id, 'name', workspaces.name, 'slug', workspaces.slug) as workspace,
-           json_build_object('id', owners.id, 'email', owners.email, 'githubLogin', owners.github_login) as owner
+           ${userJson("owners")} as owner
          from agent_tokens
          join agents on agents.id = agent_tokens.agent_id and agents.removed_at is null
          join memberships on memberships.workspace_id = agents.workspace_id and memberships.user_id = agents.owner_id

@@ -14,8 +14,12 @@ import { defaultRoundLimit, LabelRule, Outcome, StepKind } from "./steps.js";
 const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
 const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
 const StatusParams = Type.Object({ projectId: Type.String(), statusId: Type.String() });
-const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody };
+const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody };
 const kindRule = "Refused if it would leave any Status kind without a Status.";
+const writeRule = "Needs Write in the Project, for Users and Agents alike.";
+const stepAuthorRule =
+  "Needs Write in the Project, and an Agent also needs its Owner to be an Admin of the Workspace, since the Brief, " +
+  "model and Outcomes are what later Runs work by.";
 const outcomeRules =
   "Exactly one Outcome is the default and exactly one, another, is *needs you*; neither may target a Done or " +
   "Canceled Status, and no Outcome may target a Canceled Status. The *needs you* Outcome may not target the Status " +
@@ -167,15 +171,15 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Add a Status",
-          description: "Adds a Status at a position on the board, or last. Returns the Project.",
+          description: `Adds a Status at a position on the board, or last. ${writeRule} Returns the Project.`,
           params: Type.Object({ projectId: Type.String() }),
           body: Type.Object({ name: StatusName, kind: StatusKind, position: Type.Optional(Position) }),
           response: { 201: Project, ...statusRefusals },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        const project = await changeStatuses(context, user.id, request.params.projectId, {
+        const caller = await requireCaller(context, request);
+        const project = await changeStatuses(context, caller, request.params.projectId, {
           type: "add",
           ...request.body,
         });
@@ -191,7 +195,8 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Rename, move or change the kind of a Status",
           description:
             `Changes whichever of name, kind and position are given. ${kindRule} ` +
-            "A Status with a Step can't become Done or Canceled: remove its Step first. Returns the Project.",
+            "A Status with a Step can't become Done or Canceled: remove its Step first. " +
+            `${writeRule} Returns the Project.`,
           params: StatusParams,
           body: Type.Object({
             name: Type.Optional(StatusName),
@@ -202,9 +207,9 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const caller = await requireCaller(context, request);
         const { projectId, statusId } = request.params;
-        return changeStatuses(context, user.id, projectId, { type: "edit", statusId, ...request.body });
+        return changeStatuses(context, caller, projectId, { type: "edit", statusId, ...request.body });
       },
     );
 
@@ -216,15 +221,15 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Remove a Status",
           description:
             `${kindRule} Refused too while the Status holds Tickets, naming how many: ` +
-            "move them to another Status first. Returns the Project.",
+            `move them to another Status first. ${writeRule} Returns the Project.`,
           params: StatusParams,
           response: { 200: Project, ...statusRefusals },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const caller = await requireCaller(context, request);
         const { projectId, statusId } = request.params;
-        return changeStatuses(context, user.id, projectId, { type: "remove", statusId });
+        return changeStatuses(context, caller, projectId, { type: "remove", statusId });
       },
     );
 
@@ -237,17 +242,17 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Gives the Status this Step, replacing any it had: Tickets entering it get Runs. " +
             "Refused on a Done or Canceled Status, where Tickets get no Runs. " +
-            `${outcomeRules} Returns the Project.`,
+            `${outcomeRules} ${stepAuthorRule} Returns the Project.`,
           params: StatusParams,
           body: StepBody,
           response: { 200: Project, ...statusRefusals },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const caller = await requireCaller(context, request);
         const { projectId, statusId } = request.params;
         const { kind = "ordinary", roundLimit = defaultRoundLimit, labelRule = null, ...step } = request.body;
-        return changeStep(context, user.id, projectId, statusId, { type: "put", step: { ...step, kind, roundLimit, labelRule } });
+        return changeStep(context, caller, projectId, statusId, { type: "put", step: { ...step, kind, roundLimit, labelRule } });
       },
     );
 
@@ -257,15 +262,15 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "Remove a Status's Step",
-          description: "Takes the Step off the Status, so Tickets in it wait for a User. Returns the Project.",
+          description: `Takes the Step off the Status, so Tickets in it wait for a User. ${writeRule} Returns the Project.`,
           params: StatusParams,
           response: { 200: Project, ...statusRefusals },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const caller = await requireCaller(context, request);
         const { projectId, statusId } = request.params;
-        return changeStep(context, user.id, projectId, statusId, { type: "remove" });
+        return changeStep(context, caller, projectId, statusId, { type: "remove" });
       },
     );
   };

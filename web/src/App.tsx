@@ -15,7 +15,8 @@ import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
 import { ConnectError, ConnectScreen } from "./connect.js";
 import { Centered, Frame, usePlace } from "./frame.js";
-import { GitHubAccountPanel, GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
+import { AccountSettingsPage } from "./account.js";
+import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { DecisionScreen, WorkspaceDecisions } from "./decisions.js";
 import { DocumentScreen, WorkspaceDocuments } from "./documents.js";
 import { TermScreen, WorkspaceGlossary } from "./terms.js";
@@ -299,6 +300,10 @@ function SignedIn({
   useEffect(() => {
     if (path === "/" && workspaces[0]) replace(addresses.workspace(workspaces[0]));
   }, [path, workspaces]);
+  // The password page became a section of the User's settings: an old link to it opens that section.
+  useEffect(() => {
+    if (path === "/password") replace(`/account${window.location.search}#password`);
+  }, [path]);
   // A Workspace's slug in another letter case leads to the slug itself.
   useEffect(() => {
     if (routed && parsed && parsed.slug !== routed.slug) {
@@ -320,8 +325,8 @@ function SignedIn({
         }}
       />
     );
-  } else if (path === "/password") {
-    page = <ChangePassword user={user} />;
+  } else if (path === "/account" || path === "/password") {
+    page = <AccountSettingsPage user={user} onChanged={reload} />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {
@@ -459,40 +464,6 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
           </Actions>
         </form>
       </Panel>
-    </div>
-  );
-}
-
-function ChangePassword({ user }: { user: User }) {
-  usePlace(null);
-  const [done, setDone] = useState(false);
-  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
-    setDone(false);
-    await api.changePassword(field(form, "currentPassword"), field(form, "newPassword"));
-    element.reset();
-    setDone(true);
-  });
-  return (
-    <div className="page page-settings">
-      <PageHead crumbs={[{ label: "Account" }]} title="Password" />
-      <Panel>
-        <form onSubmit={onSubmit}>
-          <Field label="Current password">
-            <input name="currentPassword" type="password" required autoComplete="current-password" />
-          </Field>
-          <Field label="New password" hint="At least 8 characters. Changing it ends your other sign-ins.">
-            <input name="newPassword" type="password" required minLength={8} autoComplete="new-password" />
-          </Field>
-          <FormError error={error} />
-          <Actions>
-            <Button type="submit" variant="primary" disabled={busy}>
-              Change password
-            </Button>
-            <Saved shown={done}>Password changed. Your other sign-ins have ended.</Saved>
-          </Actions>
-        </form>
-      </Panel>
-      <GitHubAccountPanel user={user} />
     </div>
   );
 }

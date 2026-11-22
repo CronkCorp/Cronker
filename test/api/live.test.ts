@@ -333,3 +333,21 @@ describe("Workspaces apart", () => {
     await expect(kept.ended(300)).rejects.toThrow("still open");
   });
 });
+
+describe("closing", () => {
+  test("a stream asked for while Cronk begins closing is refused rather than holding it open", async () => {
+    const { workspace, cookie } = await newProject();
+    // Holding sign-ins locked keeps the stream's request checking its sign-in while Cronk begins closing, as a
+    // browser's EventSource reconnecting just then does: it subscribes only after the open streams were ended.
+    const locked = cronk.stage("begin; lock table sign_ins in access exclusive mode; select pg_sleep(1); commit");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const asked = fetch(new URL(`/api/workspaces/${workspace.id}/events`, cronk.url), { headers: { cookie } });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const stopped = cronk.stop();
+
+    await locked;
+    expect((await asked).status).toBe(503);
+    await stopped;
+  });
+});
