@@ -1830,6 +1830,12 @@
   color: var(--muted);
 }
 
+.delivery-attempts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 /* An Artifact's Comments, under the Artifact, as Comments show on a Ticket's timeline. */
 .artifact-comments {
   display: grid;

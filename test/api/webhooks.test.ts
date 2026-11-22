@@ -54,6 +54,7 @@ describe("a User's webhooks", () => {
       url: "https://ntfy.sh/ada-cronk",
       kinds: ["question", "needsYou", "run"],
       enabled: true,
+      failing: false,
       createdAt: "2026-01-01T09:00:00.000Z",
       secret: expect.stringMatching(/^whsec_[A-Za-z0-9+/]{43}=$/),
     });
@@ -166,6 +167,8 @@ describe("Send test", () => {
       statusCode: null,
       error: null,
       sentAt: null,
+      nextAt: "2026-01-01T09:00:00.000Z",
+      attempts: [],
     });
     expect(cronk.webhooks.received).toEqual([]);
 
@@ -187,13 +190,20 @@ describe("Send test", () => {
     expect(verifies(`whsec_${Buffer.alloc(32).toString("base64")}`, delivery!.headers, delivery!.body)).toBe(false);
 
     expect(await ok("GET", `${hooks}/${id}/deliveries`, ada)).toEqual([
-      { ...queued.json, state: "delivered", statusCode: 204, sentAt: "2026-01-01T09:00:00.000Z" },
+      {
+        ...queued.json,
+        state: "delivered",
+        statusCode: 204,
+        sentAt: "2026-01-01T09:00:00.000Z",
+        nextAt: null,
+        attempts: [{ at: "2026-01-01T09:00:00.000Z", statusCode: 204, error: null }],
+      },
     ]);
     await cronk.deliverWebhooks();
     expect(cronk.webhooks.received).toHaveLength(1);
   });
 
-  test("a receiver that fails or doesn't answer is recorded as failed", async () => {
+  test("a receiver that fails or doesn't answer is recorded, and the delivery waits for a retry", async () => {
     const { ada, hooks } = await adasWorkspace();
     const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: cronk.webhooks.url, enabled: false });
     cronk.webhooks.failNext(1, 500);
@@ -203,9 +213,144 @@ describe("Send test", () => {
     await ok("POST", `${hooks}/${id}/test`, ada);
     await cronk.deliverWebhooks();
     const deliveries = await ok("GET", `${hooks}/${id}/deliveries`, ada);
-    expect(deliveries.map((d: { state: string }) => d.state)).toEqual(["failed", "failed"]);
+    expect(deliveries.map((d: { state: string }) => d.state)).toEqual(["pending", "pending"]);
     expect(deliveries.map((d: { statusCode: number | null }) => d.statusCode).sort()).toEqual([500, null]);
     expect(deliveries.find((d: { statusCode: number | null }) => d.statusCode === null).error).toEqual(expect.any(String));
+    for (const d of deliveries) {
+      expect(d.sentAt).toBeNull();
+      expect(d.nextAt).toBe("2026-01-01T09:00:31.000Z");
+      expect(d.attempts).toEqual([{ at: "2026-01-01T09:00:01.000Z", statusCode: d.statusCode, error: d.error }]);
+    }
+  });
+
+  test("a failed delivery is retried about 30 seconds later, and delivered then", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: cronk.webhooks.url });
+    cronk.webhooks.failNext(1, 503);
+    const queued = await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    cronk.clock.advance(29_000);
+    await cronk.deliverWebhooks();
+    expect(cronk.webhooks.received).toHaveLength(1);
+    cronk.clock.advance(1_000);
+    await cronk.deliverWebhooks();
+    expect(cronk.webhooks.received.map((r) => r.answer)).toEqual([503, 204]);
+    // The retry sends the same body under the same id, signed afresh.
+    expect(cronk.webhooks.received[1]!.body).toBe(cronk.webhooks.received[0]!.body);
+    expect(cronk.webhooks.received[1]!.headers["webhook-id"]).toBe(queued.id);
+    expect(cronk.webhooks.received[1]!.headers["webhook-timestamp"]).toBe(String(Date.parse("2026-01-01T09:00:30.000Z") / 1000));
+
+    expect(await ok("GET", `${hooks}/${id}/deliveries`, ada)).toEqual([
+      expect.objectContaining({
+        state: "delivered",
+        statusCode: 204,
+        sentAt: "2026-01-01T09:00:30.000Z",
+        nextAt: null,
+        attempts: [
+          { at: "2026-01-01T09:00:00.000Z", statusCode: 503, error: null },
+          { at: "2026-01-01T09:00:30.000Z", statusCode: 204, error: null },
+        ],
+      }),
+    ]);
+    expect((await ok("GET", `${hooks}/${id}`, ada)).failing).toBe(false);
+  });
+
+  test("retries back off, doubling from 30 seconds, and after about 24 hours the webhook is marked failing", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: cronk.webhooks.url });
+    cronk.webhooks.failNext(13, 500);
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    const queuedAt = Date.parse("2026-01-01T09:00:00.000Z");
+    // Each retry is due 30s · 2^(n-1) after the nth try, the last moved in to land 24 hours after it was queued.
+    const offsets = [0];
+    for (let n = 1; n <= 11; n++) offsets.push(offsets[n - 1]! + 30_000 * 2 ** (n - 1));
+    offsets.push(24 * 60 * 60_000);
+    expect(offsets).toHaveLength(13);
+
+    let at = queuedAt;
+    for (const [i, offset] of offsets.entries()) {
+      // A second before it is due, nothing is sent.
+      if (i > 0) {
+        cronk.clock.advance(queuedAt + offset - 1000 - at);
+        await cronk.deliverWebhooks();
+        expect(cronk.webhooks.received, `try ${i + 1}`).toHaveLength(i);
+        cronk.clock.advance(1000);
+        at = queuedAt + offset;
+      }
+      await cronk.deliverWebhooks();
+      expect(cronk.webhooks.received, `try ${i + 1}`).toHaveLength(i + 1);
+      const [delivery] = await ok("GET", `${hooks}/${id}/deliveries`, ada);
+      const webhook = await ok("GET", `${hooks}/${id}`, ada);
+      if (i < offsets.length - 1) {
+        expect(delivery.state, `try ${i + 1}`).toBe("pending");
+        expect(delivery.nextAt, `try ${i + 1}`).toBe(new Date(queuedAt + offsets[i + 1]!).toISOString());
+        expect(webhook.failing, `try ${i + 1}`).toBe(false);
+      } else {
+        expect(delivery.state).toBe("failed");
+        expect(delivery.sentAt).toBe("2026-01-02T09:00:00.000Z");
+        expect(delivery.nextAt).toBeNull();
+        expect(delivery.attempts.map((a: { at: string }) => Date.parse(a.at) - queuedAt)).toEqual(offsets);
+        expect(delivery.attempts.every((a: { statusCode: number }) => a.statusCode === 500)).toBe(true);
+        expect(webhook.failing).toBe(true);
+      }
+    }
+    cronk.clock.advance(60 * 60_000);
+    await cronk.deliverWebhooks();
+    expect(cronk.webhooks.received).toHaveLength(13);
+    expect(await ok("GET", hooks, ada)).toEqual([expect.objectContaining({ id, failing: true })]);
+  });
+
+  test("a late retry past the deadline is the last one", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: cronk.webhooks.url });
+    cronk.webhooks.failNext(2, "drop");
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    // Cronk was down for two days: the retry it finds due on return is the last.
+    cronk.clock.advance(2 * 24 * 60 * 60_000);
+    await cronk.deliverWebhooks();
+    const [delivery] = await ok("GET", `${hooks}/${id}/deliveries`, ada);
+    expect(delivery).toMatchObject({ state: "failed", statusCode: null, error: expect.any(String) });
+    expect(delivery.attempts).toHaveLength(2);
+    expect((await ok("GET", `${hooks}/${id}`, ada)).failing).toBe(true);
+  });
+
+  test("a failing webhook's next successful delivery, such as Send test, clears failing", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: cronk.webhooks.url });
+    cronk.webhooks.failNext(2, 500);
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    cronk.clock.advance(24 * 60 * 60_000);
+    await cronk.deliverWebhooks();
+    expect((await ok("GET", `${hooks}/${id}`, ada)).failing).toBe(true);
+
+    // A test that fails once more and is retried leaves it failing until the retry succeeds.
+    cronk.webhooks.failNext(1, 500);
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    expect((await ok("GET", `${hooks}/${id}`, ada)).failing).toBe(true);
+    cronk.clock.advance(30_000);
+    await cronk.deliverWebhooks();
+    expect((await ok("GET", `${hooks}/${id}`, ada)).failing).toBe(false);
+    expect((await ok("GET", `${hooks}/${id}/deliveries`, ada)).map((d: { state: string }) => d.state)).toEqual(["delivered", "failed"]);
+  });
+
+  test("a delivery still being retried is kept beyond the last 20", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: cronk.webhooks.url });
+    cronk.webhooks.failNext(1, 500);
+    const retried = (await ok("POST", `${hooks}/${id}/test`, ada)).id;
+    await cronk.deliverWebhooks();
+    for (let i = 0; i < 20; i++) {
+      cronk.clock.advance(1000);
+      await ok("POST", `${hooks}/${id}/test`, ada);
+    }
+    await cronk.deliverWebhooks();
+    cronk.clock.advance(30_000);
+    await cronk.deliverWebhooks();
+    expect(cronk.webhooks.received.filter((r) => r.headers["webhook-id"] === retried)).toHaveLength(2);
+    expect((await ok("GET", `${hooks}/${id}/deliveries`, ada)).every((d: { state: string }) => d.state === "delivered")).toBe(true);
   });
 
   test("only the last 20 deliveries of a webhook are kept", async () => {
