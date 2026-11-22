@@ -1,6 +1,13 @@
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
-import { mergeOnGitHub, pullRequestOnGitHub, repositoryById, type MergeMethod, type RepositoryOnGitHub } from "../github/client.js";
+import {
+  mergeOnGitHub,
+  pullRequestOnGitHub,
+  repositoryById,
+  updateBranchOnGitHub,
+  type MergeMethod,
+  type RepositoryOnGitHub,
+} from "../github/client.js";
 import { installationCovering, tokenFor } from "../github/installations.js";
 import { ApiError } from "../http/errors.js";
 import { endRunFinished } from "../runs/runs.js";
@@ -116,7 +123,11 @@ const rules = {
   reviews: "Cronk merges only a Pull Request no review still requests changes on.",
   mergeable: "Cronk merges only a Pull Request GitHub says is mergeable.",
   installed: "Cronk merges with the GitHub App's token, so only in Repositories the App is installed on.",
+  upToDate: "The Merge Queue merges only a Pull Request whose branch is up to date with its base branch.",
 };
+
+/** The refusal `mergeAsAsked` gives, when asked to, for a Pull Request whose base branch has commits its head lacks. */
+export const behindCode = "behind";
 
 /** The refusal for a Pull Request whose latest commit Cronk hasn't heard of, so whose checks it doesn't know. */
 const unknownCommit = (name: string) =>
@@ -214,18 +225,33 @@ export async function askMerge(
   return { ticketKey: ticket.key, pullRequest: { ...pullRequest, listedAs }, asked, advice };
 }
 
-/** Asks GitHub to merge the Pull Request, refusing, as Cronk's rules say, when GitHub says it can't be merged. */
-async function askGitHub(context: Context, { ticketKey, pullRequest, advice }: AskedMerge): Promise<void> {
-  const name = `${pullRequest.repository}#${pullRequest.number}`;
-  const repositoryId = Number(pullRequest.repositoryId);
-  const installationId = await installationCovering(context, repositoryId);
+/** How Cronk asks GitHub for a merge. */
+export interface MergeOptions {
+  /**
+   * Refuses, with `behindCode`, a Pull Request GitHub says is behind its base branch, rather than asking GitHub to
+   * merge it, so the caller can update its branch first.
+   */
+  refuseBehind?: boolean;
+}
+
+/** The installation token for the Pull Request's Repository, refusing, as Cronk's rules say, where the App isn't installed. */
+async function tokenForPullRequest(context: Context, pullRequest: AskedMerge["pullRequest"], advice: MergeAdvice): Promise<string> {
+  const installationId = await installationCovering(context, Number(pullRequest.repositoryId));
   if (installationId === undefined) {
+    const name = `${pullRequest.repository}#${pullRequest.number}`;
     throw new ApiError(409, "repository_not_installed", `The GitHub App isn't installed on ${pullRequest.listedAs}, so Cronk can't merge ${name}.`, {
       rule: rules.installed,
       advice: advice.needsYou(`a User to install the GitHub App on ${pullRequest.listedAs}`),
     });
   }
-  const token = await tokenFor(context, installationId);
+  return tokenFor(context, installationId);
+}
+
+/** Asks GitHub to merge the Pull Request, refusing, as Cronk's rules say, when GitHub says it can't be merged. */
+async function askGitHub(context: Context, { pullRequest, advice }: AskedMerge, options: MergeOptions): Promise<void> {
+  const name = `${pullRequest.repository}#${pullRequest.number}`;
+  const repositoryId = Number(pullRequest.repositoryId);
+  const token = await tokenForPullRequest(context, pullRequest, advice);
   const notMergeable = (message: string, advice: string) => new ApiError(409, "not_mergeable", message, { rule: rules.mergeable, advice });
   const onGitHub = await pullRequestOnGitHub(context.config, token, pullRequest.listedAs, pullRequest.number);
   if (!onGitHub || onGitHub.state !== "open" || onGitHub.merged) {
@@ -237,6 +263,12 @@ async function askGitHub(context: Context, { ticketKey, pullRequest, advice }: A
   }
   if (!onGitHub.mergeable) {
     throw notMergeable(`GitHub says ${name} can't be merged, as when it has a merge conflict.`, advice.sendBack(`${name} has a merge conflict`));
+  }
+  if (options.refuseBehind && onGitHub.mergeable_state === "behind") {
+    throw new ApiError(409, behindCode, `${name}'s base branch has commits its branch lacks, so it is updated before it merges.`, {
+      rule: rules.upToDate,
+      advice: "Update its branch, then wait for the new commit's checks.",
+    });
   }
   const repository = await repositoryById(context.config, token, repositoryId);
   const merged = await mergeOnGitHub(context.config, token, pullRequest.listedAs, pullRequest.number, {
@@ -258,9 +290,14 @@ async function askGitHub(context: Context, { ticketKey, pullRequest, advice }: A
  * transaction that recorded it. When GitHub refuses, the Pull Request is no longer marked as asked for, unless GitHub
  * merged it after all, as its delivery of the merge would have recorded meanwhile.
  */
-export async function mergeAsAsked<T>(context: Context, asked: AskedMerge, then: (tx: Tx) => Promise<T>): Promise<T> {
+export async function mergeAsAsked<T>(
+  context: Context,
+  asked: AskedMerge,
+  then: (tx: Tx) => Promise<T>,
+  options: MergeOptions = {},
+): Promise<T> {
   try {
-    await askGitHub(context, asked);
+    await askGitHub(context, asked, options);
   } catch (error) {
     await context.db.query("update pull_requests set merge_asked_by = null where id = $1 and merge_asked_by = $2::jsonb", [
       asked.pullRequest.id,
@@ -272,6 +309,17 @@ export async function mergeAsAsked<T>(context: Context, asked: AskedMerge, then:
     await recordAskedMerge(context, tx, Number(asked.pullRequest.id));
     return then(tx);
   });
+}
+
+/**
+ * Asks GitHub to bring the Pull Request's branch up to date with its base branch, merging the base into it, only while
+ * its head is still the commit Cronk judged. Says whether GitHub took it on, as it does in the background; refuses, as
+ * Cronk's rules say, where the App isn't installed.
+ */
+export async function updateBranch(context: Context, { pullRequest, advice }: Pick<AskedMerge, "pullRequest" | "advice">): Promise<boolean> {
+  const token = await tokenForPullRequest(context, pullRequest, advice);
+  const updated = await updateBranchOnGitHub(context.config, token, pullRequest.listedAs, pullRequest.number, pullRequest.sha);
+  return updated.updated;
 }
 
 /**

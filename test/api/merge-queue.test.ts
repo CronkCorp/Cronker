@@ -323,8 +323,8 @@ describe("the queue pass", () => {
       action: "completed",
       check_run: { id: pending.number, name: "test", head_sha: pending.pullRequest.head.sha, status: "completed", conclusion: "success", html_url: null },
     });
-    await cronk.checkQueue();
 
+    // The delivery has the queue act on its head at once, without waiting for the next pass.
     expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
   });
 
@@ -699,5 +699,166 @@ describe("failures leaving the queue", () => {
     await cronk.checkQueue();
 
     expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
+  });
+});
+
+describe("a head behind its base branch", () => {
+  /**
+   * CRONK-1's Pull Request #101 queued first, GitHub saying it is behind `main` though it merges cleanly, and CRONK-2's
+   * #102 queued behind it. `pushed` delivers the push GitHub's branch update made to #101, and `check` a check on it.
+   */
+  async function behindSetting() {
+    const setting = await queueSetting();
+    const { inReview, merge, deliver, cronker } = setting;
+    const head = await inReview();
+    head.onGitHub.behind = true;
+    const next = await inReview();
+    await merge(head.ticket.id);
+    await merge(next.ticket.id);
+    const pushed = (sha: string) =>
+      deliver(cronker, "pull_request", {
+        action: "synchronize",
+        pull_request: { ...head.pullRequest, head: { ...head.pullRequest.head, sha }, updated_at: "2026-01-01T09:10:00Z" },
+      });
+    const check = (sha: string, conclusion: "success" | null) =>
+      deliver(cronker, "check_run", {
+        action: conclusion === null ? "created" : "completed",
+        check_run: {
+          id: 1000,
+          name: "test",
+          head_sha: sha,
+          status: conclusion === null ? "in_progress" : "completed",
+          conclusion,
+          html_url: null,
+        },
+      });
+    return { ...setting, head, next, pushed, check };
+  }
+
+  test("is updated, not merged, showing Updating branch, then Waiting for checks, the Tickets behind it waiting", async () => {
+    const { head, next, read, status, installation } = await behindSetting();
+    const seen: unknown[] = [];
+    cronk.github.onUpdate = async () => {
+      seen.push((await read(head.ticket.id)).queue?.state);
+    };
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges).toEqual([]);
+    expect(cronk.github.updates).toEqual([
+      { repository: "cronkcorp/cronker", number: 101, from: "c101", to: "c101u1", installationId: installation.id },
+    ]);
+    expect(seen).toEqual(["updating-branch"]);
+    expect(await read(head.ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1, state: "waiting-for-checks" } });
+    expect(await read(next.ticket.id)).toMatchObject({ queue: { position: 2, state: "queued" } });
+
+    // Until GitHub reports the new commit, the old one's green checks don't count.
+    await cronk.checkQueue();
+    expect(cronk.github.merges).toEqual([]);
+    expect(cronk.github.updates).toHaveLength(1);
+  });
+
+  test("merges on the next pass once the new commit's checks are green, waiting while they are pending", async () => {
+    const { head, next, read, status, pushed, check } = await behindSetting();
+    await cronk.checkQueue();
+
+    await pushed("c101u1");
+    await cronk.checkQueue();
+    // No check reported on the new commit yet, though the old one had one.
+    expect(cronk.github.merges).toEqual([]);
+
+    await check("c101u1", null);
+    await cronk.checkQueue();
+    expect(cronk.github.merges).toEqual([]);
+    expect(await read(head.ticket.id)).toMatchObject({ queue: { position: 1, state: "waiting-for-checks" } });
+    expect(await read(next.ticket.id)).toMatchObject({ queue: { position: 2, state: "queued" } });
+
+    await check("c101u1", "success");
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map(({ number, sha }) => [number, sha])).toEqual([
+      [101, "c101u1"],
+      [102, "c102"],
+    ]);
+    expect(await read(head.ticket.id)).toMatchObject({ statusId: status("Done"), verification: "verified", queue: null });
+  });
+
+  test("a green check delivered on the new commit has it merge at once", async () => {
+    const { head, read, status, pushed, check } = await behindSetting();
+    await cronk.checkQueue();
+    await pushed("c101u1");
+
+    await check("c101u1", "success");
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
+    expect(await read(head.ticket.id)).toMatchObject({ statusId: status("Done") });
+  });
+
+  test("a failing check on the updated commit takes it out of the queue, and the next one moves up", async () => {
+    const { head, next, read, status, pushed, deliver, cronker } = await behindSetting();
+    await cronk.checkQueue();
+    await pushed("c101u1");
+
+    await deliver(cronker, "check_run", {
+      action: "completed",
+      check_run: { id: 1000, name: "test", head_sha: "c101u1", status: "completed", conclusion: "failure", html_url: null },
+    });
+
+    expect(await read(head.ticket.id)).toMatchObject({ statusId: status("In Review"), queue: null });
+    expect(await read(next.ticket.id)).toMatchObject({ queue: { position: 1 } });
+    await cronk.checkQueue();
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
+  });
+
+  test("a head GitHub won't update, as when updating it conflicts, waits in the queue for a later pass", async () => {
+    const { head, read } = await behindSetting();
+    head.onGitHub.mergeable = false;
+    head.onGitHub.answers = [true];
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.updates).toEqual([]);
+    expect(cronk.github.merges).toEqual([]);
+    expect(await read(head.ticket.id)).toMatchObject({ queue: { position: 1, state: "queued" } });
+  });
+
+  test("a queue on another base branch doesn't wait on a head being updated", async () => {
+    const { inReview, merge } = await behindSetting();
+    const other = await inReview({ base: "release" });
+    await merge(other.ticket.id);
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.updates.map((u) => u.number)).toEqual([101]);
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([other.number]);
+  });
+});
+
+describe("deliveries for a queued Pull Request", () => {
+  test("a status, check suite or review delivery has the queue act on it at once", async () => {
+    const { inReview, merge, deliver, cronker } = await queueSetting();
+    const byStatus = await inReview();
+    const bySuite = await inReview({ base: "release" });
+    const byReview = await inReview({ base: "next" });
+    const other = await inReview({ base: "other" });
+    for (const { ticket } of [byStatus, bySuite, byReview, other]) await merge(ticket.id);
+    const merged = () => cronk.github.merges.map((m) => m.number);
+
+    await deliver(cronker, "status", { id: 1, sha: byStatus.pullRequest.head.sha, context: "lint", state: "success", target_url: null });
+    expect(merged()).toEqual([byStatus.number]);
+
+    await deliver(cronker, "check_suite", {
+      action: "completed",
+      check_suite: { id: 7, head_sha: bySuite.pullRequest.head.sha, conclusion: "success", app: { name: "CI" }, updated_at: "2026-01-01T09:00:00Z" },
+    });
+    expect(merged()).toEqual([byStatus.number, bySuite.number]);
+
+    await deliver(cronker, "pull_request_review", {
+      action: "submitted",
+      review: { id: 9, state: "approved", html_url: null, user: { login: "grace" } },
+      pull_request: { id: byReview.pullRequest.id },
+    });
+    // Only the Pull Request delivered about, not the other queue's head.
+    expect(merged()).toEqual([byStatus.number, bySuite.number, byReview.number]);
   });
 });

@@ -100,9 +100,10 @@ export async function sendBackForFailure(
        on runs.id = pull_request_links.producing_run_id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation
        and ((statuses.kind = 'review' and producing.id is not null)
-         -- A queued Ticket leaves the queue, unless Cronk is merging it already.
+         -- A queued Ticket leaves the queue, waiting or waiting for its updated branch's checks, unless Cronk is asking
+         -- GitHub to merge it or update its branch already.
          or exists (select from merge_queue where merge_queue.pull_request_id = $1 and merge_queue.ticket_id = tickets.id
-           and merge_queue.state = 'queued'))
+           and merge_queue.state in ('queued', 'waiting-for-checks')))
        and ${listsPullRequestsRepository} and ${inUnarchivedProject} and ($2::uuid is null or tickets.id = $2::uuid)
      order by tickets.id
      for update of tickets`,
