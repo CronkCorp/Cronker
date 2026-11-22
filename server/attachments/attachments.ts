@@ -11,6 +11,7 @@ import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { findTicketRow, holdsDiscoveredTicket, runOfAgent, ticketNotFound } from "../work/tickets.js";
+import { publishArtifactComments } from "../work/artifact-comment-events.js";
 
 /**
  * Attachments: plain files attached to a Ticket, a Document or a Comment, readable by whoever can read what they're
@@ -64,9 +65,11 @@ export function attachmentNotFound(): ApiError {
 /** What an Attachment's owner is, found in the Viewer's view: its Workspace, and the Ticket it is on or with. */
 interface FoundOwner extends Owner {
   workspaceId: string;
-  /** The Ticket, and its Project, a Ticket or Comment Attachment shows with; none for a Document. */
+  /** The Ticket, and its Project, a Ticket or Comment Attachment shows with; none for a Document or an Artifact's Comment. */
   ticket: { id: string; projectId: string } | null;
-  /** The Project it is in: its Ticket's or its Document's; null for a Document of the Workspace's own. */
+  /** The Artifact a Comment is on; none otherwise. */
+  artifactId?: string | null;
+  /** The Project it is in: its Ticket's, its Artifact's or its Document's; null for the Workspace's own. */
   projectId: string | null;
   /** A Comment's author. */
   author?: { kind: "user" | "agent"; id: string };
@@ -98,12 +101,24 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
     if (!rows[0]) throw notFound;
     return { ...owner, workspaceId: rows[0].workspaceId, ticket: null, projectId: rows[0].projectId };
   }
-  const view = inReach(viewer, { project: "tickets.project_id", workspace: "comments.workspace_id" }, "$2");
-  const { rows } = await db.query<{ workspaceId: string; ticketId: string; projectId: string; author: FoundOwner["author"] }>(
-    `select comments.workspace_id as "workspaceId", comments.ticket_id as "ticketId", tickets.project_id as "projectId",
+  const view = inReach(
+    viewer,
+    { project: "coalesce(tickets.project_id, artifacts.project_id)", workspace: "comments.workspace_id" },
+    "$2",
+  );
+  const { rows } = await db.query<{
+    workspaceId: string;
+    ticketId: string | null;
+    artifactId: string | null;
+    projectId: string | null;
+    author: FoundOwner["author"];
+  }>(
+    `select comments.workspace_id as "workspaceId", comments.ticket_id as "ticketId", comments.artifact_id as "artifactId",
+       coalesce(tickets.project_id, artifacts.project_id) as "projectId",
        case when comments.actor_agent_id is null then json_build_object('kind', 'user', 'id', comments.actor_user_id)
          else json_build_object('kind', 'agent', 'id', comments.actor_agent_id) end as author
-     from comments join tickets on tickets.id = comments.ticket_id
+     from comments left join tickets on tickets.id = comments.ticket_id
+     left join artifacts on artifacts.id = comments.artifact_id
      where comments.id = $1 and ${view.sql}`,
     [owner.id, view.value],
   );
@@ -112,7 +127,8 @@ async function findOwner(db: Db | Tx, viewer: Viewer, owner: Owner): Promise<Fou
   return {
     ...owner,
     workspaceId: comment.workspaceId,
-    ticket: { id: comment.ticketId, projectId: comment.projectId },
+    ticket: comment.ticketId ? { id: comment.ticketId, projectId: comment.projectId! } : null,
+    artifactId: comment.artifactId,
     projectId: comment.projectId,
     author: comment.author,
   };
@@ -193,7 +209,7 @@ export async function addAttachment(
           clock.now(),
         ],
       );
-      publishChange(context, tx, found);
+      await publishChange(context, tx, found);
       return (await findAttachment(tx, actor, id))!;
     });
   } catch (error) {
@@ -203,19 +219,29 @@ export async function addAttachment(
   }
 }
 
-function publishChange({ live }: Context, tx: Tx, owner: FoundOwner): void {
-  if (owner.ticket) {
+async function publishChange(context: Context, tx: Tx, owner: FoundOwner): Promise<void> {
+  const { live } = context;
+  if (owner.artifactId) {
+    const artifact = { id: owner.artifactId, workspaceId: owner.workspaceId, projectId: owner.projectId };
+    await publishArtifactComments(context, tx, artifact, (ticket) => ({ type: "attachments.changed", ...ticket }));
+  } else if (owner.ticket) {
     live.publish(tx, owner.workspaceId, { type: "attachments.changed", projectId: owner.ticket.projectId, ticketId: owner.ticket.id });
   } else {
     live.publish(tx, owner.workspaceId, { type: "attachments.changed", documentId: owner.id }, { readersOf: [owner.projectId] });
   }
 }
 
-/** The Project an Attachment is in, as SQL: its Ticket's, its Comment's Ticket's or its Document's; none for the Workspace's own. */
+/**
+ * The Project an Attachment is in, as SQL: its Ticket's, its Comment's Ticket's or Artifact's, or its Document's; none
+ * for the Workspace's own.
+ */
 const attachmentProject = `coalesce(
   (select attachment_tickets.project_id from tickets attachment_tickets
    where attachment_tickets.id = coalesce(attachments.ticket_id,
      (select attachment_comments.ticket_id from comments attachment_comments where attachment_comments.id = attachments.comment_id))),
+  (select attachment_artifacts.project_id from comments attachment_comments
+   join artifacts attachment_artifacts on attachment_artifacts.id = attachment_comments.artifact_id
+   where attachment_comments.id = attachments.comment_id),
   (select attachment_documents.project_id from documents attachment_documents where attachment_documents.id = attachments.document_id))`;
 
 /** An Attachment in the Viewer's view; otherwise nothing, as if it didn't exist. */
@@ -292,7 +318,7 @@ export async function removeAttachment(context: Context, actor: Caller, attachme
       await checkMayAttach(tx, actor, found);
     }
     await tx.query("delete from attachments where id = $1", [row.id]);
-    publishChange(context, tx, found);
+    await publishChange(context, tx, found);
     afterCommit(tx, () => forgetAttachments(context, [row.id]));
   });
 }

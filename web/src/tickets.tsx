@@ -202,6 +202,8 @@ export function TicketScreen({
       latestTicket(api.ticket(ticketId), setTicket, fail);
       loadTimeline();
       loadLinks();
+      // Linking or unlinking an Artifact brings its Comments onto the timeline, or takes them off.
+      loadComments();
     }
     if (all || (thisTicket && event.type === "pull_requests.changed")) loadPullRequests();
     if (all || (thisTicket && event.type === "transcripts.changed")) latestTranscripts(api.ticketTranscripts(ticketId), setTranscripts);
@@ -418,7 +420,7 @@ export function TicketScreen({
           />
           <MentionedIn texts={ticket.mentionedIn} />
           <FileList
-            attachments={[...attachments, ...comments.flatMap((c) => c.attachments), ...reportFiles]}
+            attachments={[...attachments, ...comments.filter((c) => c.artifactId === null).flatMap((c) => c.attachments), ...reportFiles]}
             onChanged={() => {
               loadAttachments();
               loadComments();
@@ -1140,12 +1142,13 @@ const mentioningKinds: Record<MentioningText["kind"], string> = {
   decision: "Decision",
 };
 
-/** The page a text mentioning a Ticket is read on: a Comment's is its Ticket's. */
+/** The page a text mentioning a Ticket is read on: a Comment's is its Ticket's, or its Artifact's. */
 function mentioningPage(to: Addresses, text: MentioningText): string {
   switch (text.kind) {
     case "ticket":
-    case "comment":
       return to.ticket(text.ticket!);
+    case "comment":
+      return text.ticket ? to.ticket(text.ticket) : to.artifact({ slug: text.slug! });
     case "document":
     case "report":
       return to.document({ slug: text.slug! });
@@ -1183,7 +1186,7 @@ function scrollToAndFocus(element: HTMLElement) {
   element.focus({ preventScroll: true });
 }
 
-function CommentForm({
+export function CommentForm({
   label,
   button,
   placeholder,
@@ -1645,8 +1648,11 @@ function Timeline({
   );
 }
 
-/** A Comment with its replies indented under it; a Question from an Agent shows in a warn box with its answer box. */
-function CommentThread({
+/**
+ * A Comment with its replies indented under it; a Question from an Agent shows in a warn box with its answer box. On a
+ * Ticket's timeline, a Comment on one of its Linked Artifacts names the Artifact; replies to it go to the Artifact.
+ */
+export function CommentThread({
   comment,
   comments,
   ticket,
@@ -1659,7 +1665,8 @@ function CommentThread({
 }: {
   comment: Comment;
   comments: Comment[];
-  ticket: Ticket;
+  /** The Ticket whose timeline it shows on; null on an Artifact's page. */
+  ticket: Ticket | null;
   user: User;
   runs: Run[];
   depth: number;
@@ -1677,9 +1684,11 @@ function CommentThread({
   const askedIn = question ? runs.find((r) => r.question === comment.body && r.questionBy === "agent") : undefined;
   const actor: ActorRef = comment.actor;
   const send = async (body: string) => {
-    onAdded(await api.comment(ticket.id, { body, replyToId: comment.id }));
+    const reply = { body, replyToId: comment.id };
+    onAdded(await (comment.artifactId ? api.commentOnArtifact(comment.artifactId, reply) : api.comment(comment.ticketId!, reply)));
     setReplying(false);
   };
+  const to = useAddresses();
   return (
     <article
       aria-label={`${question ? "Question from" : comment.sentBack ? "Sent back by" : depth > 0 ? "Reply from" : "Comment by"} ${comment.actor.name}`}
@@ -1687,7 +1696,13 @@ function CommentThread({
     >
       <p className="entry-head">
         {depth === 0 && <KindLabel kind={question ? "Question" : comment.sentBack ? "Sent back" : "Comment"} />}{" "}
-        <Actor actor={actor} avatar={depth > 0} /> <RelativeTime at={comment.createdAt} clock />
+        <Actor actor={actor} avatar={depth > 0} />{" "}
+        {depth === 0 && ticket && comment.artifact && (
+          <span className="muted small">
+            on <Link to={to.artifact(comment.artifact)}>{comment.artifact.title}</Link>{" "}
+          </span>
+        )}
+        <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}
       </p>
@@ -1726,7 +1741,7 @@ function CommentThread({
           label="Answer"
           button="Post answer"
           placeholder={`Answer ${comment.actor.name}…`}
-          hint={`The answer sends ${ticket.key} back to ${askedIn ? `the ${askedIn.step.name} Step` : "the Step that asked"}.`}
+          hint={`The answer sends ${ticket?.key ?? "the Ticket"} back to ${askedIn ? `the ${askedIn.step.name} Step` : "the Step that asked"}.`}
           onSend={send}
         />
       ) : replying ? (

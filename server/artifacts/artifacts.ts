@@ -398,7 +398,7 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
 
 /**
  * Deletes the Artifact with all its Versions, their files' bytes once the delete is committed. Only a User may, so an
- * agent can't remove work. It drops out of its links, and the Tickets linking it show the change.
+ * agent can't remove work. Its Comments go with it. It drops out of its links, and the Tickets linking it show the change.
  */
 export async function deleteArtifact(context: Context, actor: Caller, artifactId: string): Promise<void> {
   const { db, live } = context;
@@ -425,9 +425,18 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
       `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
       [artifact.id],
     );
+    // Its Comments go with it, with the files attached to them; replies before what they answer.
+    const attached = await tx.query<{ id: string }>(
+      `delete from attachments where comment_id in (select id from comments where artifact_id = $1) returning id`,
+      [artifact.id],
+    );
+    await tx.query("update comments set reply_to_id = null where artifact_id = $1", [artifact.id]);
+    await tx.query("delete from comments where artifact_id = $1", [artifact.id]);
     // Its Versions, their files and its links go with it.
     await tx.query("delete from artifacts where id = $1", [artifact.id]);
-    afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
+    afterCommit(tx, () =>
+      forgetAttachments(context, [...blobs.rows.map((row) => row.blobId), ...attached.rows.map((row) => row.id)]),
+    );
     live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });
   });
 }

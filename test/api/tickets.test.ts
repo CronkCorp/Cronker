@@ -370,6 +370,8 @@ describe("Comments", () => {
     expect(question).toEqual({
       id: expect.any(String),
       ticketId: ticket.id,
+      artifactId: null,
+      artifact: null,
       replyToId: null,
       body: "Shall we use **SSE**?",
       actor: { kind: "user", id: user.id, name: user.email },
@@ -411,7 +413,12 @@ describe("Comments", () => {
       const response = await comment(cookie, two.id, { body: "Reply", replyToId });
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({
-        error: { code: "unknown_comment", message: "Replies go to a Comment on the same Ticket." },
+        error: {
+          code: "unknown_comment",
+          message: "Replies go to a Comment on the same Ticket.",
+          rule: expect.any(String),
+          advice: expect.any(String),
+        },
       });
     }
   });

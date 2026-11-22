@@ -230,11 +230,11 @@ export interface MentioningText {
   id: string;
   /** Null for the Workspace's own knowledge. */
   projectId: string | null;
-  /** Its title; a Term's name; for a Comment, its Ticket's title. */
+  /** Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's. */
   title: string;
-  /** The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for other knowledge. */
+  /** The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge. */
   ticket: TicketRef | null;
-  /** A Document's or Report's slug. */
+  /** A Document's or Report's slug, or for a Comment on an Artifact the Artifact's. */
   slug: string | null;
   /** A Decision's number. */
   number: number | null;
@@ -396,7 +396,11 @@ export interface Actor {
 
 export interface Comment {
   id: string;
-  ticketId: string;
+  /** The Ticket it is on; null for a Comment on an Artifact. */
+  ticketId: string | null;
+  /** The Artifact it is on; null for a Comment on a Ticket. A Ticket's Comments include those on its Linked Artifacts. */
+  artifactId: string | null;
+  artifact: { id: string; projectId: string | null; title: string; slug: string } | null;
   replyToId: string | null;
   body: string;
   /** Who wrote it: a User, an Agent, or Cronk itself, as when a failing check sent the Ticket back. */
@@ -1069,6 +1073,10 @@ export const api = {
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
   comment: (ticketId: string, input: { body: string; replyToId?: string }) =>
     call<Comment>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/comments`, input),
+  artifactComments: (artifactId: string) =>
+    call<Comment[]>("GET", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`),
+  commentOnArtifact: (artifactId: string, input: { body: string; replyToId?: string }) =>
+    call<Comment>("POST", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),

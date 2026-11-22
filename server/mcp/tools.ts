@@ -128,7 +128,7 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "A Ticket of your Workspace with its fields, the Ticket keys its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
-        "its Comments (oldest first), its Relations: " +
+        "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
@@ -258,20 +258,38 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "comment",
     {
-      title: "Comment on a Ticket",
+      title: "Comment on a Ticket or an Artifact",
       description:
-        "Adds a Markdown Comment to a Ticket of your Workspace, as your Agent, or a reply to one of its Comments. " +
-        "Refused for a read-only token; a Ticket outside your Workspace answers as not found, and a reply only goes " +
-        "to a Comment on the same Ticket.",
+        "Adds a Markdown Comment to a Ticket or an Artifact of your Workspace, as your Agent, or a reply to one of " +
+        "its Comments: give exactly one of `ticket` and `artifact`. A Comment on an Artifact also shows on the " +
+        "Tickets linking it. Refused for a read-only token; a Ticket or Artifact outside your Workspace answers as " +
+        "not found, and a reply only goes to a Comment on the same Ticket or Artifact: reply to a Comment on a " +
+        "Linked Artifact, as `read_ticket` shows it, by its `artifactId`.",
       inputSchema: {
-        ticket: ticketArgument,
+        ticket: ticketArgument.optional(),
+        artifact: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("The Artifact's slug, such as `board-prototype-3f9a1b2c` (its words may be stale), or its id."),
         body: z.string().min(1).describe("Markdown."),
-        replyToId: z.string().optional().describe("The id of the Comment on this Ticket being replied to."),
+        replyToId: z.string().optional().describe("The id of the Comment on this Ticket or Artifact being replied to."),
       },
     },
-    ({ ticket, body, replyToId }) =>
+    ({ ticket, artifact, body, replyToId }) =>
       answer(async () => {
-        const found = await ticketByKeyOrId(ticket);
+        if ((ticket === undefined) === (artifact === undefined)) {
+          throw new Refused({
+            code: "one_target",
+            message: "A Comment is on exactly one Ticket or Artifact.",
+            rule: "Each Comment belongs to one Ticket or one Artifact.",
+            advice: "Give exactly one of `ticket` and `artifact`; comment again for another.",
+          });
+        }
+        if (artifact !== undefined) {
+          return send("POST", `/api/artifacts/${encodeURIComponent(artifact)}/comments`, { body, replyToId });
+        }
+        const found = await ticketByKeyOrId(ticket!);
         return send("POST", `/api/tickets/${found.id}/comments`, { body, replyToId });
       }),
   );
@@ -806,8 +824,8 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read an Artifact",
       description:
         "An Artifact of your Workspace at its current Version, whose number a save names as its `baseVersion`: its " +
-        "title, description, page, files (path, media type and size) and the address its page is served at; or, given " +
-        "a path, that file with its bytes as base64.",
+        "title, description, page, files (path, media type and size), the address its page is served at and its " +
+        "Comments, oldest first; or, given a path, that file with its bytes as base64.",
       inputSchema: {
         artifact: artifactArgument,
         path: artifactPathArgument.optional(),
@@ -815,9 +833,11 @@ export function buildMcpServer(api: Api): McpServer {
       annotations: { readOnlyHint: true },
     },
     ({ artifact, path }) =>
-      answer(() =>
-        get(path === undefined ? artifactPath(artifact) : `${artifactPath(artifact)}/file?path=${encodeURIComponent(path)}`),
-      ),
+      answer(async () => {
+        if (path !== undefined) return get(`${artifactPath(artifact)}/file?path=${encodeURIComponent(path)}`);
+        const found = (await get(artifactPath(artifact))) as { id: string };
+        return { ...found, comments: await get(`/api/artifacts/${found.id}/comments`) };
+      }),
   );
 
   server.registerTool(

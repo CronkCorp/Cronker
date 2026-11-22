@@ -348,7 +348,7 @@ function SignedIn({
         case "document":
           return <DocumentScreen key={`${workspace.id} ${id}`} workspace={workspace} documentId={id} />;
         case "artifact":
-          return <ArtifactScreen key={`${workspace.id} ${id}`} workspace={workspace} artifactId={id} />;
+          return <ArtifactScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} artifactId={id} />;
         case "transcript":
           return <TranscriptScreen key={`${workspace.id} ${id}`} workspace={workspace} transcriptId={id} />;
         default:
