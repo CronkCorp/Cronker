@@ -141,3 +141,45 @@ describe("live updates", () => {
     stream.close();
   });
 });
+
+describe("the order of Tickets within a Status", () => {
+  test("running Tickets come first, then blocked ones, then the rest, each by number; running beats blocked", async () => {
+    const { workspace, ada: as, project, status, ticket, blocks } = await ada();
+    const runner = await ok("POST", "/api/runners", as, { name: "Fake", kind: "fake" });
+    await ok("PATCH", `/api/runners/${runner.id}`, as, { limit: 3 });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, as, { name: "claude-max" });
+    const agent = await ok("PATCH", `/api/agents/${created.id}`, as, { runnerId: runner.id });
+    const blocker = await ticket("Blocker"); // CRONK-1, left in Backlog
+    const [blockedA, plain, runningA, blockedB, runningB, runningAndBlocked] = [
+      await ticket("Blocked A"), // CRONK-2
+      await ticket("Plain"), // CRONK-3
+      await ticket("Running A"), // CRONK-4
+      await ticket("Blocked B"), // CRONK-5
+      await ticket("Running B"), // CRONK-6
+      await ticket("Running and blocked"), // CRONK-7
+    ];
+    await blocks(blocker, blockedA);
+    await blocks(blocker, blockedB);
+    const triage = status("Triage");
+    for (const t of [blockedA, plain, blockedB]) await ok("PATCH", `/api/tickets/${t.id}`, as, { statusId: triage });
+    for (const t of [runningA, runningB, runningAndBlocked]) {
+      await ok("PATCH", `/api/tickets/${t.id}`, as, { delegateId: agent.id, statusId: triage });
+    }
+    // Blocked once its Run is running, which a block added later leaves running.
+    await blocks(blocker, runningAndBlocked);
+
+    const tickets = await ok("GET", `/api/projects/${project.id}/tickets`, as);
+    const inTriage = tickets.filter((t: { statusId: string }) => t.statusId === triage);
+    type Listed = { key: string; lastRun: { state: string } | null; blockedBy: unknown[] };
+    expect(inTriage.map((t: Listed) => [t.key, t.lastRun?.state ?? null, t.blockedBy.length])).toEqual([
+      ["CRONK-4", "running", 0],
+      ["CRONK-6", "running", 0],
+      ["CRONK-7", "running", 1],
+      ["CRONK-2", null, 1],
+      ["CRONK-5", null, 1],
+      ["CRONK-3", null, 0],
+    ]);
+    // The Statuses keep their order: Backlog's Ticket still comes before Triage's.
+    expect(tickets[0].key).toBe("CRONK-1");
+  });
+});
