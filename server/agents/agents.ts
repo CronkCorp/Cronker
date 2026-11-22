@@ -5,6 +5,7 @@ import { transaction, violates, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { User, userJson, userNameOf } from "../identity/user.js";
+import { runsInCloud } from "../runs/runner.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { undelegateTickets } from "../work/tickets.js";
 
@@ -17,6 +18,11 @@ export const Agent = Type.Object({
   runnerId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Owner's Runner the Agent's Runs start through; none yet means its Runs are refused.",
   }),
+  cloud: Type.Boolean({
+    description:
+      "Whether its Runner runs Runs in the cloud, so a Ticket labelled `local-only` can't be delegated to it; " +
+      "false for an Agent with no Runner, such as a hand-connected Claude Code.",
+  }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Agent = Static<typeof Agent>;
@@ -28,41 +34,51 @@ export const AgentName = Type.String({
   description: "Unique among the Workspace's Agents, ignoring case.",
 });
 
-type Row = Omit<Agent, "createdAt"> & { createdAt: Date };
+type Row = Omit<Agent, "createdAt" | "cloud"> & { createdAt: Date; runnerKind: string | null };
 
 const columns = `agents.id, agents.workspace_id as "workspaceId", agents.name,
   ${userJson("owners")} as owner,
-  agents.runner_id as "runnerId", agents.created_at as "createdAt"`;
+  agents.runner_id as "runnerId", agents.created_at as "createdAt",
+  (select runners.kind from runners where runners.id = agents.runner_id) as "runnerKind"`;
 
-const present = (row: Row): Agent => ({ ...row, createdAt: row.createdAt.toISOString() });
+/** What finding Agents needs: the database, and this Cronk's kinds of Runner, which say which Agents are cloud. */
+type AgentContext = Pick<Context, "db" | "runners">;
+
+const present =
+  (runners: AgentContext["runners"]) =>
+  ({ runnerKind, ...row }: Row): Agent => ({
+    ...row,
+    cloud: runsInCloud(runners, runnerKind),
+    createdAt: row.createdAt.toISOString(),
+  });
 
 const nameTaken = (name: string) =>
   new ApiError(409, "agent_name_taken", `This Workspace already has an Agent named ${name}. Choose another name.`);
 
 /** The Workspace's Agents still in use, of every member. */
-export async function agentsOf(db: Db, workspaceId: string): Promise<Agent[]> {
+export async function agentsOf({ db, runners }: AgentContext, workspaceId: string): Promise<Agent[]> {
   const { rows } = await db.query<Row>(
     `select ${columns} from agents join users owners on owners.id = agents.owner_id
      where agents.workspace_id = $1 and agents.removed_at is null
      order by lower(agents.name), agents.id`,
     [workspaceId],
   );
-  return rows.map(present);
+  return rows.map(present(runners));
 }
 
 export async function createAgent(
-  db: Db,
+  context: AgentContext,
   clock: Clock,
   ownerId: string,
   workspaceId: string,
   name: string,
 ): Promise<Agent> {
   try {
-    const { rows } = await db.query<{ id: string }>(
+    const { rows } = await context.db.query<{ id: string }>(
       "insert into agents (workspace_id, owner_id, name, created_at) values ($1, $2, $3, $4) returning id",
       [workspaceId, ownerId, name.trim(), clock.now()],
     );
-    return (await findAgent(db, rows[0]!.id))!;
+    return (await findAgent(context, rows[0]!.id))!;
   } catch (error) {
     if (violates(error, "agents_workspace_name_key")) throw nameTaken(name.trim());
     throw error;
@@ -70,24 +86,24 @@ export async function createAgent(
 }
 
 /** An Agent still in use, by id. */
-export async function findAgent(db: Db, agentId: string): Promise<Agent | undefined> {
+export async function findAgent({ db, runners }: AgentContext, agentId: string): Promise<Agent | undefined> {
   if (!isUuid(agentId)) return undefined;
   const { rows } = await db.query<Row>(
     `select ${columns} from agents join users owners on owners.id = agents.owner_id
      where agents.id = $1 and agents.removed_at is null`,
     [agentId],
   );
-  return rows[0] && present(rows[0]);
+  return rows[0] && present(runners)(rows[0]);
 }
 
 /**
  * The User's own Agent: 404 if it isn't in a Workspace they belong to (as if it didn't
  * exist), 403 if it is someone else's.
  */
-export async function requireOwnAgent(db: Db, userId: string, agentId: string): Promise<Agent> {
-  const agent = await findAgent(db, agentId);
+export async function requireOwnAgent(context: AgentContext, userId: string, agentId: string): Promise<Agent> {
+  const agent = await findAgent(context, agentId);
   const { rowCount } = agent
-    ? await db.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [agent.workspaceId, userId])
+    ? await context.db.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [agent.workspaceId, userId])
     : { rowCount: 0 };
   if (!agent || rowCount === 0) throw new ApiError(404, "not_found", "No such Agent.");
   if (agent.owner.id !== userId) {
@@ -116,7 +132,7 @@ export async function setAgentRunner(context: Context, agent: Agent, runnerId: s
     await tx.query("update agents set runner_id = $2 where id = $1", [agent.id, runnerId]);
     recheckWaiting(context, tx, await waitingTickets(tx, "tickets.delegate_id = $1", [agent.id]));
   });
-  return { ...agent, runnerId };
+  return (await findAgent(context, agent.id)) ?? { ...agent, runnerId };
 }
 
 /**

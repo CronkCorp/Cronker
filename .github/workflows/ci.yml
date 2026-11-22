@@ -6,8 +6,51 @@ on:
     branches: [main]
   merge_group:
 
+# The jobs run at the same time; `test` waits for them all and is the one check branch protection requires.
 jobs:
-  test:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  # Vitest is the slowest part, so its test files are split over shards, each with its own Postgres.
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      CRONK_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test -- --shard=${{ matrix.shard }}/4
+
+  e2e:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -30,8 +73,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
-      - run: npm test
       - run: npx playwright install --with-deps chromium firefox webkit
       - run: npm run test:e2e
+
+  test:
+    if: always()
+    needs: [build, unit, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      # A skipped or cancelled job would otherwise count as passing.
+      - run: |
+          [ "${{ needs.build.result }}" = success ] &&
+          [ "${{ needs.unit.result }}" = success ] &&
+          [ "${{ needs.e2e.result }}" = success ]

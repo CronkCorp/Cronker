@@ -336,6 +336,8 @@ export function managedAgentsRunner(context: Context, reports: RunReports): Runn
   }
 
   return {
+    // A Managed Agents session runs in Anthropic's cloud environment.
+    cloud: true,
     async start(run): Promise<StartResult> {
       const { rows } = await db.query<StoredRunner>(
         `select api_key_sealed as "apiKeySealed", managed_agent_id as "agentId", managed_environment_id as "environmentId",

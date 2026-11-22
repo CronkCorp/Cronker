@@ -5,7 +5,7 @@ import { expect, fieldPicker, newTicket, openProjectSettings, pick, test } from 
 // standing in for claude.ai and the stand-in GitHub for GitHub. Only the Agent's own calls (finishing its
 // Runs and merging), setting up the fake Runner, which the web client doesn't offer, and the GitHub App with its
 // Repository, which other walks cover, go straight to the API; GitHub's webhooks come from the stand-in.
-test("set up Cronk, delegate a Ticket, answer its Question, watch it move through the Steps, have the Merge Step merge it and Accept it", async ({
+test("set up Cronk, delegate a Ticket, answer its Question, watch it move through the Steps, have the Merge Queue merge it and Accept it", async ({
   page,
   cronk,
 }) => {
@@ -169,16 +169,13 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await finish({ outcome: "done" });
   await expect(cardIn("Code review")).toContainText("Run running");
   await finish({ outcome: "approve" });
-  await expect(cardIn("Merge")).toContainText("Run running");
+  // An Autonomous Delegation Ticket joins the Merge Queue with no Merge Run.
+  await expect(cardIn("Merge")).toContainText("#1 in queue");
+  await expect(cardIn("Merge")).not.toContainText("Run running");
 
-  // The Merge Step's Run merges the Pull Request through Cronk, which completes the Ticket, Unverified, into the
-  // Inbox: the card moves to Done without a reload.
-  const mergeRun = (await (await cronk.request("GET", `/api/tickets/${ticketId}/runs`, { cookie })).json()).at(-1);
-  const merged = await cronk.request("POST", `/api/runs/${mergeRun.id}/merge`, {
-    headers: { authorization: `Bearer ${secret}` },
-    body: { pullRequestId: 501 },
-  });
-  expect(merged.status).toBe(200);
+  // Cronk merges the queue's head as the Agent's, which completes the Ticket, Unverified, into the Inbox: the card
+  // moves to Done without a reload.
+  await cronk.checkQueue();
   expect(cronk.github.merges).toEqual([
     { repository: "cronkcorp/cronker", number: 7, method: "merge", sha: "c1", installationId: installation.id },
   ]);
@@ -192,20 +189,20 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
     merged_by: { login: "cronk-app[bot]", id: 4242, type: "Bot" },
     updated_at: "2026-01-01T10:00:00Z",
   });
-  expect(cronk.runner.starts.map((s) => s.model)).toEqual(["haiku", "haiku", "sonnet", "opus", "sonnet", "haiku"]);
+  expect(cronk.runner.starts.map((s) => s.model)).toEqual(["haiku", "haiku", "sonnet", "opus", "sonnet"]);
   await expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting");
   await inboxLink.click();
   await expect(items).toHaveCount(1);
   await expect(items.first()).toContainText("Completed by the Implement Step, Unverified");
 
   await detail.getByRole("link", { name: "CRONK-1 Make it so" }).click();
+  await expect(timeline).toContainText("Cronk queued cronkcorp/cronker#7");
   await expect(timeline).toContainText(
-    "claude-max merged cronkcorp/cronker#7 CRONK-1: make it so, completing it, moving it to Done as Unverified in its Merge Run",
+    "claude-max merged cronkcorp/cronker#7 CRONK-1: make it so, completing it, moving it to Done as Unverified",
   );
-  await expect(runs("Merge", "haiku").filter({ hasText: "Run finished" })).toContainText("merged");
   const verification = page.getByRole("region", { name: "Verification" });
   await expect(verification).toContainText(
-    "claude-max's Run of the Merge Step merged cronkcorp/cronker#7, completing this. It is Unverified until you Accept it, or Reopen it to send it back to the Implement Step.",
+    "@cronk-app[bot] merged cronkcorp/cronker#7, completing this. It is Unverified until you Accept it, or Reopen it to send it back to the Implement Step.",
   );
 
   // Accepting it verifies it and empties the Inbox.

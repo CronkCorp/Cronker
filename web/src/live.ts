@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LiveEvent, RunnerEvent } from "../../server/live/live.js";
+import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api.js";
+import { invalidations } from "./live-queries.js";
 
 /**
  * Live updates: one server-sent event stream per Workspace, and one for the User's own Runners, each shared by
@@ -166,6 +168,25 @@ function useStreamEvents<E>(url: string | null, types: string[], onEvent: (event
 export function useLiveEvents(workspaceId: string, onEvent: (event: StreamEvent) => void): void {
   // Nothing streams without a Workspace, such as for a User who belongs to none.
   useStreamEvents(workspaceId ? workspaceStream(workspaceId) : null, eventTypes, onEvent);
+}
+
+/**
+ * The app's one query client. Live events, not focus or time, say when loaded data is stale, and a failed load
+ * shows at once rather than after retries.
+ */
+export const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false } },
+});
+
+/**
+ * Makes stale what each event of the Workspace's stream changed (`invalidations`, the Live invalidation table), so
+ * every query shown refetches. Called once, for the Workspace shown.
+ */
+export function useLiveInvalidation(workspaceId: string): void {
+  const client = useQueryClient();
+  useLiveEvents(workspaceId, (event) => {
+    for (const queryKey of invalidations(event)) void client.invalidateQueries({ queryKey });
+  });
 }
 
 /** Calls `onEvent` with each event of the User's own Runners' stream while the component is shown. */

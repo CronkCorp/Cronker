@@ -44,6 +44,12 @@ export async function linkedArtifactsOf(db: Db, viewer: Viewer, ticketId: string
   return rows;
 }
 
+/** The link-an-Artifact route's body. */
+export const ArtifactLink = Type.Object({
+  artifactId: Type.String({ description: "An Artifact of the Ticket's Project or Workspace." }),
+});
+export type ArtifactLink = Static<typeof ArtifactLink>;
+
 /**
  * Links an Artifact of the Ticket's Project or of its Workspace to the Ticket. A User links on any Ticket; an Agent
  * only during its own running Run on it, or on a Discovered Ticket it filed that waits for a User.

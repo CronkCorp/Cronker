@@ -53,6 +53,47 @@ test("the board and the Ticket view show what another member changes, without a 
   );
 });
 
+test("a slow answer about a Ticket never replaces a newer one on its page", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const created = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
+  const project = (await created.json()) as { id: string };
+  const bob = await addMember(cronk, cookie, workspace.id, "bob@example.com");
+  const asBob = (method: string, path: string, body?: unknown) =>
+    cronk.request(method, path, { cookie: bob.cookie, body }).then((response) => {
+      expect(response.ok).toBe(true);
+      return response.json();
+    });
+  const ticket = await asBob("POST", `/api/projects/${project.id}/tickets`, { title: "Filed" });
+
+  // Once the page shows, the next load, after Bob's first change, answers only after his second has shown.
+  let armed = false;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let held!: () => void;
+  const holding = new Promise<void>((resolve) => (held = resolve));
+  await page.route(`**/api/tickets/${ticket.id}`, async (route) => {
+    if (route.request().method() !== "GET" || !armed) return route.fallback();
+    armed = false;
+    const response = await route.fetch();
+    held();
+    await released;
+    await route.fulfill({ response });
+  });
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  await expect(page.getByRole("heading", { name: "CRONK-1 Filed" })).toBeVisible();
+  armed = true;
+
+  await asBob("PATCH", `/api/tickets/${ticket.id}`, { title: "Renamed once" });
+  await holding;
+  await asBob("PATCH", `/api/tickets/${ticket.id}`, { title: "Renamed twice" });
+  await expect(page.getByRole("heading", { name: "CRONK-1 Renamed twice" })).toBeVisible();
+  release();
+  await page.waitForTimeout(500);
+  await expect(page.getByRole("heading", { name: "CRONK-1 Renamed twice" })).toBeVisible();
+});
+
 test("every streaming view says it is Live, and Reconnecting… while its stream is away", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
@@ -64,11 +105,11 @@ test("every streaming view says it is Live, and Reconnecting… while its stream
   const live = page.getByRole("status", { name: "Live updates" });
   for (const path of [
     `/projects/${project.id}`,
-    `/tickets/${ticket.id}`,
     `/workspaces/${workspace.id}/inbox`,
     `/workspaces/${workspace.id}/documents`,
     `/workspaces/${workspace.id}/glossary`,
     `/workspaces/${workspace.id}/decisions`,
+    `/tickets/${ticket.id}`,
   ]) {
     await page.goto(`${cronk.url}${path}`);
     await expect(live, path).toHaveText("Live");
@@ -79,11 +120,14 @@ test("every streaming view says it is Live, and Reconnecting… while its stream
   const browserCookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
   expect((await cronk.request("DELETE", "/api/sign-in", { cookie: browserCookie })).status).toBe(204);
   await expect(live).toHaveText("Reconnecting…");
+  // What changes while it is away shows once it is back.
+  expect((await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { title: "Renamed while away" } })).ok).toBe(true);
 
   // Once Cronk can be reached again, with a sign-in, the stream comes back.
   await page.context().addCookies([{ name: cookie.split("=")[0]!, value: cookie.split("=").slice(1).join("="), url: cronk.url }]);
   await page.unroute("**/events");
   await expect(live).toHaveText("Live", { timeout: 15_000 });
+  await expect(page.getByRole("heading", { name: "CRONK-1 Renamed while away" })).toBeVisible();
 });
 
 /** Opens a connection to Cronk without sending anything on it yet. */
