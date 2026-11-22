@@ -33,7 +33,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Actor, Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
   ContextMenu,
@@ -1120,7 +1120,10 @@ function KindSelect(props: ComponentProps<"select">) {
   );
 }
 
-/** The Workspace / Project scope switch of a knowledge page's head. */
+/**
+ * The Workspace / Project scope dropdown of a knowledge page's head. Its button shows the current scope; its menu lists
+ * the Workspace, then the Projects by key, the current one checked. Choosing one goes to that scope's page, as a link would.
+ */
 export function ScopeSwitch({
   workspace,
   project,
@@ -1134,18 +1137,46 @@ export function ScopeSwitch({
   useEffect(() => {
     api.projects(workspace.id).then(setProjects, () => {});
   }, [workspace.id]);
+  const current = project?.key ?? "";
+  const byKey = [...projects].sort((a, b) => a.key.localeCompare(b.key));
   return (
-    <Segmented
+    <Menu
       label="Scope"
-      items={[
-        { label: "Workspace", to: addresses.knowledge(workspace, null, kind), current: project === null },
-        ...projects.map((p) => ({
-          label: <span className="mono">{p.key}</span>,
-          to: addresses.knowledge(workspace, p.key, kind),
-          current: p.id === project?.id,
-        })),
-      ]}
-    />
+      align="start"
+      trigger={
+        <button
+          type="button"
+          className={`${buttonClass("secondary")} scope-switch`}
+          aria-label={`Scope: ${project ? `${project.key} ${project.name}` : "Workspace"}`}
+        >
+          <span className="scope-switch-name">
+            {project ? (
+              <>
+                <span className="mono">{project.key}</span> {project.name}
+              </>
+            ) : (
+              "Workspace"
+            )}
+          </span>
+          <span className="scope-switch-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+      }
+    >
+      <MenuRadioGroup
+        label="Scope"
+        value={current}
+        onChange={(key) => key !== current && navigate(addresses.knowledge(workspace, key || null, kind))}
+      >
+        <MenuRadioItem value="">Workspace</MenuRadioItem>
+        {byKey.map((p) => (
+          <MenuRadioItem key={p.id} value={p.key}>
+            <span className="mono">{p.key}</span> {p.name}
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
+    </Menu>
   );
 }
 

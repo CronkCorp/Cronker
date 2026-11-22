@@ -28,9 +28,12 @@ test("create Workspace and Project Terms, see the Project's glossary replace sam
   // On a Project's page the sidebar leads to the Project's Terms; the scope switch leads to the Workspace's.
   await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Terms" }).click();
   await expect(page).toHaveURL(/\/projects\/[^/]+\/glossary$/);
-  await page.getByRole("navigation", { name: "Scope" }).getByRole("link", { name: "Workspace" }).click();
+  await page.getByRole("button", { name: "Scope: CRONK Cronker" }).click();
+  await page.getByRole("menuitemradio", { name: "Workspace" }).click();
   await expect(page.getByRole("heading", { name: "Terms", level: 1 })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Scope" }).getByRole("link", { name: "Workspace" })).toHaveAttribute("aria-current", "page");
+  await page.getByRole("button", { name: "Scope: Workspace" }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Workspace" })).toBeChecked();
+  await page.keyboard.press("Escape");
   for (const [name, definition, avoid] of [
     ["Ticket", "A unit of work tracked within a Project.", "Issue, task"],
     ["Run", "One agent execution Cronk starts for one Ticket.", "job"],
