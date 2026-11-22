@@ -6,7 +6,7 @@ import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Place } from "./places.js";
 import { ComparedLine, compareLines, compareWords } from "./compare.js";
@@ -132,6 +132,7 @@ function termChanged(live: Live, tx: Tx, term: Glossary & { id: string }): void 
 /** Creates a Term in the glossary at Version 1 by its Actor; refused if the glossary has its name, ignoring case. */
 export async function createTerm({ db, clock, live }: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<Term> {
   return transaction(db, async (tx) => {
+    await requireWrite(tx, actor, glossary);
     const now = clock.now();
     const { rows } = await withUniqueName(glossary, input.name, () =>
       tx.query<{ id: string }>(
@@ -201,6 +202,7 @@ export async function editTerm({ db, clock, live }: Context, actor: Caller, term
   return transaction(db, async (tx) => {
     const locked = await lockTerm(tx, actor, termId);
     if (!locked) throw termNotFound();
+    await requireWrite(tx, actor, locked);
     const current = (await versionOf(tx, locked.id, locked.version))!;
     if (edit.baseVersion !== current.number) {
       throw outdatedVersion("Term", current, edit.baseVersion);
@@ -298,6 +300,7 @@ export async function deleteTerm({ db, live }: Context, actor: Caller, termId: s
   await transaction(db, async (tx) => {
     const term = await lockTerm(tx, actor, termId);
     if (!term) throw termNotFound();
+    await requireWrite(tx, actor, term);
     if (actor.kind === "agent") {
       throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Term.`, {
         rule: "Only a User deletes a Term, so an agent can't remove knowledge.",

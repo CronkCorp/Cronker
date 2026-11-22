@@ -8,7 +8,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { findTicketRow, holdsDiscoveredTicket, runOfAgent, ticketNotFound } from "../work/tickets.js";
 
@@ -174,6 +174,7 @@ export async function addAttachment(
   try {
     return await transaction(db, async (tx) => {
       const found = await findOwner(tx, actor, owner);
+      await requireWrite(tx, actor, found);
       await checkMayAttach(tx, actor, found);
       await attachments.put(id, file.bytes);
       await tx.query(
@@ -280,6 +281,7 @@ export async function removeAttachment(context: Context, actor: Caller, attachme
     const row = await findRow(tx, actor, attachmentId, { lock: true });
     if (!row) throw attachmentNotFound();
     const found = await findOwner(tx, actor, row.on);
+    await requireWrite(tx, actor, found);
     if (actor.kind === "agent") {
       if (row.actor.kind !== "agent" || row.actor.id !== actor.id) {
         throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and removes only Attachments it added.`, {

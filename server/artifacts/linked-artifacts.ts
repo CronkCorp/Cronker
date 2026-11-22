@@ -5,7 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import type { Caller } from "../identity/callers.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { findTicketRow, linkingActor, ticketNotFound, type TicketRow } from "../work/tickets.js";
 import { findArtifact } from "./artifacts.js";
@@ -52,6 +52,7 @@ export async function linkArtifact(context: Context, caller: Caller, ticketId: s
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, caller, ticket);
     const actor = await linkingActor(tx, caller, ticket, "Artifact");
     // Held until the link is made, so a delete of the Artifact either went first, and it is unknown, or waits.
     if (isUuid(artifactId)) await tx.query("select 1 from artifacts where id = $1 for key share", [artifactId]);
@@ -97,6 +98,7 @@ export async function unlinkArtifact(context: Context, caller: Caller, ticketId:
   await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, caller, ticket);
     const actor = await linkingActor(tx, caller, ticket, "Artifact");
     const { rows } = isUuid(artifactId)
       ? await tx.query<LinkedArtifact>(

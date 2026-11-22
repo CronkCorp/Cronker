@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessOf, inReach, readAccessRefusal, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
@@ -351,6 +351,7 @@ export async function createTicket(
   return transaction(db, async (tx) => {
     const project = await findProject(tx, creator, projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (project.access !== "write") throw readAccessRefusal();
     if (input.parentId !== undefined && input.runId !== undefined) {
       throw new ApiError(400, "parent_or_run", "Give a parent for a Sub-Ticket or a Run for a Discovered Ticket, not both.");
     }
@@ -572,6 +573,7 @@ export async function editTicket(
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, editor, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, editor, ticket);
     let actor: ChangeActor = editor.id;
     if (editor.kind === "agent") {
       // The Agent that filed a Discovered Ticket edits it, outside any Run, until a User takes it up.
@@ -626,7 +628,10 @@ export async function editTicket(
     if (edit.priority !== undefined) await change("priority", "priority", edit.priority);
     if (edit.labels !== undefined) await change("labels", "labels", distinctLabels(edit.labels));
     if (edit.assigneeId !== undefined) {
-      if (edit.assigneeId !== null) await checkMember(tx, ticket.workspaceId, edit.assigneeId);
+      if (edit.assigneeId !== null && edit.assigneeId !== ticket.assigneeId) {
+        await checkMember(tx, ticket.workspaceId, edit.assigneeId);
+        await checkAssigneeWrites(tx, ticket, edit.assigneeId);
+      }
       await change("assigneeId", "assignee", edit.assigneeId, userNamed);
     }
     if (edit.delegateId !== undefined && edit.delegateId !== null) {
@@ -923,6 +928,7 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
   return transaction(db, async (tx) => {
     const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, userViewer(userId), ticket);
     if (!ticket.discovered?.waiting) {
       throw new ApiError(
         409,
@@ -1175,6 +1181,16 @@ async function checkMember(tx: Tx, workspaceId: string, userId: string): Promise
     ? await tx.query("select 1 from memberships where workspace_id = $1 and user_id = $2", [workspaceId, userId])
     : { rowCount: 0 };
   if (rowCount === 0) throw new ApiError(400, "assignee_not_member", "An Assignee must be a member of this Workspace.");
+}
+
+/** Refuses an Assignee without Write in the Ticket's Project: every Assignee can act on their Ticket. */
+async function checkAssigneeWrites(tx: Tx, ticket: TicketRow, userId: string): Promise<void> {
+  if ((await accessOf(tx, userViewer(userId), ticket)) === "write") return;
+  const name = await nameOfUser(tx, userId);
+  throw new ApiError(400, "assignee_cannot_write", `${name} doesn't have Write in this Project, so they can't be its Ticket's Assignee.`, {
+    rule: "An Assignee must have Write in their Ticket's Project.",
+    advice: "Assign someone with Write, or ask an Admin of this Workspace to give them Write in this Project.",
+  });
 }
 
 /** Checks the Status is on the Project's board, and keeps the board from changing until the move commits. */

@@ -13,10 +13,10 @@ import type { Project } from "./projects.js";
 /** Refuses a caller without Write in the Project: for an Agent, the least of its Agent Access, its Owner's and its token's. */
 export function requireBoardWrite(caller: Caller, project: Project): void {
   if (project.access === "write") return;
-  throw new ApiError(403, "no_write_access", `${caller.kind === "agent" ? caller.name : "You"} may only read ${project.key}.`, {
+  throw new ApiError(403, "read_access", `${caller.kind === "agent" ? caller.name : "You"} may only read ${project.key}.`, {
     rule:
-      "Changing a Project's Statuses and Steps needs Write in it. An Agent's is the least of the Project's Agent " +
-      "Access, its Owner's Access and its token's access.",
+      "With Read in a Project you read it but change nothing: changing its Statuses and Steps needs Write in it. " +
+      "An Agent's is the least of the Project's Agent Access, its Owner's Access and its token's access.",
     advice:
       caller.kind === "agent"
         ? `Leave a Comment asking ${ownerName(caller)}, ${caller.name}'s Owner, or another User with Write in ${project.key}, to change it.`

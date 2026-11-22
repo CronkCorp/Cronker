@@ -152,7 +152,7 @@ export interface ProjectSummary {
 /** Who may see a Project: open or private, and the Users it lists. Only Admins read and set it. */
 export interface ProjectAccess {
   visibility: Visibility;
-  users: { userId: string; level: "write" }[];
+  users: { userId: string; level: "write" | "read" }[];
 }
 
 export interface Project extends ProjectSummary {

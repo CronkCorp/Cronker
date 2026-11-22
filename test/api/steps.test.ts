@@ -400,15 +400,15 @@ describe("Agents and Steps", () => {
       }
     };
     // Grace has Read, and her Agent no more than its Owner.
-    await refusals({ cookie: grace.cookie }, "no_write_access");
-    await refusals({ headers: gracesAgent }, "no_write_access");
+    await refusals({ cookie: grace.cookie }, "read_access");
+    await refusals({ headers: gracesAgent }, "read_access");
     await refusals({ headers: reader }, "read_only_token");
     await cronk.stage("update projects set agent_access = 'read' where id = $1", [project.id]);
-    await refusals({ headers: adasAgent }, "no_write_access");
+    await refusals({ headers: adasAgent }, "read_access");
 
     const refused = await cronk.request("POST", `/api/projects/${project.id}/statuses`, { headers: adasAgent, body: { name: "Mine", kind: "active" } });
     expect((await refused.json()).error).toEqual({
-      code: "no_write_access",
+      code: "read_access",
       message: "claude-max may only read CRONK.",
       rule: expect.stringContaining("needs Write in it"),
       advice: expect.stringContaining("ada@example.com"),

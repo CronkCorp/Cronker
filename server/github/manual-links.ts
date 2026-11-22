@@ -1,7 +1,7 @@
 import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { userViewer } from "../identity/viewers.js";
+import { requireWrite, userViewer } from "../identity/viewers.js";
 import { findTicketRow, ticketNotFound } from "../work/tickets.js";
 import { announce, pullRequestsOf, type PullRequest } from "./pull-requests.js";
 
@@ -37,6 +37,7 @@ export async function linkPullRequest(context: Context, userId: string, ticketId
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, viewer, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, viewer, ticket);
     // Matched by its Repository's name now or as GitHub last reported it with the Pull Request, among those the
     // Ticket's Project lists: a Project lists Repositories of its own Workspace's choosing only.
     const { rows } = await tx.query<{ id: string; state: string }>(
@@ -86,6 +87,7 @@ export async function unlinkPullRequest(context: Context, userId: string, ticket
   await transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, userViewer(userId), ticket);
     const { rows } = await tx.query<{ byKey: boolean; manual: boolean }>(
       `select by_key as "byKey", manual_at is not null as manual from pull_request_links
        where pull_request_id = $1 and ticket_id = $2 for update`,

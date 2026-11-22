@@ -18,6 +18,7 @@ These are the seams from the milestone 1 spec (#1). Tests live only at them.
    - `e2e/tickets.spec.ts`: creating Tickets, dragging one across the board, editing, commenting, a key link and filtering.
    - `e2e/board.spec.ts` (`@every-browser`): a card dragged onto another column, onto its own and refused, from anywhere on it (its link, Labels, avatars and empty space), and to the board's edges; and, in Chromium only, **Group Sub-Tickets** folding Sub-Tickets into their parent's card, unfolding them there and being remembered on this browser, since the folding is done by the web client and the API can't see it.
    - `e2e/card-menu.spec.ts`: a card's menu by keyboard, Move to starting a Run as a drop does.
+   - `e2e/read-access.spec.ts`: an Admin making a Project private and listing a User with Read, whose board offers no New Ticket and whose cards neither drag nor open their menu, while another User doesn't see the Project.
    - `e2e/board-selection.spec.ts`: several cards selected by Ctrl/Cmd+click, Shift+click, Space and Shift+Space, Escape clearing them, a selection dragged and moved with Move to, and its refused moves listed per Ticket.
    - `e2e/comments.spec.ts`: `C` reaching the Comment box of a long Ticket, never while typing or with a modifier, and Ctrl+Enter placing a Comment from the rich editor and from its Markdown source.
    - `e2e/inbox-keys.spec.ts`: the Inbox's keys.

@@ -27,6 +27,7 @@ import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
+import { ReadOnlyNote } from "./write-access.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
@@ -140,11 +141,15 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
           </>
         }
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            New Document
-          </Button>
+          // With Read in the Project, its page tree offers no New Document.
+          (!project || project.access === "write") && (
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              New Document
+            </Button>
+          )
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       <FormError error={failure} />
       {documents &&
         (documents.length === 0 ? (
@@ -259,6 +264,8 @@ export function DocumentScreen({
 
   if (failure) return <FormError error={failure} />;
   if (!document) return <p className="muted">Loading…</p>;
+  // With Read in its Project, the Document is only read: no Edit, Move or Delete, and no attaching.
+  const canWrite = !project || project.access === "write";
   const tree: Tree = document.projectId ? { kind: "project", id: document.projectId } : { kind: "workspace", id: document.workspaceId };
   // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
   const home = document.ticketId ? (ticket ? to.ticket(ticket) : `/tickets/${document.ticketId}`) : to.place(tree, "documents");
@@ -279,7 +286,8 @@ export function DocumentScreen({
         meta={<VersionMeta version={document.version} />}
         actions={
           !editing &&
-          !gone && (
+          !gone &&
+          canWrite && (
             <>
               <Menu label="More of this Document">
                 {!document.ticketId && <MenuItem onSelect={() => setMoving(true)}>Move…</MenuItem>}
@@ -294,12 +302,13 @@ export function DocumentScreen({
           )
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       {gone && (
         <DeletedElsewhere back={{ to: home, label: document.ticketId ? "Back to its Ticket" : "Back to Documents" }}>
           this Document is no longer kept.
         </DeletedElsewhere>
       )}
-      {editing ? (
+      {editing && canWrite ? (
         <Editor
           saved={document}
           save={(edit) => api.editDocument(document.id, edit)}
@@ -321,12 +330,17 @@ export function DocumentScreen({
             <DocumentBody
               body={document.body}
               label={document.title}
-              empty={<EmptyState title="Nothing written yet.">Edit adds the first words, and saving makes a new Version.</EmptyState>}
+              empty={
+                <EmptyState title="Nothing written yet.">
+                  {canWrite ? "Edit adds the first words, and saving makes a new Version." : null}
+                </EmptyState>
+              }
             />
             <Attachments
               owner={{ kind: "document", id: document.id }}
               attachments={attachments}
               label="Attachments"
+              canAttach={canWrite}
               dropHint="or, while editing, drop or paste them into the text"
               onChanged={loadAttachments}
             />

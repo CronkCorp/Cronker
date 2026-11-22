@@ -192,11 +192,11 @@ describe("setting a Project's Access", () => {
       users: [linus.user.id, linus.user.id].map((userId) => ({ userId, level: "write" })),
     });
     expect(twice).toEqual({ status: 400, json: { error: expect.objectContaining({ code: "user_listed_twice" }) } });
-    const read = await call("PUT", `/api/projects/${secret.id}/access`, ada, {
+    const unknownLevel = await call("PUT", `/api/projects/${secret.id}/access`, ada, {
       visibility: "private",
-      users: [{ userId: linus.user.id, level: "read" }],
+      users: [{ userId: linus.user.id, level: "admin" }],
     });
-    expect(read.status).toBe(400);
+    expect(unknownLevel.status).toBe(400);
     expect(await ok("GET", `/api/projects/${secret.id}/access`, ada)).toEqual({ visibility: "open", users: [] });
   });
 

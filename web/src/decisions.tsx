@@ -22,6 +22,7 @@ import { Actor } from "./ui/actor.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, Saved } from "./ui/controls.js";
 import { DecisionStatusPill, decisionStatusLabel } from "./ui/labels.js";
+import { ReadOnlyNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 
 /** A Decision's number as it is written, such as 0007. */
@@ -53,6 +54,8 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
     navigate(to.decision(created));
   });
 
+  // With Read in the Project, its register offers no New Decision, Accept or Reject.
+  const canWrite = !project || project.access === "write";
   const count = (status: DecisionStatus) => decisions?.filter((d) => d.status === status).length ?? 0;
   const shown = decisions?.filter((d) => only === null || d.status === only) ?? [];
   return (
@@ -69,12 +72,15 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
         actions={
           <>
             <ExportLink place={place} />
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              New Decision
-            </Button>
+            {canWrite && (
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                New Decision
+              </Button>
+            )}
           </>
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       <FormError error={failure} />
       {decisions &&
         (decisions.length === 0 ? (
@@ -135,11 +141,13 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
                           <RelativeTime at={decision.version.savedAt} />
                         </td>
                         <td className="register-actions">
-                          <RowActions
-                            decision={decision}
-                            onChanged={(next) => setDecisions((all) => all?.map((d) => (d.id === next.id ? next : d)) ?? null)}
-                            onOutdated={load}
-                          />
+                          {canWrite && (
+                            <RowActions
+                              decision={decision}
+                              onChanged={(next) => setDecisions((all) => all?.map((d) => (d.id === next.id ? next : d)) ?? null)}
+                              onOutdated={load}
+                            />
+                          )}
                         </td>
                       </tr>
                     );
@@ -256,6 +264,8 @@ export function DecisionScreen({
   if (!decision || !place) return <p className="muted">Loading…</p>;
   const replacement = others.find((d) => d.id === decision.supersededById);
   const replaced = others.filter((d) => d.supersededById === decision.id);
+  // With Read in its Project, the Decision is only read: no Edit, and no change of status.
+  const canWrite = !project || project.access === "write";
   return (
     <div className="page">
       <PageHead
@@ -271,7 +281,8 @@ export function DecisionScreen({
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         meta={<VersionMeta version={decision.version} />}
         actions={
-          !editing && (
+          !editing &&
+          canWrite && (
             <>
               <Saved shown={status.said(decision) !== null}>{status.said(decision)}</Saved>
               {menuChanges[decision.status].length > 0 && (
@@ -312,6 +323,7 @@ export function DecisionScreen({
           )
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       {!editing && <FormError error={status.error} />}
       <RejectDialog
         decision={decision}
@@ -362,7 +374,7 @@ export function DecisionScreen({
           </p>
         </Banner>
       )}
-      {editing ? (
+      {editing && canWrite ? (
         <Editor
           saved={decision}
           save={(edit) => api.editDecision(decision.id, edit)}

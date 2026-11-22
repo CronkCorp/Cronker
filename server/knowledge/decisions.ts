@@ -6,7 +6,7 @@ import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
@@ -229,6 +229,7 @@ export async function createDecision(
   const asked = statusAsked(null, input);
   requireStatusRight(actor, { status: "proposed", supersededById: null }, asked);
   return transaction(db, async (tx) => {
+    await requireWrite(tx, actor, scope);
     await lockScope(tx, scope);
     await requireReplacementInScope(tx, { ...scope, id: null }, asked);
     const now = clock.now();
@@ -328,6 +329,7 @@ export async function editDecision(
   return transaction(db, async (tx) => {
     const decision = await lockDecision(tx, actor, decisionId);
     if (!decision) throw decisionNotFound();
+    await requireWrite(tx, actor, decision);
     const current = (await versionOf(tx, decision.id, decision.version))!;
     const asked = statusAsked(current, edit);
     requireStatusRight(actor, current, asked);

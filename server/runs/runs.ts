@@ -7,7 +7,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
-import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
@@ -741,6 +741,7 @@ export async function retryRun(context: Context, userId: string, ticketId: strin
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, userViewer(userId), ticket);
     const { rows } = await tx.query<{ state: RunState; statusId: string | null }>(
       `select state, status_id as "statusId" from runs where ticket_id = $1 order by seq desc limit 1`,
       [ticket.id],

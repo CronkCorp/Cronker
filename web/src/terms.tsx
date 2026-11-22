@@ -12,6 +12,7 @@ import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./li
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { Chip } from "./ui/labels.js";
+import { ReadOnlyNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
@@ -85,12 +86,15 @@ function Glossary({
         actions={
           <>
             <ExportLink place={place} />
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              New Term
-            </Button>
+            {(!project || project.access === "write") && (
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                New Term
+              </Button>
+            )}
           </>
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       <div className="filter-bar">
         <input
           type="search"
@@ -271,6 +275,8 @@ export function TermScreen({
   if (!term) return <p className="muted">Loading…</p>;
   const place: Place = term.projectId ? { kind: "project", id: term.projectId } : { kind: "workspace", id: term.workspaceId };
   const crumbs = knowledgeCrumbs(workspace, project, <Link to={to.place(place, "glossary")}>Terms</Link>);
+  // With Read in its Project, the Term is only read: no Edit or Delete.
+  const canWrite = !project || project.access === "write";
   return (
     <div className="page">
       <PageHead
@@ -287,7 +293,8 @@ export function TermScreen({
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={
           !editing &&
-          !gone && (
+          !gone &&
+          canWrite && (
             <>
               <Menu label="More of this Term">
                 <MenuItem tone="danger" onSelect={() => setDeleting(true)}>
@@ -301,10 +308,11 @@ export function TermScreen({
           )
         }
       />
+      {project && <ReadOnlyNote access={project.access} />}
       {gone && (
         <DeletedElsewhere back={{ to: to.place(place, "glossary"), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
       )}
-      {editing ? (
+      {editing && canWrite ? (
         <Editor
           term={term}
           onSaved={(next) => {

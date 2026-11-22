@@ -7,7 +7,7 @@ import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inReach, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
@@ -211,6 +211,7 @@ export async function createDocument(
   input: { title: string; body: string; parentId?: string | null; position?: number },
 ): Promise<Document> {
   return transaction(db, async (tx) => {
+    await requireWrite(tx, actor, tree);
     await lockTree(tx, tree);
     const parentId = input.parentId ?? null;
     if (parentId) await requireParentInTree(tx, tree, parentId);
@@ -386,6 +387,7 @@ export async function editDocument(
     const moving = edit.parentId !== undefined || edit.position !== undefined;
     const document = await lockDocument(tx, actor, documentId, { tree: moving });
     if (!document) throw documentNotFound();
+    await requireWrite(tx, actor, document);
     if (edit.title !== undefined || edit.body !== undefined) {
       await saveNextVersion(tx, document, actor, edit.baseVersion, clock.now(), (current) => ({
         title: edit.title ?? current.title,
@@ -442,6 +444,7 @@ export async function replaceDocumentSection(
   return transaction(db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId);
     if (!document) throw documentNotFound();
+    await requireWrite(tx, actor, document);
     let start = 0;
     await saveNextVersion(tx, document, actor, input.baseVersion, clock.now(), (current) => {
       const section = findSection(current.body, input.section);
@@ -503,6 +506,7 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
   await transaction(db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
+    await requireWrite(tx, actor, document);
     if (actor.kind === "agent") {
       throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Document.`, {
         rule: "Only a User deletes a Document, so an agent can't remove knowledge.",

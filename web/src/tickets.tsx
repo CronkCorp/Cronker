@@ -1,3 +1,4 @@
+import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access.js";
 import { useAddresses, type Addresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
 import {
@@ -269,19 +270,21 @@ export function TicketScreen({
   if (!ticket || !project || !relations || !documentLinks || !artifactLinks) return <p className="muted">Loading…</p>;
   const status = project.statuses.find((s) => s.id === ticket.statusId);
   const others = projectTickets.filter((t) => t.id !== ticket.id);
-  return (
+  // With Read, the page offers nothing to change: no Comment box, editing or attaching (docs/ui.md).
+  const canWrite = project.access === "write";
+  const page = (
     <div
       className={`page ticket-page${dropping ? " dropping" : ""}`}
       onDragOver={(event) => {
-        if (!event.dataTransfer.types.includes("Files")) return;
+        if (!canWrite || !event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
         setDropping(true);
       }}
       onDragLeave={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropping(false);
       }}
-      onDrop={onDrop}
-      onPaste={onPaste}
+      onDrop={canWrite ? onDrop : undefined}
+      onPaste={canWrite ? onPaste : undefined}
     >
       <PageHead
         crumbs={[
@@ -297,29 +300,34 @@ export function TicketScreen({
         large
         switcher={<LiveIndicator workspaceId={workspace.id} />}
         actions={
-          <>
-            <Button variant="secondary" aria-keyshortcuts="C" title="Comment (C)" onClick={toCommentBox}>
-              Comment
-            </Button>
-            {!editing && (
-              <Button variant="secondary" onClick={() => setEditing(true)}>
-                Edit
+          canWrite && (
+            <>
+              <Button variant="secondary" aria-keyshortcuts="C" title="Comment (C)" onClick={toCommentBox}>
+                Comment
               </Button>
-            )}
-          </>
+              {!editing && (
+                <Button variant="secondary" onClick={() => setEditing(true)}>
+                  Edit
+                </Button>
+              )}
+            </>
+          )
         }
       />
+      <ReadOnlyNote access={project.access} />
       <FormError error={error} />
       <div className="page-split">
         <div className="page ticket-main">
-          {editing ? (
+          {editing && canWrite ? (
             <TextFields ticket={ticket} onSave={save} onDone={() => setEditing(false)} />
           ) : (
             <section aria-label="Description" className="panel description">
               {ticket.description ? (
                 <Markdown text={ticket.description} mentions={ticket.mentions} />
               ) : (
-                <p className="muted">No description. Edit adds one; Markdown and Ticket keys such as {project.key}-1 work.</p>
+                <p className="muted">
+                  {canWrite ? `No description. Edit adds one; Markdown and Ticket keys such as ${project.key}-1 work.` : "No description."}
+                </p>
               )}
             </section>
           )}
@@ -344,18 +352,20 @@ export function TicketScreen({
             onAdded={addComment}
             onChanged={loadComments}
           />
-          <div className="ticket-comment">
-            <CommentForm
-              label="New Comment"
-              button="Comment"
-              placeholder="Comment… Ticket keys link to their Tickets"
-              boxRef={commentBox}
-              onSend={async (body) => addComment(await api.comment(ticket.id, { body }))}
-            />
-            <p className="muted small keys-line">
-              <kbd>C</kbd> writes a Comment from anywhere on the Ticket, as the Comment button does.
-            </p>
-          </div>
+          {canWrite && (
+            <div className="ticket-comment">
+              <CommentForm
+                label="New Comment"
+                button="Comment"
+                placeholder="Comment… Ticket keys link to their Tickets"
+                boxRef={commentBox}
+                onSend={async (body) => addComment(await api.comment(ticket.id, { body }))}
+              />
+              <p className="muted small keys-line">
+                <kbd>C</kbd> writes a Comment from anywhere on the Ticket, as the Comment button does.
+              </p>
+            </div>
+          )}
         </div>
         <aside className="side side-fits-window" aria-label="Details" ref={fitWindow}>
           <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
@@ -374,7 +384,7 @@ export function TicketScreen({
             )}
           </Fields>
           <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
-          <PullRequestRows pullRequests={pullRequests} linking={{ ticketId: ticket.id, onChanged: loadPullRequests }} />
+          <PullRequestRows pullRequests={pullRequests} linking={canWrite ? { ticketId: ticket.id, onChanged: loadPullRequests } : undefined} />
           <Relations
             ticket={ticket}
             relations={relations}
@@ -416,6 +426,7 @@ export function TicketScreen({
       </div>
     </div>
   );
+  return <ProjectAccessProvider access={project.access}>{page}</ProjectAccessProvider>;
 }
 
 /** Every Label used on the Project's Tickets, offered when picking Labels. */
@@ -518,6 +529,7 @@ function Fields({
     void onSave({ labels: next });
   };
   const offeredAgents = delegate && !own.some((a) => a.id === delegate.id) ? [...own, delegate] : own;
+  const readOnly = !useCanWrite();
   return (
     <section aria-label="Fields" className="panel side-section fields">
       <FieldPicker
@@ -526,12 +538,13 @@ function Fields({
         options={project.statuses.map((s) => ({ value: s.id, label: s.name, content: <StatusPill kind={s.kind} name={s.name} model={s.step?.model} /> }))}
         selected={[ticket.statusId]}
         // An Unverified Ticket leaves its Done Status only by Accept or Reopen.
-        disabled={ticket.verification === "unverified"}
+        disabled={readOnly || ticket.verification === "unverified"}
         title={ticket.verification === "unverified" ? "Accept or Reopen it to move it" : undefined}
         onPick={(statusId) => statusId !== ticket.statusId && void onSave({ statusId })}
       />
       <FieldPicker
         label="Priority"
+        disabled={readOnly}
         value={ticket.priority === "none" ? none : <PriorityTag priority={ticket.priority} />}
         options={priorities.map(({ priority, label }) => ({
           value: priority,
@@ -543,6 +556,7 @@ function Fields({
       />
       <FieldPicker
         label="Assignee"
+        disabled={readOnly}
         value={assignee ? <Actor actor={{ kind: "user", name: nameOf(assignee) }} /> : <span className="muted">Nobody</span>}
         options={[
           { value: "", label: "Nobody", content: <span className="muted">Nobody</span> },
@@ -557,6 +571,7 @@ function Fields({
       />
       <FieldPicker
         label="Delegate"
+        disabled={readOnly}
         value={
           delegate ? (
             <Actor actor={{ kind: "agent", name: delegate.name, owner: delegate.owner.id === user.id ? null : nameOf(delegate.owner) }} />
@@ -575,11 +590,12 @@ function Fields({
         selected={[ticket.delegateId ?? ""]}
         onPick={(id) => (id || null) !== ticket.delegateId && void onSave({ delegateId: id || null })}
       />
-      {ticket.delegateId === null && own.length === 0 && (
+      {!readOnly && ticket.delegateId === null && own.length === 0 && (
         <p className="field-note">You have no Agent in this Workspace to delegate to.</p>
       )}
       <FieldPicker
         label="Autonomous Delegation"
+        disabled={readOnly}
         value={autonomy.find((a) => a.on === ticket.autonomousDelegation)?.shown ?? <span className="muted">The Project's, once delegated</span>}
         options={autonomy.map(({ value, shown, hint }) => ({
           value,
@@ -598,6 +614,7 @@ function Fields({
       />
       <FieldPicker
         label="Labels"
+        disabled={readOnly}
         value={shownLabels.length ? shownLabels.map((label) => <Chip key={label}>{label}</Chip>) : none}
         options={labels.map((label) => ({ value: label, label }))}
         selected={shownLabels}
@@ -615,7 +632,7 @@ function Fields({
           if (next !== ticket.dueDate) await onSave({ dueDate: next });
         }}
       >
-        <input id="ticket-due-date" name="dueDate" type="date" defaultValue={ticket.dueDate ?? ""} className="field-inline" />
+        <input id="ticket-due-date" name="dueDate" type="date" defaultValue={ticket.dueDate ?? ""} className="field-inline" disabled={readOnly} />
       </FieldForm>
       <FieldForm
         key={`estimate:${ticket.estimate}`}
@@ -627,7 +644,7 @@ function Fields({
           if (next !== ticket.estimate) await onSave({ estimate: next });
         }}
       >
-        <input id="ticket-estimate" name="estimate" type="number" min={0} step="any" defaultValue={ticket.estimate ?? ""} className="field-inline" />
+        <input id="ticket-estimate" name="estimate" type="number" min={0} step="any" defaultValue={ticket.estimate ?? ""} className="field-inline" disabled={readOnly} />
       </FieldForm>
       {ticket.cost.length > 0 && (
         <div className="field-row" title="What its Runs cost in all, where their Runner reports it">
@@ -656,6 +673,7 @@ function Verification({
 }) {
   const [reopening, setReopening] = useState(false);
   const [completion, setCompletion] = useState<Completion | null>(null);
+  const canWrite = useCanWrite();
   useEffect(() => {
     let current = true;
     void api.completion(ticket.id).then(
@@ -705,14 +723,16 @@ function Verification({
             {by}
             {merge ? ", completing this" : " completed this"}. It is Unverified until you Accept it, or Reopen it to {back}.
           </p>
-          <Actions>
-            <Button variant="primary" size="small" onClick={() => void onAccept()}>
-              Accept
-            </Button>
-            <Button size="small" onClick={() => setReopening(true)}>
-              Reopen…
-            </Button>
-          </Actions>
+          {canWrite && (
+            <Actions>
+              <Button variant="primary" size="small" onClick={() => void onAccept()}>
+                Accept
+              </Button>
+              <Button size="small" onClick={() => setReopening(true)}>
+                Reopen…
+              </Button>
+            </Actions>
+          )}
         </>
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
@@ -758,6 +778,7 @@ function RunCard({
   onRetried: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const canWrite = useCanWrite();
   const latest = runs.at(-1);
   const wentWrong = latest && (latest.state === "failed" || latest.state === "lost" || latest.state === "refused") && ticket.lastRun?.id === latest.id;
   if (ticket.waiting) {
@@ -793,7 +814,7 @@ function RunCard({
       </p>
       {latest.endReason && <p className="small">{latest.endReason}</p>}
       <Actions>
-        {wentWrong && (
+        {wentWrong && canWrite && (
           <Button
             variant="primary"
             size="small"
@@ -849,6 +870,7 @@ function Relations({
   onChanged: () => void;
 }) {
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const canWrite = useCanWrite();
   // Kept after adding, for adding several of one kind in a row.
   const [kind, setKind] = useState<RelationKind>("blockedBy");
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
@@ -887,6 +909,7 @@ function Relations({
           })),
         ]}
         selected={[ticket.parentId ?? ""]}
+        disabled={!canWrite}
         onPick={(id) => (id || null) !== ticket.parentId && void onParent(id || null)}
       />
       {subTickets.length > 0 && (
@@ -915,9 +938,11 @@ function Relations({
               {inGroup.map((relation) => (
                 <li key={relation.id}>
                   <TicketLink ticket={relation.ticket} />{" "}
-                  <Button variant="ghost" size="small" onClick={() => void remove(relation.id)}>
-                    Remove
-                  </Button>
+                  {canWrite && (
+                    <Button variant="ghost" size="small" onClick={() => void remove(relation.id)}>
+                      Remove
+                    </Button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -925,34 +950,36 @@ function Relations({
         );
       })}
       <FormError error={removeError} />
-      <form onSubmit={onSubmit} className="side-form">
-        <div className="side-form-row">
-          <Picker
-            label="Relation"
-            options={relationGroups.map(({ kind, label }) => ({ value: kind, label }))}
-            selected={[kind]}
-            onPick={(picked) => setKind(picked as RelationKind)}
-            trigger={
-              <Button size="small" aria-haspopup="listbox" aria-label={`Relation ${relationLabel(kind)}`}>
-                {relationLabel(kind)} <span aria-hidden="true">▾</span>
-              </Button>
-            }
-          />
-          <input name="ticket" required list="relation-tickets" placeholder={`Key, such as ${ticket.key}`} aria-label="Ticket" className="mono" />
-        </div>
-        <datalist id="relation-tickets">
-          {suggestions.map((t) => (
-            <option key={t.id} value={t.key}>
-              {t.title}
-            </option>
-          ))}
-        </datalist>
-        <div>
-          <Button type="submit" size="small" disabled={busy}>
-            Add
-          </Button>
-        </div>
-      </form>
+      {canWrite && (
+        <form onSubmit={onSubmit} className="side-form">
+          <div className="side-form-row">
+            <Picker
+              label="Relation"
+              options={relationGroups.map(({ kind, label }) => ({ value: kind, label }))}
+              selected={[kind]}
+              onPick={(picked) => setKind(picked as RelationKind)}
+              trigger={
+                <Button size="small" aria-haspopup="listbox" aria-label={`Relation ${relationLabel(kind)}`}>
+                  {relationLabel(kind)} <span aria-hidden="true">▾</span>
+                </Button>
+              }
+            />
+            <input name="ticket" required list="relation-tickets" placeholder={`Key, such as ${ticket.key}`} aria-label="Ticket" className="mono" />
+          </div>
+          <datalist id="relation-tickets">
+            {suggestions.map((t) => (
+              <option key={t.id} value={t.key}>
+                {t.title}
+              </option>
+            ))}
+          </datalist>
+          <div>
+            <Button type="submit" size="small" disabled={busy}>
+              Add
+            </Button>
+          </div>
+        </form>
+      )}
       <FormError error={error} />
     </section>
   );
@@ -1054,6 +1081,7 @@ function Linked({
   const unlinked = (all: { id: string; title: string }[]) => all.filter((d) => !isLinked.has(d.id));
   const offered = choices && { project: unlinked(choices.project), workspace: unlinked(choices.workspace) };
   const title = `Linked ${kind.noun}s`;
+  const canWrite = useCanWrite();
   return (
     <section aria-label={title} className="panel side-section">
       <h2 className="side-title">{title}</h2>
@@ -1063,34 +1091,39 @@ function Linked({
             <li key={item.id}>
               <Link to={kind.page(to, item)}>{item.title}</Link>
               {item.projectId === null && <span className="muted small"> Workspace</span>}{" "}
-              <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => kind.unlink(ticket.id, item.id))}>
-                Unlink
-              </Button>
+              {canWrite && (
+                <Button variant="ghost" size="small" disabled={busy} onClick={() => void change(() => kind.unlink(ticket.id, item.id))}>
+                  Unlink
+                </Button>
+              )}
             </li>
           ))}
         </ul>
       )}
       <FormError error={choicesError} />
-      <div>
-        <Picker
-          label={kind.linkLabel}
-          onOpenChange={(open) => open && loadChoices()}
-          options={
-            offered
-              ? [
-                  ...offered.project.map((d) => ({ value: d.id, label: d.title, group: "This Project" })),
-                  ...offered.workspace.map((d) => ({ value: d.id, label: d.title, group: "The Workspace" })),
-                ]
-              : []
-          }
-          onPick={(id) => void change(() => kind.link(ticket.id, id))}
-          trigger={
-            <Button size="small" aria-haspopup="listbox" disabled={busy}>
-              {kind.linkLabel}…
-            </Button>
-          }
-        />
-      </div>
+      {linked.length === 0 && !canWrite && <p className="muted small">None.</p>}
+      {canWrite && (
+        <div>
+          <Picker
+            label={kind.linkLabel}
+            onOpenChange={(open) => open && loadChoices()}
+            options={
+              offered
+                ? [
+                    ...offered.project.map((d) => ({ value: d.id, label: d.title, group: "This Project" })),
+                    ...offered.workspace.map((d) => ({ value: d.id, label: d.title, group: "The Workspace" })),
+                  ]
+                : []
+            }
+            onPick={(id) => void change(() => kind.link(ticket.id, id))}
+            trigger={
+              <Button size="small" aria-haspopup="listbox" disabled={busy}>
+                {kind.linkLabel}…
+              </Button>
+            }
+          />
+        </div>
+      )}
       <FormError error={error} />
     </section>
   );
@@ -1588,6 +1621,7 @@ function CommentThread({
   onChanged: () => void;
 }) {
   const [replying, setReplying] = useState(false);
+  const canWrite = useCanWrite();
   const replies = comments.filter((c) => c.replyToId === comment.id);
   const parent = comment.replyToId ? comments.find((c) => c.id === comment.replyToId) : undefined;
   const question = comment.questionId !== null;
@@ -1640,7 +1674,7 @@ function CommentThread({
           </div>
         )}
       </div>
-      {question && !answered ? (
+      {!canWrite ? null : question && !answered ? (
         <CommentForm
           label="Answer"
           button="Post answer"
