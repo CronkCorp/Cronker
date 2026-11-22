@@ -1,3 +1,4 @@
+import { Type, type Static } from "typebox";
 import type { Clock } from "../clock.js";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
@@ -10,11 +11,28 @@ import {
   insertStatus,
   projectNotFound,
   statusesOf,
-  statusKinds,
   type Project,
-  type StatusKind,
 } from "./projects.js";
+import { StatusKind, statusKinds } from "./status-kinds.js";
 import { mayHaveStep, noStepWhy, outcomesOf, targetRefusal } from "./steps.js";
+
+const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
+const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
+const Kind = Type.Union(StatusKind.anyOf, {
+  description: "What the Status means for its Tickets: `backlog`, `active`, `review`, `done` or `canceled`.",
+});
+
+/** The add-a-Status route's body: last on the board unless placed. */
+export const StatusAdd = Type.Object({ name: StatusName, kind: Kind, position: Type.Optional(Position) });
+export type StatusAdd = Static<typeof StatusAdd>;
+
+/** The edit-a-Status route's body: whichever of its name, kind and place are given change. */
+export const StatusEdit = Type.Object({
+  name: Type.Optional(StatusName),
+  kind: Type.Optional(Kind),
+  position: Type.Optional(Position),
+});
+export type StatusEdit = Static<typeof StatusEdit>;
 
 /**
  * Changes to a Project's Statuses. Each change is worked out on the whole board in

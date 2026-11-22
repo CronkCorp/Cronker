@@ -165,6 +165,7 @@ describe("Artifacts", () => {
     expect(saved.json).toEqual({
       ...first,
       description: "Now with a legend.",
+      avoidedWords: [],
       url: expect.stringMatching(/^\/sandbox\/[A-Za-z0-9_-]{20,}\/index\.html$/),
       version: { number: 2, actor: { kind: "agent", id: agent.id, name: "claude-max" }, savedAt: expect.any(String) },
       files: [
@@ -174,7 +175,8 @@ describe("Artifacts", () => {
       ],
     });
     expect(saved.json.url).not.toBe(first.url);
-    expect(await ok("GET", `/api/artifacts/${first.id}`, ada)).toEqual(saved.json);
+    const { avoidedWords: _, ...savedArtifact } = saved.json;
+    expect(await ok("GET", `/api/artifacts/${first.id}`, ada)).toEqual(savedArtifact);
 
     const now = new URL(saved.json.url, cronk.url);
     expect((await open(new URL("app.js", now).href)).text).toBe("document.title = 'Ran again';");
@@ -291,7 +293,7 @@ describe("Artifacts", () => {
     cronk.clock.advance(60_000);
     const savedBoard = await ok("PATCH", `/api/artifacts/${board.id}`, asAgent, { baseVersion: 1, title: "Board, take two" });
 
-    const summary = ({ files: _files, ...artifact }: { files: unknown }) => artifact;
+    const summary = ({ files: _files, avoidedWords: _words, ...artifact }: { files: unknown; avoidedWords?: unknown }) => artifact;
     expect(await ok("GET", `/api/projects/${project.id}/artifacts`, asAgent)).toEqual([summary(savedBoard), summary(inbox)]);
     expect(await ok("GET", `/api/workspaces/${workspace.id}/artifacts`, ada)).toEqual([summary(report)]);
   });
@@ -624,7 +626,10 @@ describe("Deleting one Artifact Version", () => {
     expect(only.json.error).toEqual(
       expect.objectContaining({ code: "only_version", rule: expect.any(String), advice: expect.stringContaining("Delete the Artifact") }),
     );
-    const saved = await ok("PATCH", `/api/artifacts/${artifact.id}`, asAgent, { baseVersion: 1, files: [file("app.js", "2")] });
+    const { avoidedWords: _, ...saved } = await ok("PATCH", `/api/artifacts/${artifact.id}`, asAgent, {
+      baseVersion: 1,
+      files: [file("app.js", "2")],
+    });
     await stream.next();
 
     const byAgent = await call("DELETE", `/api/artifacts/${artifact.id}/versions/1`, asAgent);

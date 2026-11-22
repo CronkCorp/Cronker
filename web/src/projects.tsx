@@ -29,6 +29,7 @@ import { keys } from "./live-queries.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate } from "./router.js";
 import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
+import { matchesText } from "./ticket-text.js";
 import { ProjectArtifacts } from "./artifacts.js";
 import { ProjectDecisions } from "./decisions.js";
 import { ProjectDocuments } from "./documents.js";
@@ -232,6 +233,8 @@ export function ProjectScreen({
   const to = useAddresses();
   const client = useQueryClient();
   const [filter, setFilter] = useState<TicketFilter>({});
+  // The Filter box narrows the Tickets already loaded, so it never enters the query key or refetches as the User types.
+  const [text, setText] = useState("");
   const [group, setGroup] = useState(storedGroupSubTickets);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
@@ -249,9 +252,15 @@ export function ProjectScreen({
     queryFn: () => api.tickets(projectId, filter),
     placeholderData: keepPreviousData,
   });
+  // The Label filter offers every Label of the Project's Tickets, unfiltered, so its list doesn't shrink as filters
+  // apply; it shares the Ticket page's query, which the same events refresh.
+  const allTicketsQuery = useQuery({ queryKey: keys.projectTickets(projectId), queryFn: () => api.tickets(projectId) });
+  const labels = labelsOf(allTicketsQuery.data ?? []);
   const members = membersQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
-  const tickets = ticketsQuery.data ?? null;
+  const loaded = ticketsQuery.data ?? null;
+  const needle = text.trim().toLowerCase();
+  const tickets = useMemo(() => (loaded && needle ? loaded.filter((ticket) => matchesText(ticket, needle)) : loaded), [loaded, needle]);
   const failed = [projectQuery, membersQuery, agentsQuery, ticketsQuery].find((query) => query.error)?.error;
   const failure = elsewhere ? "No such Project." : (failed?.message ?? null);
 
@@ -336,7 +345,7 @@ export function ProjectScreen({
       </div>
     );
   }
-  const filtered = Object.values(filter).some((value) => value !== undefined);
+  const filtered = needle !== "" || Object.values(filter).some((value) => value !== undefined);
   return (
     <div className="page">
       <PageHead
@@ -377,7 +386,7 @@ export function ProjectScreen({
       />
       <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
       {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
-      <Filters project={project} members={members} filter={filter} onChange={setFilter} />
+      <Filters project={project} members={members} labels={labels} filter={filter} onChange={setFilter} text={text} onText={setText} />
       {view === "board" && (
         <Board project={project} members={members} agents={agents} user={user} tickets={tickets} group={group} onChanged={ticketEdited} />
       )}
@@ -421,17 +430,40 @@ function NewTicket({ project, onCreated }: { project: Project; onCreated: () => 
 function Filters({
   project,
   members,
+  labels,
   filter,
   onChange,
+  text,
+  onText,
 }: {
   project: Project;
   members: Member[];
+  /** Every Label of the Project's Tickets. */
+  labels: string[];
   filter: TicketFilter;
   onChange: (filter: TicketFilter) => void;
+  text: string;
+  onText: (text: string) => void;
 }) {
   const set = (change: TicketFilter) => onChange({ ...filter, ...change });
   return (
     <div className="filters" role="group" aria-label="Filters">
+      <label className="filter">
+        <span className="sr-only">Filter Tickets</span>
+        <input
+          type="text"
+          placeholder="Filter"
+          className={text.trim() ? "filter-on" : undefined}
+          value={text}
+          onChange={(e) => onText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && text !== "") {
+              e.stopPropagation();
+              onText("");
+            }
+          }}
+        />
+      </label>
       <FilterPicker
         label="Status"
         anyLabel="Any Status"
@@ -460,12 +492,24 @@ function Filters({
         value={filter.priority}
         onChange={(priority) => set({ priority: priority as Priority | undefined })}
       />
-      <label className="filter">
-        <span className="sr-only">Filter by Label</span>
-        <input placeholder="Label" value={filter.label ?? ""} onChange={(e) => set({ label: e.target.value.trim() || undefined })} />
-      </label>
+      <FilterPicker
+        label="Label"
+        anyLabel="Any Label"
+        // A chosen Label no Ticket has any more stays listed, so the button still shows what the board is filtered by.
+        options={(filter.label === undefined || labels.includes(filter.label) ? labels : [...labels, filter.label]).map((l) => ({
+          value: l,
+          label: l,
+        }))}
+        value={filter.label}
+        onChange={(label) => set({ label })}
+      />
     </div>
   );
+}
+
+/** Every Label the Tickets have, each once, in alphabetical order: what a Label picker or filter offers. */
+export function labelsOf(tickets: { labels: string[] }[]): string[] {
+  return [...new Set(tickets.flatMap((t) => t.labels))].sort((a, b) => a.localeCompare(b));
 }
 
 /** Why a Ticket that needs a Run waits for one, as a Run state's tooltip reads. */

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { transaction, type Db } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { ModelId, mostModelLabels } from "./workspaces.js";
@@ -30,6 +30,10 @@ async function changeModelIds(db: Db, workspaceId: string, change: (modelIds: Mo
 const matches = (label: string) => (entry: ModelId) => entry.label.toLowerCase() === label.toLowerCase();
 
 /** Sets the model id a label stands for: changes the label matching it ignoring case, which takes this spelling, or adds it last. */
+/** The set-a-label's-model-id route's body. */
+export const ModelIdSave = Type.Object({ modelId: ModelId.properties.modelId });
+export type ModelIdSave = Static<typeof ModelIdSave>;
+
 export async function saveModelId(db: Db, workspaceId: string, label: string, modelId: string): Promise<ModelId> {
   const saved = { label: label.trim(), modelId: modelId.trim() };
   await changeModelIds(db, workspaceId, (modelIds) => {

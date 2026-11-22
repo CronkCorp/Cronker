@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type Webhook, type WebhookDelivery, type WebhookKind, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { Actions, Button, Check, EmptyState, Field, FormError, Panel, RelativeTime, Saved, ShownOnce } from "./ui/controls.js";
+import { Chip } from "./ui/labels.js";
 import { ConfirmDialog } from "./ui/overlays.js";
 
 /** The Inbox kinds a webhook may get, as the settings page names them; the first three are a new webhook's default. */
@@ -129,13 +130,19 @@ function WebhookRow({ workspaceId, webhook, onChanged }: { workspaceId: string; 
   useEffect(() => {
     void loadDeliveries();
   }, [loadDeliveries]);
-  // While a delivery is pending, look again shortly: the server sends due deliveries every few seconds.
-  const pending = deliveries?.some((d) => d.state === "pending") ?? false;
+  // While a delivery is pending, look again shortly after it is due: the server sends due deliveries every few
+  // seconds, and one waiting for a retry is due at its next try. At most a minute apart, so a retry shows.
+  const due = deliveries?.filter((d) => d.state === "pending").map((d) => (d.nextAt ? Date.parse(d.nextAt) : 0)) ?? [];
+  const nextDue = due.length > 0 ? Math.min(...due) : null;
   useEffect(() => {
-    if (!pending) return;
-    const timer = setTimeout(() => void loadDeliveries(), 2_000);
+    if (nextDue === null) return;
+    const wait = Math.min(Math.max(nextDue - Date.now() + 2_000, 2_000), 60_000);
+    const timer = setTimeout(() => {
+      void loadDeliveries();
+      if (webhook.failing) onChanged();
+    }, wait);
     return () => clearTimeout(timer);
-  }, [pending, deliveries, loadDeliveries]);
+  }, [nextDue, deliveries, loadDeliveries, webhook.failing, onChanged]);
 
   const run = async (action: () => Promise<unknown>) => {
     setError(null);
@@ -160,6 +167,14 @@ function WebhookRow({ workspaceId, webhook, onChanged }: { workspaceId: string; 
         <div>
           <strong>{webhook.name}</strong>
           {!webhook.enabled && <span className="muted small"> · Off</span>}
+          {webhook.failing && (
+            <>
+              {" "}
+              <Chip tone="warn" title="Its last delivery was given up on after a day of retries. Its next successful delivery clears this.">
+                Failing
+              </Chip>
+            </>
+          )}
           <div className="mono small muted webhook-url">{webhook.url}</div>
           <div className="small muted">Gets: {kindLabels(webhook.kinds)}</div>
         </div>
@@ -246,12 +261,29 @@ function Deliveries({ deliveries }: { deliveries: WebhookDelivery[] | null }) {
         {deliveries.map((delivery) => (
           <tr key={delivery.id}>
             <td className="mono small">{delivery.kind}</td>
-            <td className={`small delivery-${delivery.state}`}>
-              {delivery.state === "pending"
-                ? "Sending…"
-                : delivery.statusCode !== null
-                  ? String(delivery.statusCode)
-                  : (delivery.error ?? "No answer")}
+            <td className="small">
+              {delivery.attempts.length === 0 ? (
+                <span className="delivery-pending">Sending…</span>
+              ) : (
+                <ol className="delivery-attempts" aria-label="Tries">
+                  {delivery.attempts.map((attempt, i) => (
+                    <li key={i}>
+                      <span className={delivered(attempt.statusCode) ? "delivery-delivered" : "delivery-failed"}>
+                        {attempt.statusCode !== null ? String(attempt.statusCode) : (attempt.error ?? "No answer")}
+                      </span>{" "}
+                      <span className="muted">
+                        <RelativeTime at={attempt.at} />
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {delivery.attempts.length > 0 && delivery.state === "pending" && delivery.nextAt && (
+                <div className="delivery-pending">
+                  Next try at <RelativeTime at={delivery.nextAt} clock />
+                </div>
+              )}
+              {delivery.state === "failed" && <div className="delivery-failed">Gave up</div>}
             </td>
             <td className="muted small">{delivery.sentAt ? <RelativeTime at={delivery.sentAt} /> : <RelativeTime at={delivery.createdAt} />}</td>
           </tr>
@@ -260,3 +292,5 @@ function Deliveries({ deliveries }: { deliveries: WebhookDelivery[] | null }) {
     </table>
   );
 }
+
+const delivered = (statusCode: number | null) => statusCode !== null && statusCode >= 200 && statusCode < 300;

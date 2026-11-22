@@ -3,11 +3,13 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
-import { knowledgePlaces } from "../knowledge/places.js";
+import { knowledgePlaces, placeOfComment } from "../knowledge/places.js";
 import { Artifact, ArtifactCreate, ArtifactSave, FilePath, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, deleteArtifactVersion, readArtifactVersion, ArtifactVersionRead, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
-import { addArtifactComment, Comment, commentsOnArtifact } from "../work/comments.js";
+import { addArtifactComment, Comment, CommentCreate, commentsOnArtifact } from "../work/comments.js";
 import { ArtifactLink, linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
+// After the Comments and linked Artifacts: imported before them, the glossary check reaches Documents ahead of Mentions.
+import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 
 const tags = ["Artifacts"];
 const ArtifactParams = Type.Object({ artifactId: Type.String() });
@@ -55,16 +57,18 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
               "Creates an Artifact at Version 1 by its Actor: a title, a description, and its files, each by a path " +
               "relative to the Version and its bytes as base64. `page` names the file that is its page " +
               "(`index.html` when left out); the page refers to the others by relative paths. An Agent names its " +
-              "running Run as `runId` to link the Artifact to the Run's Ticket (`no_running_run` when it isn't one).",
+              "running Run as `runId` to link the Artifact to the Run's Ticket (`no_running_run` when it isn't one). An " +
+              "Agent's save answers with `avoidedWords`: the words the glossary avoids that its title and description use.",
             params: place.params,
             body: ArtifactCreate,
-            response: { 201: Artifact, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 413: ErrorBody },
+            response: { 201: withAvoidedWords(Artifact), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 413: ErrorBody },
           },
         },
         async (request, reply) => {
           const caller = await requireCaller(context, request);
           const created = await createArtifact(context, caller, await place.find(request, caller), request.body);
-          return reply.code(201).send(created);
+          const texts = given({ plain: [request.body.title], markdown: [request.body.description] });
+          return reply.code(201).send(await warnAgent(db, caller, created, texts, created));
         },
       );
     }
@@ -117,18 +121,18 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Comment on an Artifact, or reply to one of its Comments",
           description:
             "Users and Agents with a full token may comment on an Artifact they can change, as on a Ticket. The " +
-            "Comment also shows on the Tickets linking the Artifact; nobody is notified of it.",
+            "Comment also shows on the Tickets linking the Artifact; nobody is notified of it. An Agent's Comment answers " +
+            "with `avoidedWords`: the words the glossary avoids that its body uses.",
           params: ArtifactParams,
-          body: Type.Object({
-            body: Type.String({ minLength: 1, maxLength: 100_000, pattern: "\\S", description: "Markdown." }),
-            replyToId: Type.Optional(Type.String({ description: "The Comment on this Artifact being replied to." })),
-          }),
-          response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          body: CommentCreate,
+          response: { 201: withAvoidedWords(Comment), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
         const caller = await requireCaller(context, request);
-        return reply.code(201).send(await addArtifactComment(context, caller, request.params.artifactId, request.body));
+        const comment = await addArtifactComment(context, caller, request.params.artifactId, request.body);
+        const place = await placeOfComment(db, comment);
+        return reply.code(201).send(await warnAgent(db, caller, place, { markdown: [request.body.body] }, comment));
       },
     );
 
@@ -238,11 +242,12 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
             "out; a new title, description or page may come with it. A save needs `baseVersion`, the number of the " +
             "Version it's based on; one based on an outdated Version is refused with `outdated_version`, carrying the " +
             "current Version as `current`. Each Version is served from its own address, so earlier ones stay as they " +
-            "were.",
+            "were. An Agent's save answers with `avoidedWords`: the words the glossary avoids that the title and " +
+            "description it gives use.",
           params: ArtifactParams,
           body: ArtifactSave,
           response: {
-            200: Artifact,
+            200: withAvoidedWords(Artifact),
             400: ErrorBody,
             401: ErrorBody,
             403: ErrorBody,
@@ -252,7 +257,12 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
           },
         },
       },
-      async (request) => saveArtifact(context, await requireCaller(context, request), request.params.artifactId, request.body),
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const saved = await saveArtifact(context, caller, request.params.artifactId, request.body);
+        const texts = given({ plain: [request.body.title], markdown: [request.body.description] });
+        return warnAgent(db, caller, saved, texts, saved);
+      },
     );
 
     app.delete(

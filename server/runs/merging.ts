@@ -1,3 +1,4 @@
+import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
@@ -114,6 +115,12 @@ async function askMergeByRun(context: Context, caller: Caller, runId: string, pu
     });
   });
 }
+
+/** The merge route's body: which of the Ticket's Pull Requests to merge. */
+export const RunMerge = Type.Object({
+  pullRequestId: Type.Integer({ description: "GitHub's id for the Pull Request, as the Ticket's Pull Requests list it." }),
+});
+export type RunMerge = Static<typeof RunMerge>;
 
 /**
  * Merges the Pull Request, by GitHub's id, for the Agent's running Merge Run, as the module says, and returns the

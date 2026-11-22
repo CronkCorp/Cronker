@@ -39,6 +39,17 @@ export const CommentDocument = Type.Object(
 );
 import { markdown } from "./fields.js";
 
+/** The author of a Comment imported from a GitHub issue whom no User of the Workspace has linked. */
+export const GitHubAuthor = Type.Object(
+  {
+    kind: Type.Literal("github"),
+    login: Type.String({ description: "Their GitHub login." }),
+    name: Type.String({ description: "How to show them: `@login on GitHub`." }),
+  },
+  { description: "A GitHub account no User has linked, which wrote an imported Comment." },
+);
+export type GitHubAuthor = Static<typeof GitHubAuthor>;
+
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
   ticketId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
@@ -56,9 +67,11 @@ export const Comment = Type.Object({
   document: Type.Union([CommentDocument, Type.Null()]),
   replyToId: Type.Union([Type.String({ format: "uuid" }), Type.Null()]),
   body: Type.String({ description: "Markdown." }),
-  actor: ActorOrCronk,
+  actor: Type.Union([...ActorOrCronk.anyOf, GitHubAuthor], {
+    description: "Who wrote it: a User, an Agent, Cronk itself, or for a Comment imported from GitHub, its author's GitHub account when no User has linked it.",
+  }),
   createdAt: Type.String({ format: "date-time" }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
   attachments: Type.Array(Attachment, { description: "The files attached to the Comment, oldest first." }),
   questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
@@ -78,7 +91,9 @@ const columns = `comments.id, comments.ticket_id as "ticketId", comments.artifac
   case when documents.id is null then null else json_build_object('id', documents.id, 'projectId', documents.project_id,
     'title', document_versions.title, 'slug', ${slugColumn("document", "documents.id", "document_versions.title")}) end as document,
   comments.reply_to_id as "replyToId", comments.body,
-  ${actorOrCronkColumn("users", "agents")} as actor, comments.created_at as "createdAt", questions.id as "questionId",
+  case when comments.github_author_login is not null then json_build_object('kind', 'github',
+    'login', comments.github_author_login, 'name', '@' || comments.github_author_login || ' on GitHub')
+    else ${actorOrCronkColumn("users", "agents")} end as actor, comments.created_at as "createdAt", questions.id as "questionId",
   comments.sent_back as "sentBack"`;
 
 const fromComments = `comments
@@ -205,7 +220,7 @@ export async function addArtifactComment(
   context: Context,
   actor: Caller,
   artifactId: string,
-  input: { body: string; replyToId?: string },
+  input: CommentCreate,
 ): Promise<Comment> {
   return transaction(context.db, async (tx) => {
     const artifact = await findArtifact(tx, actor, artifactId);

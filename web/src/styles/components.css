@@ -398,6 +398,9 @@ textarea.markdown-source {
   color: var(--agent);
   font-weight: 500;
 }
+.actor-github .actor-name {
+  color: var(--text);
+}
 .actor-cronk .actor-name {
   color: var(--muted);
 }

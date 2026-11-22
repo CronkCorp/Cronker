@@ -19,7 +19,6 @@ import {
   type RelationKind,
   type Report,
   type Run,
-  type MentioningText,
   type Ticket,
   type TicketEdit,
   type TicketRef,
@@ -37,7 +36,8 @@ import { shortcutStandsAside } from "./keys.js";
 import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
-import { priorityLabel, QueueChip } from "./projects.js";
+import { MentionedIn } from "./mentioned-in.js";
+import { labelsOf, priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
@@ -319,7 +319,7 @@ export function TicketScreen({
           )}
         </div>
         <aside className="side side-fits-window" aria-label="Details" ref={fitWindow}>
-          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
+          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf([ticket, ...projectTickets])} onSave={save}>
             {ticket.verification && (
               <Verification
               ticket={ticket}
@@ -386,11 +386,6 @@ export function TicketScreen({
     </div>
   );
   return <ProjectAccessProvider access={project.access}>{page}</ProjectAccessProvider>;
-}
-
-/** Every Label used on the Project's Tickets, offered when picking Labels. */
-function labelsOf(tickets: TicketSummary[], ticket: Ticket): string[] {
-  return [...new Set([...ticket.labels, ...tickets.flatMap((t) => t.labels)])].sort((a, b) => a.localeCompare(b));
 }
 
 function TextFields({ ticket, onSave, onDone }: { ticket: Ticket; onSave: (edit: TicketEdit) => Promise<void>; onDone: () => void }) {
@@ -1173,53 +1168,6 @@ function Linked({
   );
 }
 
-const mentioningKinds: Record<MentioningText["kind"], string> = {
-  ticket: "Ticket",
-  comment: "Comment",
-  document: "Document",
-  report: "Report",
-  term: "Term",
-  decision: "Decision",
-};
-
-/** The page a text mentioning a Ticket is read on: a Comment's is its Ticket's, or its Artifact's. */
-function mentioningPage(to: Addresses, text: MentioningText): string {
-  switch (text.kind) {
-    case "ticket":
-      return to.ticket(text.ticket!);
-    case "comment":
-      // A Comment on a Ticket leads to its Ticket; one on an Artifact or a Document, to that.
-      return text.ticket ? to.ticket(text.ticket) : text.commentOn === "document" ? to.document({ slug: text.slug! }) : to.artifact({ slug: text.slug! });
-    case "document":
-    case "report":
-      return to.document({ slug: text.slug! });
-    case "term":
-      return to.term({ id: text.id, projectId: text.projectId, name: text.title });
-    case "decision":
-      return to.decision({ id: text.id, projectId: text.projectId, number: text.number! });
-  }
-}
-
-/** Mentioned in: each text whose Markdown mentions the Ticket's key, linked, with what kind of text it is. */
-function MentionedIn({ texts }: { texts: MentioningText[] }) {
-  const to = useAddresses();
-  if (texts.length === 0) return null;
-  return (
-    <section aria-label="Mentioned in" className="panel side-section">
-      <h2 className="side-title">Mentioned in</h2>
-      <ul aria-label="Mentioned in" className="side-list">
-        {texts.map((text) => (
-          <li key={`${text.kind}:${text.id}`}>
-            <KindLabel kind={mentioningKinds[text.kind]} />{" "}
-            {text.ticket && text.kind !== "report" && <span className="muted small">{text.ticket.key} </span>}
-            <Link to={mentioningPage(to, text)}>{text.title}</Link>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 export function CommentForm({
   label,
   button,
@@ -1363,13 +1311,32 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
-/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
+/**
+ * What a `created` Change records for a Ticket imported from a GitHub issue: the issue's address and its author, a
+ * User as named then or, when no User has linked their account, their GitHub login. Imports before authors were
+ * kept record none.
+ */
+interface ImportedFrom {
+  source?: string;
+  url?: string;
+  author?: { id: string; name: string } | { login: string };
+}
+
+/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked, and its author. */
 export function describedWithLink(change: Change): ReactNode {
-  const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
+  const imported = change.field === "created" ? (change.to as ImportedFrom | null) : null;
   if (imported?.source === "github" && typeof imported.url === "string") {
+    const author = imported.author;
     return (
       <>
         imported the Ticket from <ExternalLink url={imported.url}>its GitHub issue</ExternalLink>
+        {author && (
+          <>
+            {" "}
+            opened by{" "}
+            <Actor actor={"login" in author ? { kind: "github", name: `@${author.login} on GitHub` } : { kind: "user", name: author.name }} avatar={false} />
+          </>
+        )}
       </>
     );
   }

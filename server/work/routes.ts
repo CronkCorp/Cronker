@@ -6,14 +6,22 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
-import { createProject, editProject, findProject, projectNotFound, Project, projectsOf, ProjectSummary, StatusKind } from "./projects.js";
+import {
+  createProject,
+  editProject,
+  findProject,
+  Project,
+  ProjectCreate,
+  ProjectEdit,
+  projectNotFound,
+  projectsOf,
+  ProjectSummary,
+} from "./projects.js";
 import { requireProjectCreator } from "./board-rights.js";
-import { changeStatuses } from "./statuses.js";
+import { changeStatuses, StatusAdd, StatusEdit } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { defaultRoundLimit, LabelRule, Outcome, StepKind } from "./steps.js";
+import { defaultRoundLimit, StepPut } from "./steps.js";
 
-const StatusName = Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" });
-const Position = Type.Integer({ minimum: 0, description: "Place on the board, counting from 0." });
 const StatusParams = Type.Object({ projectId: Type.String(), statusId: Type.String() });
 const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody };
 const kindRule = "Refused if it would leave any Status kind without a Status.";
@@ -25,35 +33,6 @@ const outcomeRules =
   "Exactly one Outcome is the default and exactly one, another, is *needs you*; neither may target a Done or " +
   "Canceled Status, and no Outcome may target a Canceled Status. The *needs you* Outcome may not target the Status " +
   "the Step is on either.";
-const StepBody = Type.Object({
-  /** Ordinary unless given. */
-  kind: Type.Optional(StepKind),
-  brief: Type.String({ minLength: 1, maxLength: 50_000, pattern: "\\S", description: "Markdown." }),
-  model: Type.String({
-    minLength: 1,
-    maxLength: 50,
-    pattern: "^\\S+$",
-    description: "The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`.",
-  }),
-  roundLimit: Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      maximum: 100,
-      default: defaultRoundLimit,
-      description: "How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*.",
-    }),
-  ),
-  labelRule: Type.Optional(
-    Type.Union([LabelRule, Type.Null()], {
-      default: null,
-      description:
-        "Which Tickets the Step lets through; none by default, letting every Ticket through. A Ticket that doesn't pass " +
-        "gets no Run and moves on by the default Outcome.",
-    }),
-  ),
-  outcomes: Type.Array(Outcome, { minItems: 2, maxItems: 20 }),
-});
-
 export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
 
@@ -93,13 +72,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
             "token that isn't read-only and its Owner to be an Admin of the Workspace, since the default Steps are " +
             "what later Runs work by.",
           params: Type.Object({ workspaceId: Type.String() }),
-          body: Type.Object({
-            name: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }),
-            key: Type.String({
-              pattern: "^[A-Za-z][A-Za-z0-9]{1,9}$",
-              description: "2 to 10 letters and digits, starting with a letter; kept in capitals.",
-            }),
-          }),
+          body: ProjectCreate,
           response: { 201: Project, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -135,32 +108,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Projects"],
           summary: "Change a Project's settings",
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({
-            newTicketsDelegated: Type.Optional(
-              Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
-            ),
-            autonomousDelegationDefault: Type.Optional(
-              Type.Boolean({
-                description:
-                  "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it on the Ticket already.",
-              }),
-            ),
-            pullRequestAutomation: Type.Optional(
-              Type.Boolean({
-                description: "Whether a merged Pull Request completes the Tickets it links in this Project; off, merges only update its state.",
-              }),
-            ),
-            agentsMayMerge: Type.Optional(
-              Type.Boolean({
-                description:
-                  "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation. Only an Admin " +
-                  "may give it, whatever its value.",
-              }),
-            ),
-            conciseReports: Type.Optional(
-              Type.Boolean({ description: "Whether the Briefs of Runs in this Project ask them to keep their Reports concise." }),
-            ),
-          }),
+          body: ProjectEdit,
           response: { 200: Project, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -178,7 +126,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Add a Status",
           description: `Adds a Status at a position on the board, or last. ${writeRule} Returns the Project.`,
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({ name: StatusName, kind: StatusKind, position: Type.Optional(Position) }),
+          body: StatusAdd,
           response: { 201: Project, ...statusRefusals },
         },
       },
@@ -203,11 +151,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
             "A Status with a Step can't become Done or Canceled: remove its Step first. " +
             `${writeRule} Returns the Project.`,
           params: StatusParams,
-          body: Type.Object({
-            name: Type.Optional(StatusName),
-            kind: Type.Optional(StatusKind),
-            position: Type.Optional(Position),
-          }),
+          body: StatusEdit,
           response: { 200: Project, ...statusRefusals },
         },
       },
@@ -249,7 +193,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Refused on a Done or Canceled Status, where Tickets get no Runs. " +
             `${outcomeRules} ${stepAuthorRule} Returns the Project.`,
           params: StatusParams,
-          body: StepBody,
+          body: StepPut,
           response: { 200: Project, ...statusRefusals },
         },
       },
