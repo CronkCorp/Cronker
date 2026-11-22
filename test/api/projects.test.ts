@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -69,6 +69,59 @@ describe("creating a Project", () => {
     const listed = await cronk.request("GET", `/api/workspaces/${workspace.id}/projects`, { cookie });
     expect(listed.status).toBe(200);
     expect(await listed.json()).toEqual([{ id: project.id, workspaceId: workspace.id, name: "Cronker", key: "CRONK", visibility: "open", access: "write" }]);
+  });
+});
+
+describe("an Agent creating a Project", () => {
+  async function tokenOf(workspaceId: string, cookie: string, name: string, access: "full" | "read" = "full") {
+    const agent = await (await cronk.request("POST", `/api/workspaces/${workspaceId}/agents`, { cookie, body: { name } })).json();
+    const token = await (
+      await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access } })
+    ).json();
+    return { authorization: `Bearer ${token.secret}` };
+  }
+
+  test("an Agent whose Owner is an Admin creates one with the default board, as a User does", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const headers = await tokenOf(workspace.id, cookie, "claude");
+
+    const response = await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, {
+      headers,
+      body: { name: "Cronker", key: "cronk" },
+    });
+
+    expect(response.status).toBe(201);
+    const project = await response.json();
+    expect(project).toEqual(expect.objectContaining({ key: "CRONK", visibility: "open", access: "write" }));
+    expect(project.statuses.map((s: { name: string }) => s.name)).toEqual(defaultBoard.map((s) => s.name));
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { headers })).json()).toEqual(project);
+  });
+
+  test("an Agent whose Owner isn't an Admin, or with a read-only token, is refused, naming the rule", async () => {
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const grace = await addMember(cronk, cookie, workspace.id, "grace@example.com");
+    const create = (headers: Record<string, string>) =>
+      cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { headers, body: { name: "Mine", key: "MINE" } });
+
+    const notAdmin = await create(await tokenOf(workspace.id, grace.cookie, "grace-claude"));
+    expect(notAdmin.status).toBe(403);
+    expect((await notAdmin.json()).error).toEqual({
+      code: "agent_not_allowed",
+      message: expect.stringContaining("isn't an Admin"),
+      rule: expect.stringContaining("creates a Project only when its Owner is an Admin of the Workspace"),
+      advice: expect.stringContaining("grace@example.com"),
+    });
+    const readOnly = await create(await tokenOf(workspace.id, cookie, "reader", "read"));
+    expect(readOnly.status).toBe(403);
+    expect((await readOnly.json()).error.code).toBe("read_only_token");
+
+    // Grace herself, a User, may.
+    expect((await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, {
+      cookie: grace.cookie,
+      body: { name: "Mine", key: "MINE" },
+    })).status).toBe(201);
   });
 });
 

@@ -138,6 +138,8 @@ export async function createProject(
 ): Promise<Project> {
   const name = input.name.trim();
   const key = input.key.toUpperCase();
+  // The creator has Write in the new Project: a User of its Workspace, or an Agent whose Owner is an Admin, with a
+  // full token, in a Project that starts open with Agent Access Write (ADR 0010).
   return transaction(db, async (tx) => {
     const now = clock.now();
     const project = await tx
