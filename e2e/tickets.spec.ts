@@ -44,7 +44,14 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await lane("Backlog").getByRole("link", { name: /CRONK-2/ }).click();
   await expect(page.getByRole("heading", { name: "CRONK-2 Read me" })).toBeVisible();
   await page.getByRole("button", { name: "Edit" }).click();
-  await page.getByLabel("Description").fill("Comes after **CRONK-1**.");
+  // The description is written in the shared editor, as formatted text.
+  const description = page.getByRole("textbox", { name: "Description" });
+  await description.fill("Comes after ");
+  await description.press("End");
+  await description.press("ControlOrMeta+b");
+  await description.pressSequentially("CRONK-1");
+  await description.press("ControlOrMeta+b");
+  await description.pressSequentially(".");
   await page.getByRole("button", { name: "Save" }).click();
   await pick(page, "Priority", "High");
   await expect(fieldPicker(page, "Priority")).toContainText("High");
@@ -74,13 +81,13 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await expect(timeline).toContainText("ada@example.com changed Labels from none to UI");
   await expect(timeline).toContainText("ada@example.com changed Estimate from none to 3");
 
-  await page.getByLabel("New Comment").fill("Blocked by CRONK-1?");
+  await page.getByRole("textbox", { name: "New Comment" }).fill("Blocked by CRONK-1?");
   await placeCommentButton(page).click();
   const comment = timeline.getByRole("article", { name: "Comment by ada@example.com" });
   await expect(comment).toHaveCount(1);
   await expect(comment).toContainText("Blocked by CRONK-1?");
   await comment.getByRole("button", { name: "Reply" }).click();
-  await comment.getByLabel("Reply").fill("Yes, it is.");
+  await comment.getByRole("textbox", { name: "Reply" }).fill("Yes, it is.");
   await comment.getByRole("button", { name: "Send reply" }).click();
   const reply = comment.getByRole("article", { name: "Reply from ada@example.com" });
   await expect(reply).toContainText("Yes, it is.");
