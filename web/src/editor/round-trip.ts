@@ -10,12 +10,14 @@
 // block whose node is still the one loaded as its original source, and only a
 // block whose node changed through the serialiser, in Cronk's style. Blocks
 // the editor can't show (raw HTML, footnotes, link definitions and the like)
-// become source blocks, edited as their Markdown text.
+// become source blocks, edited as their Markdown text. An Artifact's address
+// alone in its paragraph becomes an Embed, one block kept as written.
 import type { Nodes, RootContent } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import type { Node } from "prosemirror-model";
+import { embedIn } from "./embed-address.js";
 import { markdownParser, markdownSerializer } from "./markdown.js";
 import { schema } from "./schema.js";
 
@@ -77,6 +79,18 @@ function formatted(source: string, env: object): Node | null {
   }
 }
 
+/** An Embed of the address a paragraph holds alone, written as `markdown`. */
+export function embedNode(address: string, markdown: string): Node {
+  return schema.nodes.embed!.create({ address, markdown });
+}
+
+/** The block as an Embed, when it is a paragraph holding an Artifact's address alone. */
+function embedded(node: RootContent, source: string): Node | null {
+  if (node.type !== "paragraph") return null;
+  const address = embedIn(source);
+  return address === undefined ? null : embedNode(address, source.trim());
+}
+
 function sourceBlock(source: string): Node {
   const text = source.replace(/\r\n?/g, "\n");
   return schema.nodes.source_block!.create(null, text ? schema.text(text) : null);
@@ -99,7 +113,7 @@ export function openMarkdown(markdown: string): MarkdownDocument {
   const sources = blocks.map(({ from, to }) => markdown.slice(from, to));
   const originals = blocks.map(({ node }, i) => {
     const source = sources[i]!;
-    const shownNode = onlyShown(node) ? formatted(source, env) : null;
+    const shownNode = embedded(node, source) ?? (onlyShown(node) ? formatted(source, env) : null);
     const loaded = shownNode ?? sourceBlock(source);
     return loaded.type.create({ ...loaded.attrs, block: i }, loaded.content, loaded.marks);
   });

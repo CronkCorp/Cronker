@@ -231,7 +231,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
     else if (key === "k") move(-1);
-    else if (key === "a" && canWrite && current?.kind === "question" && !resolved) answerBox.current?.textbox()?.focus();
+    else if (key === "a" && canWrite && current?.kind === "question" && !resolved) answerBox.current?.focus();
     else if (key === "c" && canWrite && current?.kind === "unverified" && !resolved) acceptRef.current?.();
     else if (key === "r" && canWrite && current?.kind === "unverified" && !resolved) setReopening(true);
     else return;

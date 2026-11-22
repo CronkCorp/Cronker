@@ -1,4 +1,5 @@
 import { addresses, useAddresses } from "./addresses.js";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type DragEvent, type FormEvent, type ReactNode } from "react";
 import {
   api,
@@ -25,6 +26,7 @@ import {
 import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
+import { keys } from "./live-queries.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate } from "./router.js";
 import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
@@ -36,7 +38,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Actor, Avatar } from "./ui/actor.js";
-import { Actions, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
   ConfirmDialog,
@@ -54,6 +56,7 @@ import {
   MenuSeparator,
   MenuSub,
 } from "./ui/overlays.js";
+import { FilterPicker } from "./ui/picker.js";
 import { ReadOnlyNote } from "./write-access.js";
 
 /** The Workspace's Projects, and a form to create one. */
@@ -70,7 +73,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
   useEffect(load, [load]);
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "project.created" || event.type === "reconnected") load();
+    if (event.type === "project.created" || event.type === "project.changed" || event.type === "reconnected") load();
   });
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
@@ -92,6 +95,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
                 <li key={project.id}>
                   <Link to={to.project(project)} className="row">
                     <span className="row-title">{project.name}</span> <span className="ticket-key">{project.key}</span>
+                    {project.archivedAt !== null && <Chip>Archived</Chip>}
                   </Link>
                 </li>
               ))}
@@ -131,18 +135,82 @@ type View = "board" | "list" | "settings" | "documents" | "glossary" | "decision
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** The Project's other pages, in the page head's "…" menu. */
-export function ProjectMenu({ project }: { project: ProjectSummary }) {
+/** The Project's other pages, in the page head's "…" menu, and, for an Admin, Archive… after them. */
+export function ProjectMenu({
+  project,
+  workspace,
+  onChange,
+}: {
+  project: ProjectSummary;
+  workspace: WorkspaceSummary;
+  onChange: (project: Project) => void;
+}) {
   const to = useAddresses();
   const base = to.project(project);
+  const [archiving, setArchiving] = useState(false);
   return (
-    <Menu label="More of this Project">
-      <MenuLink to={`${base}/documents`}>Documents</MenuLink>
-      <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
-      <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
-      <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
-      <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
-    </Menu>
+    <>
+      <Menu label="More of this Project">
+        <MenuLink to={`${base}/documents`}>Documents</MenuLink>
+        <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
+        <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
+        <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
+        <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
+        {workspace.isAdmin && project.archivedAt === null && (
+          <>
+            <MenuSeparator />
+            <MenuItem onSelect={() => setArchiving(true)}>Archive…</MenuItem>
+          </>
+        )}
+      </Menu>
+      <ConfirmDialog
+        open={archiving}
+        onOpenChange={setArchiving}
+        title={`Archive ${project.key}?`}
+        confirm="Archive"
+        onConfirm={async () => {
+          onChange(await api.archiveProject(project.id));
+          setArchiving(false);
+        }}
+      >
+        It becomes read-only for everyone, Admins and Agents included, and moves to Archived in the sidebar. Its key and
+        addresses keep working, and an Admin can unarchive it.
+      </ConfirmDialog>
+    </>
+  );
+}
+
+/** Says an archived Project is read-only, with Unarchive for an Admin. */
+function ArchivedBanner({
+  project,
+  workspace,
+  onChange,
+}: {
+  project: Project;
+  workspace: WorkspaceSummary;
+  onChange: (project: Project) => void;
+}) {
+  const { busy, error, save } = useSave();
+  if (project.archivedAt === null) return null;
+  return (
+    <Banner tone="warn" label="Archived">
+      <div className="archived-banner">
+        <span>
+          This Project is archived: everyone reads it, but nothing in it changes until an Admin unarchives it.
+        </span>
+        {workspace.isAdmin && (
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={busy}
+            onClick={() => save(async () => onChange(await api.unarchiveProject(project.id)))}
+          >
+            Unarchive
+          </Button>
+        )}
+      </div>
+      <FormError error={error} />
+    </Banner>
   );
 }
 
@@ -163,59 +231,47 @@ export function ProjectScreen({
   view: View;
 }) {
   const to = useAddresses();
-  const [project, setProject] = useState<Project | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [tickets, setTickets] = useState<TicketSummary[] | null>(null);
+  const client = useQueryClient();
   const [filter, setFilter] = useState<TicketFilter>({});
   const [group, setGroup] = useState(storedGroupSubTickets);
-  const [failure, setFailure] = useState<string | null>(null);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
 
-  useEffect(() => {
-    api.project(projectId).then(
-      // A Project of another of the User's Workspaces isn't shown under this one's name.
-      (found) => {
-        if (found.workspaceId === workspace.id) setProject(found);
-        else setFailure("No such Project.");
-      },
-      (e: Error) => setFailure(e.message),
-    );
-    api.members(workspace.id).then(setMembers, (e: Error) => setFailure(e.message));
-    api.agents(workspace.id).then(setAgents, (e: Error) => setFailure(e.message));
-  }, [projectId, workspace.id]);
+  const projectQuery = useQuery({ queryKey: keys.project(projectId), queryFn: () => api.project(projectId) });
+  // A Project of another of the User's Workspaces isn't shown under this one's name.
+  const elsewhere = projectQuery.data !== undefined && projectQuery.data.workspaceId !== workspace.id;
+  const project = elsewhere ? null : (projectQuery.data ?? null);
+  const membersQuery = useQuery({ queryKey: keys.members(workspace.id), queryFn: () => api.members(workspace.id) });
+  const agentsQuery = useQuery({ queryKey: keys.agents(workspace.id), queryFn: () => api.agents(workspace.id) });
+  // Each filter's list has its own key under the Project's Tickets, so the events that refresh those refresh it; while
+  // a new filter's list loads, the last one stays on screen.
+  const ticketsQuery = useQuery({
+    queryKey: [...keys.projectTickets(projectId), filter],
+    queryFn: () => api.tickets(projectId, filter),
+    placeholderData: keepPreviousData,
+  });
+  const members = membersQuery.data ?? [];
+  const agents = agentsQuery.data ?? [];
+  const tickets = ticketsQuery.data ?? null;
+  const failed = [projectQuery, membersQuery, agentsQuery, ticketsQuery].find((query) => query.error)?.error;
+  const failure = elsewhere ? "No such Project." : (failed?.message ?? null);
 
-  const latestTickets = useLatest();
-  const loadTickets = useCallback(
-    () => latestTickets(api.tickets(projectId, filter), setTickets, (e) => setFailure(e.message)),
-    [projectId, filter, latestTickets],
-  );
-  useEffect(loadTickets, [loadTickets]);
+  const setProject = (changed: Project) => client.setQueryData(keys.project(projectId), changed);
+  const loadProject = () => void client.invalidateQueries({ queryKey: keys.project(projectId) });
+  const loadTickets = () => void client.invalidateQueries({ queryKey: keys.projectTickets(projectId) });
   /**
-   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Fetching again starts
-   * after the edit, so whatever was fetched before it is dropped rather than shown over it; and the card moves without
-   * waiting on that fetch, which the events the edit sets off may start again and again on a busy server.
+   * Shows a Ticket the board just edited as the edit answered, then fetches the Tickets again. Invalidating cancels a
+   * fetch started before the edit, so what it would answer isn't shown over the edit; and the card moves without
+   * waiting on the new fetch, which the events the edit sets off may start again and again on a busy server.
    */
   const ticketEdited = (edited?: TicketSummary) => {
-    if (edited) setTickets((shown) => shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)) ?? shown);
+    if (edited) {
+      client.setQueriesData<TicketSummary[]>({ queryKey: keys.projectTickets(projectId) }, (shown) =>
+        shown?.map((ticket) => (ticket.id === edited.id ? edited : ticket)),
+      );
+    }
     loadTickets();
   };
-
-  const latestProject = useLatest();
-  const loadProject = () => latestProject(api.project(projectId), setProject, (e) => setFailure(e.message));
-  useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected") {
-      loadProject();
-      loadTickets();
-    } else if (!("projectId" in event) || event.projectId !== projectId) {
-      return;
-    } else if (event.type === "statuses.changed" || event.type === "project.changed") {
-      loadProject();
-    } else if (event.type === "ticket.created" || event.type === "ticket.changed") {
-      loadTickets();
-    }
-  });
 
   if (failure) return <FormError error={failure} />;
   if (!project || !tickets) return <p className="muted">Loading…</p>;
@@ -232,9 +288,10 @@ export function ProjectScreen({
         <PageHead
           crumbs={[home, { label: <span className="mono">{project.key}</span>, to: base }]}
           title="Project settings"
-          actions={<ProjectMenu project={project} />}
+          actions={<ProjectMenu project={project} workspace={workspace} onChange={setProject} />}
         />
-        <ReadOnlyNote access={project.access} />
+        <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
+        {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
         <SettingsLayout
           sections={[
             {
@@ -258,7 +315,7 @@ export function ProjectScreen({
               label: "Delegation defaults",
               children: <DelegationSettings project={project} onChange={setProject} />,
             },
-            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} /> },
+            { id: "repositories", label: "Repositories", children: <RepositoriesSettings project={project} isAdmin={workspace.isAdmin} /> },
             {
               id: "pull-request-automation",
               label: "Pull Request automation",
@@ -314,12 +371,13 @@ export function ProjectScreen({
         }
         actions={
           <>
-            <ProjectMenu project={project} />
+            <ProjectMenu project={project} workspace={workspace} onChange={setProject} />
             {project.access === "write" && <NewTicket project={project} onCreated={loadTickets} />}
           </>
         }
       />
-      <ReadOnlyNote access={project.access} />
+      <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
+      {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
       {view === "board" && (
         <Board project={project} members={members} agents={agents} user={user} tickets={tickets} group={group} onChanged={ticketEdited} />
@@ -375,43 +433,34 @@ function Filters({
   const set = (change: TicketFilter) => onChange({ ...filter, ...change });
   return (
     <div className="filters" role="group" aria-label="Filters">
-      <label className="filter">
-        <span className="sr-only">Filter by Status</span>
-        <select value={filter.statusId ?? ""} onChange={(e) => set({ statusId: e.target.value || undefined })}>
-          <option value="">Any Status</option>
-          {project.statuses.map((status) => (
-            <option key={status.id} value={status.id}>
-              {status.name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="filter">
-        <span className="sr-only">Filter by Assignee</span>
-        <select value={filter.assigneeId ?? ""} onChange={(e) => set({ assigneeId: e.target.value || undefined })}>
-          <option value="">Anyone</option>
-          <option value="none">Nobody</option>
-          {members.map(({ user }) => (
-            <option key={user.id} value={user.id}>
-              {nameOf(user)}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="filter">
-        <span className="sr-only">Filter by Priority</span>
-        <select
-          value={filter.priority ?? ""}
-          onChange={(e) => set({ priority: (e.target.value || undefined) as Priority | undefined })}
-        >
-          <option value="">Any Priority</option>
-          {priorities.map(({ priority, label }) => (
-            <option key={priority} value={priority}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <FilterPicker
+        label="Status"
+        anyLabel="Any Status"
+        options={project.statuses.map((s) => ({ value: s.id, label: s.name, content: <StatusPill kind={s.kind} name={s.name} /> }))}
+        value={filter.statusId}
+        onChange={(statusId) => set({ statusId })}
+      />
+      <FilterPicker
+        label="Assignee"
+        anyLabel="Anyone"
+        options={[
+          { value: "none", label: "Nobody" },
+          ...members.map(({ user }) => ({ value: user.id, label: nameOf(user), content: <Actor actor={{ kind: "user", name: nameOf(user) }} /> })),
+        ]}
+        value={filter.assigneeId}
+        onChange={(assigneeId) => set({ assigneeId })}
+      />
+      <FilterPicker
+        label="Priority"
+        anyLabel="Any Priority"
+        options={priorities.map(({ priority, label }) => ({
+          value: priority,
+          label,
+          content: priority === "none" ? undefined : <PriorityTag priority={priority} />,
+        }))}
+        value={filter.priority}
+        onChange={(priority) => set({ priority: priority as Priority | undefined })}
+      />
       <label className="filter">
         <span className="sr-only">Filter by Label</span>
         <input placeholder="Label" value={filter.label ?? ""} onChange={(e) => set({ label: e.target.value.trim() || undefined })} />
@@ -452,6 +501,35 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  * read included. Hovering or focusing it names them, each a link to its Ticket, and lists each unreadable one as "a
  * Ticket you can't see". An unblocked Ticket shows nothing.
  */
+/**
+ * A queued Ticket's place in the Merge Queue: *#2 in queue*; *Updating branch* while GitHub brings its branch, behind its
+ * base branch, up to date, then *Waiting for checks* on the new commit; *Resolving conflict* while, stepped aside for
+ * a conflict, a Merge Run resolves it, then *Waiting for checks* on the resolution; or *Merging* while Cronk merges it.
+ */
+export function QueueChip({ queue }: { queue: NonNullable<TicketSummary["queue"]> }) {
+  switch (queue.state) {
+    case "merging":
+      return <Chip tone="ok">Merging</Chip>;
+    case "updating-branch":
+      return <Chip tone="info">Updating branch</Chip>;
+    case "resolving-conflict":
+      return <Chip tone="warn">Resolving conflict</Chip>;
+    case "waiting-for-checks":
+      return <Chip tone="info">Waiting for checks</Chip>;
+    default:
+      return <Chip tone="info">#{queue.position} in queue</Chip>;
+  }
+}
+
+/** A *Conflicts with `<base>`* marker for each base branch the Ticket's open Pull Requests conflict with. */
+function ConflictChips({ ticket }: { ticket: TicketSummary }) {
+  return ticket.conflicts.map((branch) => (
+    <Chip key={branch} tone="warn" title={`A Pull Request of ${ticket.key} conflicts with ${branch}`}>
+      Conflicts with <span className="mono">{branch}</span>
+    </Chip>
+  ));
+}
+
 function BlockedChip({ ticket }: { ticket: TicketSummary }) {
   const to = useAddresses();
   const blockers = ticket.blockedBy;
@@ -711,13 +789,15 @@ function Card({
           {ticket.labels.map((label) => (
             <Chip key={label}>{label}</Chip>
           ))}
+          {ticket.queue && <QueueChip queue={ticket.queue} />}
+          <ConflictChips ticket={ticket} />
           <TicketRunState ticket={ticket} />
           <People ticket={ticket} members={members} agents={agents} />
         </span>
         {selected && <span className="sr-only">, selected</span>}
       </Link>
       <BlockedChip ticket={ticket} />
-      <SubTickets ticket={ticket} project={project} folded={folded} />
+      <SubTickets ticket={ticket} statusId={ticket.statusId} project={project} folded={folded} />
     </div>
   );
   if (!canWrite) return card;
@@ -733,37 +813,71 @@ function Card({
   );
 }
 
-/** Each loaded Ticket's loaded Sub-Tickets, by its id. */
-type Folded = Map<string, TicketSummary[]>;
-const noneFolded: Folded = new Map();
+/**
+ * With Group Sub-Tickets on, how the board's Tickets fold: each Ticket's Sub-Tickets in one Status column, by
+ * `foldKey(parentId, statusId)`; the Tickets folded away, which get no card of their own; and, by Status, the
+ * parents that get a copy of their card in that column, for the Sub-Tickets there whose parent's card is in another.
+ */
+type Folded = { children: Map<string, TicketSummary[]>; hidden: Set<string>; copies: Map<string, Set<string>> };
+const noneFolded: Folded = { children: new Map(), hidden: new Set(), copies: new Map() };
+const foldKey = (parentId: string, statusId: string) => `${parentId} ${statusId}`;
+/** A card's Sub-Tickets folded into it in the column it's shown in. */
+const foldedInto = (folded: Folded, parentId: string, statusId: string) => folded.children.get(foldKey(parentId, statusId));
 
 /**
- * Group Sub-Tickets: a Ticket whose parent is loaded folds into its parent's card, in any Status. One whose parent
- * isn't loaded, such as one a filter leaves out, keeps its own card. A Sub-Ticket's own Sub-Tickets fold into it, and
- * so show nested under it when its parent's card unfolds.
+ * Group Sub-Tickets: a Ticket whose parent is loaded folds under its parent in its own Status column: into the
+ * parent's card when the parent is in the same column, otherwise into a copy of the parent's card there, so every
+ * Sub-Ticket stays in the column of its Status. One whose parent isn't loaded, such as one a filter leaves out, keeps
+ * its own card. A Sub-Ticket's own Sub-Tickets in its column fold into it, and so show nested under it when the card
+ * it folds into unfolds.
  */
-function foldSubTickets(tickets: TicketSummary[]): { children: Folded; hidden: Set<string> } {
-  const loaded = new Set(tickets.map((ticket) => ticket.id));
-  const children: Folded = new Map();
-  const hidden = new Set<string>();
+function foldSubTickets(tickets: TicketSummary[]): Folded {
+  const byId = new Map(tickets.map((ticket) => [ticket.id, ticket]));
+  const folded: Folded = { children: new Map(), hidden: new Set(), copies: new Map() };
   for (const ticket of tickets) {
-    if (ticket.parentId === null || !loaded.has(ticket.parentId)) continue;
-    hidden.add(ticket.id);
-    children.set(ticket.parentId, [...(children.get(ticket.parentId) ?? []), ticket]);
+    const parent = ticket.parentId === null ? undefined : byId.get(ticket.parentId);
+    if (!parent) continue;
+    folded.hidden.add(ticket.id);
+    const key = foldKey(parent.id, ticket.statusId);
+    folded.children.set(key, [...(folded.children.get(key) ?? []), ticket]);
+    if (parent.statusId !== ticket.statusId) {
+      folded.copies.set(ticket.statusId, (folded.copies.get(ticket.statusId) ?? new Set()).add(parent.id));
+    }
   }
-  return { children, hidden };
+  return folded;
 }
 
 /**
- * A parent's folded Sub-Tickets on its card: *3 / 8 Sub-Tickets*, counting its direct ones and those of them finished
- * (in a Done or Canceled Status, Unverified included). It unfolds a list on the card, each by Status dot, key and
- * title, a link to its Ticket. Like the Blocked chip it holds links of its own, so it sits beside the card's link.
- * Which cards are unfolded isn't stored.
+ * Group Sub-Tickets: a copy of a parent's card in another column than its own, holding the parent's Sub-Tickets of
+ * that column. Muted and dashed, it says which Status the parent is in; it is only a link to the parent with its
+ * Sub-Tickets chip, so it neither drags, selects nor opens a context menu: the parent moves by its own card.
  */
-function SubTickets({ ticket, project, folded }: { ticket: TicketSummary; project: Project; folded: Folded }) {
+function CardCopy({ ticket, statusId, project, folded }: { ticket: TicketSummary; statusId: string; project: Project; folded: Folded }) {
+  const to = useAddresses();
+  const status = project.statuses.find((s) => s.id === ticket.statusId);
+  return (
+    <div className="card card-copy" onDragStart={(event) => event.preventDefault()}>
+      <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
+        <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
+        <span className="card-meta card-copy-status">
+          {status && <StatusDot kind={status.kind} />} In {status?.name ?? "another Status"}
+        </span>
+      </Link>
+      <SubTickets ticket={ticket} statusId={statusId} project={project} folded={folded} />
+    </div>
+  );
+}
+
+/**
+ * A card's folded Sub-Tickets, those in the column it's shown in: *3 / 8 Sub-Tickets*, counting its direct ones and
+ * those of them finished (in a Done or Canceled Status, Unverified included). It unfolds a list on the card, each by
+ * Status dot, key and title, a link to its Ticket. Like the Blocked chip it holds links of its own, so it sits beside
+ * the card's link. Which cards are unfolded isn't stored.
+ */
+function SubTickets({ ticket, statusId, project, folded }: { ticket: TicketSummary; statusId: string; project: Project; folded: Folded }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
-  const subTickets = folded.get(ticket.id);
+  const subTickets = foldedInto(folded, ticket.id, statusId);
   if (!subTickets) return null;
   const kindOf = (statusId: string) => project.statuses.find((status) => status.id === statusId)?.kind ?? "backlog";
   const finished = subTickets.filter((sub) => ["done", "canceled"].includes(kindOf(sub.statusId))).length;
@@ -780,7 +894,7 @@ function SubTickets({ ticket, project, folded }: { ticket: TicketSummary; projec
   );
 }
 
-/** Unfolded Sub-Tickets, each with its own folded ones nested under it. */
+/** Unfolded Sub-Tickets, each with its own folded ones of the same column nested under it. */
 function SubTicketList({
   id,
   subTickets,
@@ -796,7 +910,7 @@ function SubTicketList({
   return (
     <ul id={id} className="sub-ticket-list" aria-label="Sub-Tickets">
       {subTickets.map((sub) => {
-        const nested = folded.get(sub.id);
+        const nested = foldedInto(folded, sub.id, sub.statusId);
         return (
           <li key={sub.id}>
             <Link to={to.ticket(sub)} className="ticket-link" draggable>
@@ -846,7 +960,7 @@ function Board({
   const edge = useEdgeScroll();
 
   const own = agents.filter((agent) => agent.owner.id === user.id);
-  // With Group Sub-Tickets on, a Ticket folded into its parent's card gets no card of its own.
+  // With Group Sub-Tickets on, a Ticket folded under its parent gets no card of its own.
   const folded = useMemo(() => (group ? foldSubTickets(tickets) : null), [group, tickets]);
   const carded = useMemo(() => (folded ? tickets.filter((ticket) => !folded.hidden.has(ticket.id)) : tickets), [folded, tickets]);
 
@@ -986,6 +1100,10 @@ function Board({
       >
         {project.statuses.map((status) => {
           const inStatus = carded.filter((ticket) => ticket.statusId === status.id);
+          // Copies of parents whose card is in another column, for their Sub-Tickets in this one, in the board's order.
+          const copied = folded?.copies.get(status.id);
+          const copies = copied ? tickets.filter((ticket) => copied.has(ticket.id)) : [];
+          const shown = inStatus.length + copies.length;
           const isCollapsed = collapsed(status);
           return (
             <section
@@ -1006,7 +1124,7 @@ function Board({
                     type="button"
                     className="column-toggle"
                     aria-expanded={!isCollapsed}
-                    aria-label={`${status.name}, ${ticketCount(inStatus.length)}`}
+                    aria-label={`${status.name}, ${ticketCount(shown)}`}
                     title={isCollapsed ? `Open ${status.name}` : `Collapse ${status.name}`}
                     onClick={() =>
                       setOpened((shown) => {
@@ -1018,7 +1136,7 @@ function Board({
                     }
                   >
                     <StatusDot kind={status.kind} />
-                    <span className="column-count">{inStatus.length}</span>
+                    <span className="column-count">{shown}</span>
                   </button>
                 ) : (
                   <StatusDot kind={status.kind} />
@@ -1026,7 +1144,7 @@ function Board({
                 <h2 className={isCollapsed ? "sr-only" : "column-name"} title={status.name}>
                   {status.name}
                 </h2>
-                {!collapsible(status) && <span className="column-count">{inStatus.length}</span>}
+                {!collapsible(status) && <span className="column-count">{shown}</span>}
                 {status.step && !isCollapsed && (
                   <span className="column-step">
                     <ModelLabel model={status.step.model} />
@@ -1044,12 +1162,15 @@ function Board({
                       agents={agents}
                       own={own}
                       arrived={arrived.has(`${ticket.id} ${ticket.statusId}`)}
-                      folded={folded?.children ?? noneFolded}
+                      folded={folded ?? noneFolded}
                       selection={selected.has(ticket.id) ? selected.size : 0}
                       onEdit={(change) => void edit(ticket.id, change)}
                       onSelect={(range) => select(ticket, range)}
                       onMoveSelection={(statusId) => void moveSelection(statusId)}
                     />
+                  ))}
+                  {copies.map((parent) => (
+                    <CardCopy key={`copy-${parent.id}`} ticket={parent} statusId={status.id} project={project} folded={folded ?? noneFolded} />
                   ))}
                 </div>
               )}

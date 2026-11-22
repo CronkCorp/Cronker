@@ -3,7 +3,8 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { accessIn, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessIn, archivedRefusal, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
+import { dropAutonomousEntries } from "../pipeline/merge-queue.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
@@ -40,7 +41,16 @@ export const ProjectSummary = Type.Object({
   access: Type.Union([Type.Literal("write"), Type.Literal("read")], {
     description:
       "What the caller may do in the Project: `write`, or `read` to only read it. Admins always have Write; an " +
-      "Agent's is the least of the Project's Agent Access, its Owner's Access and its token's access.",
+      "Agent's is the least of the Project's Agent Access, its Owner's Access and its token's access. In an archived " +
+      "Project it is `read` for everyone.",
+  }),
+  archivedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description:
+      "When an Admin archived the Project, or null. An archived Project is read-only for everyone, Admins and Agents " +
+      "included: every write in it is refused with `project_archived` until an Admin unarchives it.",
+  }),
+  archivedBy: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Admin who archived the Project, or null.",
   }),
 });
 export type ProjectSummary = Static<typeof ProjectSummary>;
@@ -88,10 +98,24 @@ const defaultStatuses: { name: string; kind: StatusKind }[] = [
   { name: "Canceled", kind: "canceled" },
 ];
 
-/** A Project's summary columns as the Viewer sees them, its own Access included, binding the Viewer's value to `param`. */
+/**
+ * A Project's summary columns as the Viewer sees them, its own Access included, binding the Viewer's value to `param`.
+ * An archived Project's Access shows as Read, with `archivedAt` saying why.
+ */
 const summaryColumns = (viewer: Viewer, param: string) =>
   `projects.id, projects.workspace_id as "workspaceId", projects.name, projects.key, projects.visibility,
-   ${accessIn(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, param).sql} as access`;
+   (select case level when 'archived' then 'read' else level end
+    from (select ${accessIn(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, param).sql} as level) access_level) as access,
+   projects.archived_at as "archivedAt", projects.archived_by as "archivedBy"`;
+
+/**
+ * Refuses a write to the Project unless the caller has Write in it: `project_archived` while it is archived, whoever
+ * asks, otherwise `read_access`.
+ */
+export function requireProjectWrite(project: ProjectSummary): void {
+  if (project.archivedAt !== null) throw archivedRefusal();
+  if (project.access !== "write") throw readAccessRefusal();
+}
 
 /** The Workspace's Projects the Viewer may read. */
 export async function projectsOf(db: Db, viewer: Viewer, workspaceId: string): Promise<ProjectSummary[]> {
@@ -151,7 +175,8 @@ export async function createProject(
     const project = await tx
       .query<ProjectSummary>(
         `insert into projects (workspace_id, name, key, created_at) values ($1, $2, $3, $4)
-         returning id, workspace_id as "workspaceId", name, key, visibility, 'write' as access`,
+         returning id, workspace_id as "workspaceId", name, key, visibility, 'write' as access,
+           null as "archivedAt", null as "archivedBy"`,
         [workspaceId, name, key, now],
       )
       .then(
@@ -223,7 +248,7 @@ export async function editProject(
     const viewer = userViewer(userId);
     const project = await findProject(tx, viewer, projectId, { lock: true });
     if (!project) throw projectNotFound();
-    if (project.access !== "write") throw readAccessRefusal();
+    requireProjectWrite(project);
     if (edit.agentsMayMerge !== undefined && !(await requireMember(db, userId, project.workspaceId)).isAdmin) {
       throw new ApiError(403, "not_admin", "Only an Admin of this Workspace can change whether agents may merge.");
     }
@@ -256,9 +281,12 @@ export async function editProject(
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     }
-    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now.
+    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now. Turning agents
+    // may merge off also takes the Tickets only Autonomous Delegation queued out of the Merge Queue, to be passed on.
     if (next.agentsMayMerge !== project.agentsMayMerge) {
-      recheckWaiting(context, tx, await waitingTickets(tx, "tickets.project_id = $1", [project.id]));
+      const dropped = next.agentsMayMerge ? [] : await dropAutonomousEntries(context, tx, project.id);
+      const waiting = await waitingTickets(tx, "tickets.project_id = $1", [project.id]);
+      recheckWaiting(context, tx, [...waiting, ...dropped.filter((d) => !waiting.some((w) => w.id === d.id))]);
     }
     return (await findProject(tx, viewer, project.id))!;
   });

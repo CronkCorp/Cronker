@@ -1,6 +1,7 @@
 import { EditorView, type NodeView } from "prosemirror-view";
 import type { Node } from "prosemirror-model";
 import type { Command, EditorState } from "prosemirror-state";
+import { createPortal } from "react-dom";
 import { useEffect, useId, useImperativeHandle, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { api, attachmentUrl, type AttachmentOwner } from "../api.js";
 import { markdownReference } from "../attachments.js";
@@ -43,7 +44,9 @@ import {
 import { submitOnCtrlOrCmdEnter } from "../forms.js";
 import { chooseEditorMode, storedEditorMode, type EditorMode } from "../storage.js";
 import { Button, Field, FormError } from "./controls.js";
+import { EditorEmbed, embedView, type EmbedSlot } from "./editor-embed.js";
 import { Dialog, DialogActions, DialogClose } from "./overlays.js";
+import { scrollIntoViewAsAsked } from "./scroll.js";
 
 const onMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -303,6 +306,16 @@ function LinkDialog({ view, onClose }: { view: EditorView; onClose: () => void }
 export interface RichEditorHandle {
   /** The text being edited: the formatted text, or the Markdown source. */
   textbox(): HTMLElement | null;
+  /**
+   * Puts the cursor in the text, with `scroll` scrolling it into view first; asked before the editor is ready, as while
+   * it loads, it does so once it is.
+   */
+  focus(options?: EditorFocus): void;
+}
+
+export interface EditorFocus {
+  /** Scroll the text into view as the User asked for it, as the Ticket page's C does. */
+  scroll?: boolean;
 }
 
 export interface RichEditorProps {
@@ -352,6 +365,8 @@ export function RichEditor({
   const [state, setState] = useState<EditorState | null>(null);
   const [linking, setLinking] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
+  // The Embeds in the text, each drawn into its node view's place.
+  const [embeds, setEmbeds] = useState<EmbedSlot[]>([]);
   const mount = useRef<HTMLDivElement>(null);
   const source = useRef<HTMLTextAreaElement>(null);
   const toolbar = useRef<HTMLDivElement>(null);
@@ -362,7 +377,21 @@ export function RichEditor({
   const latest = useRef({ value, onChange, attachTo, onAttached, submits, disabled, placeholder });
   latest.current = { value, onChange, attachTo, onAttached, submits, disabled, placeholder };
 
-  useImperativeHandle(handle, () => ({ textbox: () => viewRef.current?.dom ?? source.current }), []);
+  // A focus asked for before the formatted text is ready, which it gets once it is.
+  const wantsFocus = useRef<EditorFocus | null>(null);
+  useImperativeHandle(
+    handle,
+    () => ({
+      textbox: () => viewRef.current?.dom ?? source.current,
+      focus: (options = {}) => {
+        const view = viewRef.current;
+        if (view) focusText(view.dom, () => view.focus(), options);
+        else if (source.current) focusText(source.current, () => source.current?.focus({ preventScroll: true }), options);
+        else wantsFocus.current = options;
+      },
+    }),
+    [],
+  );
 
   const hooks = { editLink: () => setLinking(true) };
 
@@ -422,7 +451,14 @@ export function RichEditor({
           ...(placeholder ? { "aria-placeholder": placeholder, ...(empty ? { "data-placeholder": placeholder } : {}) } : {}),
         };
       },
-      nodeViews: { image: imageView, list_item: listItemView },
+      nodeViews: {
+        image: imageView,
+        list_item: listItemView,
+        embed: embedView(
+          (slot) => setEmbeds((all) => [...all.filter((other) => other.id !== slot.id), slot]),
+          (id) => setEmbeds((all) => all.filter((other) => other.id !== id)),
+        ),
+      },
       clipboardTextParser: (text, $context) => sliceFromText(text, $context),
       clipboardTextSerializer: textFromSlice,
       handlePaste(view, event) {
@@ -439,6 +475,12 @@ export function RichEditor({
           return setLink(text.trim())(view.state, view.dispatch);
         }
         return false;
+      },
+      handleDOMEvents: {
+        // While a block is dragged, an Embed's frame doesn't take the pointer from the editor.
+        dragstart: (view) => (view.dom.classList.add("rich-editor-dragging"), false),
+        dragend: (view) => (view.dom.classList.remove("rich-editor-dragging"), false),
+        drop: (view) => (view.dom.classList.remove("rich-editor-dragging"), false),
       },
       handleDrop(view, event, _slice, moved) {
         const files = event.dataTransfer?.files;
@@ -466,7 +508,9 @@ export function RichEditor({
     });
     viewRef.current = view;
     setState(view.state);
-    if (autoFocus) view.focus();
+    if (wantsFocus.current) focusText(view.dom, () => view.focus(), wantsFocus.current);
+    else if (autoFocus) view.focus();
+    wantsFocus.current = null;
     return () => {
       view.destroy();
       viewRef.current = null;
@@ -547,7 +591,14 @@ export function RichEditor({
       </div>
       {hint && <span className="field-hint">{hint}</span>}
       <FormError error={attachError} />
+      {mode === "rich" && embeds.map((slot) => createPortal(<EditorEmbed address={slot.address} />, slot.dom, slot.id))}
       {linking && viewRef.current && <LinkDialog view={viewRef.current} onClose={() => setLinking(false)} />}
     </div>
   );
+}
+
+/** Focuses the text, scrolling it into view first when asked; `focus` itself doesn't scroll. */
+function focusText(element: HTMLElement, focus: () => void, { scroll }: EditorFocus) {
+  if (scroll) scrollIntoViewAsAsked(element);
+  focus();
 }

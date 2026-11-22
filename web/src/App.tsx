@@ -31,6 +31,7 @@ import { RunnersScreen } from "./runners.js";
 import { SearchScreen } from "./search.js";
 import { takeReturnAfterSignIn } from "./storage.js";
 import { TicketScreen } from "./tickets.js";
+import { useLiveInvalidation } from "./live.js";
 import { TranscriptScreen } from "./transcripts.js";
 import { Avatar } from "./ui/actor.js";
 import { Actions, Button, EmptyState, Field, FormError, PageHead, Panel, Saved, workspaceCrumb } from "./ui/controls.js";
@@ -297,6 +298,8 @@ function SignedIn({
     if (routed) setSelectedId(routed.id);
   }, [routed]);
   const current = routed ?? workspaces.find((w) => w.id === selectedId) ?? workspaces[0];
+  // What screens load through queries follows the stream of the Workspace whose page is shown.
+  useLiveInvalidation(routed?.id ?? "");
 
   useEffect(() => {
     if (path === "/" && workspaces[0]) replace(addresses.workspace(workspaces[0]));

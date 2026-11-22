@@ -218,3 +218,53 @@ export function FieldPicker({
     </div>
   );
 }
+
+/**
+ * A filter in a row of filters: a compact button showing the current choice, which opens a `Picker`. Its first
+ * option, such as "Any Status", clears the filter.
+ */
+export function FilterPicker({
+  label,
+  anyLabel,
+  options,
+  value,
+  onChange,
+}: {
+  /** What it filters by, such as "Status": the button reads "Filter by Status". */
+  label: string;
+  /** The choice that clears the filter, such as "Any Status". */
+  anyLabel: string;
+  options: PickerOption[];
+  /** The chosen value; none while the filter is clear. */
+  value: string | undefined;
+  onChange: (value: string | undefined) => void;
+}) {
+  const id = useId();
+  const chosen = value === undefined ? undefined : options.find((o) => o.value === value);
+  return (
+    <Picker
+      label={label}
+      options={[{ value: "", label: anyLabel, content: <span className="muted">{anyLabel}</span> }, ...options]}
+      selected={[value ?? ""]}
+      onPick={(picked) => onChange(picked || undefined)}
+      trigger={
+        <button
+          type="button"
+          className={`filter-trigger${chosen ? " filter-trigger-on" : ""}`}
+          aria-labelledby={`${id}-label ${id}-value`}
+          aria-haspopup="listbox"
+        >
+          <span id={`${id}-label`} className="sr-only">
+            Filter by {label}
+          </span>
+          <span id={`${id}-value`} className="picker-value">
+            {chosen ? (chosen.content ?? chosen.label) : <span className="muted">{anyLabel}</span>}
+          </span>
+          <span className="filter-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+      }
+    />
+  );
+}

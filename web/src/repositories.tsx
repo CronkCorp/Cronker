@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, ApiError, type GitHubInstallation, type Project, type Repository } from "./api.js";
+import { api, ApiError, type GitHubImport, type GitHubInstallation, type Project, type Repository } from "./api.js";
 import { useSave } from "./forms.js";
 import { useLatest } from "./live.js";
-import { Banner, Button, FormError, Panel, Saved } from "./ui/controls.js";
+import { Banner, Button, clockTime, FormError, Panel, Saved } from "./ui/controls.js";
 import { Picker, type PickerOption } from "./ui/picker.js";
 
 /**
@@ -10,9 +10,9 @@ import { Picker, type PickerOption } from "./ui/picker.js";
  * installations cover. Reloads whenever the Project changes, as on a rename on GitHub. Cronk
  * is asked which Repositories the App covers only once Add Repository is first opened; it
  * keeps GitHub's answer a few minutes, and Refresh asks GitHub afresh, as for a Repository
- * just installed there.
+ * just installed there. An Admin imports each Repository's GitHub issues from here too.
  */
-export function RepositoriesSettings({ project }: { project: Project }) {
+export function RepositoriesSettings({ project, isAdmin }: { project: Project; isAdmin: boolean }) {
   const [repositories, setRepositories] = useState<Repository[] | undefined>(undefined);
   // Whether the installation has a GitHub App, which Cronk answers without asking GitHub.
   const [hasApp, setHasApp] = useState<boolean | undefined>(undefined);
@@ -94,6 +94,7 @@ export function RepositoriesSettings({ project }: { project: Project }) {
               >
                 Remove
               </Button>
+              <IssuesImport project={project} repository={repository} isAdmin={isAdmin} />
               {repository.keyClash && (
                 <Banner tone="warn">
                   A Project of another Workspace also lists {repository.fullName} under the key {project.key}, so a Pull Request
@@ -136,5 +137,70 @@ export function RepositoriesSettings({ project }: { project: Project }) {
       ) : null}
       <Saved shown={saved} />
     </Panel>
+  );
+}
+
+/** How often a running import's progress is asked for. */
+const importPollMs = 2_000;
+
+/**
+ * Importing a Repository's GitHub issues into the Project: an Admin starts it, and its progress shows while it runs,
+ * with until when it waits while GitHub rate-limits it, then how many issues it imported and skipped, or why it
+ * failed. Anyone sees the latest import.
+ */
+function IssuesImport({ project, repository, isAdmin }: { project: Project; repository: Repository; isAdmin: boolean }) {
+  const [latest, setLatest] = useState<GitHubImport | null | undefined>(undefined);
+  const { error, busy, save } = useSave();
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ask = () =>
+      api.latestImport(project.id, repository.id).then(
+        ({ import: found }) => {
+          if (stopped) return;
+          setLatest(found);
+          if (found?.state === "running") timer = setTimeout(ask, importPollMs);
+        },
+        () => undefined,
+      );
+    if (latest === undefined || latest?.state === "running") void ask();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [project.id, repository.id, latest?.id, latest?.state]);
+
+  const running = latest?.state === "running";
+  const issues = (n: number) => `${n} ${n === 1 ? "issue" : "issues"}`;
+  const status = !latest
+    ? null
+    : latest.state === "running" && latest.waitingUntil
+      ? `Waiting for GitHub's rate limit until ${clockTime(new Date(latest.waitingUntil))}; ${issues(latest.imported)} imported so far.`
+      : latest.state === "running"
+        ? `Importing issues… ${issues(latest.imported)} imported so far${latest.skipped ? `, ${latest.skipped} skipped` : ""}.`
+        : latest.state === "done"
+          ? `Imported ${issues(latest.imported)}; skipped ${latest.skipped} already imported.`
+          : `The import stopped after ${issues(latest.imported)}: ${latest.error ?? "it failed."}`;
+  return (
+    <div className="repository-import">
+      {isAdmin && (
+        <Button
+          variant="ghost"
+          size="small"
+          aria-label={`Import issues from ${repository.fullName}`}
+          disabled={busy || running}
+          onClick={() => void save(async () => setLatest(await api.startImport(project.id, repository.id)))}
+        >
+          Import issues
+        </Button>
+      )}
+      {status && (
+        <span className="muted small" role="status">
+          {status}
+        </span>
+      )}
+      <FormError error={error} />
+    </div>
   );
 }

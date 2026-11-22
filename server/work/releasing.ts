@@ -2,7 +2,7 @@ import type { Context } from "../context.js";
 import type { Db, Tx } from "../db.js";
 import { userName } from "../identity/user.js";
 import { startRunIfNeeded, stopRunningRun } from "../runs/runs.js";
-import { recordChanges } from "./changes.js";
+import { lockTickets, writeTicket, type TicketPatch } from "./ticket-writes.js";
 
 /**
  * Where a User lets go of their Tickets: a whole Workspace when they leave it, or one Project of it when they lose
@@ -51,8 +51,9 @@ export async function releaseTickets(
   reason: string,
   now: Date,
 ): Promise<number> {
+  const { userId } = releasing;
   const tickets = await heldBy(tx, releasing, { lock: true });
-  await letGo(context, tx, adminId, releasing.workspaceId, releasing.userId, tickets, reason, now);
+  await letGo(context, tx, adminId, tickets, userId, reason, now);
   return tickets.length;
 }
 
@@ -99,36 +100,34 @@ export async function undelegateProject(
     tickets.map((ticket) => ticket.id),
     now,
   ]);
-  await letGo(context, tx, adminId, project.workspaceId, null, tickets, reason, now);
+  await letGo(context, tx, adminId, tickets, null, reason, now);
   return tickets.length;
 }
 
-/** Takes each Ticket's Assignee (to `formerAssignee`) and Delegate given, as the Admin's Changes. */
+/**
+ * Takes each Ticket's Assignee given (remembering `formerAssignee`) and Delegate given, as the Admin's Changes,
+ * stopping a running Run.
+ */
 async function letGo(
   context: Context,
   tx: Tx,
   adminId: string,
-  workspaceId: string,
-  formerAssignee: string | null,
   tickets: Held[],
+  formerAssignee: string | null,
   reason: string,
   now: Date,
 ): Promise<void> {
+  const locked = new Map((await lockTickets(tx, tickets.map((t) => t.id))).map((row) => [row.id, row]));
   for (const ticket of tickets) {
     if (ticket.delegate) await stopRunningRun(context, tx, ticket.id, reason, now);
-    await tx.query(
-      `update tickets set assignee_id = case when $2 then null else assignee_id end,
-         former_assignee_id = case when $2 then $4::uuid else former_assignee_id end,
-         delegate_id = case when $3 then null else delegate_id end where id = $1`,
-      [ticket.id, ticket.assignee !== null, ticket.delegate !== null, formerAssignee],
-    );
-    await recordChanges(tx, { id: ticket.id, workspaceId }, adminId, now, [
-      ...(ticket.assignee ? [{ field: "assignee" as const, from: ticket.assignee, to: null }] : []),
-      ...(ticket.delegate ? [{ field: "delegate" as const, from: ticket.delegate, to: null }] : []),
-    ]);
+    // A Ticket left without an Assignee remembers whom it had, for the Admins' Inbox.
+    const patch: TicketPatch = {
+      ...(ticket.assignee ? { assigneeId: null, formerAssigneeId: formerAssignee } : {}),
+      ...(ticket.delegate ? { delegateId: null } : {}),
+    };
+    await writeTicket(context, tx, locked.get(ticket.id)!, adminId, patch, { at: now });
     // Losing its Delegate ends a Ticket's wait for a Run.
     if (ticket.delegate) await startRunIfNeeded(context, tx, ticket.id, now);
-    context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
   }
 }
 
