@@ -115,6 +115,10 @@ export const TicketSummary = Type.Object({
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
+/** A Project's Tickets, as its board lists them. */
+export const TicketList = Type.Array(TicketSummary);
+export type TicketList = Static<typeof TicketList>;
+
 /** A text that mentions a Ticket, as the Ticket's Mentioned in lists it, with what linking to it takes. */
 export const MentioningText = Type.Object({
   kind: Type.Union(
