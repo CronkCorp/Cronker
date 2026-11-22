@@ -422,6 +422,35 @@ describe("Sending back once, and only where it applies", () => {
     expect(await commentsOf(ticket.id, cookie)).toEqual([]);
   });
 
+  test("in an archived Project, a merge has Cronk ask nothing and nothing is sent back", async () => {
+    const { cookie, project, ticket, status, cronker, mergeAnother } = await inReview();
+    await cronk.checkMergeability();
+    await ok("POST", `/api/projects/${project.id}/archive`, cookie);
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
+
+    await mergeAnother(9, "m1");
+    await cronk.checkMergeability();
+
+    // Only the ask moving into In Review had Cronk make, before the Project was archived.
+    expect(asked()).toHaveLength(1);
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("a conflict GitHub reports after the Project was archived sends nothing back", async () => {
+    const { cookie, project, ticket, status, cronker, mergeAnother } = await inReview();
+    await cronk.checkMergeability();
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
+    await mergeAnother(9, "m1");
+    // Asked while the Project was unarchived; the answer comes once it is archived.
+    await ok("POST", `/api/projects/${project.id}/archive`, cookie);
+
+    await cronk.checkMergeability();
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
   test("with Pull Request automation off, a merge has Cronk ask nothing and nothing is sent back", async () => {
     const { cookie, project, ticket, status, cronker, mergeAnother } = await inReview();
     await cronk.checkMergeability();

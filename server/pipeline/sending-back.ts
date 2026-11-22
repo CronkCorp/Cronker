@@ -2,7 +2,7 @@ import type { Context } from "../context.js";
 import type { Tx } from "../db.js";
 import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
-import { listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
+import { inUnarchivedProject, listsPullRequestsRepository, moveByCronk, type MovedTicket } from "./cronk-moves.js";
 
 /**
  * Pipeline: a failure on a Pull Request sends the Tickets it links back to work. A failing check on its latest commit
@@ -116,7 +116,7 @@ export async function sendBackForFailure(
      -- A Status that has lost its Step since produces nothing to send back to.
      join steps on steps.status_id = producing.id
      where pull_request_links.pull_request_id = $1 and projects.pull_request_automation and statuses.kind = 'review'
-       and ${listsPullRequestsRepository} and ($2::uuid is null or tickets.id = $2::uuid)
+       and ${listsPullRequestsRepository} and ${inUnarchivedProject} and ($2::uuid is null or tickets.id = $2::uuid)
      order by tickets.id
      for update of tickets`,
     [pullRequest.id, ticketId ?? null],

@@ -5,9 +5,9 @@ import { ApiError } from "../http/errors.js";
 import { requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { User } from "../identity/user.js";
 import { startRunIfNeeded, blockingChanged } from "../runs/runs.js";
-import { recordChanges } from "./changes.js";
 import { insertComment } from "./comment-writes.js";
 import { markdown } from "./fields.js";
+import { writeTicket } from "./ticket-writes.js";
 import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "./tickets.js";
 
 /**
@@ -18,12 +18,10 @@ import { findTicket, findTicketRow, ticketNotFound, type Ticket, type TicketRow 
 
 /** A User Accepts an Unverified Ticket: it stays where it is, Verified. */
 export async function acceptTicket(context: Context, user: User, ticketId: string): Promise<Ticket> {
-  const { db, clock, live } = context;
+  const { db, clock } = context;
   await transaction(db, async (tx) => {
     const ticket = await unverifiedTicket(tx, user, ticketId, "Accepted");
-    await tx.query("update tickets set verification = 'verified' where id = $1", [ticket.id]);
-    await recordChanges(tx, ticket, user.id, clock.now(), [{ field: "verification", from: "unverified", to: "verified" }]);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    await writeTicket(context, tx, ticket, user.id, { verification: "verified" }, { at: clock.now() });
   });
   return (await findTicket(db, userViewer(user.id), ticketId))!;
 }
@@ -41,7 +39,7 @@ export type TicketReopen = Static<typeof TicketReopen>;
  * where it is, no longer Unverified, for the User to move.
  */
 export async function reopenTicket(context: Context, user: User, ticketId: string, comment: string): Promise<Ticket> {
-  const { db, clock, live } = context;
+  const { db, clock } = context;
   await transaction(db, async (tx) => {
     const ticket = await unverifiedTicket(tx, user, ticketId, "Reopened");
     // Holds the board still until the move commits, so the Status it goes back to can't be removed meanwhile.
@@ -70,22 +68,18 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
       );
     }
     const now = clock.now();
-    await tx.query(
-      `update tickets set status_id = $2,
-         status_entered_at = case when status_id = $2 then status_entered_at else $3 end,
-         verification = null, completed_from_status_id = null, completed_without_step = false
-       where id = $1`,
-      [ticket.id, to.id, now],
-    );
-    await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
     // Sent back by a User, like a move by hand, it starts its rounds afresh.
     await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     await insertComment(context, tx, ticket, { kind: "user", id: user.id }, comment, null);
-    await recordChanges(tx, ticket, user.id, now, [
-      ...(to.id === from.id ? [] : [{ field: "status" as const, from, to }]),
-      { field: "verification", from: "unverified", to: null },
-    ]);
-    live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    // Its Status's Changes come after the Comment saying why, and clearing `verification` forgets where it came from.
+    await writeTicket(
+      context,
+      tx,
+      ticket,
+      user.id,
+      { statusId: to.id, verification: null, completedWithoutStep: false },
+      { at: now },
+    );
     await startRunIfNeeded(context, tx, ticket.id, now);
     // Sent back out of Done, it blocks again what it blocks.
     await blockingChanged(context, tx, [ticket.id]);

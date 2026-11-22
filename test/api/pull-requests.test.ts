@@ -909,6 +909,40 @@ describe("Merges", () => {
     expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, state: "merged" }]);
   });
 
+  test("a merge completes nothing in an archived Project, though its Pull Request still shows there, merged", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Archived away" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    expect((await cronk.request("POST", `/api/projects/${project.id}/archive`, { cookie })).status).toBe(200);
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: ticket.statusId, verification: null });
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, state: "merged", mergedBy: "bea" }]);
+  });
+
+  test("a Repository shared with an archived Project still has its merges complete the other Project's Tickets", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await beaJoins(workspace.id, cookie);
+    const website = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Website", key: "WEB" });
+    await post(cookie, `/api/projects/${website.id}/repositories`, { id: cronker.id });
+    const archived = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Archived away" });
+    const active = await post(cookie, `/api/projects/${website.id}/tickets`, { title: "Still going" });
+    const pr = { id: 501, number: 7, title: "CRONK-1 and WEB-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    expect((await cronk.request("POST", `/api/projects/${project.id}/archive`, { cookie })).status).toBe(200);
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(archived.id, cookie)).toMatchObject({ statusId: archived.statusId, verification: null });
+    expect(await ticketOf(active.id, cookie)).toMatchObject({ statusId: statusNamed(website, "Done"), verification: "verified" });
+    for (const ticket of [archived, active]) {
+      expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, state: "merged" }]);
+    }
+  });
+
   test("one merge completes a Ticket as Verified in the merger's Workspace and as Unverified in another, each Change naming the merger", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const bea = await beaJoins(workspace.id, cookie);
@@ -1425,6 +1459,20 @@ describe("Failures sending work back", () => {
 
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
     expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+  });
+
+  test("in an archived Project, failing checks and requested changes send nothing back and only show on the Pull Request", async () => {
+    const { cookie, app, installation, project, cronker, ticket, pr, status } = await inReview();
+    await ok("POST", `/api/projects/${project.id}/archive`, cookie);
+
+    await deliver(app, "check_run", failing(installation, cronker, "c1"));
+    await deliver(app, "pull_request_review", reviewEvent(installation, cronker, pr, { id: 72, state: "changes_requested", reviewer: "bea" }));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await commentsOf(ticket.id, cookie)).toEqual([]);
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([
+      { checks: [{ name: "test", state: "failed" }], reviewState: { state: "changes_requested", reviewer: "bea" }, sentBack: null },
+    ]);
   });
 
   test("with Pull Request automation off, failures only show on the Pull Request", async () => {

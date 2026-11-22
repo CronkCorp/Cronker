@@ -4,9 +4,8 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inReach, type Viewer } from "../identity/viewers.js";
-import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
-import { statusesOf } from "../work/projects.js";
+import { lockTickets, writeTicket } from "../work/ticket-writes.js";
 import { startRunIfNeeded, blockingChanged } from "./runs.js";
 
 /**
@@ -94,17 +93,15 @@ export async function answerQuestion(
   );
   const question = rows[0];
   if (!question) return;
-  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-  if (question.needsYouRunId !== question.runId || !question.stepStatusId) return;
+  if (question.needsYouRunId !== question.runId || !question.stepStatusId) {
+    // Only the Question changed: the Ticket's card stops showing it as waiting on the User.
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    return;
+  }
 
   // The User moves it back, as moving it by hand would: entering the Status resets its rounds.
-  await tx.query("update tickets set status_id = $2, status_entered_at = $3 where id = $1", [ticket.id, question.stepStatusId, now]);
-  await tx.query("delete from needs_you where ticket_id = $1", [ticket.id]);
-  const statuses = await statusesOf(tx, ticket.projectId);
-  const named = (id: string) => ({ id, name: statuses.find((s) => s.id === id)!.name });
-  await recordChanges(tx, ticket, userId, now, [
-    { field: "status", from: named(ticket.statusId), to: named(question.stepStatusId) },
-  ]);
+  const [locked] = await lockTickets(tx, [ticket.id]);
+  await writeTicket(context, tx, locked!, userId, { statusId: question.stepStatusId }, { at: now });
   await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
   await startRunIfNeeded(context, tx, ticket.id, now);
   await blockingChanged(context, tx, [ticket.id]);

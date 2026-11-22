@@ -16,7 +16,7 @@ import { RunState } from "../runs/states.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 import { userName } from "../identity/user.js";
 import { Description, Label, nullable, title } from "./fields.js";
-import { indexMentions, keysWritten, Mention, mentionsOfOne } from "./mentions.js";
+import { indexMentions, keysWritten, Mention, mentionsOfOne, type TicketMention } from "./mentions.js";
 
 export { keysWritten, Mention };
 
@@ -150,7 +150,7 @@ export type MentioningText = Static<typeof MentioningText>;
 /** A Ticket with the Ticket keys its description mentions, the texts mentioning it and what its Runs cost. */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
-  mentions: Type.Array(Mention, { description: "The Ticket keys its description mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its description mentions and the Artifacts it embeds that the caller may read." }),
   mentionedIn: Type.Array(MentioningText, {
     description:
       "Mentioned in: each other text whose Markdown mentions its key, outside code and links, that the caller may " +
@@ -323,7 +323,7 @@ async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket
  * Ticket keys in plain text that name Tickets of the Workspace, each once, in order of first mention; given a Viewer,
  * only those it may read. Markdown texts are indexed instead (`mentions.ts`).
  */
-export async function mentionsIn(db: Db | Tx, workspaceId: string, text: string, viewer?: Viewer): Promise<Mention[]> {
+export async function mentionsIn(db: Db | Tx, workspaceId: string, text: string, viewer?: Viewer): Promise<TicketMention[]> {
   return (await mentionsInEach(db, workspaceId, [text], viewer))[0]!;
 }
 
@@ -333,12 +333,12 @@ export async function mentionsInEach(
   workspaceId: string,
   texts: string[],
   viewer?: Viewer,
-): Promise<Mention[][]> {
+): Promise<TicketMention[][]> {
   const written = texts.map(keysWritten);
   const all = [...new Set(written.flat())];
   if (all.length === 0) return texts.map(() => []);
   const reach = viewer && inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, "$3");
-  const { rows } = await db.query<Mention>(
+  const { rows } = await db.query<TicketMention>(
     `select 'ticket' as kind, written.text, projects.key || '-' || tickets.number as key, tickets.id as "ticketId"
      from unnest($2::text[]) as written (text)
      join projects on projects.workspace_id = $1
@@ -1188,7 +1188,7 @@ async function named(tx: Tx, query: string, id: string | null): Promise<{ id: st
 }
 
 /** Labels are matched ignoring case: one of each, kept as first written. */
-function distinctLabels(labels: string[]): string[] {
+export function distinctLabels(labels: string[]): string[] {
   const seen = new Map<string, string>();
   for (const label of labels) {
     const trimmed = label.trim();

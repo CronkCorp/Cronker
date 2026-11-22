@@ -19,7 +19,7 @@ What a web address, the HTTP API and the MCP tools name a thing by in place of i
 _Avoid_: Alias, handle, permalink
 
 **Project**:
-The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. Meanwhile its Tickets leave the Inbox and its work is left out of search unless the search names the Project.
+The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived. Meanwhile its Tickets leave the Inbox and its work is left out of search unless the search names the Project.
 _Avoid_: Board, space, repo
 
 ### Work
@@ -131,7 +131,7 @@ Text that names a Ticket's key (`WEB-4`), a Decision's key (`WEB-D7`, or `D7` fo
 _Avoid_: Reference, backlink, tag
 
 **Embed**:
-An Artifact's address alone on its own line of Markdown, which shows the Artifact in place, isolated as on its own page: the Version the address names, else the latest.
+An Artifact's address alone in its paragraph of Markdown, which shows the Artifact in place, isolated as on its own page: the Version the address names, else the latest.
 _Avoid_: Inline Artifact, preview
 
 **Attachment**:
