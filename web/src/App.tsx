@@ -15,7 +15,7 @@ import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
 import { ConnectError, ConnectScreen } from "./connect.js";
 import { Centered, Frame, usePlace } from "./frame.js";
-import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
+import { GitHubAccountPanel, GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { DecisionScreen, WorkspaceDecisions } from "./decisions.js";
 import { DocumentScreen, WorkspaceDocuments } from "./documents.js";
 import { TermScreen, WorkspaceGlossary } from "./terms.js";
@@ -321,7 +321,7 @@ function SignedIn({
       />
     );
   } else if (path === "/password") {
-    page = <ChangePassword />;
+    page = <ChangePassword user={user} />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {
@@ -463,7 +463,7 @@ function NewWorkspace({ onCreated }: { onCreated: (workspace: WorkspaceSummary) 
   );
 }
 
-function ChangePassword() {
+function ChangePassword({ user }: { user: User }) {
   usePlace(null);
   const [done, setDone] = useState(false);
   const { error, busy, onSubmit } = useSubmit(async (form, element) => {
@@ -492,6 +492,7 @@ function ChangePassword() {
           </Actions>
         </form>
       </Panel>
+      <GitHubAccountPanel user={user} />
     </div>
   );
 }

@@ -248,6 +248,8 @@ test("add a Managed Agents Runner's webhook: copy its URL, and save its signing 
   await page.getByLabel("Anthropic API key").fill("sk-ant-api03-ada-secret");
   await page.getByRole("button", { name: "Set up a Managed Agents Runner" }).click();
   const webhook = page.getByRole("region", { name: "Claude API" }).getByRole("group", { name: "Webhook" });
+  // The Runner is listed once its card shows; asking sooner can find none yet.
+  await expect(webhook).toBeVisible();
   const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
   const [runner] = await (await cronk.request("GET", "/api/runners", { cookie })).json();
 
