@@ -117,6 +117,7 @@ describe("what an Agent may change", () => {
       questionId: null,
       sentBack: false,
       attachments: [],
+      avoidedWords: [],
     });
   });
 
