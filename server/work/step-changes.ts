@@ -2,7 +2,7 @@ import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
-import { userViewer } from "../identity/viewers.js";
+import { readAccessRefusal, userViewer } from "../identity/viewers.js";
 import { findProject, projectNotFound, statusesOf, type Project } from "./projects.js";
 import { checkOutcomes, mayHaveStep, removeStep, stepOnDoneOrCanceled, writeStep, type Step } from "./steps.js";
 
@@ -23,6 +23,7 @@ export async function changeStep(
   return transaction(db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (project.access !== "write") throw readAccessRefusal();
     const status = project.statuses.find((s) => s.id === statusId);
     if (!status) throw new ApiError(404, "not_found", "No such Status in this Project.");
     if (change.type === "put") {

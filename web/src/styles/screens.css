@@ -247,6 +247,10 @@
 .card:hover {
   border-color: var(--muted);
 }
+/* With Read, a card doesn't drag: it is only its link. */
+.card-read-only {
+  cursor: pointer;
+}
 .card-link {
   align-self: stretch;
   display: flex;
@@ -1570,4 +1574,17 @@
   color: var(--muted);
   font-size: 13px;
   text-align: center;
+}
+
+/* The line a page with Read shows under its head (docs/ui.md, the Read-only state). */
+.read-only-note {
+  margin: 0 0 var(--space-3);
+}
+
+/* A User in a Project's Access list: their checkbox, then their level, or why an Admin's is fixed. */
+.access-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }

@@ -50,6 +50,7 @@ import {
   MenuSeparator,
   MenuSub,
 } from "./ui/overlays.js";
+import { ReadOnlyNote } from "./write-access.js";
 
 /** The Workspace's Projects, and a form to create one. */
 export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
@@ -219,6 +220,7 @@ export function ProjectScreen({
           title="Project settings"
           actions={<ProjectMenu project={project} />}
         />
+        <ReadOnlyNote access={project.access} />
         <SettingsLayout
           sections={[
             {
@@ -253,7 +255,8 @@ export function ProjectScreen({
               label: "Merges by agents",
               children: <MergesByAgentsSettings workspace={workspace} project={project} onChange={setProject} />,
             },
-          ]}
+            // With Read, the settings show only the User's own Access: nothing else here is theirs to change.
+          ].filter((section) => project.access === "write" || section.id === "access")}
         />
       </div>
     );
@@ -279,10 +282,11 @@ export function ProjectScreen({
         actions={
           <>
             <ProjectMenu project={project} />
-            <NewTicket project={project} onCreated={loadTickets} />
+            {project.access === "write" && <NewTicket project={project} onCreated={loadTickets} />}
           </>
         }
       />
+      <ReadOnlyNote access={project.access} />
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
       {view === "board" && <Board project={project} members={members} agents={agents} user={user} tickets={tickets} onChanged={loadTickets} />}
       {view === "list" && <List project={project} members={members} agents={agents} tickets={tickets} filtered={filtered} />}
@@ -593,35 +597,42 @@ function Card({
   onEdit: (edit: TicketEdit) => void;
 }) {
   const to = useAddresses();
+  // With Read, a card neither drags nor opens a context menu of changes: it is only a link to its Ticket.
+  const canWrite = project.access === "write";
+  const card = (
+    <div
+      className={`card${arrived ? " arrived" : ""}${canWrite ? "" : " card-read-only"}`}
+      draggable={canWrite}
+      onDragStart={(event: DragEvent<HTMLDivElement>) => {
+        if (!canWrite) return event.preventDefault();
+        // A drag picked up on the card's link starts on the link, a link's own drag: show the whole card under the
+        // pointer rather than the browser's picture of a link, held where it was pressed.
+        const card = event.currentTarget.getBoundingClientRect();
+        event.dataTransfer.setDragImage(event.currentTarget, event.clientX - card.left, event.clientY - card.top);
+        event.dataTransfer.setData(ticketDrag, ticket.id);
+        event.dataTransfer.effectAllowed = "move";
+      }}
+    >
+      <Link to={to.ticket(ticket)} className="card-link">
+        <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
+        <span className="card-priority">
+          <PriorityTag priority={ticket.priority} />
+        </span>
+        <span className="card-meta">
+          {ticket.labels.map((label) => (
+            <Chip key={label}>{label}</Chip>
+          ))}
+          <TicketRunState ticket={ticket} />
+          <People ticket={ticket} members={members} agents={agents} />
+        </span>
+      </Link>
+      <BlockedChip ticket={ticket} />
+    </div>
+  );
+  if (!canWrite) return card;
   return (
     <ContextMenu label={`${ticket.key} ${ticket.title}`} content={<CardMenu ticket={ticket} project={project} own={own} onEdit={onEdit} />}>
-      <div
-        className={`card${arrived ? " arrived" : ""}`}
-        draggable
-        onDragStart={(event: DragEvent<HTMLDivElement>) => {
-          // A drag picked up on the card's link starts on the link, a link's own drag: show the whole card under the
-          // pointer rather than the browser's picture of a link, held where it was pressed.
-          const card = event.currentTarget.getBoundingClientRect();
-          event.dataTransfer.setDragImage(event.currentTarget, event.clientX - card.left, event.clientY - card.top);
-          event.dataTransfer.setData(ticketDrag, ticket.id);
-          event.dataTransfer.effectAllowed = "move";
-        }}
-      >
-        <Link to={to.ticket(ticket)} className="card-link">
-          <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
-          <span className="card-priority">
-            <PriorityTag priority={ticket.priority} />
-          </span>
-          <span className="card-meta">
-            {ticket.labels.map((label) => (
-              <Chip key={label}>{label}</Chip>
-            ))}
-            <TicketRunState ticket={ticket} />
-            <People ticket={ticket} members={members} agents={agents} />
-          </span>
-        </Link>
-        <BlockedChip ticket={ticket} />
-      </div>
+      {card}
     </ContextMenu>
   );
 }
@@ -696,7 +707,7 @@ function Board({
               aria-label={status.name}
               className={`column${target === status.id ? " column-target" : ""}${isCollapsed ? " column-collapsed" : ""}`}
               onDragOver={(event) => {
-                if (!carriesTicket(event)) return;
+                if (project.access !== "write" || !carriesTicket(event)) return;
                 event.preventDefault();
                 setTarget(status.id);
               }}
@@ -913,6 +924,8 @@ function MergesByAgentsSettings({
   );
 }
 
+type Level = ProjectAccess["users"][number]["level"];
+
 /**
  * Who may see the Project: open to every User of the Workspace, or private to the Users listed here and the
  * Admins, who keep Write in every Project. Only an Admin reads and changes it; others see whether it is private and
@@ -937,12 +950,13 @@ function AccessSettings({
     api.projectAccess(project.id).then(setAccess, (e: Error) => setFailure(e.message));
   }, [workspace.isAdmin, project.id]);
   const description =
-    "An open Project is for every User of the Workspace. A private one is only for the Users listed here and the Workspace's Admins, who always have Write; to anyone else, and their Agents, it doesn't exist.";
+    "An open Project is for every User of the Workspace. A private one is only for the Users listed here and the Workspace's Admins, who always have Write; to anyone else, and their Agents, it doesn't exist. A User listed with Read reads everything in it but changes nothing.";
   if (!workspace.isAdmin) {
     return (
       <Panel title="Access" id="access" description={description}>
         <p>
-          This Project is {project.visibility}, and you have {project.access === "write" ? "Write" : "Read"} in it.
+          This Project is {project.visibility}, and you have {project.access === "write" ? "Write" : "Read"} in it
+          {project.access === "read" ? ": you read everything in it, but change nothing." : "."}
         </p>
         <p className="muted small">Only an Admin of this Workspace changes this.</p>
       </Panel>
@@ -961,6 +975,9 @@ function AccessSettings({
       ...access,
       users: on ? [...access.users, { userId, level: "write" }] : access.users.filter((u) => u.userId !== userId),
     });
+  const levelOf = (userId: string) => access.users.find((u) => u.userId === userId)?.level;
+  const setLevel = (userId: string, level: Level) =>
+    void apply({ ...access, users: access.users.map((u) => (u.userId === userId ? { ...u, level } : u)) });
   return (
     <Panel title="Access" id="access" description={description}>
       <fieldset className="access-visibility">
@@ -982,15 +999,32 @@ function AccessSettings({
       <fieldset>
         <legend>Listed Users</legend>
         {members.map(({ user, isAdmin }) => (
-          <label key={user.id} className="check">
-            <input
-              type="checkbox"
-              checked={isAdmin || listed.has(user.id)}
-              disabled={busy || isAdmin}
-              onChange={(e) => toggle(user.id, e.target.checked)}
-            />
-            {nameOf(user)} <span className="muted small">{isAdmin ? "Admin, always Write" : listed.has(user.id) ? "Write" : ""}</span>
-          </label>
+          <div key={user.id} className="access-user">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={isAdmin || listed.has(user.id)}
+                disabled={busy || isAdmin}
+                onChange={(e) => toggle(user.id, e.target.checked)}
+              />
+              {nameOf(user)}
+            </label>
+            {isAdmin ? (
+              <span className="muted small">Admin, always Write</span>
+            ) : (
+              listed.has(user.id) && (
+                <select
+                  aria-label={`Access of ${nameOf(user)}`}
+                  value={levelOf(user.id)}
+                  disabled={busy}
+                  onChange={(e) => setLevel(user.id, e.target.value as Level)}
+                >
+                  <option value="write">Write</option>
+                  <option value="read">Read</option>
+                </select>
+              )
+            )}
+          </div>
         ))}
       </fieldset>
       <FormError error={error} />

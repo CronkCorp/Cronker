@@ -1,4 +1,5 @@
 import type { Db, Tx } from "../db.js";
+import { ApiError } from "../http/errors.js";
 
 /**
  * Whose view of Cronk a read takes: a User sees the Workspaces they belong to, an Agent
@@ -97,6 +98,26 @@ export async function accessOf(db: Db | Tx, viewer: Viewer, place: { workspaceId
     access.value,
   ]);
   return rows[0]!.access;
+}
+
+/** The refusal of a write to a Viewer with only Read where the write lands. */
+export function readAccessRefusal(): ApiError {
+  return new ApiError(403, "read_access", "You have Read in this Project, so you may only read it.", {
+    rule: "A Viewer with Read in a Project may read everything in it but change nothing.",
+    advice: "Read instead, or ask an Admin of this Workspace for Write in this Project.",
+  });
+}
+
+/**
+ * Refuses a write unless the Viewer has Write where it lands: in a Project, or, with no Project, the Workspace's own
+ * knowledge. Call it after finding the record, so what the Viewer can't read still answers as not found.
+ */
+export async function requireWrite(
+  db: Db | Tx,
+  viewer: Viewer,
+  place: { workspaceId: string; projectId: string | null },
+): Promise<void> {
+  if ((await accessOf(db, viewer, place)) !== "write") throw readAccessRefusal();
 }
 
 /**

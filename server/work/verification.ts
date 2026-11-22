@@ -2,7 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { userViewer, type Viewer } from "../identity/viewers.js";
+import { requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { User } from "../identity/user.js";
 import { startRunIfNeeded, blockingChanged } from "../runs/runs.js";
 import { recordChanges } from "./changes.js";
@@ -95,6 +95,7 @@ async function unverifiedTicket(
 ): Promise<TicketRow> {
   const ticket = await findTicketRow(tx, userViewer(user.id), ticketId, { lock: true });
   if (!ticket) throw ticketNotFound();
+  await requireWrite(tx, userViewer(user.id), ticket);
   if (ticket.verification !== "unverified") {
     throw new ApiError(
       409,

@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { blockingChanged } from "../runs/runs.js";
-import { userViewer } from "../identity/viewers.js";
+import { readAccessRefusal, userViewer } from "../identity/viewers.js";
 import {
   findProject,
   insertStatus,
@@ -50,6 +50,7 @@ export async function changeStatuses(
   return transaction(db, async (tx) => {
     const project = await findProject(tx, userViewer(userId), projectId, { lock: true });
     if (!project) throw projectNotFound();
+    if (project.access !== "write") throw readAccessRefusal();
     const { statuses } = project;
 
     const board: Draft[] = statuses.map((s) => ({ ...s }));

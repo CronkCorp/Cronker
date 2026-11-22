@@ -3,9 +3,10 @@ import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
- * Access (ADR 0010): what a Viewer may do in a Project, nothing, Read or Write, decided by one rule. No route lists Read
- * or sets Agent Access yet, so these tests set a Project's visibility, its listed Users and Agent Access in the database, and check what
- * each Viewer then reads through the HTTP API.
+ * Access (ADR 0010): what a Viewer may do in a Project, nothing, Read or Write, decided by one rule. No route sets Agent
+ * Access yet, so these tests set a Project's visibility, its listed Users and Agent Access in the database, and check what
+ * each Viewer then reads through the HTTP API. `read-access.test.ts` lists Users with Read through the API and checks
+ * their writes are refused.
  */
 
 let cronk: StartedCronk;

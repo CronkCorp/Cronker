@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { blockingChanged } from "../runs/runs.js";
@@ -60,6 +60,9 @@ export async function addRelation(
     // A Ticket the caller can't read answers as if it weren't in the Workspace.
     const otherRow = other && (await findTicketRow(tx, caller, other.id));
     if (!other || !otherRow) throw unknownTicket();
+    // A Relation shows on both Tickets, so it takes Write in both Projects.
+    await requireWrite(tx, caller, ticket);
+    await requireWrite(tx, caller, otherRow);
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
     let actor: ChangeActor;
     if (caller.kind === "agent") {
@@ -160,7 +163,10 @@ export async function removeRelation(
     if (!removed) throw relationNotFound();
     // A Relation with a Ticket the User can't read isn't listed for them, so it answers as if it didn't exist.
     const otherId = removed.ticketId === ticket.id ? removed.otherTicketId : removed.ticketId;
-    if (!(await findTicketRow(tx, userViewer(userId), otherId))) throw relationNotFound();
+    const otherRow = await findTicketRow(tx, userViewer(userId), otherId);
+    if (!otherRow) throw relationNotFound();
+    await requireWrite(tx, userViewer(userId), ticket);
+    await requireWrite(tx, userViewer(userId), otherRow);
     const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
