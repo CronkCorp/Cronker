@@ -6,7 +6,7 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers (listed, or one by id), a Pull Request with its mergeability, and sending the App's webhook deliveries signed with its secret,
+ * installation covers (listed, or one by id), a Pull Request with its mergeability, a repository's issues, and sending the App's webhook deliveries signed with its secret,
  * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
@@ -71,6 +71,23 @@ export interface StandInPullRequest {
    * merged (null while GitHub works it out), alone or worked out against another base commit than `baseSha`.
    */
   answers: (boolean | null | { mergeable: boolean | null; baseSha: string })[];
+}
+
+/** An issue as GitHub's issues list answers about it; a Pull Request is listed among them too, marked as one. */
+export interface StandInIssue {
+  repository: StandInRepository;
+  number: number;
+  nodeId: string;
+  title: string;
+  body: string | null;
+  state: "open" | "closed";
+  /** Why it was closed: `completed` or `not_planned`; null while open. */
+  stateReason: "completed" | "not_planned" | null;
+  /** Its Labels' names. */
+  labels: string[];
+  createdAt: Date;
+  /** Whether it is a Pull Request, which GitHub's issues list includes. */
+  pullRequest: boolean;
 }
 
 /** A merge GitHub made at the App's request. */
@@ -151,6 +168,13 @@ export interface StandInGitHub {
   tokensIssued: IssuedToken[];
   /** Adds, or changes, a Pull Request of the repository as GitHub's API answers about it; open and mergeable by default. */
   pullRequest(repository: StandInRepository, number: number, fields?: Partial<Omit<StandInPullRequest, "repository" | "number">>): StandInPullRequest;
+  /**
+   * Files an issue in the repository, numbered after the last, as GitHub's issues list answers about it: open, with
+   * no Labels and created now, unless `fields` say otherwise.
+   */
+  issue(repository: StandInRepository, fields?: Partial<Omit<StandInIssue, "repository" | "number" | "nodeId">>): StandInIssue;
+  /** Every issue of every repository, in the order they were filed. */
+  issues: StandInIssue[];
   /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
   merges: StandInMerge[];
   /**
@@ -300,6 +324,25 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       pullRequests.set(key, pullRequest);
       return pullRequest;
     },
+    issue(repository, fields = {}) {
+      const number = github.issues.filter((i) => i.repository === repository).length + 1;
+      const issue: StandInIssue = {
+        repository,
+        number,
+        nodeId: `I_${randomBytes(8).toString("hex")}`,
+        title: `Issue ${number}`,
+        body: null,
+        state: "open",
+        stateReason: null,
+        labels: [],
+        createdAt: clock.now(),
+        pullRequest: false,
+        ...fields,
+      };
+      github.issues.push(issue);
+      return issue;
+    },
+    issues: [],
     merges: [],
     onMerge: null,
     async deliver(app, event, payload, { id = randomBytes(8).toString("hex"), secret = app.webhookSecret, fails } = {}) {
@@ -589,6 +632,41 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         allow_squash_merge: allows(repository, "squash"),
         allow_rebase_merge: allows(repository, "rebase"),
       });
+    }
+
+    // API: a repository's issues, Pull Requests among them, with a token of an installation that covers it and may read issues.
+    const issues = /^\/repos\/([^/]+\/[^/]+)\/issues$/.exec(path);
+    if (request.method === "GET" && issues) {
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(issues[1]!).toLowerCase());
+      if (!repository) return json(response, 404, { message: "Not Found" });
+      const access = installation.permissions.issues;
+      if (access !== "read" && access !== "write") return json(response, 403, { message: "Resource not accessible by integration" });
+      const state = url.searchParams.get("state") ?? "open";
+      const listed = github.issues
+        .filter((i) => i.repository === repository && (state === "all" || i.state === state))
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.number - b.number);
+      if (url.searchParams.get("direction") !== "asc") listed.reverse();
+      const { items, link } = page(url, listed);
+      return json(
+        response,
+        200,
+        items.map((i) => ({
+          node_id: i.nodeId,
+          number: i.number,
+          title: i.title,
+          body: i.body,
+          state: i.state,
+          state_reason: i.stateReason,
+          labels: i.labels.map((name) => ({ name, color: "ededed" })),
+          html_url: `${github.url}/${repository.fullName}/${i.pullRequest ? "pull" : "issues"}/${i.number}`,
+          created_at: i.createdAt.toISOString().replace(/\.\d{3}Z$/, "Z"),
+          ...(i.pullRequest ? { pull_request: { url: `${github.apiUrl}/repos/${repository.fullName}/pulls/${i.number}` } } : {}),
+        })),
+        link ? { link } : {},
+      );
     }
 
     // API: a Pull Request, and merging it, with a token of an installation that covers its repository.

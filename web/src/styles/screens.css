@@ -541,6 +541,13 @@
 .repositories .banner {
   flex-basis: 100%;
 }
+.repository-import {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
 
 /* Side panels of a split page */
 .side-section {

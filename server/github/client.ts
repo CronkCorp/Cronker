@@ -284,3 +284,42 @@ export async function redeliver({ github }: Config, jwt: string, attemptId: numb
   const response = await call(url, { method: "POST", headers: { authorization: `Bearer ${jwt}` } });
   if (!response.ok) throw unavailable(`The redelivery request answered ${response.status}`);
 }
+
+/** An issue as GitHub's issues list answers about it; one with `pull_request` is a Pull Request. */
+export interface IssueOnGitHub {
+  node_id: string;
+  number: number;
+  title: string;
+  body: string | null;
+  html_url: string;
+  state: string;
+  /** Why it was closed: `completed`, `not_planned` or `reopened`; null for an open one or one GitHub doesn't say. */
+  state_reason?: string | null;
+  labels: (string | { name?: string | null })[];
+  created_at: string;
+  pull_request?: unknown;
+}
+
+/**
+ * One page of a repository's issues, open and closed, oldest first, as an installation covering it sees them, with
+ * whether GitHub has a page after it. Oldest first keeps the pages steady while new issues are filed, so an import
+ * resumes by page number. A refusal (GitHub's 403, 404 or 410) comes back with its status.
+ */
+export async function issuesPage(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  page: number,
+): Promise<{ kind: "page"; issues: IssueOnGitHub[]; more: boolean } | { kind: "refused"; status: number }> {
+  const url = under(github.apiUrl, `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/issues`);
+  url.searchParams.set("state", "all");
+  url.searchParams.set("sort", "created");
+  url.searchParams.set("direction", "asc");
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("page", String(page));
+  const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  if (response.status === 403 || response.status === 404 || response.status === 410) return { kind: "refused", status: response.status };
+  const issues = await jsonOf<IssueOnGitHub[]>(response, "The issues list");
+  if (!Array.isArray(issues)) throw unavailable("The issues list answered something other than a list");
+  return { kind: "page", issues, more: /rel="next"/.test(response.headers.get("link") ?? "") };
+}
