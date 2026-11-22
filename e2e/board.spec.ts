@@ -518,6 +518,65 @@ test("Merge queues Tickets: the Merge column lists them in queue order with thei
   await expect(board.getByRole("region", { name: "In Review", exact: true })).toContainText("CRONK-1");
 });
 
+test("a Ticket with two queued Pull Requests stays in Merge after the first merges, its timeline saying so", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker", "website"]);
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  for (const repository of installation.repositories) await call("POST", `/api/projects/${project.id}/repositories`, { id: repository.id });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Change both" });
+  await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: status("In Review") });
+  // CRONK-1 has an open, green, mergeable Pull Request in each Repository.
+  for (const [n, repository] of installation.repositories.entries()) {
+    const deliver = async (event: string, payload: Record<string, unknown>) => {
+      const delivered = await cronk.github.deliver(app, event, {
+        installation: { id: installation.id },
+        repository: { id: repository.id, full_name: repository.fullName },
+        ...payload,
+      });
+      expect(delivered.status).toBe(200);
+    };
+    await deliver("pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 500 + n, number: n + 1, title: `CRONK-1: change ${repository.fullName}`, state: "open", draft: false, merged: false,
+        html_url: `https://github.com/${repository.fullName}/pull/${n + 1}`, head: { ref: "cronk-1", sha: `c${n}` }, base: { ref: "main" },
+        updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await deliver("check_run", {
+      action: "completed",
+      check_run: { id: n + 1, name: "test", head_sha: `c${n}`, status: "completed", conclusion: "success", html_url: null },
+    });
+    cronk.github.pullRequest(repository, n + 1, { headSha: `c${n}`, mergeable: true });
+  }
+  // The website's Pull Request is held back, so only cronker's merges on the first pass.
+  const website = cronk.github.pullRequest(installation.repositories[1]!, 2, { headSha: "c1", mergeable: null });
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("region", { name: "Board" }).getByRole("link", { name: /CRONK-1/ }).click();
+  const queue = page.getByRole("region", { name: "Merge Queue" });
+  await queue.getByRole("button", { name: "Merge" }).click();
+  await expect(queue).toContainText("in queue");
+
+  await cronk.checkQueue();
+
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  await expect(timeline).toContainText(
+    "merged cronkcorp/cronker#1 CRONK-1: change cronkcorp/cronker, waiting in the Merge Queue for its other Pull Requests",
+  );
+  await expect(queue).toContainText("#1 in queue");
+
+  website.mergeable = true;
+  await cronk.checkQueue();
+
+  await expect(timeline).toContainText("completed it: cronkcorp/website#2 CRONK-1: change cronkcorp/website was merged, moving it to Done, Verified by that merge");
+});
+
 test("a queued head behind its base branch shows Updating branch, then Waiting for checks, live, until it merges", async ({ page, cronk }) => {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
