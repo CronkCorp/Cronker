@@ -23,6 +23,7 @@ import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 import { userName } from "../identity/user.js";
 import { joinQueueAutonomously } from "../pipeline/merge-queue.js";
+import { sessionIdOf } from "./session-ids.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -358,7 +359,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
       if (result.started) {
         await tx.query("update runs set session_id = $2, session_url = $3 where id = $1", [
           runId,
-          result.reference.sessionId ?? null,
+          result.reference.sessionId ? sessionIdOf(result.reference.sessionId) : null,
           result.reference.url ?? null,
         ]);
       } else if (result.refusal.kind === "rate_limited") {
