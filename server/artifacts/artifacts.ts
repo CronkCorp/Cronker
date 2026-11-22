@@ -297,7 +297,8 @@ export async function createArtifact(
           : null;
       const now = clock.now();
       const { rows } = await tx.query<{ id: string }>(
-        `insert into artifacts (workspace_id, project_id, version, created_at) values ($1, $2, 1, $3) returning id`,
+        `insert into artifacts (workspace_id, project_id, version, last_version, created_at) values ($1, $2, 1, 1, $3)
+         returning id`,
         [place.workspaceId, place.projectId, now],
       );
       const id = rows[0]!.id;
@@ -380,7 +381,8 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
       const kept = (await keptFiles(tx, current.id, current.version.number)).filter(
         (file) => !removed.has(file.path) && !replaced.has(file.path),
       );
-      const number = current.version.number + 1;
+      // Numbered after every Version the Artifact has had, deleted ones too, so no number is used twice.
+      const number = (await lastVersionOf(tx, current.id)) + 1;
       const content = {
         title: save.title ?? current.title,
         description: save.description ?? current.description,
@@ -389,7 +391,7 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
       };
       checkVersion(content, context.config.attachments.limitBytes);
       await insertVersion(tx, current, number, content, actor, clock.now());
-      await tx.query("update artifacts set version = $2 where id = $1", [current.id, number]);
+      await tx.query("update artifacts set version = $2, last_version = $2 where id = $1", [current.id, number]);
       context.live.publish(tx, current.workspaceId, { type: "artifact.changed", projectId: current.projectId, artifactId: current.id });
       return (await findArtifact(tx, actor, current.id))!;
     }),
@@ -430,6 +432,77 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
     afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
     live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });
   });
+}
+
+/**
+ * Deletes one Version of the Artifact, such as one that leaked something, keeping the others; its files' bytes go
+ * once the delete is committed, unless a remaining Version shares them. Only a User may, so an agent can't remove
+ * work. Deleting the current Version makes the newest remaining one current. Its number is never used again.
+ */
+export async function deleteArtifactVersion(context: Context, actor: Caller, artifactId: string, number: number): Promise<void> {
+  const { db, live } = context;
+  await transaction(db, async (tx) => {
+    const artifact = await lockArtifact(tx, actor, artifactId);
+    if (!artifact) throw artifactNotFound();
+    await requireWrite(tx, actor, artifact);
+    if (actor.kind === "agent") {
+      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Version of an Artifact.`, {
+        rule: "Only a User deletes a Version of an Artifact, so an agent can't remove work.",
+        advice: `Leave the Version as it is, or save a new one; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
+      });
+    }
+    const versions = await versionsOfFound(tx, artifact.id);
+    if (!versions.some((version) => version.number === number)) {
+      throw await missingVersion(tx, artifact, number);
+    }
+    if (versions.length === 1) {
+      throw new ApiError(409, "only_version", `Version ${number} is ${artifact.title}'s only Version.`, {
+        rule: "An Artifact keeps at least one Version, so deleting its only Version would delete the Artifact.",
+        advice: "Delete the Artifact itself instead, or save a new Version first and then delete this one.",
+      });
+    }
+    const blobs = await tx.query<{ blobId: string }>(
+      `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1 and version = $2`,
+      [artifact.id, number],
+    );
+    if (number === artifact.version.number) {
+      const newest = Math.max(...versions.filter((version) => version.number !== number).map((version) => version.number));
+      await tx.query("update artifacts set version = $2 where id = $1", [artifact.id, newest]);
+    }
+    // Its files go with it.
+    await tx.query("delete from artifact_versions where artifact_id = $1 and number = $2", [artifact.id, number]);
+    const ids = blobs.rows.map((row) => row.blobId);
+    const shared = await tx.query<{ blobId: string }>(
+      `select distinct blob_id as "blobId" from artifact_files where blob_id = any($1::uuid[])`,
+      [ids],
+    );
+    const kept = new Set(shared.rows.map((row) => row.blobId));
+    const freed = ids.filter((id) => !kept.has(id));
+    afterCommit(tx, () => forgetAttachments(context, freed));
+    live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });
+  });
+}
+
+/** The number of the last Version the Artifact has had, deleted or not. */
+async function lastVersionOf(db: Db | Tx, artifactId: string): Promise<number> {
+  const { rows } = await db.query<{ lastVersion: number }>(`select last_version as "lastVersion" from artifacts where id = $1`, [
+    artifactId,
+  ]);
+  return rows[0]!.lastVersion;
+}
+
+/**
+ * The refusal for a Version number the Artifact doesn't have: `version_deleted` for one a User deleted, since numbers
+ * are never reused, otherwise `not_found`.
+ */
+async function missingVersion(db: Db | Tx, artifact: { id: string; title: string }, number: number): Promise<ApiError> {
+  if (number >= 1 && number <= (await lastVersionOf(db, artifact.id))) {
+    return new ApiError(410, "version_deleted", `Version ${number} of ${artifact.title} was deleted.`, {
+      rule: "A User may delete one Version of an Artifact; its number is never used again, and its files are no longer served.",
+      advice: "Read the Artifact's remaining Versions, or its current one, instead.",
+    });
+  }
+  return new ApiError(404, "not_found", `${artifact.title} has no Version ${number}.`);
 }
 
 /** The Artifact at its current Version, its row locked until the transaction ends, so saves of it queue up. */
@@ -498,7 +571,7 @@ async function bytesOf(context: Context, file: Kept): Promise<Buffer> {
 type VersionRow = Omit<ArtifactVersion, "savedAt"> & { savedAt: Date };
 
 /** The Versions of an Artifact already found in the caller's view, oldest first. */
-async function versionsOfFound(db: Db, artifactId: string): Promise<ArtifactVersion[]> {
+async function versionsOfFound(db: Db | Tx, artifactId: string): Promise<ArtifactVersion[]> {
   const { rows } = await db.query<VersionRow>(
     `select versions.number, ${actorColumn("users", "agents")} as actor, versions.saved_at as "savedAt"
      from artifact_versions versions
@@ -515,6 +588,52 @@ export async function artifactVersionsOf(db: Db, viewer: Viewer, artifactId: str
   const artifact = await findArtifact(db, viewer, artifactId);
   if (!artifact) throw artifactNotFound();
   return versionsOfFound(db, artifact.id);
+}
+
+export const ArtifactVersionRead = Type.Object(
+  {
+    ...ArtifactVersion.properties,
+    title: Type.String(),
+    description: Type.String(),
+    page: Type.String({ description: "The path of the file that is its page." }),
+    url: Type.String({ description: "Where this Version's page is served, sandboxed, as an Artifact's `url` is." }),
+    files: Type.Array(ArtifactFile, { description: "The Version's files, by path." }),
+  },
+  { description: "One Version of an Artifact, with its title, page, address and files, without their bytes." },
+);
+export type ArtifactVersionRead = Static<typeof ArtifactVersionRead>;
+
+/**
+ * One Version of an Artifact by its number, with its address and files; `version_deleted` for one a User deleted,
+ * `not_found` for a number it never had.
+ */
+export async function readArtifactVersion(db: Db, viewer: Viewer, artifactId: string, number: number): Promise<ArtifactVersionRead> {
+  const artifact = await findArtifact(db, viewer, artifactId);
+  if (!artifact) throw artifactNotFound();
+  const { rows } = await db.query<VersionRow & { title: string; description: string; page: string; serveKey: string }>(
+    `select versions.number, ${actorColumn("users", "agents")} as actor, versions.saved_at as "savedAt", versions.title,
+       versions.description, versions.page, versions.serve_key as "serveKey"
+     from artifact_versions versions
+     left join users on users.id = versions.actor_user_id
+     left join agents on agents.id = versions.actor_agent_id
+     where versions.artifact_id = $1 and versions.number = $2`,
+    [artifact.id, number],
+  );
+  const row = rows[0];
+  if (!row) throw await missingVersion(db, artifact, number);
+  const files = await keptFiles(db, artifact.id, number);
+  return {
+    number: row.number,
+    actor: row.actor,
+    savedAt: row.savedAt.toISOString(),
+    title: row.title,
+    description: row.description,
+    page: row.page,
+    url: sandboxPath(row.serveKey, row.page),
+    files: files
+      .map(({ path, mediaType, size }) => ({ path, mediaType, size }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+  };
 }
 
 export const ComparedFile = Type.Object({
@@ -566,12 +685,12 @@ export async function compareArtifactVersions(
   const artifact = await findArtifact(context.db, viewer, artifactId);
   if (!artifact) throw artifactNotFound();
   const versions = await versionsOfFound(context.db, artifact.id);
-  const version = (number: number) => {
+  const version = async (number: number) => {
     const found = versions.find((v) => v.number === number);
-    if (!found) throw new ApiError(404, "not_found", `${artifact.title} has no Version ${number}.`);
+    if (!found) throw await missingVersion(context.db, artifact, number);
     return found;
   };
-  const [from, to] = [version(numbers.from), version(numbers.to)];
+  const [from, to] = [await version(numbers.from), await version(numbers.to)];
   const filesOf = async (number: number) =>
     new Map((await keptFiles(context.db, artifact.id, number)).map((file) => [file.path, file]));
   const [filesBefore, filesAfter] = [await filesOf(from.number), await filesOf(to.number)];

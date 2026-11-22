@@ -1114,6 +1114,9 @@
 .version-item .button-ghost {
   justify-self: start;
 }
+.version-actions {
+  margin-left: auto;
+}
 .version-by {
   display: inline-flex;
   flex-wrap: wrap;

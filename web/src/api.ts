@@ -1004,6 +1004,8 @@ export const api = {
   compareArtifactVersions: (id: string, from: number, to: number) =>
     call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),
   deleteArtifact: (id: string) => call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}`),
+  deleteArtifactVersion: (id: string, number: number) =>
+    call<void>("DELETE", `/api/artifacts/${encodeURIComponent(id)}/versions/${number}`),
   linkedArtifacts: (ticketId: string) =>
     call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),
   linkArtifact: (ticketId: string, artifactId: string) =>

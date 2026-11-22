@@ -318,6 +318,9 @@ describe("Artifacts", () => {
       ["a stranger", asStranger, "GET", `/api/workspaces/${workspace.id}/artifacts`, undefined, 404],
       ["a stranger", asStranger, "GET", `/api/artifacts/${artifact.id}/versions`, undefined, 404],
       ["a stranger", asStranger, "GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=1`, undefined, 404],
+      ["a stranger", asStranger, "GET", `/api/artifacts/${artifact.id}/versions/1`, undefined, 404],
+      ["a stranger", asStranger, "DELETE", `/api/artifacts/${artifact.id}/versions/1`, undefined, 404],
+      ["a read-only token", asReader, "DELETE", `/api/artifacts/${artifact.id}/versions/1`, undefined, 403, "read_only_token"],
       ["a read-only token", asReader, "PATCH", `/api/artifacts/${artifact.id}`, { baseVersion: 1, title: "Mine" }, 403, "read_only_token"],
       [
         "a read-only token",
@@ -520,5 +523,121 @@ describe("Artifacts", () => {
     );
     expect((await call("DELETE", `/api/artifacts/${artifact.id}`, ada)).status).toBe(404);
     stream.close();
+  });
+});
+
+describe("Deleting one Artifact Version", () => {
+  test("a User deletes a Version that leaked something: the others stay, and its bytes go unless another Version shares them", async () => {
+    const { ada, user, project, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page), file("app.js", "const token = 'leaked';")],
+    });
+    const saved = await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 1, files: [file("app.js", "const token = env();")] });
+    // Version 2 keeps Version 1's page, so the two share its bytes.
+    expect(await cronk.attachmentFiles()).toHaveLength(3);
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+
+    expect((await call("DELETE", `/api/artifacts/${artifact.id}/versions/1`, ada)).status).toBe(204);
+
+    expect(await stream.next()).toEqual({ type: "artifact.changed", data: { projectId: project.id, artifactId: artifact.id } });
+    stream.close();
+    // The shared page is kept for Version 2; the leaked script is freed.
+    expect(await cronk.attachmentFiles()).toHaveLength(2);
+    expect(await ok("GET", `/api/artifacts/${artifact.id}`, ada)).toEqual(saved);
+    expect((await ok("GET", `/api/artifacts/${artifact.id}/versions`, ada)).map((v: { number: number }) => v.number)).toEqual([2]);
+    expect((await open(artifact.url)).status).toBe(404);
+    expect((await open(saved.url)).status).toBe(200);
+    expect((await open(saved.url.replace("index.html", "app.js"))).text).toBe("const token = env();");
+
+    const deleted = await call("GET", `/api/artifacts/${artifact.id}/versions/1`, ada);
+    expect(deleted.status).toBe(410);
+    expect(deleted.json.error).toEqual(
+      expect.objectContaining({ code: "version_deleted", message: "Version 1 of Board prototype was deleted." }),
+    );
+    expect(await ok("GET", `/api/artifacts/${artifact.id}/versions/2`, ada)).toEqual({
+      number: 2,
+      actor: { kind: "user", id: user.id, name: user.email },
+      savedAt: saved.version.savedAt,
+      title: "Board prototype",
+      description: "",
+      page: "index.html",
+      url: saved.url,
+      files: saved.files,
+    });
+    const compared = await call("GET", `/api/artifacts/${artifact.id}/versions/compare?from=1&to=2`, ada);
+    expect(compared.status).toBe(410);
+    expect(compared.json.error.code).toBe("version_deleted");
+    const again = await call("DELETE", `/api/artifacts/${artifact.id}/versions/1`, ada);
+    expect([again.status, again.json.error.code]).toEqual([410, "version_deleted"]);
+    // A number the Artifact never had is not found.
+    const never = await call("GET", `/api/artifacts/${artifact.id}/versions/9`, ada);
+    expect([never.status, never.json.error.code]).toEqual([404, "not_found"]);
+    expect((await call("DELETE", `/api/artifacts/${artifact.id}/versions/9`, ada)).status).toBe(404);
+  });
+
+  test("deleting the current Version makes the newest remaining one current; its number is never reused, and a save based on it is outdated", async () => {
+    const { ada, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page), file("app.js", "1")],
+    });
+    const second = await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 1, files: [file("app.js", "2")] });
+    const third = await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, {
+      baseVersion: 2,
+      title: "Board, take three",
+      files: [file("app.js", "3")],
+    });
+
+    expect((await call("DELETE", `/api/artifacts/${artifact.id}/versions/3`, ada)).status).toBe(204);
+
+    expect(await ok("GET", `/api/artifacts/${artifact.id}`, ada)).toEqual(second);
+    expect((await open(third.url)).status).toBe(404);
+    const outdated = await call("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 3, title: "Mine" });
+    expect(outdated.status).toBe(409);
+    expect(outdated.json.error).toEqual(expect.objectContaining({ code: "outdated_version", current: second.version }));
+
+    const fourth = await ok("PATCH", `/api/artifacts/${artifact.id}`, ada, { baseVersion: 2, files: [file("app.js", "4")] });
+
+    expect(fourth.version.number).toBe(4);
+    expect((await ok("GET", `/api/artifacts/${artifact.id}/versions`, ada)).map((v: { number: number }) => v.number)).toEqual([1, 2, 4]);
+    expect((await call("GET", `/api/artifacts/${artifact.id}/versions/3`, ada)).json.error.code).toBe("version_deleted");
+    // Comparing skips the deleted Version: the remaining ones compare as before.
+    const comparison = await ok("GET", `/api/artifacts/${artifact.id}/versions/compare?from=2&to=4`, ada);
+    expect(comparison.files.map((f: { path: string; change: string }) => [f.path, f.change])).toEqual([["app.js", "changed"]]);
+    // Deleting a Version under the current one leaves the current one as it is.
+    expect((await call("DELETE", `/api/artifacts/${artifact.id}/versions/1`, ada)).status).toBe(204);
+    expect(await ok("GET", `/api/artifacts/${artifact.id}`, ada)).toEqual(fourth);
+  });
+
+  test("refused, changing nothing: an Agent deleting a Version, and a User deleting an Artifact's only Version", async () => {
+    const { ada, asAgent, workspace } = await workspaceWithProject();
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Board prototype",
+      files: [file("index.html", page)],
+    });
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+
+    const only = await call("DELETE", `/api/artifacts/${artifact.id}/versions/1`, ada);
+
+    expect(only.status).toBe(409);
+    expect(only.json.error).toEqual(
+      expect.objectContaining({ code: "only_version", rule: expect.any(String), advice: expect.stringContaining("Delete the Artifact") }),
+    );
+    const saved = await ok("PATCH", `/api/artifacts/${artifact.id}`, asAgent, { baseVersion: 1, files: [file("app.js", "2")] });
+    await stream.next();
+
+    const byAgent = await call("DELETE", `/api/artifacts/${artifact.id}/versions/1`, asAgent);
+
+    expect(byAgent.status).toBe(403);
+    expect(byAgent.json.error).toEqual(
+      expect.objectContaining({ code: "agent_not_allowed", rule: expect.any(String), advice: expect.any(String) }),
+    );
+    await stream.expectQuiet();
+    stream.close();
+    expect(await ok("GET", `/api/artifacts/${artifact.id}`, ada)).toEqual(saved);
+    expect((await ok("GET", `/api/artifacts/${artifact.id}/versions`, ada)).map((v: { number: number }) => v.number)).toEqual([1, 2]);
+    expect((await open(artifact.url)).status).toBe(200);
+    expect(await cronk.attachmentFiles()).toHaveLength(2);
   });
 });

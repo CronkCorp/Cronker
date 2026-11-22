@@ -4,7 +4,7 @@ import type { Context } from "../context.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces } from "../knowledge/places.js";
-import { Artifact, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, findArtifact, saveArtifact } from "./artifacts.js";
+import { Artifact, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, deleteArtifactVersion, readArtifactVersion, ArtifactVersionRead, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
 import { linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
 
@@ -134,14 +134,59 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Compare two of an Artifact's Versions",
           description:
             "Both Versions, and each file that differs between them, by path: added, removed or changed, with its " +
-            "text compared line by line from `from` to `to`. Files that didn't change are left out.",
+            "text compared line by line from `from` to `to`. Files that didn't change are left out. A deleted Version " +
+            "answers `version_deleted`.",
           params: ArtifactParams,
           querystring: Type.Object({ from: Type.Integer({ minimum: 1 }), to: Type.Integer({ minimum: 1 }) }),
-          response: { 200: ArtifactComparison, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          response: { 200: ArtifactComparison, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 410: ErrorBody },
         },
       },
       async (request) =>
         compareArtifactVersions(context, await requireCaller(context, request), request.params.artifactId, request.query),
+    );
+
+    const VersionParams = Type.Object({ artifactId: Type.String(), number: Type.Integer({ minimum: 1 }) });
+
+    app.get(
+      "/api/artifacts/:artifactId/versions/:number",
+      {
+        schema: {
+          tags,
+          summary: "One of an Artifact's Versions",
+          description:
+            "The Version by its number: who saved it and when, its title, page and files, without their bytes, and " +
+            "the address its page is served at. A Version a User deleted answers 410 `version_deleted`, since its " +
+            "number is never used again; a number the Artifact never had answers `not_found`.",
+          params: VersionParams,
+          response: { 200: ArtifactVersionRead, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 410: ErrorBody },
+        },
+      },
+      async (request) =>
+        readArtifactVersion(db, await requireCaller(context, request), request.params.artifactId, request.params.number),
+    );
+
+    app.delete(
+      "/api/artifacts/:artifactId/versions/:number",
+      {
+        schema: {
+          tags,
+          summary: "Delete one of an Artifact's Versions",
+          description:
+            "Deletes the Version and its files, which are no longer served, keeping the Artifact's other Versions; " +
+            "its files' bytes are kept while another Version shares them. Deleting the current Version makes the " +
+            "newest remaining one current. Its number is never used again: reading it answers `version_deleted`, " +
+            "and a save based on it is refused as `outdated_version`. The only Version is refused with " +
+            "`only_version`: delete the Artifact instead. Only a User may; Agents are refused with " +
+            "`agent_not_allowed`.",
+          params: VersionParams,
+          response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 410: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        await deleteArtifactVersion(context, caller, request.params.artifactId, request.params.number);
+        return reply.code(204).send(null);
+      },
     );
 
     app.get(
