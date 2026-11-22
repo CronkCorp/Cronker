@@ -699,6 +699,14 @@ export interface Completion {
   reopen: { kind: "back"; status: { id: string; name: string } } | { kind: "stays" } | { kind: "refused" };
 }
 
+/** A Ticket the reopened one blocks that moved on since it was completed, as Reopen lists it. */
+export interface MovedOnDependent {
+  ticket: TicketRef;
+  status: { id: string; name: string; kind: StatusKind };
+  /** Whether a Run is running on it. */
+  running: boolean;
+}
+
 /** Which page tree: a Project's, or the Workspace's. */
 export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
 
@@ -986,6 +994,8 @@ export const api = {
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   completion: (ticketId: string) =>
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
+  reopenPreview: (ticketId: string) =>
+    call<{ dependents: MovedOnDependent[] }>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reopen-preview`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkPullRequest: (ticketId: string, pullRequest: string) =>

@@ -40,6 +40,7 @@ import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { priorityLabel } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
+import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { fitWindow } from "./ui/fit-window.js";
@@ -737,6 +738,7 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
+          <MovedOnDependents ticketId={ticket.id} open={reopening} />
           <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>

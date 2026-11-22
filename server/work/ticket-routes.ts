@@ -8,7 +8,7 @@ import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
 import { Report, reportsOn, writeReport } from "../knowledge/reports.js";
-import { acceptTicket, Completion, completionOf, reopenTicket } from "./verification.js";
+import { acceptTicket, Completion, completionOf, ReopenPreview, reopenPreview, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
@@ -252,7 +252,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Reopen an Unverified Ticket",
           description:
             "Sends a Ticket a Run completed back to the Status of the Step that completed it, with a Comment saying why, " +
-            "so a new Run picks it up there; it blocks again the Tickets it blocks. Only Users Reopen; a Ticket that " +
+            "so a new Run picks it up there; it blocks again the Tickets it blocks. Cronk writes a Comment, naming it and " +
+            "quoting the reason, on each Ticket it blocks that moved on since it was completed (see `reopen-preview`) and " +
+            "the User may read. Only Users Reopen; a Ticket that " +
             "isn't Unverified is refused with `not_unverified`.",
           params: Type.Object({ ticketId: Type.String() }),
           body: Type.Object({
@@ -288,6 +290,26 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const caller = await requireCaller(context, request);
         return completionOf(context.db, caller, request.params.ticketId);
+      },
+    );
+
+    app.get(
+      "/api/tickets/:ticketId/reopen-preview",
+      {
+        schema: {
+          tags: ["Tickets"],
+          summary: "What Reopening a Ticket would reach besides it",
+          description:
+            "For an Unverified Ticket: the Tickets it blocks that moved on since it was completed, leaving a Backlog Status " +
+            "or having a Run start then or later, each with its Status and whether a Run is running. Reopening it writes " +
+            "a Comment by Cronk on each, naming it and quoting the reason. Only those the caller may read are listed.",
+          params: Type.Object({ ticketId: Type.String() }),
+          response: { 200: ReopenPreview, 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        return reopenPreview(context.db, caller, request.params.ticketId);
       },
     );
 

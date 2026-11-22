@@ -156,6 +156,7 @@ The web client keeps its own small component set, styled with the tokens in plai
   - **A Question** shows the Agent, the Step that asked and the full Question, with an answer box underneath. "Post answer" says the answer sends the Ticket back to that Step; Dismiss, in the ghost style, sets it aside.
   - **A failed, lost or refused Run** shows what happened and why, the Run's session link, and **Retry** (primary).
   - **An Unverified completion** shows the Report and **Accept** (primary) and **Reopen…**, which asks for a required Comment.
+- **The Reopen dialog** (in the Inbox and on the Ticket) asks for the required Comment. When Tickets the reopened one blocks moved on since it was completed (left a Backlog Status, or had a Run start), a line above the Comment says so and that Cronk tells each of them, quoting the Comment, and lists them: each a link by key and title, with its Status pill and, while one runs, its Run state. With none, the dialog shows only the Comment box.
   - **A Ticket to review** shows its Status, its Pull Requests and its latest Report rendered inline, with a link to the Ticket.
   - **A Discovered Ticket** shows where it was found, then **Delegate** (primary), **Move…** and **Dismiss** in the ghost style.
 - **Keyboard:** J and K move through the list, A focuses the answer box, C Accepts and R opens Reopen…, on items that offer them. None fire while focus is in a text field. A line under the split names them.
