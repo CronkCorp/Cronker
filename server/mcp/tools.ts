@@ -126,7 +126,9 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields, its Comments (oldest first), its Relations: " +
+        "A Ticket of your Workspace with its fields, the Ticket keys its description mentions and, as `mentionedIn`, " +
+        "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
+        "its Comments (oldest first), its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +

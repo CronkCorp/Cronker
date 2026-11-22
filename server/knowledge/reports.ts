@@ -7,6 +7,7 @@ import { slugColumn, slugDescription } from "../http/readable.js";
 import { requireWrite, type Viewer } from "../identity/viewers.js";
 import { findTicketRow, runOfAgent, ticketNotFound } from "../work/tickets.js";
 import { insertVersion } from "./documents.js";
+import { Mention, mentionsOf } from "../work/mentions.js";
 
 /**
  * Reports: Documents a Run writes on its Ticket, such as an investigation's findings, listed with the Ticket instead
@@ -22,10 +23,11 @@ export const Report = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown; its current Version's." }),
   createdAt: Type.String({ format: "date-time" }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
 });
 export type Report = Static<typeof Report>;
 
-type Row = Omit<Report, "createdAt"> & { createdAt: Date };
+type Row = Omit<Report, "createdAt" | "mentions"> & { createdAt: Date };
 
 const columns = `documents.id, documents.ticket_id as "ticketId", documents.run_id as "runId",
   json_build_object('id', agents.id, 'name', agents.name) as agent, versions.title,
@@ -54,7 +56,11 @@ export const ReportRef = Type.Object({
 });
 export type ReportRef = Static<typeof ReportRef>;
 
-const present = (row: Row): Report => ({ ...row, createdAt: row.createdAt.toISOString() });
+/** Reports as the API shows them, finding the Ticket keys of all their bodies at once. */
+async function present(db: Db | Tx, viewer: Viewer, rows: Row[]): Promise<Report[]> {
+  const mentions = await mentionsOf(db, viewer, "document", rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString(), mentions: mentions.get(row.id)! }));
+}
 
 async function rowsOf(db: Db | Tx, where: string, param: string): Promise<Row[]> {
   const { rows } = await db.query<Row>(`select ${columns} from ${fromReports} where ${where} order by documents.seq`, [
@@ -67,17 +73,21 @@ async function rowsOf(db: Db | Tx, where: string, param: string): Promise<Row[]>
 export async function reportsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Report[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  return (await rowsOf(db, "documents.ticket_id = $1", ticket.id)).map(present);
+  return present(db, viewer, await rowsOf(db, "documents.ticket_id = $1", ticket.id));
 }
 
-/** Records a Report of the Run, at Version 1 by its Agent, in the transaction that locked its Ticket. */
+/**
+ * Records a Report of the Run, at Version 1 by its Agent, in the transaction that locked its Ticket; given a Viewer,
+ * returns it as the Viewer sees it.
+ */
 export async function recordReport(
   { clock, live }: Context,
   tx: Tx,
   ticket: { id: string; workspaceId: string; projectId: string },
   run: { id: string; agentId: string },
   input: { title: string; body: string },
-): Promise<Report> {
+  viewer?: Viewer,
+): Promise<Report | undefined> {
   const now = clock.now();
   const { rows } = await tx.query<{ id: string }>(
     `insert into documents (workspace_id, project_id, ticket_id, run_id, version, created_at)
@@ -93,7 +103,7 @@ export async function recordReport(
     ticketId: ticket.id,
     reportId: report!.id,
   });
-  return present(report!);
+  return viewer && (await present(tx, viewer, [report!]))[0];
 }
 
 /** An Agent writes a Report on a Ticket during its own running Run on it; Users comment instead. */
@@ -111,6 +121,6 @@ export async function writeReport(
     }
     await requireWrite(tx, writer, ticket);
     const runId = await runOfAgent(tx, writer, ticket);
-    return recordReport(context, tx, ticket, { id: runId, agentId: writer.id }, input);
+    return (await recordReport(context, tx, ticket, { id: runId, agentId: writer.id }, input, writer))!;
   });
 }

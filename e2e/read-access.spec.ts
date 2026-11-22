@@ -12,7 +12,7 @@ async function signInAs(page: Page, url: string, email: string, password: string
   await expect(page.getByRole("navigation", { name: "Sidebar" })).toBeVisible();
 }
 
-test("an Admin makes a Project private and lists a User with Read, who sees its board without New Ticket or dragging", async ({
+test("an Admin makes a Project private and lists a User with Read, who sees its board without New Ticket or dragging, and no editor", async ({
   page,
   cronk,
 }) => {
@@ -23,7 +23,8 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
   const post = async (path: string, body: unknown) =>
     (await cronk.request("POST", path, { cookie: adaCookie, body })).json() as Promise<{ id: string }>;
   const project = await post(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
-  await post(`/api/projects/${project.id}/tickets`, { title: "Read access" });
+  await post(`/api/projects/${project.id}/tickets`, { title: "Read access", description: "Readers **follow** the work." });
+  const document = await post(`/api/projects/${project.id}/documents`, { title: "Plan", body: "Runs start from a **Brief**." });
 
   // Ada, the Admin, makes CRONK private and lists Grace on it with Read.
   await signInInBrowser(page, cronk);
@@ -36,6 +37,12 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
   await access.getByLabel("Access of grace@example.com").selectOption("Read");
   await expect(access.getByRole("status")).toHaveText("Saved.");
   await expect(access.getByLabel("Access of grace@example.com")).toHaveValue("read");
+
+  // Ada, with Write, still edits the Document in the rich editor.
+  await page.goto(`${cronk.url}/documents/${document.id}`);
+  await page.getByRole("button", { name: "Edit" }).click();
+  await expect(page.getByRole("textbox", { name: "Body" })).toBeVisible();
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toBeVisible();
 
   // Grace sees the board and its card, but no New Ticket, and the card doesn't drag or offer changes.
   await signInAs(page, cronk.url, "grace@example.com", grace.password);
@@ -64,6 +71,18 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
   await expect(page.getByRole("heading", { name: /Read access/ })).toBeVisible();
   await expect(page.getByLabel("New Comment")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Description" }).getByText("follow")).toBeVisible();
+  await expect(page.locator("[contenteditable=true]")).toHaveCount(0);
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toHaveCount(0);
+
+  // The Project's Document reads as rendered text, with no Edit and no editor.
+  await page.goto(`${cronk.url}/documents/${document.id}`);
+  await expect(page.getByRole("heading", { name: "Plan" })).toBeVisible();
+  await expect(page.getByRole("note")).toHaveText("You have Read in this Project: you follow its work, but don't change it.");
+  await expect(page.getByText("Brief", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  await expect(page.locator("[contenteditable=true]")).toHaveCount(0);
+  await expect(page.getByRole("toolbar", { name: "Formatting" })).toHaveCount(0);
 
   // Linus, unlisted, doesn't see the Project at all.
   await signInAs(page, cronk.url, "linus@example.com", linus.password);

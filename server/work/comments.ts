@@ -9,7 +9,8 @@ import { requireWrite, type Viewer } from "../identity/viewers.js";
 import { answerQuestion } from "../runs/questions.js";
 import { insertComment } from "./comment-writes.js";
 import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
-import { findTicketRow, Mention, mentionsInEach, ticketNotFound } from "./tickets.js";
+import { findTicketRow, ticketNotFound } from "./tickets.js";
+import { Mention, mentionsOf } from "./mentions.js";
 
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -18,7 +19,7 @@ export const Comment = Type.Object({
   body: Type.String({ description: "Markdown." }),
   actor: ActorOrCronk,
   createdAt: Type.String({ format: "date-time" }),
-  mentions: Type.Array(Mention, { description: "Ticket keys the body mentions." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
   attachments: Type.Array(Attachment, { description: "The files attached to the Comment, oldest first." }),
   questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
@@ -49,13 +50,13 @@ async function rowsOf(db: Db | Tx, ticketId: string, commentId?: string): Promis
 }
 
 /** Comments as the API shows them, finding the Ticket keys of all their bodies, and their Attachments, at once. */
-async function present(db: Db | Tx, viewer: Viewer, workspaceId: string, rows: Row[]): Promise<Comment[]> {
-  const mentions = await mentionsInEach(db, workspaceId, rows.map((row) => row.body), viewer);
+async function present(db: Db | Tx, viewer: Viewer, rows: Row[]): Promise<Comment[]> {
+  const mentions = await mentionsOf(db, viewer, "comment", rows.map((row) => row.id));
   const attachments = await attachmentsOnComments(db, rows.map((row) => row.id));
-  return rows.map((row, i) => ({
+  return rows.map((row) => ({
     ...row,
     createdAt: row.createdAt.toISOString(),
-    mentions: mentions[i]!,
+    mentions: mentions.get(row.id)!,
     attachments: attachments.get(row.id)!,
   }));
 }
@@ -63,7 +64,7 @@ async function present(db: Db | Tx, viewer: Viewer, workspaceId: string, rows: R
 export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Comment[]> {
   const ticket = await findTicketRow(db, viewer, ticketId);
   if (!ticket) throw ticketNotFound();
-  return present(db, viewer, ticket.workspaceId, await rowsOf(db, ticket.id));
+  return present(db, viewer, await rowsOf(db, ticket.id));
 }
 
 export async function addComment(
@@ -87,7 +88,7 @@ export async function addComment(
     if (actor.kind === "user" && input.replyToId !== undefined) {
       await answerQuestion(context, tx, ticket, actor.id, input.replyToId, commentId);
     }
-    const [comment] = await present(tx, actor, ticket.workspaceId, await rowsOf(tx, ticket.id, commentId));
+    const [comment] = await present(tx, actor, await rowsOf(tx, ticket.id, commentId));
     return comment!;
   });
 }
