@@ -106,7 +106,14 @@ export const TicketSummary = Type.Object({
   blockedBy: Type.Array(TicketRef, {
     description:
       "The unfinished Tickets blocking this one, of any Project of the Workspace, oldest block first. A blocker in a " +
-      "Done or Canceled Status, Unverified ones included, is finished and no longer listed.",
+      "Done or Canceled Status, Unverified ones included, is finished and no longer listed. Only those the caller " +
+      "may read are listed; `blockedByHidden` counts the rest.",
+  }),
+  blockedByHidden: Type.Integer({
+    minimum: 0,
+    description:
+      "How many more unfinished Tickets block this one that the caller can't read, such as those of a private " +
+      "Project: counted, so the Ticket shows as blocked, but never named.",
   }),
 });
 export type TicketSummary = Static<typeof TicketSummary>;
@@ -128,14 +135,31 @@ export const ticketRefColumn = (tickets: string, projects: string) =>
   `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
      'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
-/** SQL for the unfinished Tickets blocking the Ticket `alias`, as TicketRefs, oldest block first. */
-const blockersColumn = (alias: string) =>
+/** A SQL condition that the Viewer may read the Ticket `alias`. */
+type Reach = (alias: string) => string;
+
+/**
+ * SQL for the unfinished Tickets blocking the Ticket `alias` that the Viewer may read, as TicketRefs, oldest block
+ * first, and for how many more there are that it may not read.
+ */
+const blockersColumns = (alias: string, reach: Reach) =>
   `coalesce((select json_agg(${ticketRefColumn("blockers", "blocker_projects")} order by relations.seq)
      from projects blocker_projects, ${unfinishedBlockers(alias)}
-       and blocker_projects.id = blockers.project_id), '[]'::json)`;
+       and blocker_projects.id = blockers.project_id and ${reach("blockers")}), '[]'::json) as "blockedBy",
+   (select count(*)::int from ${unfinishedBlockers(alias)} and not ${reach("blockers")}) as "blockedByHidden"`;
 
-/** The columns of a Ticket as stored, for queries joining `tickets` to `projects`. */
-export const ticketColumns = `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
+/**
+ * The columns of a Ticket as the Viewer sees it, for queries joining `tickets` to `projects`, with the value to bind
+ * to `param`: a Ticket it names that the Viewer can't read is left out, and a blocker among them only counted.
+ */
+export function ticketColumns(viewer: Viewer, param: string): { sql: string; value: string | string[] } {
+  const reach: Reach = (alias) =>
+    inReach(viewer, { project: `${alias}.project_id`, workspace: `${alias}.workspace_id` }, param).sql;
+  const { value } = inReach(viewer, { project: "null", workspace: "null" }, param);
+  return { sql: ticketColumnsSql(reach), value };
+}
+
+const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "projectId", projects.key || '-' || tickets.number as key,
   tickets.title, tickets.description, tickets.status_id as "statusId", tickets.priority, tickets.labels,
   tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId",
   tickets.autonomous_delegation as "autonomousDelegation", tickets.verification, tickets.parent_id as "parentId",
@@ -144,12 +168,12 @@ export const ticketColumns = `tickets.id, tickets.project_id as "projectId", pro
   (select json_build_object('id', runs.id, 'state', runs.state) from runs
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
   ${waitingColumn("tickets")} as waiting,
-  ${blockersColumn("tickets")} as "blockedBy",
+  ${blockersColumns("tickets", reach)},
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources
       join projects source_projects on source_projects.id = sources.project_id
-      where sources.id = tickets.discovered_from_ticket_id),
+      where sources.id = tickets.discovered_from_ticket_id and ${reach("sources")}),
     'runId', tickets.discovered_in_run_id,
     'waiting', tickets.discovery_waits) end as discovered`;
 
@@ -215,7 +239,7 @@ export async function findTicketRow(
   if (!isUuid(ticketId)) return undefined;
   const view = inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(
-    `select ${ticketColumns}, tickets.workspace_id as "workspaceId"
+    `select ${ticketColumns(viewer, "$2").sql}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
      where tickets.id = $1 and ${view.sql} ${lock ? "for update of tickets" : ""}`,
     [ticketId, view.value],
@@ -225,7 +249,7 @@ export async function findTicketRow(
 
 export async function findTicket(db: Db | Tx, viewer: Viewer, ticketId: string): Promise<Ticket | undefined> {
   const row = await findTicketRow(db, viewer, ticketId);
-  return row && fullTicket(db, row);
+  return row && fullTicket(db, viewer, row);
 }
 
 /** A Ticket of a Workspace in the Viewer's view, by its key, ignoring case. */
@@ -235,14 +259,21 @@ export async function findTicketByKey(
   workspaceId: string,
   key: string,
 ): Promise<Ticket | undefined> {
-  const [mention] = isUuid(workspaceId) ? await mentionsIn(db, workspaceId, key) : [];
+  const [mention] = isUuid(workspaceId) ? await mentionsIn(db, workspaceId, key, viewer) : [];
   return mention && mention.text === key ? findTicket(db, viewer, mention.ticketId) : undefined;
 }
 
-/** The Ticket as the API shows one alone: its summary, the Ticket keys its description mentions, and its Runs' cost. */
-async function fullTicket(db: Db | Tx, row: Row): Promise<Ticket> {
+/**
+ * The Ticket as the API shows one alone: its summary, the Ticket keys its description mentions that the Viewer may
+ * read, and its Runs' cost.
+ */
+async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket> {
   const { rows } = await db.query<{ cost: Cost[] }>(`select ${costTotalsSql("runs.ticket_id = $1")} as cost`, [row.id]);
-  return { ...ticketSummary(row), mentions: await mentionsIn(db, row.workspaceId, row.description), cost: rows[0]!.cost };
+  return {
+    ...ticketSummary(row),
+    mentions: await mentionsIn(db, row.workspaceId, row.description, viewer),
+    cost: rows[0]!.cost,
+  };
 }
 
 const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;
@@ -250,24 +281,34 @@ const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;
 /** Ticket keys as written in Markdown or other text, each once, in order of first mention. */
 export const keysWritten = (markdown: string) => [...new Set([...markdown.matchAll(writtenKey)].map((m) => m[0]))];
 
-/** Ticket keys in Markdown that name Tickets of the Workspace, each once, in order of first mention. */
-export async function mentionsIn(db: Db | Tx, workspaceId: string, markdown: string): Promise<Mention[]> {
-  return (await mentionsInEach(db, workspaceId, [markdown]))[0]!;
+/**
+ * Ticket keys in Markdown that name Tickets of the Workspace, each once, in order of first mention; given a Viewer,
+ * only those it may read.
+ */
+export async function mentionsIn(db: Db | Tx, workspaceId: string, markdown: string, viewer?: Viewer): Promise<Mention[]> {
+  return (await mentionsInEach(db, workspaceId, [markdown], viewer))[0]!;
 }
 
-/** The mentions in each of several Markdown texts, looked up together. */
-export async function mentionsInEach(db: Db | Tx, workspaceId: string, texts: string[]): Promise<Mention[][]> {
+/** The mentions in each of several Markdown texts, looked up together; given a Viewer, only those it may read. */
+export async function mentionsInEach(
+  db: Db | Tx,
+  workspaceId: string,
+  texts: string[],
+  viewer?: Viewer,
+): Promise<Mention[][]> {
   const written = texts.map(keysWritten);
   const all = [...new Set(written.flat())];
   if (all.length === 0) return texts.map(() => []);
+  const reach = viewer && inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, "$3");
   const { rows } = await db.query<Mention>(
     `select written.text, projects.key || '-' || tickets.number as key, tickets.id as "ticketId"
      from unnest($2::text[]) as written (text)
      join projects on projects.workspace_id = $1
        and lower(projects.key) = lower(split_part(written.text, '-', 1))
      join tickets on tickets.project_id = projects.id
-       and tickets.number = split_part(written.text, '-', 2)::integer`,
-    [workspaceId, all],
+       and tickets.number = split_part(written.text, '-', 2)::integer
+     ${reach ? `where ${reach.sql}` : ""}`,
+    reach ? [workspaceId, all, reach.value] : [workspaceId, all],
   );
   const found = new Map(rows.map((mention) => [mention.text, mention]));
   return written.map((keys) => keys.flatMap((text) => found.get(text) ?? []));
@@ -398,7 +439,7 @@ export async function createTicket(
     }
     await startRunIfNeeded(context, tx, ticket.id, now);
     // Read it again: a Run it started, or its wait for one, shows on it.
-    return fullTicket(tx, (await findTicketRow(tx, creator, ticket.id))!);
+    return fullTicket(tx, creator, (await findTicketRow(tx, creator, ticket.id))!);
   });
 }
 
@@ -476,8 +517,10 @@ export async function listTickets(
   if (label !== undefined) {
     match((p) => `exists (select 1 from unnest(tickets.labels) as l where lower(l) = lower(${p}))`, label.trim());
   }
+  const columns = ticketColumns(viewer, `$${params.length + 1}`);
+  params.push(columns.value);
   const { rows } = await db.query<Row>(
-    `select ${ticketColumns}, tickets.workspace_id as "workspaceId"
+    `select ${columns.sql}, tickets.workspace_id as "workspaceId"
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
@@ -625,7 +668,7 @@ export async function editTicket(
     }
     if (edit.dueDate !== undefined) await change("dueDate", "dueDate", edit.dueDate);
     if (edit.estimate !== undefined) await change("estimate", "estimate", edit.estimate);
-    if (changes.length === 0) return fullTicket(tx, ticket);
+    if (changes.length === 0) return fullTicket(tx, editor, ticket);
 
     const now = clock.now();
     // A User delegating or moving a Discovered Ticket takes it up: it leaves their Inbox and the Agent's hands.
@@ -716,7 +759,7 @@ export async function editTicket(
     // The cards of what it blocks name it by its title.
     else if (next.title !== ticket.title) await blockingChanged(context, tx, [ticket.id]);
     // Read it again: what the edit started or stopped shows in its last Run and what it waits for.
-    return fullTicket(tx, (await findTicketRow(tx, editor, ticket.id))!);
+    return fullTicket(tx, editor, (await findTicketRow(tx, editor, ticket.id))!);
   });
 }
 
@@ -882,7 +925,7 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
     await settleDiscoveredSubTickets(context, tx, ticket);
     await recordChanges(tx, ticket, userId, clock.now(), [{ field: "dismissed", from: null, to: null }]);
     live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-    return fullTicket(tx, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
+    return fullTicket(tx, userViewer(userId), { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
 }
 

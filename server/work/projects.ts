@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inReach, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessIn, inReach, userViewer, type Viewer } from "../identity/viewers.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
@@ -24,11 +24,24 @@ export const Status = Type.Object({
 });
 export type Status = Static<typeof Status>;
 
+/** Whether a Project is open to every User of its Workspace or only to those it lists, and its Admins. */
+export const Visibility = Type.Union([Type.Literal("open"), Type.Literal("private")], {
+  description:
+    "`open`: every User of the Workspace has Write unless listed otherwise. `private`: only the Users it lists, and " +
+    "the Workspace's Admins, see it; to anyone else it answers as if it didn't exist.",
+});
+
 export const ProjectSummary = Type.Object({
   id: Type.String({ format: "uuid" }),
   workspaceId: Type.String({ format: "uuid" }),
   name: Type.String(),
   key: Type.String(),
+  visibility: Visibility,
+  access: Type.Union([Type.Literal("write"), Type.Literal("read")], {
+    description:
+      "What the caller may do in the Project: `write`, or `read` to only read it. Admins always have Write; an " +
+      "Agent's is the least of the Project's Agent Access, its Owner's Access and its token's access.",
+  }),
 });
 export type ProjectSummary = Static<typeof ProjectSummary>;
 
@@ -70,13 +83,16 @@ const defaultStatuses: { name: string; kind: StatusKind }[] = [
   { name: "Canceled", kind: "canceled" },
 ];
 
-const summaryColumns = `projects.id, projects.workspace_id as "workspaceId", projects.name, projects.key`;
+/** A Project's summary columns as the Viewer sees them, its own Access included, binding the Viewer's value to `param`. */
+const summaryColumns = (viewer: Viewer, param: string) =>
+  `projects.id, projects.workspace_id as "workspaceId", projects.name, projects.key, projects.visibility,
+   ${accessIn(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, param).sql} as access`;
 
 /** The Workspace's Projects the Viewer may read. */
 export async function projectsOf(db: Db, viewer: Viewer, workspaceId: string): Promise<ProjectSummary[]> {
   const view = inReach(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, "$2");
   const { rows } = await db.query<ProjectSummary>(
-    `select ${summaryColumns} from projects where workspace_id = $1 and ${view.sql} order by lower(name), id`,
+    `select ${summaryColumns(viewer, "$2")} from projects where workspace_id = $1 and ${view.sql} order by lower(name), id`,
     [workspaceId, view.value],
   );
   return rows;
@@ -104,7 +120,7 @@ export async function findProject(
   if (!isUuid(projectId)) return undefined;
   const view = inReach(viewer, { project: "projects.id", workspace: "projects.workspace_id" }, "$2");
   const { rows } = await db.query<Omit<Project, "statuses">>(
-    `select ${summaryColumns}, projects.new_tickets_delegated as "newTicketsDelegated",
+    `select ${summaryColumns(viewer, "$2")}, projects.new_tickets_delegated as "newTicketsDelegated",
        projects.autonomous_delegation_default as "autonomousDelegationDefault",
        projects.pull_request_automation as "pullRequestAutomation", projects.agents_may_merge as "agentsMayMerge"
      from projects where projects.id = $1 and ${view.sql}
@@ -127,7 +143,7 @@ export async function createProject(
     const project = await tx
       .query<ProjectSummary>(
         `insert into projects (workspace_id, name, key, created_at) values ($1, $2, $3, $4)
-         returning id, workspace_id as "workspaceId", name, key`,
+         returning id, workspace_id as "workspaceId", name, key, visibility, 'write' as access`,
         [workspaceId, name, key, now],
       )
       .then(

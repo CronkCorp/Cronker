@@ -1,6 +1,6 @@
 # Testing
 
-Tests exercise Cronk from the outside, the way a User or Agent does: they call the HTTP API (or drive the web client) and assert on responses and on what later calls return. They never read tables, import internal modules or call private functions, so the inside can be refactored freely. Only the harness reaches in, and only for what starting Cronk takes: `createCronk` and the migrations that build its template database. The one exception is a test of a migration that moves data an earlier Cronk wrote: it writes those rows as that Cronk did (`stage()`, below), since today's API can no longer write them, and reads the result through the API. Rules are not tested through lower-level unit seams.
+Tests exercise Cronk from the outside, the way a User or Agent does: they call the HTTP API (or drive the web client) and assert on responses and on what later calls return. They never read tables, import internal modules or call private functions (the rich editor's round trip, seam 8, is the one module the web client offers as a seam), so the inside can be refactored freely. Only the harness reaches in, and only for what starting Cronk takes: `createCronk` and the migrations that build its template database. The one exception is a test of a migration that moves data an earlier Cronk wrote: it writes those rows as that Cronk did (`stage()`, below), since today's API can no longer write them, and reads the result through the API. Rules are not tested through lower-level unit seams.
 
 ## Seams
 
@@ -28,6 +28,7 @@ These are the seams from the milestone 1 spec (#1). Tests live only at them.
    - `e2e/addresses.spec.ts`: a Ticket at its key's address, any letter case replaced by the canonical one.
    - `e2e/frame.spec.ts`: the sidebar, and at phone width a strip with the rest in a menu.
    - `e2e/styling.spec.ts`: the faces loading from Cronk itself, and every colour the stylesheets set coming from a token.
+8. **The rich editor's round trip** (component): Markdown in, the editor's document, Markdown out, through `openMarkdown` (`web/src/editor/round-trip.ts`), the shared editor's one seam, which takes Markdown and gives Markdown back. ProseMirror runs without a browser, so this needs no DOM and no Cronk. Edits are ProseMirror transactions, as the editor makes them. Lives in `test/editor/round-trip.test.ts`, over the handwritten samples in `test/editor/samples/` (`attachment:` references, Mentions, Embeds, tables and task lists, code blocks, raw HTML and footnotes, nested lists, odd spacing, Windows line endings) and this repository's own Markdown docs: each comes back byte for byte without edits and with only the touched block changed after an edit to any one block, Markdown the editor can't show is a source block kept as written, and the source mode goes through the same round trip.
 
 What a seam can't see, such as that only hashes of secrets are stored, is kept by code review rather than by tests reaching past the seam.
 
