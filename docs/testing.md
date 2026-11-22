@@ -29,7 +29,7 @@ These are the seams from the milestone 1 spec (#1). Tests live only at them.
    - `e2e/transcripts.spec.ts`: a Run's Transcript opened from its timeline, following a new upload, a tool call expanded, and deleted.
    - `e2e/search.spec.ts`: searching from the sidebar, results grouped by kind, the Project filter and opening a result.
    - `e2e/addresses.spec.ts`: a Ticket at its key's address, any letter case replaced by the canonical one.
-   - `e2e/editor.spec.ts`: the rich editor on a Document: its toolbar, keys and Markdown shortcuts, the source toggle both ways and remembered on this browser, and its toolbar as one stop with arrow keys between its buttons.
+   - `e2e/editor.spec.ts`: the rich editor on a Document: its toolbar, keys and Markdown shortcuts, the source toggle both ways and remembered on this browser, its toolbar as one stop with arrow keys between its buttons, and, at a wide window, text that fills the frame so long lines wrap at its edge with their line breaks kept through save and reload.
    - `e2e/documents.spec.ts`: files pasted or dropped into the rich editor's text, each an Attachment shown where it went in.
    - `e2e/scope-switch.spec.ts`: the knowledge pages' scope dropdown by keyboard, each choice an address that Back and Forward move between.
    - `e2e/frame.spec.ts`: the sidebar, and at phone width a strip with the rest in a menu.
