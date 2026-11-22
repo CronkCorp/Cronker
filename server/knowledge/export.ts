@@ -1,5 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
+import { ApiError } from "../http/errors.js";
+import { accessOf, type Viewer } from "../identity/viewers.js";
 import { decisionsWithBodiesOf, type Decision } from "./decisions.js";
 import type { Place } from "./places.js";
 import { glossaryOf, termsOf, type Term } from "./terms.js";
@@ -66,10 +68,19 @@ function decisionFile(decision: Decision, byId: Map<string, Decision>): Exported
 /**
  * The place's export. A Project's `GLOSSARY.md` holds its glossary, its own Terms over the Workspace's, and its
  * `docs/adr/` only its own Decisions; the Workspace's holds the Workspace's own Terms and Decisions. A superseded
- * Decision's replacement is always of the same place, so its link resolves within the export.
+ * Decision's replacement is always of the same place, so its link resolves within the export. It holds only what the
+ * Viewer can read: the Project's export is found only in reach, and the Workspace's own knowledge, by the Workspace's
+ * Agent Access, may be out of an Agent's reach, which leaves the Workspace's Terms out of a Project's glossary and the
+ * Workspace's export not found.
  */
-export async function exportOf(db: Db, place: Place): Promise<Export> {
-  const terms = place.projectId ? await glossaryOf(db, { ...place, projectId: place.projectId }) : await termsOf(db, place);
+export async function exportOf(db: Db, viewer: Viewer, place: Place): Promise<Export> {
+  const workspaceKnowledge = (await accessOf(db, viewer, { workspaceId: place.workspaceId, projectId: null })) !== "none";
+  if (!place.projectId && !workspaceKnowledge) throw new ApiError(404, "not_found", "No such Workspace.");
+  const terms = !place.projectId
+    ? await termsOf(db, place)
+    : workspaceKnowledge
+      ? await glossaryOf(db, { ...place, projectId: place.projectId })
+      : await termsOf(db, place);
   const decisions = await decisionsWithBodiesOf(db, place);
   const byId = new Map(decisions.map((decision) => [decision.id, decision]));
   return { files: [glossaryFile(terms), ...decisions.map((decision) => decisionFile(decision, byId))] };
