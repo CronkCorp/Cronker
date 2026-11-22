@@ -8,6 +8,7 @@ import { archivedRefusal, readersIn, userViewer, writersIn } from "../identity/v
 import { requireAdmin } from "../workspaces/members.js";
 import { findProject, Project, projectNotFound, Visibility } from "./projects.js";
 import { countHeld, nameOf, releaseTickets } from "./releasing.js";
+import { resumeRunsOfUnarchivedProject, stopRunsOfArchivedProject } from "../runs/runs.js";
 
 /** A User listed on a Project, with their level there: Read to follow its work without changing it, or Write. */
 export const ListedUser = Type.Object({
@@ -172,11 +173,12 @@ export async function previewProjectAccess(
  * already is as asked.
  */
 export async function archiveProject(
-  { db, clock, live }: Context,
+  context: Context,
   userId: string,
   projectId: string,
   archived: boolean,
 ): Promise<Project> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const project = await projectForAdmin(db, tx, userId, projectId, { lock: true });
     if (archived && project.archivedAt !== null) {
@@ -185,11 +187,15 @@ export async function archiveProject(
     if (!archived && project.archivedAt === null) {
       throw new ApiError(409, "project_not_archived", `${project.key} isn't archived.`);
     }
+    const now = clock.now();
     await tx.query("update projects set archived_at = $2, archived_by = $3 where id = $1", [
       project.id,
-      archived ? clock.now() : null,
+      archived ? now : null,
       archived ? userId : null,
     ]);
+    // An archived Project spends nothing: its running Runs stop and its Tickets wait until it is unarchived.
+    if (archived) await stopRunsOfArchivedProject(context, tx, project, userId, now);
+    else await resumeRunsOfUnarchivedProject(context, tx, project.id);
     live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     return (await findProject(tx, userViewer(userId), project.id))!;
   });

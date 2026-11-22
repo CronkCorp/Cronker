@@ -20,7 +20,7 @@ import { Cost } from "./costs.js";
 import type { RunReports, RunToStart, StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
-import { isBlocked, queueOrder } from "./waiting.js";
+import { inArchivedProject, isBlocked, queueOrder } from "./waiting.js";
 import { userName } from "../identity/user.js";
 
 /**
@@ -200,6 +200,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     runnerKind: string | null;
     waits: boolean;
     blocked: boolean;
+    archived: boolean;
   }>(
     `select tickets.workspace_id as "workspaceId", tickets.project_id as "projectId", projects.key as "projectKey",
        projects.name as "projectName", projects.key || '-' || tickets.number as key, tickets.status_id as "statusId",
@@ -207,7 +208,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
        tickets.autonomous_delegation as "autonomousDelegation", projects.agents_may_merge as "agentsMayMerge",
        projects.concise_reports as "conciseReports", agents.name as "agentName", runners.id as "runnerId",
        runners.owner_id as "runnerOwnerId", runners.name as "runnerName", runners.kind as "runnerKind",
-       tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked
+       tickets.waits_for_run as waits, ${isBlocked("tickets")} as blocked,
+       projects.archived_at is not null as archived
      from tickets join projects on projects.id = tickets.project_id
      left join agents on agents.id = tickets.delegate_id
      left join runners on runners.id = agents.runner_id
@@ -233,6 +235,13 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.
   if (!status.step || !mayHaveStep(status.kind)) return needsNone();
+  // An archived Project spends nothing: its Tickets wait where they are, skipping no Step, until it is unarchived.
+  if (ticket.archived) {
+    const { rowCount: running } = await tx.query("select 1 from runs where ticket_id = $1 and state = 'running'", [ticketId]);
+    if (running) return needsNone();
+    await waitForRun(true);
+    return "waiting";
+  }
   // A Merge Step skips itself unless an agent may merge this Ticket; otherwise the Label rule decides.
   const mergeRule = status.step.kind === "merge" ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true) : null;
   if (mergeRule || !passes(status.step.labelRule, ticket.labels)) {
@@ -429,6 +438,7 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
           where agents.runner_id = $1 and waiting.waits_for_run and waiting.id <> $2 and not ${isBlocked("waiting")}
+            and not ${inArchivedProject("waiting")}
             and (${queueOrder("waiting")}) < (select ${queueOrder("tickets")} from tickets where id = $2)) as taken`,
     [runnerId, ticketId],
   );
@@ -469,7 +479,8 @@ export async function waitingTickets(tx: Tx, where: string, params: unknown[]): 
   const { rows } = await tx.query<WaitingTicket>(
     `select tickets.id, agents.runner_id as "runnerId"
      from tickets left join agents on agents.id = tickets.delegate_id
-     where tickets.waits_for_run and ${where}`,
+     where tickets.waits_for_run and ${where}
+     order by ${queueOrder("tickets")}`,
     params,
   );
   return rows;
@@ -506,6 +517,7 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
     const { rows } = await context.db.query<{ id: string }>(
       `select tickets.id from tickets join agents on agents.id = tickets.delegate_id
        where agents.runner_id = $1 and tickets.waits_for_run and not ${isBlocked("tickets")}
+         and not ${inArchivedProject("tickets")}
        order by ${queueOrder("tickets")} limit 1`,
       [runnerId],
     );
@@ -547,6 +559,57 @@ export async function stopRunningRun(context: Context, tx: Tx, ticketId: string,
     );
     for (const run of rows) tellRunner(context, tx, run, "stop");
   }
+}
+
+/**
+ * What a `runStopped` Change records: the Run Cronk stopped, its Step's name, its Agent, and why: `projectArchived`
+ * when an Admin archived the Ticket's Project.
+ */
+export interface RunStopped {
+  runId: string;
+  step: string;
+  agent: { id: string; name: string };
+  why: "projectArchived";
+}
+
+/**
+ * Call in the transaction that archived the Project, holding its lock: stops each of its running Runs, as an
+ * undelegation stops one, recording Cronk's `runStopped` Change on its Ticket. Each Ticket then waits for a Run,
+ * as every delegated Ticket of an archived Project does, so unarchiving starts it again.
+ */
+export async function stopRunsOfArchivedProject(
+  context: Context,
+  tx: Tx,
+  project: { id: string; key: string },
+  archivedBy: string,
+  now: Date,
+): Promise<void> {
+  const { rows } = await tx.query<{ ticketId: string; runId: string; step: string; agentId: string; agentName: string }>(
+    `select tickets.id as "ticketId", runs.id as "runId", runs.status_name as step, agents.id as "agentId",
+       agents.name as "agentName"
+     from tickets join runs on runs.ticket_id = tickets.id and runs.state = 'running'
+     join agents on agents.id = runs.agent_id
+     where tickets.project_id = $1 order by tickets.id for update of tickets`,
+    [project.id],
+  );
+  if (rows.length === 0) return;
+  const { rows: named } = await tx.query<{ name: string }>(`select ${userName()} as name from users where id = $1`, [archivedBy]);
+  const reason = `${named[0]!.name} archived ${project.key}, stopping its Runs.`;
+  for (const run of rows) {
+    await stopRunningRun(context, tx, run.ticketId, reason, now);
+    const stopped: RunStopped = { runId: run.runId, step: run.step, agent: { id: run.agentId, name: run.agentName }, why: "projectArchived" };
+    const [locked] = await lockTickets(tx, [run.ticketId]);
+    await writeTicket(context, tx, locked!, { kind: "cronk" }, {}, { at: now, changes: [{ field: "runStopped", from: stopped, to: null }] });
+    await startRunIfNeeded(context, tx, run.ticketId, now);
+  }
+}
+
+/**
+ * Call in the transaction that unarchived the Project: once it commits, its Tickets waiting for a Run are
+ * rechecked, and start in queue order as their Runners have slots.
+ */
+export async function resumeRunsOfUnarchivedProject(context: Context, tx: Tx, projectId: string): Promise<void> {
+  recheckWaiting(context, tx, await waitingTickets(tx, "tickets.project_id = $1", [projectId]));
 }
 
 /** A Run that just ended in Cronk, with what its Runner needs to stop it too. */

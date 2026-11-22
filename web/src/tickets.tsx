@@ -710,6 +710,7 @@ const waitingReasons = {
   runnerSlot: "Runner full",
   runnerPaused: "Runner rate-limited",
   blocked: "Blocked by another Ticket",
+  archived: "Project archived",
 } as const;
 
 /** The Ticket's Run while one is running or waiting, or gone wrong with Retry; hidden otherwise. */
@@ -1177,7 +1178,7 @@ function CommentForm({
 const fieldNames: Record<
   Exclude<
     Change["field"],
-    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | "transcriptDeleted" | RelationKind
+    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | "transcriptDeleted" | "runStopped" | RelationKind
   >,
   string
 > = {
@@ -1250,6 +1251,14 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
+/** What a `runStopped` Change records: the Run Cronk stopped, its Step's name, its Agent, and why. */
+interface RunStopped {
+  runId: string;
+  step: string;
+  agent: { id: string; name: string };
+  why: "projectArchived";
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
@@ -1275,6 +1284,10 @@ function described(change: Change): string {
   if (change.field === "transcriptDeleted") {
     const { step, agent } = change.from as TranscriptDeleted;
     return step ? `deleted the Transcript of the ${step} Run` : `deleted a Transcript of ${agent.name}'s session outside a Run`;
+  }
+  if (change.field === "runStopped") {
+    const { step, agent } = change.from as RunStopped;
+    return `stopped ${agent.name}'s ${step} Run: the Project was archived`;
   }
   if (change.field === "stepSkipped") {
     const { status, labelRule, mergeRule, outcome } = change.to as StepSkipped;
