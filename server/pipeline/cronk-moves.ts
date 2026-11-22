@@ -24,6 +24,13 @@ export const listsPullRequestsRepository = `exists (
   select from pull_requests join project_repositories on project_repositories.repository_id = pull_requests.repository_id
   where pull_requests.id = $1 and project_repositories.project_id = tickets.project_id)`;
 
+/**
+ * SQL condition, for a query over `tickets`: the Ticket's Project isn't archived. GitHub moves no work in an archived
+ * Project, so its merges and failures move none of its Tickets, while its Pull Requests stay recorded and linked.
+ */
+export const inUnarchivedProject = `not exists (
+  select from projects archived where archived.id = tickets.project_id and archived.archived_at is not null)`;
+
 /** The Ticket a move by Cronk moves, locked by the caller's transaction. */
 export interface MovedTicket {
   id: string;

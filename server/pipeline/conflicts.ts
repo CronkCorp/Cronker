@@ -54,7 +54,8 @@ export async function askMergeability(
 
 /**
  * SQL condition, for a query over `pull_requests`: the Pull Request links a Ticket that a conflict would send back,
- * one in a Review Status with a producing Step, in a Project with Pull Request automation on that lists its Repository.
+ * one in a Review Status with a producing Step, in an unarchived Project with Pull Request automation on that lists its
+ * Repository.
  * `sendBackForFailure` applies the same rule when the answer comes; this only spares GitHub the other asks.
  */
 const linksTicketToSendBack = `exists (
@@ -67,7 +68,7 @@ const linksTicketToSendBack = `exists (
   join project_repositories on project_repositories.project_id = tickets.project_id
     and project_repositories.repository_id = pull_requests.repository_id
   where pull_request_links.pull_request_id = pull_requests.id and projects.pull_request_automation
-    and statuses.kind = 'review')`;
+    and projects.archived_at is null and statuses.kind = 'review')`;
 
 /** Asks for the Pull Requests chosen by `where` over `pull_requests` to be checked, now, naming the merge, if any. */
 async function queue(context: Context, tx: Tx, where: string, params: unknown[], mergedPullRequestId: number | null): Promise<void> {
