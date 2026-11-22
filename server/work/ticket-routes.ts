@@ -6,10 +6,10 @@ import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
-import { addComment, Comment, commentsOn } from "./comments.js";
-import { Report, reportsOn, writeReport } from "../knowledge/reports.js";
-import { acceptTicket, Completion, completionOf, reopenTicket } from "./verification.js";
-import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
+import { addComment, Comment, CommentCreate, commentsOn } from "./comments.js";
+import { Report, ReportCreate, reportsOn, writeReport } from "../knowledge/reports.js";
+import { acceptTicket, Completion, completionOf, reopenTicket, TicketReopen } from "./verification.js";
+import { addRelation, Relation, RelationCreate, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
   createTicket,
   dismissTicket,
@@ -20,15 +20,11 @@ import {
   listTickets,
   Priority,
   Ticket,
+  TicketCreate,
+  TicketEdit,
   ticketNotFound,
   TicketList,
 } from "./tickets.js";
-
-const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
-const Description = Type.String({ maxLength: 100_000, description: "Markdown." });
-const Label = Type.String({ minLength: 1, maxLength: 50, pattern: "\\S" });
-// Null comes first: the body's type coercion would otherwise turn null into 0 or "".
-const nullable = <T extends Parameters<typeof Type.Union>[0][number]>(schema: T) => Type.Union([Type.Null(), schema]);
 
 export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
@@ -49,20 +45,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Discovered Tickets of the same Agent and source, waiting with their parent rather than in the Inbox, " +
             "and settled along with it. An Agent gets `not_your_discovered_ticket` for any other Discovered Ticket as parent, and `no_running_run` for any other parent.",
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({
-            title: Title,
-            description: Type.Optional(Description),
-            parentId: Type.Optional(
-              Type.String({ format: "uuid", description: "Makes it a Sub-Ticket of this Ticket of the same Project." }),
-            ),
-            runId: Type.Optional(
-              Type.String({
-                format: "uuid",
-                description:
-                  "For an Agent filing a Discovered Ticket: its running Run, whose Ticket it records as the source.",
-              }),
-            ),
-          }),
+          body: TicketCreate,
           response: { 201: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -146,48 +129,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "with a Step, or delegated where it is, gets a Run. Agents never set a Status (`agent_sets_no_status`): " +
             "their Runs move Tickets with `finish`.",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Object({
-            title: Type.Optional(Title),
-            description: Type.Optional(Description),
-            priority: Type.Optional(Priority),
-            labels: Type.Optional(Type.Array(Label, { maxItems: 50 })),
-            assigneeId: Type.Optional(nullable(Type.String({ format: "uuid" }))),
-            delegateId: Type.Optional(
-              nullable(
-                Type.String({
-                  format: "uuid",
-                  description:
-                    "Delegates the Ticket to one of your own Agents, or `null` undelegates it. Only the Assignee " +
-                    "delegates a Ticket; delegating an unassigned Ticket assigns you. A new Assignee who doesn't " +
-                    "own the Delegate removes it.",
-                }),
-              ),
-            ),
-            autonomousDelegation: Type.Optional(
-              Type.Boolean({
-                description:
-                  "Lets a Step complete the Ticket itself, as Unverified, or stops that. Only Users set it; " +
-                  "its Sub-Tickets take it too.",
-              }),
-            ),
-            dueDate: Type.Optional(nullable(Type.String({ format: "date" }))),
-            estimate: Type.Optional(nullable(Type.Number({ minimum: 0, maximum: 1_000_000 }))),
-            statusId: Type.Optional(
-              Type.String({ format: "uuid", description: "Moves the Ticket to this Status of its Project." }),
-            ),
-            parentId: Type.Optional(
-              nullable(
-                Type.String({
-                  format: "uuid",
-                  description:
-                    "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; " +
-                    "never of itself or of one of its own Sub-Tickets. Under a delegated parent it takes the parent's " +
-                    "Assignee and Delegate, replacing its own and stopping its running Run, unless `assigneeId` or " +
-                    "`delegateId` is given too; under an undelegated parent it keeps its own.",
-                }),
-              ),
-            ),
-          }),
+          body: TicketEdit,
           response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -255,14 +197,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "so a new Run picks it up there; it blocks again the Tickets it blocks. Only Users Reopen; a Ticket that " +
             "isn't Unverified is refused with `not_unverified`.",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Object({
-            comment: Type.String({
-              minLength: 1,
-              maxLength: 100_000,
-              pattern: "\\S",
-              description: "Why it is reopened, in Markdown; added to the Ticket's Comments.",
-            }),
-          }),
+          body: TicketReopen,
           response: { 200: Ticket, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -316,10 +251,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Comment on a Ticket, or reply to a Comment",
           description: "Users and Agents with a full token may comment on any Ticket of their Workspace.",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Object({
-            body: Type.String({ minLength: 1, maxLength: 100_000, pattern: "\\S", description: "Markdown." }),
-            replyToId: Type.Optional(Type.String({ description: "The Comment on this Ticket being replied to." })),
-          }),
+          body: CommentCreate,
           response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
         },
       },
@@ -353,10 +285,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "For an Agent, during its own running Run on the Ticket (`no_running_run` otherwise): Markdown such as an " +
             "investigation's findings, listed with the Ticket. Users comment instead (`only_runs_report`).",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Object({
-            title: Title,
-            body: Type.String({ minLength: 1, maxLength: 500_000, pattern: "\\S", description: "Markdown." }),
-          }),
+          body: ReportCreate,
           response: { 201: Report, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -396,15 +325,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "one of the two Tickets is a Discovered Ticket it filed that still waits for a User " +
             "(`not_your_discovered_ticket`): from it to any Ticket, or to it from any Ticket.",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Union([
-            Type.Object({ kind: RelationKind, ticketId: Type.String({ description: "The other Ticket." }) }),
-            Type.Object({
-              kind: RelationKind,
-              ticketKey: Type.String({
-                description: "The other Ticket's key, such as `CRONK-12`, matched ignoring case.",
-              }),
-            }),
-          ]),
+          body: RelationCreate,
           response: { 201: Relation, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

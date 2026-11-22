@@ -366,6 +366,99 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
+  test("a value a Ticket route refuses is refused by its tool, before anything is written", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Investigate") },
+    });
+    const client = await connect(secret);
+    const { json: before } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    const runId = before.runs[0].id;
+    const tooLong = "x".repeat(301);
+
+    const refusals: [string, Record<string, unknown>, RegExp][] = [
+      // Length, and a title that is only spaces.
+      ["file_ticket", { project: "CRONK", title: tooLong, run: runId }, /title/],
+      ["file_ticket", { project: "CRONK", title: "   " }, /title/],
+      ["create_sub_ticket", { ticket: "CRONK-1", title: tooLong }, /title/],
+      ["edit_ticket", { ticket: "CRONK-1", title: tooLong }, /title/],
+      ["edit_ticket", { ticket: "CRONK-1", labels: ["x".repeat(51)] }, /labels/],
+      ["comment", { ticket: "CRONK-1", body: " " }, /body/],
+      ["write_report", { ticket: "CRONK-1", title: tooLong, body: "Findings." }, /title/],
+      // Minimum.
+      ["edit_ticket", { ticket: "CRONK-1", estimate: -1 }, /estimate/],
+      // Enum.
+      ["edit_ticket", { ticket: "CRONK-1", priority: "huge" }, /priority/],
+      // Format.
+      ["edit_ticket", { ticket: "CRONK-1", dueDate: "tomorrow" }, /dueDate/],
+    ];
+    for (const [tool, args, field] of refusals) {
+      const result = await client.callTool({ name: tool, arguments: args });
+      const [content] = result.content as { type: string; text: string }[];
+      expect({ tool, args, isError: result.isError }).toEqual({ tool, args, isError: true });
+      expect(content!.text).toMatch(/validation/i);
+      expect(content!.text).toMatch(field);
+    }
+
+    // Nothing was written: no Ticket, Comment, Report or Change.
+    const { json: after } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(after.ticket).toEqual(before.ticket);
+    expect(after.comments).toEqual(before.comments);
+    expect(after.reports).toEqual([]);
+    expect(after.relations.subTickets).toEqual([]);
+    const tickets = await (await cronk.request("GET", `/api/projects/${ticket.projectId}/tickets`, { cookie })).json();
+    expect(tickets.map((t: { key: string }) => t.key)).toEqual(expect.arrayContaining(["CRONK-1", "CRONK-2"]));
+    expect(tickets).toHaveLength(2);
+    const timeline = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
+    const changesBefore = timeline.length;
+    // The same edit, within the limits, goes through, and Agents still name their Ticket by its key.
+    const accepted = await call(client, "edit_ticket", { ticket: "cronk-1", estimate: 0, priority: "low", dueDate: "2026-12-01" });
+    expect(accepted.isError).toBe(false);
+    const later = await (await cronk.request("GET", `/api/tickets/${ticket.id}/timeline`, { cookie })).json();
+    expect(later.length).toBeGreaterThan(changesBefore);
+  });
+
+  test("the Ticket tools' inputs carry the routes' field descriptions and limits", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const { tools } = await client.listTools();
+    const input = (name: string) => tools.find((tool) => tool.name === name)!.inputSchema as {
+      properties: Record<string, Record<string, unknown>>;
+      required?: string[];
+    };
+
+    const edit = input("edit_ticket");
+    // The Agent is offered only the fields it may edit, and names its Ticket its own way.
+    expect(Object.keys(edit.properties).sort()).toEqual(
+      ["description", "dueDate", "estimate", "labels", "priority", "ticket", "title"],
+    );
+    expect(edit.required).toEqual(["ticket"]);
+    expect(edit.properties.title).toEqual(
+      expect.objectContaining({ maxLength: 300, description: expect.stringContaining("Discovered Ticket") }),
+    );
+    expect(edit.properties.labels).toEqual(expect.objectContaining({ maxItems: 50 }));
+    expect(JSON.stringify(edit.properties.dueDate)).toContain("2026-02-01");
+    expect(JSON.stringify(edit.properties.estimate)).toContain('"minimum":0');
+    expect(JSON.stringify(edit.properties.priority)).toContain("urgent");
+
+    const filing = input("file_ticket");
+    expect(Object.keys(filing.properties).sort()).toEqual(["description", "project", "run", "title"]);
+    expect(filing.properties.title).toEqual(expect.objectContaining({ maxLength: 300, pattern: "\\S" }));
+    expect(filing.properties.description).toEqual(expect.objectContaining({ maxLength: 100_000, description: "Markdown." }));
+    expect(Object.keys(input("create_sub_ticket").properties).sort()).toEqual(["description", "ticket", "title"]);
+    expect(input("comment").properties.body).toEqual(expect.objectContaining({ maxLength: 100_000 }));
+    expect(input("write_report").properties.title).toEqual(
+      expect.objectContaining({ maxLength: 300, description: "A short title, such as `Findings`." }),
+    );
+    expect(input("write_report").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000 }));
+  });
+
   test("during its Run an Agent links and unlinks Documents on its Ticket", async () => {
     const { cookie, ticket, agent, secret } = await workspaceWithTicket();
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
