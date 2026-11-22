@@ -170,7 +170,7 @@ export type RunNeed = "started" | "waiting" | "none";
  * goes to the highest Priority waiting Ticket first, then to the one that entered its Status first.
  *
  * A delegated Ticket that doesn't pass the Step's Label rule, or a Merge Step's rule (Autonomous Delegation in a
- * Project with agents may merge on), gets no Run: Cronk moves it on by the Step's default Outcome, which counts as
+ * Project with agents may merge on, unless a User queued it in the Merge Queue, which merges it with no Run), gets no Run: Cronk moves it on by the Step's default Outcome, which counts as
  * entering that Status in turn. A chain of skips that comes back to a Status it already passed stops there, so the
  * Ticket waits for a User.
  */
@@ -233,7 +233,12 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.
   if (!status.step || !mayHaveStep(status.kind)) return needsNone();
-  // A Merge Step skips itself unless an agent may merge this Ticket; otherwise the Label rule decides.
+  // A Ticket a User queued in the Merge Queue waits there for Cronk to merge it, with no Merge Run (ADR 0011).
+  if (status.step.kind === "merge") {
+    const { rowCount: queued } = await tx.query("select from merge_queue where ticket_id = $1 and status_id = $2", [ticketId, status.id]);
+    if (queued) return needsNone();
+  }
+  // A Merge Step skips itself unless an agent may merge this Ticket, or a User queued it; otherwise the Label rule decides.
   const mergeRule = status.step.kind === "merge" ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true) : null;
   if (mergeRule || !passes(status.step.labelRule, ticket.labels)) {
     const outcome = status.step.outcomes.find((o) => o.default)!;
