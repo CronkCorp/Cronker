@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { hours } from "../harness/clock.js";
-import { addMember, createGitHubApp, setUp, signIn, signInWithGitHub } from "../harness/flows.js";
+import { addMember, createGitHubApp, linkGitHub, setUp, signIn, signInWithGitHub } from "../harness/flows.js";
 import type { StandInApp, StandInInstallation, StandInRepository } from "../harness/github.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
@@ -619,6 +619,20 @@ describe("Merges", () => {
     await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
 
     await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea", id: bea.account.id })));
+
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
+  });
+
+  test("a merge by the GitHub account a password User linked from the password page completes the Ticket as Verified", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
+    const account = cronk.github.account("bea-gh");
+    expect((await linkGitHub(cronk, bea.cookie, account)).location).toBe("/password?github=linked");
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Merge me" });
+    const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged(pr, { login: "bea-gh", id: account.id })));
 
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
   });
@@ -1488,10 +1502,11 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
     // Setting up and creating a Project, as today's API does, needs Workspace slugs and the Merge Step's columns;
-    // reading a Ticket needs the columns of Runs' costs.
+    // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access.
     await cronk.applyAhead("0033_merge_step.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
     await cronk.applyAhead("0049_run_costs.sql");
+    await cronk.applyAhead("0051_access.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Db, Tx } from "../db.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
 
 /** Who made a Change: a User, an Agent, or Cronk itself, such as when it moves a Ticket on past a skipped Step. */
@@ -105,8 +106,16 @@ export async function recordChanges(
 // pg sends a JS array as a Postgres array, so jsonb values go as JSON text.
 const json = (value: unknown) => (value === null ? null : JSON.stringify(value));
 
-/** A Ticket's Changes, oldest first. */
-export async function changesOf(db: Db, ticketId: string): Promise<Change[]> {
+/**
+ * A Ticket's Changes, oldest first, as the Viewer sees them: a Change naming a Ticket it can't read, such as a block
+ * by a Ticket of a private Project, is left out, as if it didn't exist.
+ */
+export async function changesOf(db: Db, viewer: Viewer, ticketId: string): Promise<Change[]> {
+  const named = (value: string) => {
+    const project = `(case when jsonb_typeof(${value}) = 'object' then ${value} ->> 'projectId' end)::uuid`;
+    const reach = inReach(viewer, { project, workspace: "changes.workspace_id" }, "$2");
+    return `(${project} is null or ${reach.sql})`;
+  };
   const { rows } = await db.query<Omit<Change, "at"> & { at: Date }>(
     `select changes.id,
        ${actorOrCronkColumn("users", "agents")} as actor,
@@ -114,8 +123,9 @@ export async function changesOf(db: Db, ticketId: string): Promise<Change[]> {
        changes.from_value as from, changes.to_value as to, changes.run_id as "runId"
      from changes left join users on users.id = changes.actor_user_id
      left join agents on agents.id = changes.actor_agent_id
-     where changes.ticket_id = $1 order by changes.seq`,
-    [ticketId],
+     where changes.ticket_id = $1 and ${named("changes.from_value")} and ${named("changes.to_value")}
+     order by changes.seq`,
+    [ticketId, inReach(viewer, { project: "null", workspace: "null" }, "$2").value],
   );
   return rows.map((row) => ({ ...row, at: row.at.toISOString() }));
 }

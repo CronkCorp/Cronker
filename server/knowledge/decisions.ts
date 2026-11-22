@@ -6,7 +6,7 @@ import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
@@ -79,7 +79,7 @@ const present = (row: Row): Decision => ({
 /** A Decision in the Viewer's view; otherwise nothing, as if it didn't exist. */
 export async function findDecision(db: Db | Tx, viewer: Viewer, decisionId: string): Promise<Decision | undefined> {
   if (!isUuid(decisionId)) return undefined;
-  const view = inView(viewer, "decisions.workspace_id", "$2");
+  const view = inReach(viewer, { project: "decisions.project_id", workspace: "decisions.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(`select ${columns} from ${fromDecisions} where decisions.id = $1 and ${view.sql}`, [
     decisionId,
     view.value,
@@ -295,7 +295,7 @@ async function versionOf(db: Db | Tx, decisionId: string, number: number): Promi
 /** A Decision as a save needs it, its row locked until the transaction ends, so saves to it queue up. */
 async function lockDecision(tx: Tx, viewer: Viewer, decisionId: string): Promise<(Place & { id: string; version: number }) | undefined> {
   if (!isUuid(decisionId)) return undefined;
-  const view = inView(viewer, "decisions.workspace_id", "$2");
+  const view = inReach(viewer, { project: "decisions.project_id", workspace: "decisions.workspace_id" }, "$2");
   const { rows } = await tx.query<Place & { id: string; version: number }>(
     `select id, workspace_id as "workspaceId", project_id as "projectId", version from decisions
      where id = $1 and ${view.sql} for update`,

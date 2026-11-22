@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Context } from "../context.js";
 import type { Db } from "../db.js";
 import { requireCaller } from "../identity/callers.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, inView, type Viewer } from "../identity/viewers.js";
 import { ApiError } from "./errors.js";
 import { isUuid } from "./ids.js";
 
@@ -133,9 +133,13 @@ function readings(kind: ReadableKind, form: string): Reading[] {
   }
 }
 
-/** The SQL condition, with its parameter, that a Workspace column is in view and, given a slug, is that Workspace's. */
-function workspaceCondition(viewer: Viewer, column: string, slug: string | null, params: unknown[]): string {
-  const view = inView(viewer, column, `$${params.length + 1}`);
+/**
+ * The SQL condition, with its parameter, that a Workspace column is in view, or, given the column of the record's
+ * Project, that the record is in reach; and, given a slug, that the Workspace is that one.
+ */
+function workspaceCondition(viewer: Viewer, column: string, slug: string | null, params: unknown[], projectColumn?: string): string {
+  const param = `$${params.length + 1}`;
+  const view = projectColumn ? inReach(viewer, { project: projectColumn, workspace: column }, param) : inView(viewer, column, param);
   params.push(view.value);
   if (slug === null) return view.sql;
   params.push(slug);
@@ -156,7 +160,7 @@ function projects(db: Db, viewer: Viewer, slug: string | null, key: string): Pro
   const params: unknown[] = [key];
   return ids(
     db,
-    `select id from projects where lower(key) = lower($1) and ${workspaceCondition(viewer, "projects.workspace_id", slug, params)}`,
+    `select id from projects where lower(key) = lower($1) and ${workspaceCondition(viewer, "projects.workspace_id", slug, params, "projects.id")}`,
     params,
   );
 }
@@ -169,7 +173,7 @@ function tickets(db: Db, viewer: Viewer, slug: string | null, key: string): Prom
     db,
     `select tickets.id from tickets join projects on projects.id = tickets.project_id
      where lower(projects.key) = lower($1) and tickets.number = $2
-       and ${workspaceCondition(viewer, "tickets.workspace_id", slug, params)}`,
+       and ${workspaceCondition(viewer, "tickets.workspace_id", slug, params, "tickets.project_id")}`,
     params,
   );
 }
@@ -188,7 +192,7 @@ function decisions(db: Db, viewer: Viewer, slug: string | null, key: string | nu
   return ids(
     db,
     `select id from decisions where number = $1 and ${placeCondition("decisions", key, params)}
-       and ${workspaceCondition(viewer, "decisions.workspace_id", slug, params)}`,
+       and ${workspaceCondition(viewer, "decisions.workspace_id", slug, params, "decisions.project_id")}`,
     params,
   );
 }
@@ -198,12 +202,14 @@ function terms(db: Db, viewer: Viewer, slug: string | null, key: string | null, 
   return ids(
     db,
     `select id from terms where lower(name) = lower($1) and ${placeCondition("terms", key, params)}
-       and ${workspaceCondition(viewer, "terms.workspace_id", slug, params)}`,
+       and ${workspaceCondition(viewer, "terms.workspace_id", slug, params, "terms.project_id")}`,
     params,
   );
 }
 
 const tables = { document: "documents", artifact: "artifacts", transcript: "transcripts" } as const;
+/** The column of a kind's Project, for kinds in a Project's Access; a Transcript's Access comes in a later change. */
+const projectColumns = { document: "documents.project_id", artifact: "artifacts.project_id", transcript: undefined } as const;
 const endingInId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const endingInShortId = /(?:^|-)([0-9a-f]{8,32})$/i;
 
@@ -222,7 +228,7 @@ function bySlug(db: Db, viewer: Viewer, kind: keyof typeof tables, slug: string)
   const whole = endingInId.exec(slug)?.[1];
   if (whole) {
     const params: unknown[] = [whole];
-    return ids(db, `select id from ${table} where id = $1 and ${workspaceCondition(viewer, `${table}.workspace_id`, null, params)}`, params);
+    return ids(db, `select id from ${table} where id = $1 and ${workspaceCondition(viewer, `${table}.workspace_id`, null, params, projectColumns[kind])}`, params);
   }
   const short = endingInShortId.exec(slug)?.[1];
   if (!short) return Promise.resolve([]);
@@ -231,7 +237,7 @@ function bySlug(db: Db, viewer: Viewer, kind: keyof typeof tables, slug: string)
     db,
     `select id from ${table} where id between $1 and $2
        and (select count(*) from ${table} others where others.id between $1 and $2) = 1
-       and ${workspaceCondition(viewer, `${table}.workspace_id`, null, params)}`,
+       and ${workspaceCondition(viewer, `${table}.workspace_id`, null, params, projectColumns[kind])}`,
     params,
   );
 }
