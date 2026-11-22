@@ -1,5 +1,23 @@
 /** A thin client for Cronk's HTTP API. The web client holds no rules of its own. */
 
+// The Ticket area's response types are the server's own, from its schemas: type-only, so no server code reaches the
+// browser bundle (the build refuses any that does). Screens import them from here.
+import type { Report } from "../../server/knowledge/reports.js";
+import type { Cost } from "../../server/runs/costs.js";
+import type { RunState } from "../../server/runs/states.js";
+import type { ActorOrCronk } from "../../server/work/actors.js";
+import type { Change } from "../../server/work/changes.js";
+import type { Comment } from "../../server/work/comments.js";
+import type { Mention } from "../../server/work/mentions.js";
+import type { Relation, RelationKind, TicketRelations } from "../../server/work/relations.js";
+import type { MentioningText, Priority, Ticket, TicketList, TicketRef, TicketSummary } from "../../server/work/tickets.js";
+
+export type { Change, Comment, Cost, Mention, MentioningText, Priority, Relation, RelationKind, Report, RunState };
+export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
+
+/** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
+export type ChangeActor = ActorOrCronk;
+
 export interface User {
   id: string;
   /** Unknown for a User added by GitHub login until they first sign in. */
@@ -177,8 +195,6 @@ export interface ProjectEdit {
   conciseReports?: boolean;
 }
 
-export type Priority = "urgent" | "high" | "medium" | "low" | "none";
-
 export const priorities: { priority: Priority; label: string }[] = [
   { priority: "urgent", label: "Urgent" },
   { priority: "high", label: "High" },
@@ -186,70 +202,6 @@ export const priorities: { priority: Priority; label: string }[] = [
   { priority: "low", label: "Low" },
   { priority: "none", label: "None" },
 ];
-
-/** A Ticket key written in Markdown that names a Ticket of the Workspace, outside code and links. */
-export interface Mention {
-  kind: "ticket";
-  /** The key as written, such as `cronk-12`. */
-  text: string;
-  key: string;
-  ticketId: string;
-}
-
-export interface TicketSummary {
-  id: string;
-  projectId: string;
-  key: string;
-  title: string;
-  description: string;
-  statusId: string;
-  priority: Priority;
-  labels: string[];
-  assigneeId: string | null;
-  delegateId: string | null;
-  /** Null until a User sets it or the Ticket is first delegated. */
-  autonomousDelegation: boolean | null;
-  /** For a Ticket a Run completed: Unverified until a User Accepts (Verified) or Reopens it. */
-  verification: "unverified" | "verified" | null;
-  parentId: string | null;
-  /** For a Discovered Ticket: the Agent that filed it, from which Ticket and Run, and whether it waits for a User. */
-  discovered: { agentId: string; sourceTicket: TicketRef | null; runId: string | null; waiting: boolean } | null;
-  dueDate: string | null;
-  estimate: number | null;
-  createdBy: string;
-  createdAt: string;
-  lastRun: { id: string; state: RunState } | null;
-  /** What it waits for before it gets the Run it needs, if it needs one. */
-  waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
-  /** The unfinished Tickets blocking it, of any Project of the Workspace, oldest block first. */
-  blockedBy: TicketRef[];
-  /** How many more unfinished Tickets block it that the User can't read: counted, never named. */
-  blockedByHidden: number;
-}
-
-/** A text that mentions a Ticket, as its Mentioned in lists it. */
-export interface MentioningText {
-  kind: "ticket" | "comment" | "document" | "report" | "term" | "decision";
-  id: string;
-  /** Null for the Workspace's own knowledge. */
-  projectId: string | null;
-  /** Its title; a Term's name; for a Comment, its Ticket's title. */
-  title: string;
-  /** The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for other knowledge. */
-  ticket: TicketRef | null;
-  /** A Document's or Report's slug. */
-  slug: string | null;
-  /** A Decision's number. */
-  number: number | null;
-}
-
-export interface Ticket extends TicketSummary {
-  mentions: Mention[];
-  /** The other texts mentioning it that the User may read, most recently saved first. */
-  mentionedIn: MentioningText[];
-  /** What its Runs cost in all, one total per currency; empty when none reported a cost. */
-  cost: Cost[];
-}
 
 export interface TicketEdit {
   title?: string;
@@ -263,29 +215,6 @@ export interface TicketEdit {
   dueDate?: string | null;
   estimate?: number | null;
   parentId?: string | null;
-}
-
-/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
-export interface TicketRef {
-  id: string;
-  projectId: string;
-  key: string;
-  title: string;
-}
-
-/** A Relation as seen from one of its Tickets. */
-export type RelationKind = "blocks" | "blockedBy" | "relatesTo";
-
-export interface Relation {
-  id: string;
-  kind: RelationKind;
-  ticket: TicketRef;
-}
-
-export interface TicketRelations {
-  parent: TicketRef | null;
-  subTickets: TicketRef[];
-  relations: Relation[];
 }
 
 export interface TicketFilter {
@@ -342,12 +271,6 @@ export interface StartedSetup {
   };
 }
 
-/** What something cost: an amount in the currency's minor units, such as US cents. */
-export interface Cost {
-  amount: number;
-  currency: string;
-}
-
 /** A way for Cronk to start Runs of the User's Agents with their own credentials. */
 export interface Runner {
   id: string;
@@ -397,22 +320,6 @@ export interface Actor {
   name: string;
 }
 
-export interface Comment {
-  id: string;
-  ticketId: string;
-  replyToId: string | null;
-  body: string;
-  /** Who wrote it: a User, an Agent, or Cronk itself, as when a failing check sent the Ticket back. */
-  actor: ChangeActor;
-  createdAt: string;
-  mentions: Mention[];
-  /** The Question this Comment asks, if a Run asked one with it; the first User's reply answers it. */
-  questionId: string | null;
-  /** Whether this is Cronk's Comment on a send-back, linking the failing check or the review requesting changes. */
-  sentBack: boolean;
-  attachments: Attachment[];
-}
-
 /** What an Attachment is attached to. */
 export interface AttachmentOwner {
   kind: "ticket" | "document" | "comment";
@@ -444,58 +351,6 @@ export function exportUrl(place: Place): string {
 export function isAttachmentUrl(url: string): boolean {
   return /^\/api\/attachments\/[^/]+\/content$/.test(url);
 }
-
-/** Markdown a Run wrote on its Ticket. */
-export interface Report {
-  id: string;
-  ticketId: string;
-  runId: string;
-  agent: { id: string; name: string };
-  title: string;
-  /** Its readable form, as its address takes it: the words of its title, then its short id. */
-  slug: string;
-  body: string;
-  createdAt: string;
-  mentions: Mention[];
-}
-
-/** Who made a Change: a User, an Agent, or Cronk itself. */
-export type ChangeActor = Actor | { kind: "cronk"; name: "Cronk" };
-
-export interface Change {
-  id: string;
-  actor: ChangeActor;
-  at: string;
-  field:
-    | "created"
-    | "title"
-    | "description"
-    | "status"
-    | "priority"
-    | "labels"
-    | "assignee"
-    | "dueDate"
-    | "estimate"
-    | "parent"
-    | "subTicket"
-    | "delegate"
-    | "stepSkipped"
-    | "autonomousDelegation"
-    | "verification"
-    | "dismissed"
-    | "linkedDocument"
-    | "linkedArtifact"
-    | "merged"
-    | "sentBack"
-    | "transcriptDeleted"
-    | RelationKind;
-  from: unknown;
-  to: unknown;
-  /** The Run an Agent made the Change in; null for a User's, or an Agent's outside a Run. */
-  runId: string | null;
-}
-
-export type RunState = "running" | "finished" | "failed" | "lost" | "stopped" | "refused";
 
 /** One agent execution Cronk started for a Ticket. */
 export interface Run {
@@ -1063,7 +918,7 @@ export const api = {
   tickets: (projectId: string, filter: TicketFilter = {}) => {
     const query = new URLSearchParams(Object.entries(filter).filter(([, value]) => value));
     const search = query.size ? `?${query}` : "";
-    return call<TicketSummary[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
+    return call<TicketList>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
   },
   createTicket: (projectId: string, input: { title: string; description?: string }) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
