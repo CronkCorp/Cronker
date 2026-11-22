@@ -89,3 +89,22 @@ export async function signInWithGitHub(cronk: StartedCronk, account: GitHubAccou
   expect(back.status).toBe(302);
   return { location: back.headers.get("location")!, cookie: cookieOf(back, "cronk_sign_in") };
 }
+
+/**
+ * Links a GitHub account to the signed-in User in a browser signed in to GitHub as the
+ * account, following each redirect: Cronk to GitHub, GitHub back to Cronk without the
+ * `SameSite=Strict` sign-in cookie. Returns where Cronk sends the browser last.
+ */
+export async function linkGitHub(cronk: StartedCronk, cookie: string, account: GitHubAccount) {
+  cronk.github.signedInAs = account;
+  const start = await navigate(`${cronk.url}/api/github/link`, cookie);
+  expect(start.status).toBe(302);
+  const location = start.headers.get("location")!;
+  if (location.startsWith("/")) return { location };
+  const stateCookie = cookieOf(start, "cronk_github_state");
+  const atGitHub = await navigate(location);
+  expect(atGitHub.status).toBe(302);
+  const back = await navigate(atGitHub.headers.get("location")!, stateCookie);
+  expect(back.status).toBe(302);
+  return { location: back.headers.get("location")! };
+}

@@ -604,6 +604,14 @@ describe("MCP with an Agent token", () => {
     expect(blocked.json).toEqual(expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-1" }) }));
     const refused = await call(client, "add_block", { ticket: "CRONK-2", blocks: "CRONK-1" });
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "not_your_discovered_ticket" }) });
+    await call(client, "file_ticket", { project: "CRONK", title: "After the running one" });
+    const waits = await call(client, "add_block", { ticket: "CRONK-5", blockedBy: "CRONK-1" });
+    expect(waits.isError).toBe(false);
+    expect(waits.json).toEqual(expect.objectContaining({ kind: "blockedBy", ticket: expect.objectContaining({ key: "CRONK-1" }) }));
+    for (const args of [{ ticket: "CRONK-5" }, { ticket: "CRONK-5", blocks: "CRONK-2", blockedBy: "CRONK-2" }]) {
+      const unclear = await call(client, "add_block", args);
+      expect(unclear).toEqual({ isError: true, json: expect.objectContaining({ code: "one_side_of_block", rule: expect.any(String) }) });
+    }
     const noProject = await call(client, "file_ticket", { project: "NOPE", title: "Lost" });
     expect(noProject).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project", advice: expect.stringContaining("CRONK") }) });
   });

@@ -1,4 +1,4 @@
-import { createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
+import { addMember, createGitHubApp, setUp, signIn, signInWithGitHub } from "../test/harness/flows.js";
 import { expect, signInInBrowser, test } from "./fixtures.js";
 
 test("set up with a GitHub App, add someone by GitHub login, and they sign in with GitHub", async ({ page, browser, cronk }) => {
@@ -61,4 +61,29 @@ test("an App that only reads Repositories shows the write access to add, as GitH
   app.permissions = { ...readOnly, contents: "write", pull_requests: "write" };
   await page.reload();
   await expect(checklist.getByText("The App has every permission, event and webhook setting Cronk needs")).toBeVisible();
+});
+
+test("a User who signs in with a password links their GitHub account from the password page", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  // Bea has this GitHub account already.
+  const taken = cronk.github.account("bea-gh", "bea@example.com");
+  await addMember(cronk, cookie, workspace.id, "bea@example.com");
+  await signInWithGitHub(cronk, taken);
+  await signInInBrowser(page, cronk);
+
+  await page.goto(`${cronk.url}/password`);
+  const panel = page.getByRole("region", { name: "GitHub account" });
+  cronk.github.signedInAs = taken;
+  await panel.getByRole("link", { name: "Link GitHub account" }).click();
+  await expect(page).toHaveURL(`${cronk.url}/password`);
+  await expect(panel.getByRole("alert")).toContainText("linked to another User already");
+
+  cronk.github.signedInAs = cronk.github.account("ada-gh", "ada@elsewhere.example.com");
+  await panel.getByRole("link", { name: "Link GitHub account" }).click();
+  await expect(page).toHaveURL(`${cronk.url}/password`);
+  await expect(panel.getByRole("status")).toHaveText("GitHub account linked.");
+  await expect(panel).toContainText("Linked to @ada-gh.");
+  await expect(panel.getByRole("link", { name: "Link GitHub account" })).toHaveCount(0);
 });

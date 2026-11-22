@@ -3,7 +3,7 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inView, type Viewer } from "../identity/viewers.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { insertComment } from "../work/comment-writes.js";
 import { statusesOf } from "../work/projects.js";
@@ -116,7 +116,7 @@ export async function answerQuestion(
  */
 export async function dismissQuestion({ db, clock, live }: Context, viewer: Viewer & { kind: "user" }, questionId: string): Promise<void> {
   await transaction(db, async (tx) => {
-    const view = inView(viewer, "questions.workspace_id", "$2");
+    const view = inReach(viewer, { project: "tickets.project_id", workspace: "questions.workspace_id" }, "$2");
     const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
       `select questions.workspace_id as "workspaceId", tickets.project_id as "projectId", tickets.id as "ticketId"
        from questions join tickets on tickets.id = questions.ticket_id

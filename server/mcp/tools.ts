@@ -66,7 +66,7 @@ const rights =
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
   "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, add blocks from " +
-  "it, link Documents and Artifacts to it and unlink them, such as the spec Document you filed it from, and split " +
+  "it, or make it blocked by any Ticket of the Workspace, delegated or running included, link Documents and Artifacts to it and unlink them, such as the spec Document you filed it from, and split " +
   "it into Sub-Tickets, which are Discovered Tickets of yours too and are settled along with it, so a planned piece " +
   "of work is filed as one parent Ticket with its slices under it. Anything else is refused with the rule and what to do instead.";
 
@@ -336,7 +336,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Files a Ticket you found that isn't part of your Ticket's work, such as a bug noticed on the way, as a " +
         "Discovered Ticket: in the Project's first Backlog Status, undelegated, assigned to the Assignee of your Run's " +
         "Ticket (or, without a Run, to your Owner) and waiting in their Inbox. Until a User delegates, moves or " +
-        "dismisses it you may edit it with `edit_ticket`, add blocks from it with `add_block` and split it into " +
+        "dismisses it you may edit it with `edit_ticket`, add blocks from it, or to it from any Ticket, with `add_block` and split it into " +
         "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead.",
       inputSchema: {
         project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
@@ -355,21 +355,35 @@ export function buildMcpServer(api: Api): McpServer {
   server.registerTool(
     "add_block",
     {
-      title: "Block a Ticket by your Discovered Ticket",
+      title: "Block a Ticket by your Discovered Ticket, or make yours wait on one",
       description:
-        "Marks that a Discovered Ticket you filed blocks another Ticket of your Workspace, which then gets no Runs " +
-        "until it is finished. Refused for any other Ticket, once a User has delegated, moved or dismissed it, and for " +
-        "a block that would form a cycle.",
+        "Adds a block between a waiting Discovered Ticket you filed and another Ticket of your Workspace, either " +
+        "way round: give `blocks` for a Ticket yours blocks, which then gets no Runs until yours is finished, or " +
+        "`blockedBy` for a Ticket yours waits on, which may be delegated, running or in another Project. Give " +
+        "exactly one of them. Refused unless `ticket` is a Discovered Ticket you filed that still waits for a User " +
+        "(or the `blockedBy` Ticket is), and for a block that would form a cycle.",
       inputSchema: {
         ticket: ticketArgument.describe("Your Discovered Ticket: its key, such as `CRONK-12`, or its id."),
-        blocks: ticketArgument.describe("The Ticket it blocks: its key, such as `CRONK-12`, or its id."),
+        blocks: ticketArgument.optional().describe("The Ticket it blocks: its key, such as `CRONK-12`, or its id."),
+        blockedBy: ticketArgument
+          .optional()
+          .describe("The Ticket it waits on, blocked by it: its key, such as `CRONK-12`, or its id."),
       },
     },
-    ({ ticket, blocks }) =>
+    ({ ticket, blocks, blockedBy }) =>
       answer(async () => {
+        if ((blocks === undefined) === (blockedBy === undefined)) {
+          throw new Refused({
+            code: "one_side_of_block",
+            message: "Give exactly one of `blocks` and `blockedBy`.",
+            rule: "A block names the Ticket yours blocks, or the Ticket yours is blocked by: one at a time.",
+            advice: "Call `add_block` once for each block.",
+          });
+        }
         const found = await ticketByKeyOrId(ticket);
-        const other = isUuid(blocks) ? { ticketId: blocks } : { ticketKey: blocks };
-        return send("POST", `/api/tickets/${found.id}/relations`, { kind: "blocks", ...other });
+        const named = (blocks ?? blockedBy)!;
+        const other = isUuid(named) ? { ticketId: named } : { ticketKey: named };
+        return send("POST", `/api/tickets/${found.id}/relations`, { kind: blocks ? "blocks" : "blockedBy", ...other });
       }),
   );
 

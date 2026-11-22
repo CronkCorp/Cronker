@@ -4,6 +4,7 @@ import { User } from "../identity/user.js";
 import { latestReportOf, ReportRef } from "../knowledge/reports.js";
 import { openQuestionsFor, Question } from "../runs/questions.js";
 import { WentWrongState, wentWrongStates } from "../runs/states.js";
+import { inReach, userViewer } from "../identity/viewers.js";
 import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
 
 /**
@@ -117,9 +118,19 @@ export const Inbox = Type.Object({
 });
 export type Inbox = Static<typeof Inbox>;
 
-/** The User's Inbox in the Workspace; the caller checks they belong to it, and whether they are its Admin. */
+/**
+ * The User's Inbox in the Workspace; the caller checks they belong to it, and whether they are its Admin. It holds
+ * only Tickets of Projects the User may read.
+ */
 export async function inboxOf(db: Db, userId: string, workspace: { id: string; isAdmin: boolean }): Promise<Inbox> {
   const workspaceId = workspace.id;
+  const viewer = userViewer(userId);
+  /** The Ticket's columns as the User sees them and the condition that they may read it, both bound to `param`. */
+  const seen = (param: string) => ({
+    columns: ticketColumns(viewer, param).sql,
+    readable: inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, param).sql,
+    value: inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, param).value,
+  });
   const questions = await openQuestionsFor(db, userId, workspaceId);
   type Row = TicketRow & {
     statusName: string;
@@ -130,8 +141,9 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
     handedBack: { outcome: string; step: { statusId: string | null; name: string }; question?: string } | null;
     report: ReportRef | null;
   };
+  const mine = seen("$4");
   const { rows } = await db.query<Row>(
-    `select ${ticketColumns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
+    `select ${mine.columns}, tickets.workspace_id as "workspaceId", statuses.name as "statusName",
        tickets.status_entered_at as "statusEnteredAt", statuses.kind = 'review' as "inReview",
        case when completed_by.id is not null then json_build_object('id', completed_by.id, 'name', completed_by.name)
          end as "completedBy", tickets.completed_without_step as "completedWithoutStep",
@@ -147,8 +159,9 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      left join statuses completed_by on completed_by.id = tickets.completed_from_status_id
      where tickets.workspace_id = $1 and tickets.assignee_id = $2
        and (statuses.kind = 'review' or needs_you.ticket_id is not null or tickets.id = any($3) or tickets.verification = 'unverified')
+       and ${mine.readable}
      order by projects.key, tickets.number`,
-    [workspaceId, userId, questions.map((q) => q.ticketId)],
+    [workspaceId, userId, questions.map((q) => q.ticketId), mine.value],
   );
   const summary = ({
     statusName: _s,
@@ -191,23 +204,25 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
   ];
   // A Ticket still in the Status of its latest Run, which went wrong, delegated to one of the User's Agents,
   // unless it already waits for its next Run (after a Retry, while its Runner is full).
+  const wrong = seen("$4");
   const { rows: wentWrong } = await db.query<TicketRow & { run: Static<typeof RunItem>["run"]; endedAt: Date }>(
-    `select ${ticketColumns}, tickets.workspace_id as "workspaceId", runs.ended_at as "endedAt",
+    `select ${wrong.columns}, tickets.workspace_id as "workspaceId", runs.ended_at as "endedAt",
        json_build_object('id', runs.id, 'state', runs.state,
          'step', json_build_object('statusId', runs.status_id, 'name', runs.status_name), 'endReason', runs.end_reason) as run
      from tickets join projects on projects.id = tickets.project_id
      join agents on agents.id = tickets.delegate_id
      join lateral (select * from runs where runs.ticket_id = tickets.id order by runs.seq desc limit 1) runs on true
      where tickets.workspace_id = $1 and agents.owner_id = $2 and not tickets.waits_for_run
-       and runs.state = any($3::run_state[]) and runs.status_id = tickets.status_id
+       and runs.state = any($3::run_state[]) and runs.status_id = tickets.status_id and ${wrong.readable}
      order by projects.key, tickets.number`,
-    [workspaceId, userId, wentWrongStates],
+    [workspaceId, userId, wentWrongStates, wrong.value],
   );
   for (const { run, endedAt, ...row } of wentWrong) {
     items.push({ kind: "run", ticket: ticketSummary(row), run, since: endedAt.toISOString() });
   }
+  const filed = seen("$3");
   const { rows: discovered } = await db.query<TicketRow & { agent: { id: string; name: string } }>(
-    `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
+    `select ${filed.columns}, tickets.workspace_id as "workspaceId",
        json_build_object('id', agents.id, 'name', agents.name) as agent
      from tickets join projects on projects.id = tickets.project_id
      join agents on agents.id = tickets.discovered_by_agent_id
@@ -215,23 +230,25 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
      where tickets.workspace_id = $1 and tickets.assignee_id = $2 and tickets.discovery_waits
        -- A Sub-Ticket the Agent split its waiting Discovered Ticket into waits with its parent, not on its own.
        and (parents.discovery_waits and parents.discovered_by_agent_id = tickets.discovered_by_agent_id) is not true
+       and ${filed.readable}
      order by projects.key, tickets.number`,
-    [workspaceId, userId],
+    [workspaceId, userId, filed.value],
   );
   for (const { agent, ...row } of discovered) {
     items.push({ kind: "discovered", ticket: ticketSummary(row), agent, since: row.createdAt.toISOString() });
   }
   if (workspace.isAdmin) {
     // Removing its Assignee recorded its latest assignee Change: assigning it again takes it out of the Inbox.
+    const unassigned = seen("$2");
     const { rows: toReassign } = await db.query<TicketRow & { formerAssignee: User; removedAt: Date }>(
-      `select ${ticketColumns}, tickets.workspace_id as "workspaceId",
+      `select ${unassigned.columns}, tickets.workspace_id as "workspaceId",
          json_build_object('id', users.id, 'email', users.email, 'githubLogin', users.github_login) as "formerAssignee",
          (select max(changes.at) from changes where changes.ticket_id = tickets.id and changes.field = 'assignee') as "removedAt"
        from tickets join projects on projects.id = tickets.project_id
        join users on users.id = tickets.former_assignee_id
-       where tickets.workspace_id = $1 and tickets.assignee_id is null
+       where tickets.workspace_id = $1 and tickets.assignee_id is null and ${unassigned.readable}
        order by projects.key, tickets.number`,
-      [workspaceId],
+      [workspaceId, unassigned.value],
     );
     for (const { formerAssignee, removedAt, ...row } of toReassign) {
       items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee, since: removedAt.toISOString() });

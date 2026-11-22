@@ -134,11 +134,23 @@ export interface Brief {
   text: string;
 }
 
+/** Whether a Project is open to every User of its Workspace or only to those it lists, and its Admins. */
+export type Visibility = "open" | "private";
+
 export interface ProjectSummary {
   id: string;
   workspaceId: string;
   name: string;
   key: string;
+  visibility: Visibility;
+  /** What the signed-in User may do in the Project. */
+  access: "write" | "read";
+}
+
+/** Who may see a Project: open or private, and the Users it lists. Only Admins read and set it. */
+export interface ProjectAccess {
+  visibility: Visibility;
+  users: { userId: string; level: "write" }[];
 }
 
 export interface Project extends ProjectSummary {
@@ -204,6 +216,8 @@ export interface TicketSummary {
   waiting: "runnerSlot" | "runnerPaused" | "blocked" | null;
   /** The unfinished Tickets blocking it, of any Project of the Workspace, oldest block first. */
   blockedBy: TicketRef[];
+  /** How many more unfinished Tickets block it that the User can't read: counted, never named. */
+  blockedByHidden: number;
 }
 
 export interface Ticket extends TicketSummary {
@@ -979,6 +993,9 @@ export const api = {
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: ProjectEdit) =>
     call<Project>("PATCH", `/api/projects/${encodeURIComponent(id)}`, edit),
+  projectAccess: (id: string) => call<ProjectAccess>("GET", `/api/projects/${encodeURIComponent(id)}/access`),
+  setProjectAccess: (id: string, access: ProjectAccess) =>
+    call<ProjectAccess>("PUT", `/api/projects/${encodeURIComponent(id)}/access`, access),
   repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
   addRepository: (projectId: string, id: number) =>
     call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),

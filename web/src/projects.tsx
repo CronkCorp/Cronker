@@ -9,6 +9,7 @@ import {
   type Member,
   type Priority,
   type Project,
+  type ProjectAccess,
   type ProjectEdit,
   type ProjectSummary,
   type Status,
@@ -232,6 +233,11 @@ export function ProjectScreen({
               ),
             },
             {
+              id: "access",
+              label: "Access",
+              children: <AccessSettings workspace={workspace} project={project} members={members} onChange={loadProject} />,
+            },
+            {
               id: "delegation",
               label: "Delegation defaults",
               children: <DelegationSettings project={project} onChange={setProject} />,
@@ -403,26 +409,30 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
 }
 
 /**
- * A blocked Ticket's chip on its card or row: *Blocked by N*, counting its unfinished blockers. Hovering or focusing
- * it names them, each a link to its Ticket. An unblocked Ticket shows nothing.
+ * A blocked Ticket's chip on its card or row: *Blocked by N*, counting its unfinished blockers, those the User can't
+ * read included. Hovering or focusing it names them, each a link to its Ticket, and lists each unreadable one as "a
+ * Ticket you can't see". An unblocked Ticket shows nothing.
  */
 function BlockedChip({ ticket }: { ticket: TicketSummary }) {
   const to = useAddresses();
   const blockers = ticket.blockedBy;
-  if (blockers.length === 0) return null;
+  const hidden = Array.from({ length: ticket.blockedByHidden }, (_, i) => i);
+  const count = blockers.length + hidden.length;
+  if (count === 0) return null;
+  const named = [...blockers.map((b) => `${b.key} ${b.title}`), ...hidden.map(() => "a Ticket you can't see")];
   return (
     <HoverPopover
       label={`Tickets blocking ${ticket.key}`}
       button={{
         className: "chip chip-blocked",
-        "aria-label": `Blocked by ${blockers.length}: ${blockers.map((b) => `${b.key} ${b.title}`).join(", ")}`,
+        "aria-label": `Blocked by ${count}: ${named.join(", ")}`,
         children: (
           <>
             <svg className="chip-icon" viewBox="0 0 12 12" aria-hidden="true">
               <circle cx="6" cy="6" r="4.75" />
               <path d="M2.7 9.3 9.3 2.7" />
             </svg>
-            Blocked by {blockers.length}
+            Blocked by {count}
           </>
         ),
       }}
@@ -434,6 +444,11 @@ function BlockedChip({ ticket }: { ticket: TicketSummary }) {
             <Link to={to.ticket(blocker)} className="ticket-link">
               <Key>{blocker.key}</Key> {blocker.title}
             </Link>
+          </li>
+        ))}
+        {hidden.map((i) => (
+          <li key={`hidden-${i}`} className="muted">
+            a Ticket you can't see
           </li>
         ))}
       </ul>
@@ -892,6 +907,92 @@ function MergesByAgentsSettings({
         Agents may merge Autonomous Delegation Tickets' Pull Requests
       </label>
       {!workspace.isAdmin && <p className="muted small">Only an Admin of this Workspace changes this.</p>}
+      <FormError error={error} />
+      <Saved shown={saved} />
+    </Panel>
+  );
+}
+
+/**
+ * Who may see the Project: open to every User of the Workspace, or private to the Users listed here and the
+ * Admins, who keep Write in every Project. Only an Admin reads and changes it; others see whether it is private and
+ * their own Access.
+ */
+function AccessSettings({
+  workspace,
+  project,
+  members,
+  onChange,
+}: {
+  workspace: WorkspaceSummary;
+  project: Project;
+  members: Member[];
+  onChange: () => void;
+}) {
+  const { error, busy, saved, save } = useSave();
+  const [access, setAccess] = useState<ProjectAccess | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  useEffect(() => {
+    if (!workspace.isAdmin) return;
+    api.projectAccess(project.id).then(setAccess, (e: Error) => setFailure(e.message));
+  }, [workspace.isAdmin, project.id]);
+  const description =
+    "An open Project is for every User of the Workspace. A private one is only for the Users listed here and the Workspace's Admins, who always have Write; to anyone else, and their Agents, it doesn't exist.";
+  if (!workspace.isAdmin) {
+    return (
+      <Panel title="Access" id="access" description={description}>
+        <p>
+          This Project is {project.visibility}, and you have {project.access === "write" ? "Write" : "Read"} in it.
+        </p>
+        <p className="muted small">Only an Admin of this Workspace changes this.</p>
+      </Panel>
+    );
+  }
+  if (failure) return <FormError error={failure} />;
+  if (!access) return <p className="muted">Loading…</p>;
+  const listed = new Set(access.users.map((u) => u.userId));
+  const apply = (next: ProjectAccess) =>
+    save(async () => {
+      setAccess(await api.setProjectAccess(project.id, next));
+      onChange();
+    });
+  const toggle = (userId: string, on: boolean) =>
+    void apply({
+      ...access,
+      users: on ? [...access.users, { userId, level: "write" }] : access.users.filter((u) => u.userId !== userId),
+    });
+  return (
+    <Panel title="Access" id="access" description={description}>
+      <fieldset className="access-visibility">
+        <legend>Visibility</legend>
+        {(["open", "private"] as const).map((visibility) => (
+          <label key={visibility} className="check">
+            <input
+              type="radio"
+              name="visibility"
+              value={visibility}
+              checked={access.visibility === visibility}
+              disabled={busy}
+              onChange={() => void apply({ ...access, visibility })}
+            />
+            {visibility === "open" ? "Open to every User of the Workspace" : "Private to the Users listed below"}
+          </label>
+        ))}
+      </fieldset>
+      <fieldset>
+        <legend>Listed Users</legend>
+        {members.map(({ user, isAdmin }) => (
+          <label key={user.id} className="check">
+            <input
+              type="checkbox"
+              checked={isAdmin || listed.has(user.id)}
+              disabled={busy || isAdmin}
+              onChange={(e) => toggle(user.id, e.target.checked)}
+            />
+            {nameOf(user)} <span className="muted small">{isAdmin ? "Admin, always Write" : listed.has(user.id) ? "Write" : ""}</span>
+          </label>
+        ))}
+      </fieldset>
       <FormError error={error} />
       <Saved shown={saved} />
     </Panel>

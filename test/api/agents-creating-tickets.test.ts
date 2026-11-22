@@ -267,17 +267,70 @@ describe("the filing Agent and its Discovered Ticket", () => {
     expect(blockedBy).toEqual(expect.objectContaining({ field: "blockedBy", actor: expect.objectContaining({ id: agent.id }), runId: null }));
   });
 
-  test("adds only blocks from it: no other Relation, and none from another Ticket", async () => {
+  test("adds only blocks with it: no other Relation, and none between two Tickets it doesn't hold", async () => {
     const { ticket, other, found, asAgent } = await discovered();
 
-    for (const kind of ["blockedBy", "relatesTo"]) {
-      const refused = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind, ticketId: ticket.id });
-      expect(refused.status, kind).toBe(403);
-      expect(refused.json.error.code, kind).toBe("agent_adds_only_blocks");
+    for (const path of [found.id, ticket.id]) {
+      const refused = await call("POST", `/api/tickets/${path}/relations`, asAgent, {
+        kind: "relatesTo",
+        ticketId: path === found.id ? ticket.id : found.id,
+      });
+      expect(refused.status).toBe(403);
+      expect(refused.json.error).toEqual(expect.objectContaining({ code: "agent_adds_only_blocks", rule: expect.any(String) }));
     }
-    const fromOther = await call("POST", `/api/tickets/${other.id}/relations`, asAgent, { kind: "blocks", ticketId: ticket.id });
-    expect(fromOther.status).toBe(403);
-    expect(fromOther.json.error).toEqual(expect.objectContaining({ code: "not_your_discovered_ticket", advice: expect.any(String) }));
+    for (const kind of ["blocks", "blockedBy"]) {
+      const neither = await call("POST", `/api/tickets/${other.id}/relations`, asAgent, { kind, ticketId: ticket.id });
+      expect(neither.status, kind).toBe(403);
+      expect(neither.json.error, kind).toEqual(
+        expect.objectContaining({ code: "not_your_discovered_ticket", rule: expect.any(String), advice: expect.any(String) }),
+      );
+    }
+  });
+
+  test("makes it blocked by a delegated Ticket with a running Run, said either way round", async () => {
+    const { ada, ticket, other, agent, found, asAgent, status } = await discovered();
+    // CRONK-1 is delegated; start another Run on it so it is running.
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    expect(runs.at(-1).state).toBe("running");
+
+    const blockedBy = await ok("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blockedBy", ticketKey: "CRONK-1" });
+    expect(blockedBy).toEqual(expect.objectContaining({ kind: "blockedBy", ticket: expect.objectContaining({ key: "CRONK-1" }) }));
+    // From the other Ticket's side: CRONK-2, a User's undelegated Ticket, blocks the Agent's.
+    const blocks = await ok("POST", `/api/tickets/${other.id}/relations`, asAgent, { kind: "blocks", ticketId: found.id });
+    expect(blocks).toEqual(expect.objectContaining({ kind: "blocks", ticket: expect.objectContaining({ key: "CRONK-3" }) }));
+
+    const { relations } = await ok("GET", `/api/tickets/${found.id}/relations`, ada);
+    expect(relations.map((r: { kind: string; ticket: { key: string } }) => [r.kind, r.ticket.key])).toEqual([
+      ["blockedBy", "CRONK-1"],
+      ["blockedBy", "CRONK-2"],
+    ]);
+    const [last] = (await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada)).slice(-1);
+    expect(last).toEqual(expect.objectContaining({ field: "blocks", actor: expect.objectContaining({ id: agent.id }) }));
+    expect((await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).at(-1).state).toBe("running");
+  });
+
+  test("makes it blocked by a Ticket of another Project", async () => {
+    const { workspace, ada, found, asAgent } = await discovered();
+    const elsewhere = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Site", key: "SITE" });
+    await ok("POST", `/api/projects/${elsewhere.id}/tickets`, ada, { title: "Over there" });
+
+    const relation = await ok("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blockedBy", ticketKey: "SITE-1" });
+
+    expect(relation.ticket.key).toBe("SITE-1");
+  });
+
+  test("doesn't make a Ticket it didn't file, or another Agent's waiting one, blocked by its own", async () => {
+    const { workspace, ada, project, ticket, found, asAgent } = await discovered();
+    const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
+    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "full" });
+    const theirs = await ok("POST", `/api/projects/${project.id}/tickets`, { headers: { authorization: `Bearer ${secret}` } }, { title: "Theirs" });
+
+    // Its own Ticket blocking another stays allowed, as before; but neither Ticket is held here.
+    const refused = await call("POST", `/api/tickets/${theirs.id}/relations`, asAgent, { kind: "blockedBy", ticketId: ticket.id });
+    expect(refused.status).toBe(403);
+    expect(refused.json.error.code).toBe("not_your_discovered_ticket");
+    expect((await ok("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketId: theirs.id })).kind).toBe("blocks");
   });
 
   test("a block that would form a cycle is still refused", async () => {
@@ -348,6 +401,16 @@ describe("Sub-Tickets of a waiting Discovered Ticket, outside a Run", () => {
     expect(edited).toEqual(expect.objectContaining({ title: "Slice two: the parser", priority: "high" }));
     const { relations } = await ok("GET", `/api/tickets/${second.id}/relations`, ada);
     expect(relations.map((r: { kind: string; ticket: { key: string } }) => [r.kind, r.ticket.key])).toEqual([["blockedBy", "CRONK-4"]]);
+  });
+
+  test("the Agent makes one blocked by a delegated Ticket with a running Run", async () => {
+    const { ada, project, ticket, found, asAgent, status } = await discovered();
+    const slice = await ok("POST", `/api/projects/${project.id}/tickets`, asAgent, { title: "Slice", parentId: found.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+
+    const relation = await ok("POST", `/api/tickets/${slice.id}/relations`, asAgent, { kind: "blockedBy", ticketKey: "CRONK-1" });
+
+    expect(relation.ticket.key).toBe("CRONK-1");
   });
 
   test("the Agent splits a slice further", async () => {
@@ -550,8 +613,10 @@ describe("waiting Discovered Tickets in the Inbox", () => {
     );
     expect((await inbox()).count).toBe(0);
     expect(await agentEdits()).toBe(false);
-    const block = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind: "blocks", ticketKey: "CRONK-1" });
-    expect(block.json.error.code).toBe("not_your_discovered_ticket");
+    for (const kind of ["blocks", "blockedBy"]) {
+      const block = await call("POST", `/api/tickets/${found.id}/relations`, asAgent, { kind, ticketKey: "CRONK-1" });
+      expect(block.json.error.code, kind).toBe("not_your_discovered_ticket");
+    }
     const again = await call("POST", `/api/tickets/${found.id}/dismiss`, ada);
     expect(again.status).toBe(409);
     expect(again.json.error.code).toBe("not_waiting");
