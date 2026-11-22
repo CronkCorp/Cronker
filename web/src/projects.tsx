@@ -9,6 +9,7 @@ import {
   type Member,
   type Priority,
   type Project,
+  type AgentAccess,
   type ProjectAccess,
   type ProjectEdit,
   type ProjectSummary,
@@ -1257,13 +1258,13 @@ function AccessSettings({
   const { error, busy, saved, save, clear } = useSave();
   const [access, setAccess] = useState<ProjectAccess | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [pending, setPending] = useState<{ access: ProjectAccess; tickets: number } | null>(null);
+  const [pending, setPending] = useState<{ access: ProjectAccess; tickets: number; agentsLose: boolean } | null>(null);
   useEffect(() => {
     if (!workspace.isAdmin) return;
     api.projectAccess(project.id).then(setAccess, (e: Error) => setFailure(e.message));
   }, [workspace.isAdmin, project.id]);
   const description =
-    "An open Project is for every User of the Workspace. A private one is only for the Users listed here and the Workspace's Admins, who always have Write; to anyone else, and their Agents, it doesn't exist. A User listed with Read reads everything in it but changes nothing.";
+    "An open Project is for every User of the Workspace. A private one is only for the Users listed here and the Workspace's Admins, who always have Write; to anyone else, and their Agents, it doesn't exist. A User listed with Read reads everything in it but changes nothing. Agent Access sets how far Agents may go here: an Agent may do the least of it, its Owner's Access and its token's access.";
   if (!workspace.isAdmin) {
     return (
       <Panel title="Access" id="access" description={description}>
@@ -1282,13 +1283,14 @@ function AccessSettings({
     setAccess(await api.setProjectAccess(project.id, next));
     onChange();
   };
-  // A change that takes Users' Write, and so their Tickets here, asks first; one that affects no Ticket saves at once.
+  // A change that takes Users' or Agents' Write, and so Tickets here, asks first; one that affects no Ticket saves at once.
   const apply = async (next: ProjectAccess) => {
     let asked = false;
     await save(async () => {
       const { tickets } = await api.previewProjectAccess(project.id, next);
       asked = tickets > 0;
-      if (asked) setPending({ access: next, tickets });
+      const agentsLose = access.agentAccess === "write" && next.agentAccess !== "write";
+      if (asked) setPending({ access: next, tickets, agentsLose });
       else await commit(next);
     });
     if (asked) clear();
@@ -1350,6 +1352,18 @@ function AccessSettings({
           </div>
         ))}
       </fieldset>
+      <Field label="Agent Access">
+        <select
+          aria-label="Agent Access"
+          value={access.agentAccess}
+          disabled={busy}
+          onChange={(e) => void apply({ ...access, agentAccess: e.target.value as AgentAccess })}
+        >
+          <option value="write">Write: Agents work here</option>
+          <option value="read">Read: Agents read, and change nothing</option>
+          <option value="none">None: out of Agents' reach</option>
+        </select>
+      </Field>
       <FormError error={error} />
       <Saved shown={saved} />
       <ConfirmDialog
@@ -1363,9 +1377,13 @@ function AccessSettings({
         }}
       >
         {pending &&
-          `This takes Write in ${project.key} from Users who have it now, so ${pending.tickets} ${
-            pending.tickets === 1 ? "Ticket" : "Tickets"
-          } will be unassigned or undelegated, stopping their running Runs. They wait in the Admins' Inbox to be assigned again.`}
+          (pending.agentsLose
+            ? `This takes Write in ${project.key} from Agents, so ${pending.tickets} ${
+                pending.tickets === 1 ? "Ticket" : "Tickets"
+              } will be undelegated, stopping their running Runs. Each waits in its Assignee's Inbox, or, if its Assignee loses Write too, the Admins'.`
+            : `This takes Write in ${project.key} from Users who have it now, so ${pending.tickets} ${
+                pending.tickets === 1 ? "Ticket" : "Tickets"
+              } will be unassigned or undelegated, stopping their running Runs. They wait in the Admins' Inbox to be assigned again.`)}
       </ConfirmDialog>
     </Panel>
   );

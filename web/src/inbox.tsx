@@ -73,7 +73,7 @@ const keyOf = (item: InboxItem) => (item.kind === "question" ? `question:${item.
 /** The Inbox's groups, in the order they are worked through. */
 const groups: { name: string; kinds: InboxItem["kind"][] }[] = [
   { name: "Questions", kinds: ["question"] },
-  { name: "Needs you", kinds: ["needsYou", "reassign"] },
+  { name: "Needs you", kinds: ["needsYou", "reassign", "undelegated"] },
   { name: "Runs gone wrong", kinds: ["run"] },
   { name: "To review", kinds: ["review"] },
   { name: "Unverified", kinds: ["unverified"] },
@@ -84,6 +84,7 @@ const kindNames: Record<Exclude<InboxItem["kind"], "run">, string> = {
   question: "Question",
   needsYou: "Needs you",
   reassign: "Needs you",
+  undelegated: "Needs you",
   review: "To review",
   unverified: "Unverified",
   discovered: "Discovered",
@@ -119,6 +120,8 @@ function summary(item: InboxItem): string {
     }
     case "reassign":
       return `${nameOf(item.formerAssignee)} can no longer work on it: assign it to someone`;
+    case "undelegated":
+      return "Undelegated, as Agents no longer have Write in its Project: work on it, move it or reassign it";
   }
 }
 
@@ -464,6 +467,13 @@ function ItemBody({
       return <Discovered item={item} workspace={workspace} user={user} disabled={disabled} run={run} />;
     case "reassign":
       return <Reassign item={item} workspace={workspace} disabled={disabled} run={run} />;
+    case "undelegated":
+      return (
+        <>
+          <p className="detail-line">{sentence(summary(item))}</p>
+          <TicketStatus ticket={ticket} />
+        </>
+      );
   }
 }
 

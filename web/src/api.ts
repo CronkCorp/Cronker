@@ -149,10 +149,14 @@ export interface ProjectSummary {
   access: "write" | "read";
 }
 
-/** Who may see a Project: open or private, and the Users it lists. Only Admins read and set it. */
+/** How far Agents may go in a Project, or in the Workspace's own knowledge. */
+export type AgentAccess = "write" | "read" | "none";
+
+/** Who may see a Project: open or private, the Users it lists, and its Agent Access. Only Admins read and set it. */
 export interface ProjectAccess {
   visibility: Visibility;
   users: { userId: string; level: "write" | "read" }[];
+  agentAccess: AgentAccess;
 }
 
 export interface Project extends ProjectSummary {
@@ -652,11 +656,29 @@ export interface ReassignItem {
   since: string;
 }
 
-export type InboxItem = QuestionItem | NeedsYouItem | ReviewItem | UnverifiedItem | RunItem | DiscoveredItem | ReassignItem;
+/** A Ticket its Project's Agent Access dropping below Write undelegated, waiting for its Assignee. */
+export interface UndelegatedItem {
+  kind: "undelegated";
+  ticket: TicketSummary;
+  /** When it began waiting: when an Admin dropped its Project's Agent Access below Write. */
+  since: string;
+}
+
+export type InboxItem =
+  | QuestionItem
+  | NeedsYouItem
+  | ReviewItem
+  | UnverifiedItem
+  | RunItem
+  | DiscoveredItem
+  | ReassignItem
+  | UndelegatedItem;
 
 /** A Workspace's settings beyond its name, set by its Admins. */
 export interface WorkspaceSettings {
   lostRunMinutes: number;
+  /** How far Agents may go in the Workspace's own Documents, Terms, Decisions and Artifacts. */
+  agentAccess: AgentAccess;
   /** The exact model id each model label stands for, used by Runner setups. */
   modelIds: { label: string; modelId: string }[];
 }

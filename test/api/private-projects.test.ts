@@ -146,7 +146,7 @@ const inboxKeys = async (setting: Setting, as: As) =>
 describe("setting a Project's Access", () => {
   test("an Admin makes a Project private, lists Users on it and opens it again", async () => {
     const { ada, secret, linus, grace, makePrivate } = await twoProjects();
-    expect(await ok("GET", `/api/projects/${secret.id}/access`, ada)).toEqual({ visibility: "open", users: [] });
+    expect(await ok("GET", `/api/projects/${secret.id}/access`, ada)).toEqual({ visibility: "open", users: [], agentAccess: "write" });
 
     const listed = await makePrivate([linus.user.id, grace.user.id]);
 
@@ -154,12 +154,12 @@ describe("setting a Project's Access", () => {
       { userId: linus.user.id, level: "write" },
       { userId: grace.user.id, level: "write" },
     ];
-    expect(listed).toEqual({ visibility: "private", users: expect.arrayContaining(both) });
+    expect(listed).toEqual({ visibility: "private", users: expect.arrayContaining(both), agentAccess: "write" });
     expect(await ok("GET", `/api/projects/${secret.id}/access`, ada)).toEqual(listed);
     expect((await ok("GET", `/api/projects/${secret.id}`, ada)).visibility).toBe("private");
 
     const opened = await ok("PUT", `/api/projects/${secret.id}/access`, ada, { visibility: "open", users: [] });
-    expect(opened).toEqual({ visibility: "open", users: [] });
+    expect(opened).toEqual({ visibility: "open", users: [], agentAccess: "write" });
   });
 
   test("is refused to Users who aren't Admins, and to Agents", async () => {
@@ -197,7 +197,7 @@ describe("setting a Project's Access", () => {
       users: [{ userId: linus.user.id, level: "admin" }],
     });
     expect(unknownLevel.status).toBe(400);
-    expect(await ok("GET", `/api/projects/${secret.id}/access`, ada)).toEqual({ visibility: "open", users: [] });
+    expect(await ok("GET", `/api/projects/${secret.id}/access`, ada)).toEqual({ visibility: "open", users: [], agentAccess: "write" });
   });
 
   test("Project responses carry the caller's own Access", async () => {

@@ -98,6 +98,11 @@ export type ModelId = Static<typeof ModelId>;
 /** How many model labels a Workspace may have. */
 export const mostModelLabels = 50;
 
+/** How far Agents may go somewhere: Write, Read, or None, which puts it out of their reach; described for where. */
+export const agentAccess = (description: string) =>
+  Type.Union([Type.Literal("write"), Type.Literal("read"), Type.Literal("none")], { description });
+export type AgentAccess = "write" | "read" | "none";
+
 /** A Workspace's settings beyond its name, set by its Admins. */
 export const WorkspaceSettings = Type.Object({
   lostRunMinutes: Type.Integer({
@@ -111,10 +116,15 @@ export const WorkspaceSettings = Type.Object({
       "The model id each model label stands for, labels unique ignoring case. A Runner setup gives each routine the " +
       "model id of its label. Ships with the latest Haiku, Sonnet and Opus for `haiku`, `sonnet` and `opus`.",
   }),
+  agentAccess: agentAccess(
+    "The Workspace's Agent Access: how far Agents may go in its own Documents, Terms, Decisions and Artifacts. " +
+      "`write` (the default), `read`, refusing their writes there with `read_access`, or `none`, answering as not " +
+      "found to them. An Agent may do the least of it, its Owner's Access and its token's access. Projects set their own.",
+  ),
 });
 export type WorkspaceSettings = Static<typeof WorkspaceSettings>;
 
-const settingsColumns = `lost_run_minutes as "lostRunMinutes", model_ids as "modelIds"`;
+const settingsColumns = `lost_run_minutes as "lostRunMinutes", model_ids as "modelIds", agent_access as "agentAccess"`;
 
 export async function settingsOf(db: Db, workspaceId: string): Promise<WorkspaceSettings> {
   const { rows } = await db.query<WorkspaceSettings>(`select ${settingsColumns} from workspaces where id = $1`, [workspaceId]);
@@ -139,9 +149,10 @@ export async function changeSettings(db: Db, workspaceId: string, change: Partia
     }
   }
   const { rows } = await db.query<WorkspaceSettings>(
-    `update workspaces set lost_run_minutes = coalesce($2, lost_run_minutes), model_ids = coalesce($3, model_ids)
+    `update workspaces set lost_run_minutes = coalesce($2, lost_run_minutes), model_ids = coalesce($3, model_ids),
+       agent_access = coalesce($4, agent_access)
      where id = $1 returning ${settingsColumns}`,
-    [workspaceId, change.lostRunMinutes ?? null, modelIds ? JSON.stringify(modelIds) : null],
+    [workspaceId, change.lostRunMinutes ?? null, modelIds ? JSON.stringify(modelIds) : null, change.agentAccess ?? null],
   );
   return rows[0]!;
 }

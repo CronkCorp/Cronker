@@ -63,6 +63,7 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0053_display_name.sql");
     await cronk.applyAhead("0055_mentions.sql");
     await cronk.applyAhead("0056_concise_reports.sql");
+    await cronk.applyAhead("0057_agent_access_undelegated.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

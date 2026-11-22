@@ -7,7 +7,8 @@ import { requireUser } from "../identity/sign-ins.js";
 import { readersIn, userViewer, writersIn } from "../identity/viewers.js";
 import { requireAdmin } from "../workspaces/members.js";
 import { findProject, projectNotFound, Visibility } from "./projects.js";
-import { countHeld, nameOf, releaseTickets } from "./releasing.js";
+import { agentAccess, type AgentAccess } from "../workspaces/workspaces.js";
+import { delegatedTickets, heldTickets, nameOf, releaseTickets, undelegateProject } from "./releasing.js";
 
 /** A User listed on a Project, with their level there: Read to follow its work without changing it, or Write. */
 export const ListedUser = Type.Object({
@@ -18,8 +19,14 @@ export const ListedUser = Type.Object({
 });
 export type ListedUser = Static<typeof ListedUser>;
 
-/** Who may see a Project: whether it is open or private, and the Users it lists. */
-export const ProjectAccess = Type.Object({
+const projectAgentAccess = () =>
+  agentAccess(
+    "The Project's Agent Access: how far Agents may go in it. `write` (the default), `read`, refusing every write " +
+      "of theirs there with `read_access`, or `none`, answering as not found to them. An Agent may do the least of " +
+      "it, its Owner's Access and its token's access. Dropping it below `write` undelegates the Project's Tickets.",
+  );
+
+const accessFields = {
   visibility: Visibility,
   users: Type.Array(ListedUser, {
     description:
@@ -27,19 +34,26 @@ export const ProjectAccess = Type.Object({
       "Workspace's Admins, see it; in an open Project, a User it doesn't list has Write. Admins have Write whatever " +
       "the list says.",
   }),
-});
+};
+
+/** Who may see a Project and how far: whether it is open or private, the Users it lists, and its Agent Access. */
+export const ProjectAccess = Type.Object({ ...accessFields, agentAccess: projectAgentAccess() });
 export type ProjectAccess = Static<typeof ProjectAccess>;
 
+/** A Project's Access as set: its Agent Access stays as it is when left out. */
+export const ProjectAccessChange = Type.Object({ ...accessFields, agentAccess: Type.Optional(projectAgentAccess()) });
+export type ProjectAccessChange = Static<typeof ProjectAccessChange>;
+
 async function accessOfProject(db: Db | Tx, projectId: string): Promise<ProjectAccess> {
-  const { rows } = await db.query<{ visibility: ProjectAccess["visibility"] }>(
-    "select visibility from projects where id = $1",
+  const { rows } = await db.query<Pick<ProjectAccess, "visibility" | "agentAccess">>(
+    `select visibility, agent_access as "agentAccess" from projects where id = $1`,
     [projectId],
   );
   const users = await db.query<ListedUser>(
     `select user_id as "userId", level from project_members where project_id = $1 order by created_at, user_id`,
     [projectId],
   );
-  return { visibility: rows[0]!.visibility, users: users.rows };
+  return { visibility: rows[0]!.visibility, users: users.rows, agentAccess: rows[0]!.agentAccess };
 }
 
 /**
@@ -58,15 +72,22 @@ export const AccessPreview = Type.Object({
   tickets: Type.Integer({
     description:
       "How many of the Project's Tickets the change would unassign or undelegate, stopping their running Runs: those " +
-      "of Users who would lose Write in it, and those delegated to their Agents.",
+      "of Users who would lose Write in it, those delegated to their Agents, and, with Agent Access dropping below " +
+      "Write, every delegated one; each Ticket counted once.",
   }),
 });
 export type AccessPreview = Static<typeof AccessPreview>;
 
 type AdminProject = Awaited<ReturnType<typeof projectForAdmin>>;
 
-/** Writes the Project's new Access in the transaction, after checking it; returns the Users who lose Write by it. */
-async function writeAccess(tx: Tx, project: AdminProject, access: ProjectAccess, now: Date): Promise<string[]> {
+/** What an Access change takes away: the Users who lose Write by it, and whether Agents do. */
+interface Losing {
+  users: string[];
+  agentsLoseWrite: boolean;
+}
+
+/** Writes the Project's new Access in the transaction, after checking it; returns who loses Write by it. */
+async function writeAccess(tx: Tx, project: AdminProject, access: ProjectAccessChange, now: Date): Promise<Losing> {
   const ids = access.users.map((user) => user.userId);
   if (new Set(ids).size !== ids.length) {
     throw new ApiError(400, "user_listed_twice", "Each User is listed on a Project once.");
@@ -79,7 +100,17 @@ async function writeAccess(tx: Tx, project: AdminProject, access: ProjectAccess,
     throw new ApiError(400, "unknown_user", "Only Users of the Project's Workspace can be listed on it.");
   }
   const writersBefore = await writersIn(tx, project.workspaceId, project.id);
-  await tx.query("update projects set visibility = $2 where id = $1", [project.id, access.visibility]);
+  const { rows: was } = await tx.query<{ agentAccess: AgentAccess }>(
+    `select agent_access as "agentAccess" from projects where id = $1`,
+    [project.id],
+  );
+  const agentAccessBefore = was[0]!.agentAccess;
+  const agentAccessAfter = access.agentAccess ?? agentAccessBefore;
+  await tx.query("update projects set visibility = $2, agent_access = $3 where id = $1", [
+    project.id,
+    access.visibility,
+    agentAccessAfter,
+  ]);
   await tx.query("delete from project_members where project_id = $1 and not (user_id = any($2::uuid[]))", [
     project.id,
     ids,
@@ -92,19 +123,24 @@ async function writeAccess(tx: Tx, project: AdminProject, access: ProjectAccess,
     );
   }
   const writersAfter = await writersIn(tx, project.workspaceId, project.id);
-  return [...writersBefore].filter((user) => !writersAfter.has(user)).sort();
+  return {
+    users: [...writersBefore].filter((user) => !writersAfter.has(user)).sort(),
+    agentsLoseWrite: agentAccessBefore === "write" && agentAccessAfter !== "write",
+  };
 }
 
 /**
- * Sets whether a Project is open or private and replaces the Users it lists, as an Admin. A User who loses Write
- * in it, by dropping to Read, leaving its list or its turning private without them, lets go of its Tickets as when
- * leaving the Workspace: they are unassigned, their Agents undelegated and their Runs stopped, as the Admin's Changes.
+ * Sets whether a Project is open or private, replaces the Users it lists and sets its Agent Access, as an Admin. A
+ * User who loses Write in it, by dropping to Read, leaving its list or its turning private without them, lets go of
+ * its Tickets as when leaving the Workspace: they are unassigned, their Agents undelegated and their Runs stopped, as
+ * the Admin's Changes. Agent Access dropping below Write undelegates all its Tickets, stopping their Runs, as the
+ * Admin's Changes; each keeps its Assignee, in whose Inbox it waits.
  */
 export async function setProjectAccess(
   context: Context,
   userId: string,
   projectId: string,
-  access: ProjectAccess,
+  access: ProjectAccessChange,
 ): Promise<ProjectAccess> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
@@ -112,9 +148,13 @@ export async function setProjectAccess(
     const before = await readersIn(tx, project.workspaceId, [project.id]);
     const now = clock.now();
     const losing = await writeAccess(tx, project, access, now);
-    for (const loser of losing) {
+    for (const loser of losing.users) {
       const reason = `${await nameOf(tx, userId)} removed ${await nameOf(tx, loser)}'s Write in ${project.key}.`;
       await releaseTickets(context, tx, userId, { workspaceId: project.workspaceId, userId: loser, projectId: project.id }, reason, now);
+    }
+    if (losing.agentsLoseWrite) {
+      const reason = `${await nameOf(tx, userId)} removed Agents' Write in ${project.key}.`;
+      await undelegateProject(context, tx, userId, project, reason, now);
     }
     // Those who keep the Project hear that it changed; those who gain or lose it, so their open pages add or drop it.
     const after = await readersIn(tx, project.workspaceId, [project.id]);
@@ -145,17 +185,19 @@ export async function previewProjectAccess(
   { db, clock }: Context,
   userId: string,
   projectId: string,
-  access: ProjectAccess,
+  access: ProjectAccessChange,
 ): Promise<AccessPreview> {
   try {
     await transaction(db, async (tx) => {
       const project = await projectForAdmin(db, tx, userId, projectId);
       const losing = await writeAccess(tx, project, access, clock.now());
-      let tickets = 0;
-      for (const loser of losing) {
-        tickets += await countHeld(tx, { workspaceId: project.workspaceId, userId: loser, projectId: project.id });
+      const tickets = new Set<string>();
+      for (const loser of losing.users) {
+        const releasing = { workspaceId: project.workspaceId, userId: loser, projectId: project.id };
+        for (const id of await heldTickets(tx, releasing)) tickets.add(id);
       }
-      throw new Previewed({ tickets });
+      if (losing.agentsLoseWrite) for (const id of await delegatedTickets(tx, project.id)) tickets.add(id);
+      throw new Previewed({ tickets: tickets.size });
     });
   } catch (error) {
     if (error instanceof Previewed) return error.preview;
@@ -174,7 +216,9 @@ export function accessRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Projects"],
           summary: "A Project's Access",
-          description: "Whether the Project is open or private, and the Users it lists. Only an Admin of its Workspace reads it.",
+          description:
+            "Whether the Project is open or private, the Users it lists, and its Agent Access. Only an Admin of its " +
+            "Workspace reads it.",
           params,
           response: { 200: ProjectAccess, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
@@ -193,16 +237,18 @@ export function accessRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Projects"],
           summary: "Set a Project's Access",
           description:
-            "Makes the Project open or private and replaces the Users it lists, each a User of its Workspace, once, " +
-            "with Read or Write. A User with Read reads everything in the Project, and every write of theirs is " +
-            "refused with `read_access`. " +
+            "Makes the Project open or private, replaces the Users it lists, each a User of its Workspace, once, " +
+            "with Read or Write, and sets its Agent Access, kept as it is when left out. A User with Read reads " +
+            "everything in the Project, and every write of theirs is refused with `read_access`. " +
             "In a private Project, a User it doesn't list, and their Agents, find nothing of it, as if it didn't " +
             "exist; Admins keep Write in every Project. A User who loses Write in it is unassigned from its Tickets " +
             "and their Agents undelegated, stopping their Runs, as when they leave the Workspace: the Tickets wait in " +
-            "the Admins' Inbox, and the Changes are the Admin's. `POST .../access/preview` says how many Tickets " +
+            "the Admins' Inbox, and the Changes are the Admin's. Agent Access dropping below `write` undelegates " +
+            "every Ticket of the Project, stopping its Run; each keeps its Assignee, in whose Inbox it waits. " +
+            "`POST .../access/preview` says how many Tickets " +
             "that would be first. Only an Admin of its Workspace sets it.",
           params,
-          body: ProjectAccess,
+          body: ProjectAccessChange,
           response: { 200: ProjectAccess, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
@@ -222,7 +268,7 @@ export function accessRoutes(context: Context): FastifyPluginAsyncTypebox {
             "How many Tickets setting the Project's Access to the body would unassign or undelegate, stopping their " +
             "running Runs, changing nothing; refused as setting it would be. Only an Admin of its Workspace asks.",
           params,
-          body: ProjectAccess,
+          body: ProjectAccessChange,
           response: { 200: AccessPreview, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

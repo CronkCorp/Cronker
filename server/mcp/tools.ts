@@ -71,6 +71,15 @@ const rights =
   "it into Sub-Tickets, which are Discovered Tickets of yours too and are settled along with it, so a planned piece " +
   "of work is filed as one parent Ticket with its slices under it. Anything else is refused with the rule and what to do instead.";
 
+const access =
+  "What you reach follows Access. A Project is open or private, and a User has Write, Read or nothing in it; the " +
+  "Workspace's own knowledge is Write for every User. Each Project, and the Workspace for its own knowledge, also " +
+  "sets an Agent Access: Write, Read or None. You may do the least of the Agent Access there, your Owner's Access " +
+  "and your token's access. What you can't read, such as a private Project your Owner isn't listed on or a Project " +
+  "whose Agent Access is None, answers as not found, as if it didn't exist; with Read, every write there, filing a " +
+  "Ticket and saving knowledge included, is refused with `read_access`. Only Admins change Access, and a Ticket is " +
+  "delegated only to an Agent with Write in its Project.";
+
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
     { name: "Cronk", version: "0.0.0" },
@@ -81,7 +90,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Workspace's), recorded choices as numbered Decisions of each Project and of the Workspace, and live pages such " +
         "as HTML prototypes as Artifacts, shown sandboxed; " +
         "`export_knowledge` gives both as `GLOSSARY.md` and `docs/adr/` files to commit into your branch. You act as " +
-        `one Agent. ${rights}`,
+        `one Agent. ${rights} ${access}`,
     },
   );
 

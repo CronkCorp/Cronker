@@ -486,8 +486,12 @@ export async function createTicket(
       assigneeId = run?.assigneeId ?? creator.owner.id;
       discovery = { runId: run?.id ?? null, sourceTicketId: run?.ticketId ?? null };
     } else if (project.newTicketsDelegated) {
-      // In a Project whose new Tickets start delegated, the creator's first Agent takes it, assigning them.
+      // In a Project whose new Tickets start delegated, the creator's first Agent takes it, assigning them, if Agents
+      // have Write there.
       delegateId = await firstAgentOf(tx, creator.id, project.workspaceId);
+      if (delegateId && !(await agentWrites(tx, { id: delegateId, ownerId: creator.id }, { workspaceId: project.workspaceId, projectId: project.id }))) {
+        delegateId = null;
+      }
       if (delegateId) {
         assigneeId = creator.id;
         // Delegated from the start, it takes its Project's Autonomous Delegation at once.
@@ -536,6 +540,25 @@ export async function createTicket(
     // Read it again: a Run it started, or its wait for one, shows on it.
     return fullTicket(tx, creator, (await findTicketRow(tx, creator, ticket.id))!);
   });
+}
+
+/**
+ * Whether the Agent would have Write in the Ticket's Project when running on it: the least of the Project's Agent
+ * Access and its Owner's Access, as a Run's token has full access.
+ */
+async function agentWrites(
+  tx: Tx,
+  agent: { id: string; ownerId: string },
+  place: { workspaceId: string; projectId: string },
+): Promise<boolean> {
+  const viewer: Viewer = {
+    kind: "agent",
+    id: agent.id,
+    workspace: { id: place.workspaceId },
+    owner: { id: agent.ownerId },
+    access: "full",
+  };
+  return (await accessOf(tx, viewer, place)) === "write";
 }
 
 /** Whether the Agent is still in use, holding it until the transaction ends so it isn't removed meanwhile. */
@@ -782,7 +805,9 @@ export async function editTicket(
        status_entered_at = case when status_id = $9 then status_entered_at else $12 end,
        autonomous_delegation = $13, verification = $14,
        completed_from_status_id = case when $14::verification is null then null else completed_from_status_id end,
-       discovery_waits = $15
+       discovery_waits = $15,
+       undelegated_at = case when status_id = $9 and assignee_id is not distinct from $6::uuid and $11::uuid is null
+         then undelegated_at end
        where id = $1`,
       [
         ticket.id,
@@ -1219,6 +1244,12 @@ async function checkDelegate(
       "not_your_agent",
       `You can delegate only to your own Agents, and ${agent.name} is ${agent.owner}'s.`,
     );
+  }
+  if (!(await agentWrites(tx, { id: agent.id, ownerId: agent.ownerId }, ticket))) {
+    throw new ApiError(400, "delegate_cannot_write", `${agent.name} doesn't have Write in this Project, so it can't be delegated its Ticket.`, {
+      rule: "A Delegate must have Write in its Ticket's Project: the least of the Project's Agent Access and its Owner's Access.",
+      advice: "Work on the Ticket yourself, or ask an Admin of this Workspace to set the Project's Agent Access to Write.",
+    });
   }
   if (assigneeId !== null && assigneeId !== userId) {
     const assignee = await named(tx, `select id, ${userName()} as name from users where id = $1`, assigneeId);
