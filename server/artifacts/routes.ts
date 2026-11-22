@@ -1,7 +1,6 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
-import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces, placeOfComment } from "../knowledge/places.js";
@@ -9,6 +8,8 @@ import { Artifact, ArtifactCreate, ArtifactSave, FilePath, ArtifactFileContent, 
 import { OutdatedVersionBody } from "../knowledge/versions.js";
 import { addArtifactComment, Comment, commentsOnArtifact } from "../work/comments.js";
 import { ArtifactLink, linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
+// After the Comments and linked Artifacts: imported before them, the glossary check reaches Documents ahead of Mentions.
+import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 
 const tags = ["Artifacts"];
 const ArtifactParams = Type.Object({ artifactId: Type.String() });
