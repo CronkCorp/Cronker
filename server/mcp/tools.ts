@@ -1,8 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { Type, type Static, type TObject } from "typebox";
 import { z } from "zod";
+import { agentRights } from "../agents/rights.js";
 import type { Guidance } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { ReportCreate } from "../knowledge/reports.js";
+import { CommentCreate } from "../work/comments.js";
+import { AgentTicketEdit, TicketCreate } from "../work/tickets.js";
 
 /**
  * Cronk's MCP tools for an Agent. They hold no rules of their own: each calls the HTTP
@@ -57,19 +62,24 @@ interface TicketSummary {
   estimate: number | null;
 }
 
-const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
+/**
+ * A route body's fields as a tool's input: the route's own limits and descriptions, so a value the route refuses is
+ * refused before the tool calls the API, and nothing is written. The tool adds only its own fields, such as the
+ * Ticket's readable form.
+ */
+function bodyFields<T extends TObject>(body: T): BodyFields<Static<T>> {
+  return (z.fromJSONSchema(body as unknown as z.core.JSONSchema.JSONSchema) as z.ZodObject).shape as BodyFields<Static<T>>;
+}
 
-const rights =
-  "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
-  "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
-  "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only Users change a Decision's status). An Agent whose Owner is an " +
-  "Admin may also create Projects, and with Write in a Project change its board. During your " +
-  "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
-  "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
-  "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, add blocks from " +
-  "it, or make it blocked by any Ticket of the Workspace, delegated or running included, link Documents and Artifacts to it and unlink them, such as the spec Document you filed it from, and split " +
-  "it into Sub-Tickets, which are Discovered Tickets of yours too and are settled along with it, so a planned piece " +
-  "of work is filed as one parent Ticket with its slices under it. Anything else is refused with the rule and what to do instead.";
+/** The zod shape of a body, typed as the body is: what is optional there is optional in the tool's input. */
+type BodyFields<B> = {
+  [K in keyof B]-?: undefined extends B[K] ? z.ZodOptional<z.ZodType<Exclude<B[K], undefined>>> : z.ZodType<B[K]>;
+};
+
+/** A new Ticket's own fields; the tools name its parent or source their own way. */
+const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
+
+const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CRONK-12`, or its id.");
 
 export function buildMcpServer(api: Api): McpServer {
   const server = new McpServer(
@@ -81,7 +91,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Workspace's), recorded choices as numbered Decisions of each Project and of the Workspace, and live pages such " +
         "as HTML prototypes as Artifacts, shown sandboxed; " +
         "`export_knowledge` gives both as `GLOSSARY.md` and `docs/adr/` files to commit into your branch. You act as " +
-        `one Agent. ${rights}`,
+        `one Agent. ${agentRights}`,
     },
   );
 
@@ -266,8 +276,7 @@ export function buildMcpServer(api: Api): McpServer {
         "to a Comment on the same Ticket.",
       inputSchema: {
         ticket: ticketArgument,
-        body: z.string().min(1).describe("Markdown."),
-        replyToId: z.string().optional().describe("The id of the Comment on this Ticket being replied to."),
+        ...bodyFields(CommentCreate),
       },
     },
     ({ ticket, body, replyToId }) =>
@@ -289,12 +298,7 @@ export function buildMcpServer(api: Api): McpServer {
         "field: a Ticket's Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`.",
       inputSchema: {
         ticket: ticketArgument,
-        title: z.string().min(1).optional().describe("A new title; only for a Discovered Ticket you filed."),
-        description: z.string().optional().describe("The whole new description, in Markdown."),
-        priority: z.enum(["urgent", "high", "medium", "low", "none"]).optional(),
-        labels: z.array(z.string().min(1)).optional().describe("The Ticket's Labels, all of them."),
-        dueDate: z.string().nullable().optional().describe("A date such as `2026-02-01`, or null to clear it."),
-        estimate: z.number().min(0).nullable().optional().describe("A number, or null to clear it."),
+        ...bodyFields(AgentTicketEdit),
       },
     },
     ({ ticket, ...edit }) =>
@@ -320,8 +324,7 @@ export function buildMcpServer(api: Api): McpServer {
         ticket: ticketArgument.describe(
           "The parent: your Run's Ticket, or a waiting Discovered Ticket you filed. Its key, such as `CRONK-12`, or its id.",
         ),
-        title: z.string().min(1),
-        description: z.string().optional().describe("Markdown."),
+        ...newTicketFields,
       },
     },
     ({ ticket, title, description }) =>
@@ -343,8 +346,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Sub-Tickets with `create_sub_ticket`. To split your own Run's Ticket's work, use `create_sub_ticket` instead.",
       inputSchema: {
         project: z.string().min(1).describe("A Project's key, such as `CRONK`."),
-        title: z.string().min(1),
-        description: z.string().optional().describe("Markdown."),
+        ...newTicketFields,
         run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it, recorded as the source."),
       },
     },
@@ -401,8 +403,7 @@ export function buildMcpServer(api: Api): McpServer {
         "`read_document` and `edit_document` take its id.",
       inputSchema: {
         ticket: ticketArgument,
-        title: z.string().min(1).describe("A short title, such as `Findings`."),
-        body: z.string().min(1).describe("Markdown."),
+        ...bodyFields(ReportCreate),
       },
     },
     ({ ticket, title, body }) =>

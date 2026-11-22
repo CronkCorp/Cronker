@@ -405,14 +405,14 @@
   cursor: pointer;
 }
 /* A copy of a parent's card in another column, holding its Sub-Tickets there: dashed and muted, since the parent
-   isn't in this column; it doesn't drag, so it points rather than grabs. */
+   isn't in this column; it doesn't drag, so it points rather than grabs. Its edge is --muted so it stands out from the
+   column, and its title is plain text so it reads; the clear background and muted status line keep it from looking
+   like a real card. */
 .card-copy {
   border-style: dashed;
+  border-color: var(--muted);
   background: transparent;
   cursor: pointer;
-}
-.card-copy .card-title {
-  color: var(--muted);
 }
 .card-copy-status {
   gap: var(--space-1);
