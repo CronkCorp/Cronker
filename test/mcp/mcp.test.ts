@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
@@ -36,7 +36,7 @@ async function workspaceWithTicket(access: "full" | "read" = "full") {
   await post(cookie, `/api/tickets/${ticket.id}/comments`, { body: "First thoughts." });
   const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access });
-  return { cookie, ticket, agent, secret };
+  return { workspace, cookie, ticket, agent, secret };
 }
 
 async function connect(token: string) {
@@ -84,6 +84,7 @@ describe("MCP with an Agent token", () => {
       "compare_versions",
       "create_artifact",
       "create_document",
+      "create_project",
       "create_sub_ticket",
       "create_term",
       "edit_decision",
@@ -806,6 +807,42 @@ describe("MCP with an Agent token", () => {
     expect((await call(client, "remove_step", { project: "CRONK", status: "Sketch" })).json.statuses[1].step).toBeNull();
     const removed = await call(client, "remove_status", { project: "CRONK", status: "Sketch" });
     expect(removed.json.statuses.map((s: { name: string }) => s.name)).not.toContain("Sketch");
+  });
+
+  test("an Agent whose Owner is an Admin creates a Project with the default board, then uses it", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const created = await call(client, "create_project", { name: "Docs", key: "docs" });
+    expect(created.isError).toBe(false);
+    expect(created.json).toEqual(expect.objectContaining({ name: "Docs", key: "DOCS", visibility: "open", access: "write" }));
+    expect(created.json.statuses.map((s: { name: string }) => s.name)).toEqual([
+      "Backlog", "Triage", "Ready", "Investigate", "Implement", "Code review", "Merge", "In Review", "Done", "Canceled",
+    ]);
+    expect((await call(client, "read_project", { project: "DOCS" })).json).toEqual(created.json);
+    const added = await call(client, "add_status", { project: "docs", name: "Design", kind: "active" });
+    expect(added.isError).toBe(false);
+
+    const taken = await call(client, "create_project", { name: "Other", key: "Cronk" });
+    expect(taken).toEqual({ isError: true, json: expect.objectContaining({ code: "project_key_taken" }) });
+  });
+
+  test("an Agent whose Owner isn't an Admin, or with a read-only token, doesn't create a Project", async () => {
+    const { workspace, cookie, secret: readOnly } = await workspaceWithTicket("read");
+    const refused = await call(await connect(readOnly), "create_project", { name: "Docs", key: "DOCS" });
+    expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "read_only_token", rule: expect.any(String) }) });
+
+    const grace = await addMember(cronk, cookie, workspace.id, "grace@example.com");
+    const agent = await post(grace.cookie, `/api/workspaces/${workspace.id}/agents`, { name: "grace-claude" });
+    const { secret } = await post(grace.cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+    const notAdmin = await call(await connect(secret), "create_project", { name: "Docs", key: "DOCS" });
+    expect(notAdmin).toEqual({
+      isError: true,
+      json: expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Owner is an Admin") }),
+    });
+    const keys = (await (await cronk.request("GET", `/api/workspaces/${workspace.id}/projects`, { cookie: grace.cookie })).json())
+      .map((p: { key: string }) => p.key);
+    expect(keys).toEqual(["CRONK"]);
   });
 
   test("a revoked token is refused at once, even on an open connection", async () => {

@@ -62,7 +62,8 @@ const ticketArgument = z.string().min(1).describe("The Ticket's key, such as `CR
 const rights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
   "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
-  "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only Users change a Decision's status). During your " +
+  "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only Users change a Decision's status). An Agent whose Owner is an " +
+  "Admin may also create Projects, and with Write in a Project change its board. During your " +
   "running Run on a Ticket you may also edit its description, Priority, Labels, due date and estimate, attach files to it, split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink " +
   "them, and finish the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket you file outside your Ticket's Sub-Tickets is a Discovered Ticket, waiting for " +
   "its Assignee: until a User delegates, moves or dismisses it you may edit it, title included, add blocks from " +
@@ -1057,6 +1058,28 @@ export function buildMcpServer(api: Api): McpServer {
       annotations: { readOnlyHint: true },
     },
     ({ project }) => answer(() => boardOf(project)),
+  );
+
+  server.registerTool(
+    "create_project",
+    {
+      title: "Create a Project",
+      description:
+        "Creates a Project in your Workspace with the default board's Statuses and Steps, open, with Agent Access " +
+        "Write, as a User does from the Projects page. Since the default Steps' Briefs, models and Outcomes are what " +
+        "later Runs work by, needs your Owner to be an Admin of the Workspace and a token that isn't read-only. " +
+        "Refused for a key or name another Project of the Workspace has, ignoring case. Returns the Project as " +
+        "`read_project` does.",
+      inputSchema: {
+        name: z.string().min(1).max(200).regex(/\S/).describe("The Project's name."),
+        key: z
+          .string()
+          .regex(/^[A-Za-z][A-Za-z0-9]{1,9}$/)
+          .describe("2 to 10 letters and digits, starting with a letter, such as `CRONK`; kept in capitals."),
+      },
+    },
+    ({ name, key }) =>
+      answer(async () => send<Project>("POST", `/api/workspaces/${(await ownWorkspace()).id}/projects`, { name, key })),
   );
 
   server.registerTool(
