@@ -104,6 +104,14 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+.filter input {
+  width: auto;
+  min-width: 140px;
+}
+/* The Filter box, while it holds text, is marked as an active filter like a FilterPicker. */
+.filter input.filter-on {
+  border-color: var(--accent);
+}
 /* A filter's button opens its list; an active filter has an --accent border. */
 .filter-trigger {
   display: inline-flex;

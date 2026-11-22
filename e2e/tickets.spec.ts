@@ -104,6 +104,21 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
   await expect(page.getByRole("button", { name: "Filter by Label UI" })).toBeVisible();
   await pickFilter(page, "Label", "Any Label");
+  // The Filter box narrows by a word of the title or by key, together with the other filters.
+  const text = page.getByLabel("Filter Tickets", { exact: true });
+  await text.fill("drag");
+  await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-1 Drag me/]);
+  await text.fill("cronk-2");
+  await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
+  await pickFilter(page, "Status", "Triage");
+  await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
+  await text.fill("drag");
+  await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveCount(0);
+  await pickFilter(page, "Status", "Any Status");
+  await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-1 Drag me/]);
+  await text.press("Escape");
+  await expect(text).toHaveValue("");
+  await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveCount(2);
   await pickFilter(page, "Assignee", "Nobody");
   await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-1 Drag me/]);
   // The Label list holds the Project's Labels whatever is filtered, though CRONK-1 has none.
