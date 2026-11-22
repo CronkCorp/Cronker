@@ -9,6 +9,8 @@ import { Change, changesOf } from "./changes.js";
 import { joinQueue, leaveQueue } from "../pipeline/merge-queue.js";
 import { addComment, Comment, CommentCreate, commentsOn } from "./comments.js";
 import { Report, ReportCreate, reportsOn, writeReport } from "../knowledge/reports.js";
+import { placeOfDocument } from "../knowledge/documents.js";
+import { warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { acceptTicket, Completion, completionOf, reopenTicket, TicketReopen } from "./verification.js";
 import { addRelation, Relation, RelationCreate, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
@@ -277,7 +279,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "A Ticket's Comments",
-          description: "Oldest first. A reply names the Comment it answers.",
+          description:
+            "Oldest first. A reply names the Comment it answers. The Comments on the Ticket's Linked Artifacts the " +
+            "caller can read are among them, each naming its Artifact; replies to those go to the Artifact.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Type.Array(Comment), 401: ErrorBody, 404: ErrorBody },
         },
@@ -331,12 +335,15 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "investigation's findings, listed with the Ticket. Users comment instead (`only_runs_report`).",
           params: Type.Object({ ticketId: Type.String() }),
           body: ReportCreate,
-          response: { 201: Report, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          response: { 201: withAvoidedWords(Report), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
         const caller = await requireCaller(context, request);
-        return reply.code(201).send(await writeReport(context, caller, request.params.ticketId, request.body));
+        const report = await writeReport(context, caller, request.params.ticketId, request.body);
+        const { title, body } = request.body;
+        const place = await placeOfDocument(db, report.id);
+        return reply.code(201).send(await warnAgent(db, caller, place, { plain: [title], markdown: [body] }, report));
       },
     );
 

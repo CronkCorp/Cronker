@@ -58,6 +58,8 @@ export function invalidations(event: StreamEvent): QueryKey[] {
         keys.relations(event.ticketId),
         keys.documentLinks(event.ticketId),
         keys.artifactLinks(event.ticketId),
+        // Linking or unlinking an Artifact brings its Comments onto the timeline, or takes them off.
+        keys.comments(event.ticketId),
         keys.projectTickets(event.projectId),
       ];
     case "comment.added":
@@ -81,6 +83,7 @@ export function invalidations(event: StreamEvent): QueryKey[] {
     case "decision.changed":
       return [keys.everythingOf("decision", event.decisionId)];
     case "artifact.changed":
+    case "artifact.comments.changed":
       return [keys.everythingOf("artifact", event.artifactId)];
     case "transcript.changed":
       return [keys.everythingOf("transcript", event.transcriptId)];

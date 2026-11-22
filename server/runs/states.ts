@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { literals } from "../literals.js";
 
 /**
  * Where a Run stands. Kept apart from `runs.ts`, which imports `work/tickets.ts`: Tickets build
@@ -6,7 +6,7 @@ import { Type } from "typebox";
  */
 export const runStates = ["running", "finished", "failed", "lost", "stopped", "refused"] as const;
 export type RunState = (typeof runStates)[number];
-export const RunState = Type.Union(runStates.map((state) => Type.Literal(state)), {
+export const RunState = literals(runStates, {
   description:
     "`running` until its Agent finishes it (`finished`), its Runner reports it ended without finishing (`failed`), " +
     "nothing names it or its Ticket for the Workspace's lost-Run threshold (`lost`), or a User moves, undelegates or " +
@@ -16,5 +16,5 @@ export const RunState = Type.Union(runStates.map((state) => Type.Literal(state))
 /** The states of a Run that went wrong: its Ticket waits in its Delegate's Owner's Inbox for Retry. */
 export const wentWrongStates = ["failed", "lost", "refused"] as const satisfies readonly RunState[];
 export type WentWrongState = (typeof wentWrongStates)[number];
-export const WentWrongState = Type.Union(wentWrongStates.map((state) => Type.Literal(state)));
+export const WentWrongState = literals(wentWrongStates);
 export const wentWrong = (state: RunState): state is WentWrongState => (wentWrongStates as readonly RunState[]).includes(state);
