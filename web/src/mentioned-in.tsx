@@ -12,12 +12,13 @@ const mentioningKinds: Record<MentioningText["kind"], string> = {
   decision: "Decision",
 };
 
-/** The page a text mentioning a Ticket or Decision is read on: a Comment's is its Ticket's. */
+/** The page a text mentioning a Ticket or Decision is read on: a Comment's is its Ticket's, or its Artifact's. */
 function mentioningPage(to: Addresses, text: MentioningText): string {
   switch (text.kind) {
     case "ticket":
-    case "comment":
       return to.ticket(text.ticket!);
+    case "comment":
+      return text.ticket ? to.ticket(text.ticket) : to.artifact({ slug: text.slug! });
     case "document":
     case "report":
       return to.document({ slug: text.slug! });

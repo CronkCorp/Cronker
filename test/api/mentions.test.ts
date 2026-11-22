@@ -513,12 +513,12 @@ describe("texts written before the Mention index", () => {
     expect((await ok("GET", `/api/tickets/${ticket.id}/comments`, s.ada))[0].mentions).toEqual([mentionOf(s.target)]);
   });
 
-  test("have their Decision keys indexed once on the next start after migration 0066", async () => {
+  test("have their Decision keys indexed once on the next start after migration 0067", async () => {
     const s = await workspaceWithDecisions();
     const ticket = await ok("POST", `/api/projects/${s.project.id}/tickets`, s.ada, { title: "Then", description: "Per D1." });
     const comment = await ok("POST", `/api/tickets/${ticket.id}/comments`, s.ada, { body: "CRONK-D1 `D1`" });
     const decision = await ok("POST", `/api/projects/${s.project.id}/decisions`, s.ada, { title: "Lanes", body: "After D1, CRONK-1." });
-    // As migration 0066 leaves a Cronk that indexed only Ticket keys: their indexing still to do.
+    // As migration 0067 leaves a Cronk that indexed only Ticket keys: their indexing still to do.
     await cronk.stage("delete from mentions where target_kind = 'decision'");
     await cronk.stage("insert into pending_backfills (name) values ('decision-mentions')");
     expect(await decisionMentionedIn(s.ada, s.own.id)).toEqual([]);
