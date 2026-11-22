@@ -185,13 +185,31 @@ export const priorities: { priority: Priority; label: string }[] = [
 ];
 
 /** A Ticket key written in Markdown that names a Ticket of the Workspace, outside code and links. */
-export interface Mention {
+export interface TicketMention {
   kind: "ticket";
   /** The key as written, such as `cronk-12`. */
   text: string;
   key: string;
   ticketId: string;
 }
+
+/** An Embed: an Artifact's address alone in its paragraph, which shows the Artifact in place. */
+export interface ArtifactMention {
+  kind: "artifact";
+  /** The address as written. */
+  text: string;
+  artifactId: string;
+  slug: string;
+  /** The shown Version's title. */
+  title: string;
+  /** The Version the address names, or null for the latest. */
+  version: number | null;
+  /** Where the shown Version's page is served, sandboxed. */
+  url: string;
+}
+
+/** What a text mentions: a Ticket by its key, or an Artifact it embeds. */
+export type Mention = TicketMention | ArtifactMention;
 
 export interface TicketSummary {
   id: string;
@@ -1141,7 +1159,8 @@ export const api = {
   createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
-  artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
+  artifact: (id: string, version?: number | null) =>
+    call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}${version ? `?version=${version}` : ""}`),
   artifactVersions: (id: string) => call<ArtifactVersion[]>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions`),
   compareArtifactVersions: (id: string, from: number, to: number) =>
     call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),

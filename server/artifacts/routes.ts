@@ -99,14 +99,21 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags,
-          summary: "An Artifact at its current Version",
-          description: "Its title, description, page and files, without their bytes, and the address its page is served at.",
+          summary: "An Artifact at its current Version, or another",
+          description:
+            "Its title, description, page and files, without their bytes, and the address its page is served at: at " +
+            "its current Version, or at the one `version` names, as an Embed's address may. A Version it never had " +
+            "answers 404.",
           params: ArtifactParams,
+          querystring: Type.Object({
+            version: Type.Optional(Type.Integer({ minimum: 1, description: "A Version's number; the current one when left out." })),
+          }),
           response: { 200: Artifact, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {
-        const artifact = await findArtifact(db, await requireCaller(context, request), request.params.artifactId);
+        const caller = await requireCaller(context, request);
+        const artifact = await findArtifact(db, caller, request.params.artifactId, request.query.version);
         if (!artifact) throw artifactNotFound();
         return artifact;
       },
