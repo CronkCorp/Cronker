@@ -303,6 +303,8 @@ function LinkDialog({ view, onClose }: { view: EditorView; onClose: () => void }
 export interface RichEditorHandle {
   /** The text being edited: the formatted text, or the Markdown source. */
   textbox(): HTMLElement | null;
+  /** Puts the cursor in the text; asked before the editor is ready, as while it loads, it does so once it is. */
+  focus(): void;
 }
 
 export interface RichEditorProps {
@@ -362,7 +364,20 @@ export function RichEditor({
   const latest = useRef({ value, onChange, attachTo, onAttached, submits, disabled, placeholder });
   latest.current = { value, onChange, attachTo, onAttached, submits, disabled, placeholder };
 
-  useImperativeHandle(handle, () => ({ textbox: () => viewRef.current?.dom ?? source.current }), []);
+  // A focus asked for before the formatted text is ready, which it gets once it is.
+  const wantsFocus = useRef(false);
+  useImperativeHandle(
+    handle,
+    () => ({
+      textbox: () => viewRef.current?.dom ?? source.current,
+      focus: () => {
+        const target = viewRef.current ?? source.current;
+        if (target) target.focus();
+        else wantsFocus.current = true;
+      },
+    }),
+    [],
+  );
 
   const hooks = { editLink: () => setLinking(true) };
 
@@ -466,7 +481,8 @@ export function RichEditor({
     });
     viewRef.current = view;
     setState(view.state);
-    if (autoFocus) view.focus();
+    if (autoFocus || wantsFocus.current) view.focus();
+    wantsFocus.current = false;
     return () => {
       view.destroy();
       viewRef.current = null;

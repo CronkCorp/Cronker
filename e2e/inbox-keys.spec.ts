@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
 import { expect, test } from "./fixtures.js";
 
@@ -81,4 +81,25 @@ test("J and K move through the Inbox, A focuses the answer box, C Accepts and R 
   await expect(items).toHaveCount(2);
   await expect(items.nth(1)).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("navigation").getByRole("link", { name: /^Inbox/ })).toHaveAccessibleName("Inbox, 2 waiting");
+});
+
+test("A pressed while the editor still loads focuses the answer box once it is in", async ({ page, cronk }) => {
+  // The rich editor is loaded the first time a screen shows one: hold it back until A has been pressed.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/assets/rich-editor-*.js", async (route: Route) => {
+    await held;
+    await route.continue();
+  });
+  const { items, detail } = await inboxOfThree(page, cronk);
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "true");
+  await expect(detail.getByText("Loading the editor…")).toBeVisible();
+
+  await page.keyboard.press("a");
+  release();
+  const answer = detail.getByLabel("Answer");
+  await expect(answer).toBeFocused();
+  await page.keyboard.type("jjk");
+  await expect(answer).toHaveText("jjk");
+  await expect(items.nth(0)).toHaveAttribute("aria-current", "true");
 });

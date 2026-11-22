@@ -277,7 +277,7 @@ const storedTexts: Record<MentioningKind, string> = {
 
 /**
  * Indexes the texts stored before the Mention index existed, or before it recorded Embeds, once: migrations 0055 and
- * 0056 leave this to do on the next start, as it takes parsing their Markdown. Does nothing on a database migrated
+ * 0057 leave this to do on the next start, as it takes parsing their Markdown. Does nothing on a database migrated
  * short of it, or once done.
  */
 export async function backfillMentions(db: Db): Promise<void> {

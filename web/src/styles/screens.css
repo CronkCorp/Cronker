@@ -104,10 +104,49 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
-.filter select,
 .filter input {
   width: auto;
   min-width: 140px;
+}
+/* A filter's button looks like the Label box beside it; an active filter has an --accent border. */
+.filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 140px;
+  max-width: 240px;
+  min-height: 32px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.filter-trigger:hover {
+  background: var(--surface-2);
+}
+.filter-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 1px var(--accent);
+}
+.filter-trigger-on {
+  border-color: var(--accent);
+}
+.filter-trigger .picker-value {
+  flex: 1;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.filter-caret {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
 }
 .filter-bar {
   display: flex;
@@ -364,6 +403,21 @@
   background: var(--surface-2);
   color: var(--muted);
   cursor: pointer;
+}
+/* A copy of a parent's card in another column, holding its Sub-Tickets there: dashed and muted, since the parent
+   isn't in this column; it doesn't drag, so it points rather than grabs. */
+.card-copy {
+  border-style: dashed;
+  background: transparent;
+  cursor: pointer;
+}
+.card-copy .card-title {
+  color: var(--muted);
+}
+.card-copy-status {
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 12px;
 }
 .sub-ticket-list {
   display: grid;

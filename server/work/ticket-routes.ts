@@ -21,7 +21,7 @@ import {
   Priority,
   Ticket,
   ticketNotFound,
-  TicketSummary,
+  TicketList,
 } from "./tickets.js";
 
 const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
@@ -88,7 +88,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             priority: Type.Optional(Priority),
             label: Type.Optional(Type.String({ description: "Matched ignoring case." })),
           }),
-          response: { 200: Type.Array(TicketSummary), 401: ErrorBody, 404: ErrorBody },
+          response: { 200: TicketList, 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request) => {

@@ -35,7 +35,14 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
       `${ticket.key} is in ${status.name}, which has no Step: Tickets there wait for a User, and get no Run.`,
     );
   }
-  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, ticket.autonomousDelegation === true);
+  const { rows } = await db.query<{ conciseReports: boolean }>(
+    `select concise_reports as "conciseReports" from projects where id = $1`,
+    [ticket.projectId],
+  );
+  return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, {
+    autonomous: ticket.autonomousDelegation === true,
+    conciseReports: rows[0]!.conciseReports,
+  });
 }
 
 /** The Outcomes a Run of the Step may choose: those to a Done Status only on a Ticket under Autonomous Delegation. */
@@ -48,14 +55,19 @@ export function completes(outcome: Outcome, statuses: Status[]): boolean {
   return statuses.find((s) => s.id === outcome.statusId)!.kind === "done";
 }
 
+/** The rule a Brief carries in a Project with Concise Reports on. */
+export const conciseReportsRule =
+  "- This Project keeps Reports concise, even where the Step's brief asks for more: lead with the outcome, then the " +
+  "findings, what you verified and anything the next Run or User needs, in as few lines as you can. Leave out the " +
+  "working, such as a step-by-step log of what you read or tried.";
+
 /** The Brief of a Run of the Status's Step on the Ticket; without a Run id, as a preview. */
 export function buildBrief(
   config: Config,
   ticketKey: string,
   statuses: Status[],
   status: Status & { step: Step },
-  autonomous: boolean,
-  runId?: string,
+  { autonomous, conciseReports, runId }: { autonomous: boolean; conciseReports: boolean; runId?: string },
 ): Brief {
   const step = status.step;
   const nameOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.name;
@@ -98,6 +110,7 @@ export function buildBrief(
       `for ${ticketKey}'s Assignee as a Discovered Ticket.`,
     `- Give your Run id when you create an Artifact with \`create_artifact\`, so it is linked to ${ticketKey}.`,
     "- Don't merge pull requests on GitHub directly.",
+    ...(conciseReports ? [conciseReportsRule] : []),
   ].join("\n");
 
   return {

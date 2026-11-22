@@ -450,7 +450,7 @@ describe("Embeds", () => {
   test("texts written before Embeds were indexed are indexed on the next start", async () => {
     const s = await withArtifact();
     const document = await ok("POST", `/api/projects/${s.project.id}/documents`, s.ada, { title: "Plan", body: s.address });
-    // As a Cronk before migration 0056 left them: no Embeds recorded, with their indexing still to do.
+    // As a Cronk before migration 0057 left them: no Embeds recorded, with their indexing still to do.
     await cronk.stage("delete from mentions");
     await cronk.stage("insert into pending_backfills (name) values ('embeds')");
     expect((await ok("GET", `/api/documents/${document.id}`, s.ada)).mentions).toEqual([]);

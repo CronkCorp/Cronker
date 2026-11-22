@@ -132,3 +132,61 @@ test("by keyboard alone at phone width, in the dark theme, the toolbar is one st
   await expect(page.getByRole("article", { name: "Plan" }).getByRole("heading", { level: 1 })).toBeVisible();
   expect(await saved()).toBe("# Words. More");
 });
+
+test("at a wide window the text fills the frame, so long lines wrap at its edge and newlines typed there are kept", async ({ page, cronk }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const { text, saved } = await editDocument(page, cronk, "Start.");
+  const frame = page.locator(".rich-editor-frame");
+
+  // The text box is as wide as the frame (less its border), not cut short at a measure of its own (CRONK-60).
+  const widths = await text.evaluate((element) => {
+    const frameBox = element.closest(".rich-editor-frame")!;
+    return { text: element.getBoundingClientRect().width, frame: frameBox.clientWidth, scroll: element.scrollWidth, client: element.clientWidth };
+  });
+  expect(widths.frame).toBeGreaterThan(900);
+  expect(widths.text).toBeGreaterThanOrEqual(widths.frame - 1);
+  expect(widths.scroll).toBeLessThanOrEqual(widths.client);
+
+  // A long line of words and a long unbroken token both wrap inside the text, with nothing past its edge.
+  const words = "Runs start from a Brief and finish with an Outcome ".repeat(6).trim();
+  const token = "x".repeat(400);
+  await text.getByText("Start.").click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type(words);
+  await page.keyboard.press("Shift+Enter");
+  await page.keyboard.type("after the break");
+  await page.keyboard.press("Enter");
+  await page.keyboard.insertText(token);
+  const paragraphs = text.locator("p");
+  const lineBoxes = await paragraphs.evaluateAll((elements) => {
+    const box = elements[0]!.closest(".rich-editor-text")!.getBoundingClientRect();
+    return elements.map((element) => ({ right: element.getBoundingClientRect().right, scroll: element.scrollWidth, client: element.clientWidth, limit: box.right }));
+  });
+  for (const line of lineBoxes) {
+    expect(line.right).toBeLessThanOrEqual(line.limit);
+    expect(line.scroll).toBeLessThanOrEqual(line.client);
+  }
+  // The long line of words reaches past 80% of the frame before it wraps.
+  const reach = await paragraphs.nth(1).evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const rights = [...range.getClientRects()].map((rect) => rect.right);
+    const box = element.closest(".rich-editor-frame")!.getBoundingClientRect();
+    return (Math.max(...rights) - box.left) / box.width;
+  });
+  expect(reach).toBeGreaterThan(0.85);
+  expect(await frame.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  const body = `Start.\n\n${words}\\\nafter the break\n\n${token}`;
+  await mode(page, "Markdown").click();
+  await expect(page.getByLabel("Body, as Markdown")).toHaveValue(body);
+  await mode(page, "Rich text").click();
+  await page.getByRole("button", { name: "Save as Version 2" }).click();
+  await expect(page.getByRole("article", { name: "Plan" })).toContainText("after the break");
+  expect(await saved()).toBe(body);
+  await page.reload();
+  await page.getByRole("button", { name: "Edit" }).click();
+  await expect(text.locator("p")).toHaveCount(3);
+  await expect(text.locator("p").nth(1).locator("br")).toHaveCount(1);
+});
