@@ -5,12 +5,13 @@ import { Type } from "typebox";
  * Tickets build their schema and columns from it as they load, before `runs.ts` would have finished loading.
  */
 export const Waiting = Type.Union(
-  [Type.Literal("runnerSlot"), Type.Literal("runnerPaused"), Type.Literal("blocked"), Type.Null()],
+  [Type.Literal("runnerSlot"), Type.Literal("runnerPaused"), Type.Literal("blocked"), Type.Literal("archived"), Type.Null()],
   {
     description:
       "What the Ticket waits for before it gets the Run it needs: `runnerSlot` while its Runner already has as many " +
       "Runs as its limit, `runnerPaused` while its Runner's queue is paused by a rate limit (see the Runner's " +
-      "`pausedUntil`), `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished. " +
+      "`pausedUntil`), `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished, `archived` while " +
+      "its Project is archived: nothing starts for it, and the Runner's queue passes it by, until an Admin unarchives it. " +
       "Null when it needs no Run, or has one.",
   },
 );
@@ -34,9 +35,14 @@ export const isBlocked = (alias: string) =>
     or exists (select 1 from tickets subs join statuses on statuses.id = subs.status_id
       where subs.parent_id = ${alias}.id and statuses.kind not in ${finishedKinds}))`;
 
+/** SQL that holds while the Ticket `alias` is in an archived Project. */
+export const inArchivedProject = (alias: string) =>
+  `exists (select 1 from projects archived where archived.id = ${alias}.project_id and archived.archived_at is not null)`;
+
 /** SQL for what the Ticket `alias` waits for, as `Waiting`. */
 export const waitingColumn = (alias: string) =>
-  `case when not ${alias}.waits_for_run then null when ${isBlocked(alias)} then 'blocked'
+  `case when not ${alias}.waits_for_run then null when ${inArchivedProject(alias)} then 'archived'
+     when ${isBlocked(alias)} then 'blocked'
      when exists (select 1 from agents join runners on runners.id = agents.runner_id
        where agents.id = ${alias}.delegate_id and runners.paused_until is not null) then 'runnerPaused'
      else 'runnerSlot' end`;
