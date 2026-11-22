@@ -7,15 +7,26 @@ import { requireWrite } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { statusesOf } from "../work/projects.js";
 import { editTicketIn, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
-import { askMerge, linkedPullRequest, mergeAsAsked, type AskedMerge, type MergeAdvice } from "./pull-request-merging.js";
+import {
+  askMerge,
+  linkedPullRequest,
+  mergeAsAsked,
+  type AskedMerge,
+  type CompleteAs,
+  type MergeActor,
+  type MergeAdvice,
+} from "./pull-request-merging.js";
 
 /**
  * Pipeline: the Merge Queue (ADR 0011, amending ADR 0005). A User with Write presses Merge on a Ticket in a Review
  * Status with an open linked Pull Request, in a Project with Pull Request automation on and a Merge Status (a Status
  * with a Merge Step): the Pull Request joins the queue for its Repository and base branch, and the Ticket moves into
- * the Merge Status as the User's move. A queued Ticket gets no Merge Run. Each `queuePass` takes the head of each queue,
- * the entry that joined first, and asks Cronk's merge (`pull-request-merging.ts`) for it as the queuing User's,
- * completing the Ticket as Verified; a head that isn't clean and green yet waits for a later pass. One head per queue
+ * the Merge Status as the User's move. An Autonomous Delegation Ticket in a Project with agents may merge on joins on
+ * its own as it enters the Merge Status (`runs.ts`), for its Agent. A queued Ticket gets no Merge Run. Each `queuePass`
+ * takes the head of each queue, the entry that joined first, and asks Cronk's merge (`pull-request-merging.ts`) for it
+ * as the queuing User's, completing the Ticket as Verified, or as the Agent's, completing it as Unverified; a head that
+ * isn't clean and green yet waits for a later pass. Turning agents may merge off takes out the entries Autonomous
+ * Delegation queued, passing their Tickets on as their Merge Step would (`dropAutonomousEntries`). One head per queue
  * is merged at a time, so queues on other branches or Repositories never wait on each other.
  *
  * An entry leaves the queue when its Ticket leaves the Merge Status it waits in (`ticket-writes.ts`), as Remove from
@@ -67,17 +78,7 @@ export async function joinQueue(context: Context, caller: Caller & { kind: "user
     if (!mergeStatus) {
       throw refuse("no_merge_status", `${ticket.key}'s Project has no Merge Status, so it has no Merge Queue.`, "Merge it on GitHub, or give a Status of the board a Merge Step.");
     }
-    const { rows: pullRequests } = await tx.query<{ id: string; repository: string; number: number; url: string }>(
-      `select pull_requests.id::text, pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.url
-       from pull_request_links join pull_requests on pull_requests.id = pull_request_links.pull_request_id
-       join project_repositories on project_repositories.repository_id = pull_requests.repository_id
-         and project_repositories.project_id = $2
-       where pull_request_links.ticket_id = $1 and pull_requests.state = 'open'
-         and not exists (select from merge_queue where merge_queue.pull_request_id = pull_requests.id)
-       order by pull_request_links.linked_at, pull_requests.id limit 1`,
-      [ticket.id, ticket.projectId],
-    );
-    const pullRequest = pullRequests[0];
+    const pullRequest = await queueablePullRequest(tx, ticket);
     if (!pullRequest) {
       throw refuse(
         "no_open_pull_request",
@@ -90,11 +91,94 @@ export async function joinQueue(context: Context, caller: Caller & { kind: "user
       `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, entered_at) values ($1, $2, $3, $4, $5)`,
       [pullRequest.id, ticket.id, mergeStatus.id, caller.id, now],
     );
-    await recordChanges(tx, ticket, caller.id, now, [
-      { field: "queueJoined", from: null, to: { pullRequest: { ...pullRequest, id: Number(pullRequest.id) } } },
-    ]);
+    await recordChanges(tx, ticket, caller.id, now, [queueJoined(pullRequest)]);
     return editTicketIn(context, tx, caller, ticket.id, { statusId: mergeStatus.id });
   });
+}
+
+/** A Pull Request a Ticket can queue: its first open linked one, of a Repository its Project lists, not queued yet. */
+interface QueueablePullRequest {
+  id: string;
+  repository: string;
+  number: number;
+  url: string;
+}
+
+async function queueablePullRequest(tx: Tx, ticket: { id: string; projectId: string }): Promise<QueueablePullRequest | undefined> {
+  const { rows } = await tx.query<QueueablePullRequest>(
+    `select pull_requests.id::text, pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.url
+     from pull_request_links join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+     join project_repositories on project_repositories.repository_id = pull_requests.repository_id
+       and project_repositories.project_id = $2
+     where pull_request_links.ticket_id = $1 and pull_requests.state = 'open'
+       and not exists (select from merge_queue where merge_queue.pull_request_id = pull_requests.id)
+     order by pull_request_links.linked_at, pull_requests.id limit 1`,
+    [ticket.id, ticket.projectId],
+  );
+  return rows[0];
+}
+
+const queueJoined = (pullRequest: QueueablePullRequest) =>
+  ({ field: "queueJoined", from: null, to: { pullRequest: { ...pullRequest, id: Number(pullRequest.id) } } }) as const;
+
+/**
+ * Autonomous Delegation's join: queues the Ticket's first open linked Pull Request for the Agent it is delegated to,
+ * as it enters the Merge Status `statusId`, recording a `queueJoined` Change by Cronk. Returns false, queueing
+ * nothing, when the Ticket has no such Pull Request. Whether an agent may merge the Ticket is the caller's to check
+ * first, in the transaction that locked the Ticket.
+ */
+export async function joinQueueAutonomously(
+  context: Context,
+  tx: Tx,
+  ticket: { id: string; workspaceId: string; projectId: string },
+  statusId: string,
+  agentId: string,
+  now: Date,
+): Promise<boolean> {
+  const pullRequest = await queueablePullRequest(tx, ticket);
+  if (!pullRequest) return false;
+  await tx.query(
+    `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_agent_id, entered_at) values ($1, $2, $3, $4, $5)`,
+    [pullRequest.id, ticket.id, statusId, agentId, now],
+  );
+  await recordChanges(tx, ticket, { kind: "cronk" }, now, [queueJoined(pullRequest)]);
+  context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  return true;
+}
+
+/**
+ * Turning *agents may merge* off: takes the Project's entries only Autonomous Delegation queued out of the queue,
+ * recording a `queueLeft` Change by Cronk on each, and returns their Tickets with their Runners, for their Merge Step to pass them on as
+ * entering it now would. Entries a User queued stay, and so does one Cronk is merging already.
+ */
+export async function dropAutonomousEntries(
+  context: Context,
+  tx: Tx,
+  projectId: string,
+): Promise<{ id: string; runnerId: string | null }[]> {
+  const { rows } = await tx.query<{ ticketId: string; workspaceId: string; runnerId: string | null; pullRequest: unknown }>(
+    `with dropped as (
+       delete from merge_queue using tickets
+       where tickets.id = merge_queue.ticket_id and tickets.project_id = $1
+         and merge_queue.queued_by_agent_id is not null and merge_queue.state = 'queued'
+       returning merge_queue.ticket_id, merge_queue.pull_request_id)
+     select tickets.id as "ticketId", tickets.workspace_id as "workspaceId", agents.runner_id as "runnerId",
+       json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
+         'number', pull_requests.number, 'url', pull_requests.url) as "pullRequest"
+     from dropped join tickets on tickets.id = dropped.ticket_id join pull_requests on pull_requests.id = dropped.pull_request_id
+       left join agents on agents.id = tickets.delegate_id
+     order by tickets.number`,
+    [projectId],
+  );
+  for (const { ticketId, workspaceId, pullRequest } of rows) {
+    await recordChanges(tx, { id: ticketId, workspaceId }, { kind: "cronk" }, context.clock.now(), [
+      { field: "queueLeft", from: { pullRequest }, to: null },
+    ]);
+    context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });
+  }
+  return rows
+    .filter((row, i) => rows.findIndex((other) => other.ticketId === row.ticketId) === i)
+    .map((row) => ({ id: row.ticketId, runnerId: row.runnerId }));
 }
 
 /** Remove from queue: sends the queued Ticket back to its Project's first Review Status, as the User's move. */
@@ -144,7 +228,9 @@ interface Head {
   pullRequestId: string;
   ticketId: string;
   state: "queued" | "merging";
-  queuedBy: string;
+  /** The User who pressed Merge, or null for an entry Autonomous Delegation queued for `queuedByAgent`. */
+  queuedBy: string | null;
+  queuedByAgent: string | null;
 }
 
 /**
@@ -156,7 +242,7 @@ export async function queuePass(context: Context): Promise<void> {
   const { rows: heads } = await context.db.query<Head>(
     `select distinct on (pull_requests.repository_id, coalesce(pull_requests.base_branch, ''))
        merge_queue.pull_request_id::text as "pullRequestId", merge_queue.ticket_id as "ticketId", merge_queue.state,
-       merge_queue.queued_by_user_id as "queuedBy",
+       merge_queue.queued_by_user_id as "queuedBy", merge_queue.queued_by_agent_id as "queuedByAgent",
        projects.archived_at is null and projects.pull_request_automation as active
      from merge_queue join pull_requests on pull_requests.id = merge_queue.pull_request_id
      join tickets on tickets.id = merge_queue.ticket_id join projects on projects.id = tickets.project_id
@@ -168,7 +254,34 @@ export async function queuePass(context: Context): Promise<void> {
   }
 }
 
-/** Asks Cronk's merge for the head as its queuing User's, marking it *merging* while GitHub is asked. */
+/**
+ * Whom Cronk merges the head for: the User who queued it, completing the Ticket as Verified, or the Agent Autonomous
+ * Delegation queued it for, completing it as Unverified, as an agent's merge does, while its Project still has agents
+ * may merge on and the Agent isn't removed. Null leaves the head waiting.
+ */
+async function mergerOf(
+  tx: Tx,
+  head: Head,
+  ticket: { projectId: string; workspaceId: string },
+): Promise<{ actor: MergeActor; completeAs: CompleteAs } | null> {
+  if (head.queuedBy) {
+    const { rows } = await tx.query<{ name: string }>(`select ${userName()} as name from users where id = $1`, [head.queuedBy]);
+    if (!rows[0]) return null;
+    return { actor: { kind: "user", userId: head.queuedBy, name: rows[0].name, workspaceId: ticket.workspaceId }, completeAs: "verified" };
+  }
+  const { rows } = await tx.query(
+    `select from agents join projects on projects.id = $2
+     where agents.id = $1 and agents.removed_at is null and projects.agents_may_merge`,
+    [head.queuedByAgent, ticket.projectId],
+  );
+  if (!rows.length) return null;
+  return {
+    actor: { kind: "agent", agentId: head.queuedByAgent!, runId: null, workspaceId: ticket.workspaceId },
+    completeAs: "unverified",
+  };
+}
+
+/** Asks Cronk's merge for the head as its queuing User's or Agent's, marking it *merging* while GitHub is asked. */
 async function mergeHead(context: Context, head: Head): Promise<void> {
   const asked = await transaction(context.db, async (tx): Promise<AskedMerge | null> => {
     const { rows: tickets } = await tx.query<{ id: string; projectId: string; workspaceId: string; key: string }>(
@@ -185,17 +298,12 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
     );
     if (!ticket || !rowCount) return null;
     const pullRequest = await linkedPullRequest(tx, ticket, Number(head.pullRequestId));
-    const { rows: users } = await tx.query<{ name: string }>(`select ${userName()} as name from users where id = $1`, [head.queuedBy]);
-    if (!pullRequest || !users[0]) return null;
+    if (!pullRequest) return null;
+    const merger = await mergerOf(tx, head, ticket);
+    if (!merger) return null;
     let asked: AskedMerge;
     try {
-      asked = await askMerge(tx, {
-        ticket,
-        pullRequest,
-        actor: { kind: "user", userId: head.queuedBy, name: users[0].name, workspaceId: ticket.workspaceId },
-        completeAs: "verified",
-        advice: waitAdvice,
-      });
+      asked = await askMerge(tx, { ticket, pullRequest, ...merger, advice: waitAdvice });
     } catch (error) {
       if (error instanceof ApiError) return null;
       throw error;

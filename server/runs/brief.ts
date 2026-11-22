@@ -83,6 +83,9 @@ export function buildBrief(
     return `${moves}.`;
   };
 
+  // Cronk merges queued Tickets itself (ADR 0011); only a Brief of a Merge Step that still tells its Run to merge
+  // with `merge_pull_request`, as a Project's own copy may, gets the rules for it.
+  const mergesItself = step.kind === "merge" && step.brief.includes("merge_pull_request");
   const preamble = [
     `You are an agent working on the Ticket ${ticketKey} in Cronk, as one Run of its ${status.name} Step.`,
     "",
@@ -91,7 +94,7 @@ export function buildBrief(
     "",
     runId ? `Your Run id is ${runId}.` : "Your Run id is given when the Run starts.",
     "",
-    step.kind === "merge"
+    mergesItself
       ? "End the Run by merging its Pull Request with `merge_pull_request`, or by calling `finish` with your Run id and one of these Outcomes:"
       : "End the Run by calling `finish` with your Run id and one of these Outcomes:",
     "",
@@ -99,7 +102,7 @@ export function buildBrief(
     "",
     "Rules:",
     "",
-    step.kind === "merge"
+    mergesItself
       ? "- Call `finish` exactly once, as the last thing you do, unless you merge: a merge with `merge_pull_request` " +
         "ends this Run, finished as *merged*, so don't call `finish` after it."
       : "- Call `finish` exactly once, as the last thing you do.",

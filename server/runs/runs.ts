@@ -22,6 +22,7 @@ import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 import { userName } from "../identity/user.js";
+import { joinQueueAutonomously } from "../pipeline/merge-queue.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -170,9 +171,11 @@ export type RunNeed = "started" | "waiting" | "none";
  * goes to the highest Priority waiting Ticket first, then to the one that entered its Status first.
  *
  * A delegated Ticket that doesn't pass the Step's Label rule, or a Merge Step's rule (Autonomous Delegation in a
- * Project with agents may merge on, unless a User queued it in the Merge Queue, which merges it with no Run), gets no Run: Cronk moves it on by the Step's default Outcome, which counts as
+ * Project with agents may merge on and Pull Request automation on, unless a User queued it in the Merge Queue), gets
+ * no Run: Cronk moves it on by the Step's default Outcome, which counts as
  * entering that Status in turn. A chain of skips that comes back to a Status it already passed stops there, so the
- * Ticket waits for a User.
+ * Ticket waits for a User. A Ticket that passes a Merge Step's rule joins the Merge Queue instead of getting a Run,
+ * when it has an open Pull Request to queue; a queued Ticket gets no Merge Run, Cronk merging it (ADR 0011).
  */
 export async function startRunIfNeeded(context: Context, tx: Tx, ticketId: string, now: Date): Promise<RunNeed> {
   return enterStatus(context, tx, ticketId, now, new Set());
@@ -239,7 +242,15 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     if (queued) return needsNone();
   }
   // A Merge Step skips itself unless an agent may merge this Ticket, or a User queued it; otherwise the Label rule decides.
-  const mergeRule = status.step.kind === "merge" ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true) : null;
+  const mergeRule =
+    status.step.kind === "merge"
+      ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true, await pullRequestAutomation(tx, ticket.projectId))
+      : null;
+  // An agent may merge it: it joins the Merge Queue for its Agent, with no Merge Run, if it has a Pull Request to queue.
+  // One with none gets a Run, to find out why.
+  if (status.step.kind === "merge" && !mergeRule && passes(status.step.labelRule, ticket.labels)) {
+    if (await joinQueueAutonomously(context, tx, { id: ticketId, ...ticket }, status.id, ticket.delegateId, now)) return needsNone();
+  }
   if (mergeRule || !passes(status.step.labelRule, ticket.labels)) {
     const outcome = status.step.outcomes.find((o) => o.default)!;
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
@@ -610,9 +621,20 @@ function tellRunner(context: Context, tx: Tx, run: EndedRun, what: "stop" | "end
  * Why a Merge Step skips itself for a Ticket, if it does: its Project has agents may merge off, or the Ticket lacks
  * Autonomous Delegation (ADR 0005).
  */
-function mergeRefusal(agentsMayMerge: boolean, autonomous: boolean): "agentsMayMergeOff" | "noAutonomousDelegation" | null {
+async function pullRequestAutomation(tx: Tx, projectId: string): Promise<boolean> {
+  const { rows } = await tx.query<{ automation: boolean }>("select pull_request_automation as automation from projects where id = $1", [projectId]);
+  return rows[0]!.automation;
+}
+
+function mergeRefusal(
+  agentsMayMerge: boolean,
+  autonomous: boolean,
+  pullRequestAutomation: boolean,
+): "agentsMayMergeOff" | "noAutonomousDelegation" | "pullRequestAutomationOff" | null {
   if (!agentsMayMerge) return "agentsMayMergeOff";
   if (!autonomous) return "noAutonomousDelegation";
+  // With Pull Request automation off a merge completes nothing, so there is no Merge Queue to join.
+  if (!pullRequestAutomation) return "pullRequestAutomationOff";
   return null;
 }
 

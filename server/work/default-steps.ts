@@ -47,15 +47,13 @@ const codeReview = `Review the pull request this Ticket's implementation opened.
 
 Finish with **approve** when it is ready for a User to merge. Finish with **changes** when it needs more work, saying what in your Report. Finish with **complete**, if you are offered it, when the work needs nothing more from a User. Finish with **needs you** and a Question when you can't judge it.`;
 
-const merge = `Merge the pull request this Ticket's implementation opened, if it is ready.
+const merge = `Cronk merges this Ticket itself through the Merge Queue: an Autonomous Delegation Ticket joins the queue as it enters this Step, when it has an open Pull Request of a Repository its Project lists. This Run started because it had none to queue.
 
-- Read the Ticket, its Comments and Reports, and its Pull Request's state, checks and reviews.
-- It is ready when it is open, its checks on the latest commit all passed with none still running, and no review still requests changes.
-- Merge it with \`merge_pull_request\`, giving your Run id and the Pull Request's id. Cronk merges it on GitHub and checks the same rules first, refusing with the rule and what to do instead; a merge ends your Run as *merged*, so don't call \`finish\` after it.
-- While a check is still running, wait for it and read the Ticket again before merging.
-- Never resolve a merge conflict or change code yourself: that is Implement's work.
+- Read the Ticket, its Comments and Reports, and its Pull Requests.
+- Find out why it has none: no Pull Request was opened or linked, it is still a draft or closed, it is in a Repository the Project doesn't list, or another Ticket's queue entry holds it.
+- Never change code or merge it yourself.
 
-Finish with **send back** when it has a merge conflict, a failing check or a review requesting changes, first leaving a Comment saying which: it goes back to Implement, as a round. Finish with **needs you** and a Question when you can't tell, or Cronk refuses the merge for a reason Implement can't fix.`;
+Finish with **send back** when Implement can fix it, such as a missing, closed or draft Pull Request, first leaving a Comment saying which: it goes back to Implement, as a round. Finish with **needs you** and a Question when only a User can, such as listing a Repository.`;
 
 export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {
@@ -93,7 +91,8 @@ export const defaultSteps: Record<string, DefaultStep> = {
       { name: "needs you", status: "In Review", needsYou: true },
     ],
   },
-  // ADR 0005: skipped, passing the Ticket on to In Review, unless an agent may merge it.
+  // ADR 0005, ADR 0011: skipped, passing the Ticket on to In Review, unless an agent may merge it, when it joins the
+  // Merge Queue instead, or a User queued it.
   Merge: {
     kind: "merge",
     brief: merge,

@@ -63,11 +63,13 @@ export const Change = Type.Object({
       "address. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
       "and the default Outcome the Ticket moved on by. A Merge Step that skipped itself records `labelRule` null and " +
-      "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, otherwise " +
-      "`noAutonomousDelegation`. A `merged` Change goes from null to " +
+      "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, " +
+      "`noAutonomousDelegation` when the Ticket has no Autonomous Delegation, otherwise `pullRequestAutomationOff`, " +
+      "when its Project has Pull Request automation off. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
       "login of the GitHub account that merged it, or null when GitHub named none. A `queueJoined` Change goes from null " +
-      "to `{ pullRequest: { id, repository, number, url } }`, the Pull Request queued in the Merge Queue; a `queueLeft` " +
+      "to `{ pullRequest: { id, repository, number, url } }`, the Pull Request queued in the Merge Queue, by the User " +
+      "who pressed Merge or, for Autonomous Delegation, by Cronk; a `queueLeft` " +
       "Change goes from that to null, when it leaves the queue unmerged. A `sentBack` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it: a check " +
       "`{ kind: \"check\", name, url }`, a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +

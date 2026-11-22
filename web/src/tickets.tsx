@@ -1297,13 +1297,14 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
 interface StepSkipped {
   status: { id: string; name: string };
   labelRule: LabelRule | null;
-  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation";
+  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation" | "pullRequestAutomationOff";
   outcome: string;
 }
 
 const mergeRulesShown = {
   agentsMayMergeOff: "agents may not merge in this Project",
   noAutonomousDelegation: "no Autonomous Delegation",
+  pullRequestAutomationOff: "Pull Request automation is off in this Project",
 };
 
 /** What a `merged` Change records: the Pull Request as it was then, and the login of the GitHub account that merged it. */

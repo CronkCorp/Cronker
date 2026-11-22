@@ -396,3 +396,137 @@ describe("leaving the queue", () => {
     expect(cronk.github.merges).toEqual([]);
   });
 });
+
+describe("Autonomous Delegation joins the queue", () => {
+  /**
+   * `queueSetting` with agents may merge on and Ada's Agent claude-max on her fake Runner, with a full token.
+   * `approved()` takes a Ticket `inReview` makes, delegates it with Autonomous Delegation into Code review, and has its
+   * Code review Run approve it, moving it into Merge.
+   */
+  async function autonomousSetting() {
+    const setting = await queueSetting();
+    const { workspace, ada, project, inReview, status } = setting;
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: true });
+    const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const asAgent = { headers: { authorization: `Bearer ${secret}` } };
+    const approved = async () => {
+      const made = await inReview();
+      await ok("PATCH", `/api/tickets/${made.ticket.id}`, ada, {
+        delegateId: agent.id,
+        autonomousDelegation: true,
+        statusId: status("Code review"),
+      });
+      const runs = await ok("GET", `/api/tickets/${made.ticket.id}/runs`, ada);
+      const running = runs.find((r: { state: string }) => r.state === "running");
+      await ok("POST", `/api/runs/${running.id}/finish`, asAgent, { outcome: "approve" });
+      return made;
+    };
+    return { ...setting, agent, asAgent, approved };
+  }
+
+  const runsIn = async (ticketId: string, as: As, step: string) =>
+    (await ok("GET", `/api/tickets/${ticketId}/runs`, as)).filter((r: { step: { name: string } }) => r.step.name === step);
+
+  test("entering Merge from Code review, it joins the queue as Cronk's Change and gets no Merge Run", async () => {
+    const { ada, approved, read, status } = await autonomousSetting();
+
+    const { ticket } = await approved();
+
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1, state: "queued", pullRequestId: 601 } });
+    expect(await runsIn(ticket.id, ada, "Merge")).toEqual([]);
+    expect(cronk.runner.starts.map((s) => s.model)).toEqual(["sonnet"]);
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.find((c: { field: string }) => c.field === "queueJoined")).toMatchObject({
+      actor: { kind: "cronk" },
+      to: { pullRequest: { id: 601, repository: "cronkcorp/cronker", number: 101, url: "https://github.com/cronkcorp/cronker/pull/101" } },
+    });
+  });
+
+  test("Cronk merges it as the Agent's, with no Run, completing it as Unverified into its Assignee's Inbox", async () => {
+    const { ada, approved, read, status, agent, workspace, installation } = await autonomousSetting();
+    const { ticket } = await approved();
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges).toEqual([
+      { repository: "cronkcorp/cronker", number: 101, method: "merge", sha: "c101", installationId: installation.id },
+    ]);
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Done"), verification: "unverified", queue: null });
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.slice(-3).map(({ actor, field, runId }: Record<string, unknown>) => [actor, field, runId])).toEqual([
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "merged", null],
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "status", null],
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "verification", null],
+    ]);
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.filter((i: { kind: string }) => i.kind === "unverified")).toEqual([
+      expect.objectContaining({ ticket: expect.objectContaining({ key: ticket.key }) }),
+    ]);
+    expect(await runsIn(ticket.id, ada, "Merge")).toEqual([]);
+  });
+
+  test("it waits its turn behind a Ticket a User queued first, each completing as its queuer's", async () => {
+    const { approved, inReview, merge, read, status } = await autonomousSetting();
+    const byAda = await inReview();
+    await merge(byAda.ticket.id);
+    const { ticket } = await approved();
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
+    expect(await read(byAda.ticket.id)).toMatchObject({ statusId: status("Done"), verification: "verified" });
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1 } });
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101, 102]);
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Done"), verification: "unverified" });
+  });
+
+  test("with no open Pull Request to queue, such as a draft, it gets a Merge Run instead", async () => {
+    const { ada, project, status, agent, asAgent, read, deliver, cronker } = await autonomousSetting();
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
+    await deliver(cronker, "pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 601, number: 101, title: `${ticket.key}: make it so`, state: "open", draft: true, merged: false,
+        html_url: "https://github.com/cronkcorp/cronker/pull/101", head: { ref: "cronk-1", sha: "c101" }, base: { ref: "main" },
+        created_at: "2026-01-01T09:00:00Z", updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, autonomousDelegation: true, statusId: status("Code review") });
+    const [review] = await runsIn(ticket.id, ada, "Code review");
+    await ok("POST", `/api/runs/${review.id}/finish`, asAgent, { outcome: "approve" });
+
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Merge"), queue: null });
+    expect((await runsIn(ticket.id, ada, "Merge")).map((r: { state: string }) => r.state)).toEqual(["running"]);
+  });
+
+  test("turning agents may merge off passes the Tickets only it queued on to In Review, keeping those a User queued", async () => {
+    const { ada, project, approved, inReview, merge, read, status, agent } = await autonomousSetting();
+    const { ticket: autonomous } = await approved();
+    const byAda = await inReview();
+    await ok("PATCH", `/api/tickets/${byAda.ticket.id}`, ada, { delegateId: agent.id, autonomousDelegation: true });
+    await merge(byAda.ticket.id);
+
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: false });
+
+    expect(await read(autonomous.id)).toMatchObject({ statusId: status("In Review"), queue: null });
+    const timeline = await ok("GET", `/api/tickets/${autonomous.id}/timeline`, ada);
+    expect(timeline.slice(-3).map(({ actor, field, to }: Record<string, unknown>) => [actor, field, to])).toEqual([
+      [expect.objectContaining({ kind: "cronk" }), "queueLeft", null],
+      [expect.objectContaining({ kind: "cronk" }), "stepSkipped", expect.objectContaining({ mergeRule: "agentsMayMergeOff" })],
+      [expect.objectContaining({ kind: "cronk" }), "status", { id: status("In Review"), name: "In Review" }],
+    ]);
+    expect(await read(byAda.ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1, state: "queued" } });
+    expect(await runsIn(autonomous.id, ada, "Merge")).toEqual([]);
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([102]);
+    expect(await read(byAda.ticket.id)).toMatchObject({ statusId: status("Done"), verification: "verified" });
+  });
+});
