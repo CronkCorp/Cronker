@@ -19,7 +19,6 @@ import {
   type RelationKind,
   type Report,
   type Run,
-  type MentioningText,
   type Ticket,
   type TicketEdit,
   type TicketRef,
@@ -37,8 +36,10 @@ import { shortcutStandsAside } from "./keys.js";
 import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
+import { MentionedIn } from "./mentioned-in.js";
 import { labelsOf, priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
+import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { fitWindow } from "./ui/fit-window.js";
@@ -690,6 +691,7 @@ function Verification({
       )}
       <Dialog open={reopening} onOpenChange={setReopening} title={`Reopen ${ticket.key}`} description={`With your Comment, Reopen will ${back}.`}>
         <form onSubmit={onSubmit}>
+          <MovedOnDependents ticketId={ticket.id} open={reopening} />
           <RichEditor label="Why reopen it?" compact autoFocus value={why} onChange={setWhy} />
           <FormError error={error} />
           <DialogActions>
@@ -1166,52 +1168,6 @@ function Linked({
   );
 }
 
-const mentioningKinds: Record<MentioningText["kind"], string> = {
-  ticket: "Ticket",
-  comment: "Comment",
-  document: "Document",
-  report: "Report",
-  term: "Term",
-  decision: "Decision",
-};
-
-/** The page a text mentioning a Ticket is read on: a Comment's is its Ticket's, or its Artifact's. */
-function mentioningPage(to: Addresses, text: MentioningText): string {
-  switch (text.kind) {
-    case "ticket":
-      return to.ticket(text.ticket!);
-    case "comment":
-      return text.ticket ? to.ticket(text.ticket) : to.artifact({ slug: text.slug! });
-    case "document":
-    case "report":
-      return to.document({ slug: text.slug! });
-    case "term":
-      return to.term({ id: text.id, projectId: text.projectId, name: text.title });
-    case "decision":
-      return to.decision({ id: text.id, projectId: text.projectId, number: text.number! });
-  }
-}
-
-/** Mentioned in: each text whose Markdown mentions the Ticket's key, linked, with what kind of text it is. */
-function MentionedIn({ texts }: { texts: MentioningText[] }) {
-  const to = useAddresses();
-  if (texts.length === 0) return null;
-  return (
-    <section aria-label="Mentioned in" className="panel side-section">
-      <h2 className="side-title">Mentioned in</h2>
-      <ul aria-label="Mentioned in" className="side-list">
-        {texts.map((text) => (
-          <li key={`${text.kind}:${text.id}`}>
-            <KindLabel kind={mentioningKinds[text.kind]} />{" "}
-            {text.ticket && text.kind !== "report" && <span className="muted small">{text.ticket.key} </span>}
-            <Link to={mentioningPage(to, text)}>{text.title}</Link>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 export function CommentForm({
   label,
   button,
@@ -1356,7 +1312,7 @@ interface TranscriptDeleted {
 }
 
 /** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
-function describedWithLink(change: Change): ReactNode {
+export function describedWithLink(change: Change): ReactNode {
   const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
   if (imported?.source === "github" && typeof imported.url === "string") {
     return (

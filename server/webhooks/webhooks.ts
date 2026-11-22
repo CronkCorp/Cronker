@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { Type, type Static } from "typebox";
 import type { Config } from "../config.js";
 import type { Context } from "../context.js";
-import type { Db, Tx } from "../db.js";
+import { transaction, type Db, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
@@ -11,8 +11,9 @@ import type { Workspace } from "../workspaces/workspaces.js";
 /**
  * Webhooks: a User's own channels for what waits in their Inbox in a Workspace. Each gets the Inbox kinds it chose,
  * as signed JSON deliveries laid out like Standard Webhooks (https://www.standardwebhooks.com), so existing verifiers
- * work. Deliveries are kept in Postgres and sent by a check the server runs every few seconds; only the last 20 per
- * webhook are kept. Webhooks are for Users alone: Agents never see or change them.
+ * work. Deliveries are kept in Postgres and sent by a check the server runs every few seconds; one that fails is tried
+ * again with backoff for about a day, after which its webhook is marked failing until a delivery succeeds again. Only
+ * the last 20 settled deliveries per webhook are kept. Webhooks are for Users alone: Agents never see or change them.
  */
 
 /** The Inbox kinds a webhook may get. */
@@ -29,6 +30,23 @@ export const keptDeliveries = 20;
 /** How long a receiver has to answer a delivery. */
 const deliveryTimeoutMs = 10_000;
 
+/** The wait before the first retry; each later one waits twice as long as the one before. */
+export const firstRetryMs = 30_000;
+
+/** How long after it was queued a delivery is still tried: the last retry lands at this, then it is given up on. */
+export const retryForMs = 24 * 60 * 60_000;
+
+/**
+ * When to try a delivery queued at `createdAt` again after its `attempts`th try failed at `now`: 30 seconds after the
+ * first, then doubling, the last one moved in to land at the deadline a day after it was queued. Null once the
+ * deadline has passed, when it is given up on: 13 tries in all when each is on time.
+ */
+export function nextAttemptAt(createdAt: Date, attempts: number, now: Date): Date | null {
+  const deadline = createdAt.getTime() + retryForMs;
+  if (now.getTime() >= deadline) return null;
+  return new Date(Math.min(now.getTime() + firstRetryMs * 2 ** (attempts - 1), deadline));
+}
+
 export const WebhookName = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 export const WebhookUrl = Type.String({ minLength: 1, maxLength: 2000 });
 
@@ -39,6 +57,9 @@ export const Webhook = Type.Object({
   url: Type.String(),
   kinds: Type.Array(WebhookKind),
   enabled: Type.Boolean(),
+  failing: Type.Boolean({
+    description: "Its last delivery was given up on after about a day of retries; its next successful delivery clears it.",
+  }),
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Webhook = Static<typeof Webhook>;
@@ -52,20 +73,32 @@ export const CreatedWebhook = Type.Intersect([
   }),
 ]);
 
+export const WebhookAttempt = Type.Object({
+  at: Type.String({ format: "date-time" }),
+  statusCode: Type.Union([Type.Integer(), Type.Null()], { description: "The receiver's answer, or null when it gave none." }),
+  error: Type.Union([Type.String(), Type.Null()], { description: "Why there was no answer, such as a timeout." }),
+});
+export type WebhookAttempt = Static<typeof WebhookAttempt>;
+
 export const WebhookDelivery = Type.Object({
   id: Type.String({ format: "uuid" }),
   kind: Type.String(),
   createdAt: Type.String({ format: "date-time" }),
   state: Type.Union([Type.Literal("pending"), Type.Literal("delivered"), Type.Literal("failed")], {
-    description: "Pending until sent; delivered when the receiver answered 2xx; failed otherwise.",
+    description:
+      "Pending until sent and while a failed try waits for a retry; delivered when the receiver answered 2xx; failed once given up on, about a day after it was queued.",
   }),
-  statusCode: Type.Union([Type.Integer(), Type.Null()], { description: "The receiver's answer, or null when it gave none." }),
-  error: Type.Union([Type.String(), Type.Null()], { description: "Why there was no answer, such as a timeout." }),
-  sentAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()]),
+  statusCode: Type.Union([Type.Integer(), Type.Null()], { description: "The latest try's answer, or null when it gave none." }),
+  error: Type.Union([Type.String(), Type.Null()], { description: "Why the latest try had no answer, such as a timeout." }),
+  sentAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description: "When it was delivered or given up on; null while pending.",
+  }),
+  nextAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "When it is tried next, while pending." }),
+  attempts: Type.Array(WebhookAttempt, { description: "Each try, oldest first." }),
 });
 export type WebhookDelivery = Static<typeof WebhookDelivery>;
 
-const columns = `id, workspace_id as "workspaceId", name, url, kinds, enabled, created_at as "createdAt"`;
+const columns = `id, workspace_id as "workspaceId", name, url, kinds, enabled, failing, created_at as "createdAt"`;
 
 interface WebhookRow extends Omit<Webhook, "createdAt"> {
   createdAt: Date;
@@ -234,15 +267,21 @@ interface DeliveryRow {
   statusCode: number | null;
   error: string | null;
   sentAt: Date | null;
+  nextAt: Date | null;
 }
 
 /** A webhook's kept deliveries, newest first. */
 export async function deliveriesOf(db: Db, userId: string, workspaceId: string, webhookId: string): Promise<WebhookDelivery[]> {
   const webhook = await findOwn(db, userId, workspaceId, webhookId);
   const { rows } = await db.query<DeliveryRow>(
-    `select id, kind, created_at as "createdAt", status_code as "statusCode", error, sent_at as "sentAt"
+    `select id, kind, created_at as "createdAt", status_code as "statusCode", error, sent_at as "sentAt", next_at as "nextAt"
      from webhook_deliveries where webhook_id = $1 order by created_at desc, id desc limit ${keptDeliveries}`,
     [webhook.id],
+  );
+  const { rows: attempts } = await db.query<{ deliveryId: string; at: Date; statusCode: number | null; error: string | null }>(
+    `select delivery_id as "deliveryId", at, status_code as "statusCode", error from webhook_attempts
+     where delivery_id = any($1) order by at, id`,
+    [rows.map((row) => row.id)],
   );
   return rows.map((row) => ({
     id: row.id,
@@ -252,13 +291,20 @@ export async function deliveriesOf(db: Db, userId: string, workspaceId: string, 
     statusCode: row.statusCode,
     error: row.error,
     sentAt: row.sentAt?.toISOString() ?? null,
+    nextAt: row.sentAt ? null : (row.nextAt?.toISOString() ?? null),
+    attempts: attempts
+      .filter((a) => a.deliveryId === row.id)
+      .map((a) => ({ at: a.at.toISOString(), statusCode: a.statusCode, error: a.error })),
   }));
 }
 
-/** Drops a webhook's deliveries beyond the newest `keptDeliveries`. */
+/**
+ * Drops a webhook's settled deliveries beyond the newest `keptDeliveries`; one still being retried is kept until it
+ * settles, so its outcome still marks the webhook.
+ */
 async function pruneDeliveries(db: Db, webhookId: string): Promise<void> {
   await db.query(
-    `delete from webhook_deliveries where webhook_id = $1 and id not in (
+    `delete from webhook_deliveries where webhook_id = $1 and sent_at is not null and id not in (
        select id from webhook_deliveries where webhook_id = $1 order by created_at desc, id desc limit ${keptDeliveries})`,
     [webhookId],
   );
@@ -274,13 +320,24 @@ export function signDelivery(secret: string, id: string, timestamp: string, body
 }
 
 /**
- * The delivery check: sends every due delivery once, recording the receiver's status code (or why there was none)
- * and the time, then keeps only the newest deliveries of each webhook it sent for.
+ * The delivery check: sends every due delivery once, recording the attempt with the receiver's status code (or why
+ * there was none) and the time. A 2xx delivers it and clears the webhook's failing; otherwise it is due again after
+ * the backoff of `nextAttemptAt`, or, once that is spent, is given up on and marks its webhook failing. Then keeps only
+ * the newest deliveries of each webhook it sent for.
  */
 export async function deliverWebhooks(context: Context): Promise<void> {
   const { db, clock, config } = context;
-  const { rows } = await db.query<{ id: string; webhookId: string; url: string; body: string; secretSealed: string }>(
-    `select d.id, d.webhook_id as "webhookId", w.url, d.body, w.secret_sealed as "secretSealed"
+  const { rows } = await db.query<{
+    id: string;
+    webhookId: string;
+    url: string;
+    body: string;
+    secretSealed: string;
+    attempts: number;
+    createdAt: Date;
+  }>(
+    `select d.id, d.webhook_id as "webhookId", w.url, d.body, w.secret_sealed as "secretSealed", d.attempts,
+       d.created_at as "createdAt"
      from webhook_deliveries d join webhooks w on w.id = d.webhook_id
      where d.sent_at is null and d.next_at <= $1 order by d.created_at, d.id limit 100`,
     [clock.now()],
@@ -312,11 +369,23 @@ export async function deliverWebhooks(context: Context): Promise<void> {
         const name = (failure as Error).name;
         error = name === "TimeoutError" ? "The receiver didn't answer in time." : "The receiver couldn't be reached.";
       }
-      await db.query(
-        `update webhook_deliveries set attempts = attempts + 1, status_code = $2, error = $3, sent_at = $4, next_at = null
-         where id = $1`,
-        [delivery.id, statusCode, error, clock.now()],
-      );
+      const now = clock.now();
+      const delivered = statusCode !== null && statusCode >= 200 && statusCode < 300;
+      const nextAt = delivered ? null : nextAttemptAt(delivery.createdAt, delivery.attempts + 1, now);
+      await transaction(db, async (tx) => {
+        // A delivery whose webhook was removed meanwhile is gone: nothing to record.
+        await tx.query(
+          `insert into webhook_attempts (delivery_id, at, status_code, error)
+           select id, $2, $3, $4 from webhook_deliveries where id = $1`,
+          [delivery.id, now, statusCode, error],
+        );
+        await tx.query(
+          `update webhook_deliveries set attempts = attempts + 1, status_code = $2, error = $3, sent_at = $4, next_at = $5
+           where id = $1`,
+          [delivery.id, statusCode, error, nextAt ? null : now, nextAt],
+        );
+        if (delivered || !nextAt) await tx.query("update webhooks set failing = $2 where id = $1", [delivery.webhookId, !delivered]);
+      });
     }),
   );
   for (const webhookId of new Set(rows.map((r) => r.webhookId))) await pruneDeliveries(db, webhookId);

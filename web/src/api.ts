@@ -4,6 +4,7 @@
 // (the build refuses any that does). Screens import them from here. What this module holds itself is the `fetch`
 // plumbing, the error type, the request shapes the server has no schema for, and the calls.
 import type { Agent } from "../../server/agents/agents.js";
+import type { AgentRecord, RecordEntry } from "../../server/agents/record.js";
 import type { AgentToken, IssuedToken, TokenAccess } from "../../server/agents/tokens.js";
 import type {
   Artifact,
@@ -61,7 +62,7 @@ import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work
 import type { Actor, ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
 import type { Comment, CommentCreate } from "../../server/work/comments.js";
-import type { ArtifactMention, Mention, TicketMention } from "../../server/work/mentions.js";
+import type { ArtifactMention, DecisionMention, Mention, TicketMention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
 import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type { LabelRule, Outcome, Step, StepKind } from "../../server/work/steps.js";
@@ -75,25 +76,25 @@ import type {
   TicketRef,
   TicketSummary,
 } from "../../server/work/tickets.js";
-import type { Completion, TicketReopen } from "../../server/work/verification.js";
+import type { Completion, MovedOnDependent, ReopenPreview, TicketReopen } from "../../server/work/verification.js";
 import type { AddedMember, Member, PendingAdd } from "../../server/workspaces/members.js";
 import type { Membership as WorkspaceSummary, Workspace, WorkspaceSettings } from "../../server/workspaces/workspaces.js";
 import type { Webhook, WebhookDelivery, WebhookKind } from "../../server/webhooks/webhooks.js";
 
-export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
+export type { ArtifactMention, Change, Comment, Cost, DecisionMention, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
 export type { Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
 export type { LabelRule, ListedUser, Outcome, Project, ProjectAccess, ProjectSummary, Status, StatusKind, Step, StepKind, Visibility };
-export type { Agent, AgentToken, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
+export type { Agent, AgentRecord, AgentToken, RecordEntry, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
 export type { TicketTranscript, Transcript, TranscriptEntry, TranscriptHook };
 export type { Actor, Attachment, AttachmentOwner };
 export type { ComparedLine, Comparison, Document, DocumentSummary, LinkedDocument, ReportRef, Version, VersionWithBody };
 export type { Term, TermComparison, TermVersion };
 export type { Decision, DecisionComparison, DecisionStatus, DecisionSummary, DecisionVersion, DecisionVersionWithBody };
 export type { Artifact, ArtifactComparison, ArtifactFile, ArtifactSummary, ArtifactVersion, ComparedFile, LinkedArtifact };
-export type { Check, Completion, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
+export type { Check, Completion, MovedOnDependent, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
 export type { ConnectRequest, Inbox, InboxItem, SearchKind, SearchResult };
 export type { Webhook, WebhookDelivery, WebhookKind };
 
@@ -352,6 +353,11 @@ export const api = {
   run: (id: string) => call<Run>("GET", `/api/runs/${encodeURIComponent(id)}`),
   transcriptHook: () => call<TranscriptHook>("GET", "/api/transcript-hook"),
   transcript: (id: string) => call<Transcript>("GET", `/api/transcripts/${encodeURIComponent(id)}`),
+  agentRecord: (agentId: string, before?: string) =>
+    call<AgentRecord>(
+      "GET",
+      `/api/agents/${encodeURIComponent(agentId)}/record${before === undefined ? "" : `?before=${encodeURIComponent(before)}`}`,
+    ),
   agentTranscripts: (agentId: string) =>
     call<Transcript[]>("GET", `/api/agents/${encodeURIComponent(agentId)}/transcripts`),
   ticketTranscripts: (ticketId: string) =>
@@ -372,6 +378,8 @@ export const api = {
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   completion: (ticketId: string) =>
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
+  reopenPreview: (ticketId: string) =>
+    call<ReopenPreview>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reopen-preview`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkPullRequest: (ticketId: string, pullRequest: string) =>

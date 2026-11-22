@@ -3,7 +3,6 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { slugColumn } from "../http/readable.js";
 import { accessOf, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
@@ -17,9 +16,18 @@ import { isLocalOnly, runsInCloud } from "../runs/runner.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
 import { userName } from "../identity/user.js";
 import { Description, Label, nullable, title } from "./fields.js";
-import { indexMentions, keysWritten, Mention, mentionsOfOne, type TicketMention } from "./mentions.js";
+import {
+  indexMentions,
+  keysWritten,
+  Mention,
+  mentionedIn,
+  MentioningText,
+  mentionsOfOne,
+  type TicketMention,
+} from "./mentions.js";
+import { TicketRef, ticketRefColumn } from "./ticket-refs.js";
 
-export { keysWritten, Mention };
+export { keysWritten, Mention, MentioningText, TicketRef, ticketRefColumn };
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -31,15 +39,6 @@ export const Priority = Type.Union([
   Type.Literal("low"),
   Type.Literal("none"),
 ]);
-
-/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
-export const TicketRef = Type.Object({
-  id: Type.String({ format: "uuid" }),
-  projectId: Type.String({ format: "uuid" }),
-  key: Type.String(),
-  title: Type.String(),
-});
-export type TicketRef = Static<typeof TicketRef>;
 
 /** Where a Discovered Ticket came from, and whether it still waits for a User. */
 export const Discovery = Type.Object({
@@ -177,41 +176,12 @@ export type TicketSummary = Static<typeof TicketSummary>;
 export const TicketList = Type.Array(TicketSummary);
 export type TicketList = Static<typeof TicketList>;
 
-/** A text that mentions a Ticket, as the Ticket's Mentioned in lists it, with what linking to it takes. */
-export const MentioningText = Type.Object({
-  kind: Type.Union(
-    [
-      Type.Literal("ticket"),
-      Type.Literal("comment"),
-      Type.Literal("document"),
-      Type.Literal("report"),
-      Type.Literal("term"),
-      Type.Literal("decision"),
-    ],
-    { description: "A Ticket's description, a Comment, a Document, a Report, a Term's definition or a Decision's body." },
-  ),
-  id: Type.String({ format: "uuid", description: "The Ticket's, Comment's, Document's, Report's, Term's or Decision's." }),
-  projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
-    description: "Its Project, or null for the Workspace's own knowledge.",
-  }),
-  title: Type.String({
-    description: "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's.",
-  }),
-  ticket: Type.Union([TicketRef, Type.Null()], {
-    description:
-      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge.",
-  }),
-  slug: Type.Union([Type.String(), Type.Null()], {
-    description: "A Document's or Report's slug, or for a Comment on an Artifact the Artifact's; otherwise null.",
-  }),
-  number: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], { description: "A Decision's number; otherwise null." }),
-});
-export type MentioningText = Static<typeof MentioningText>;
-
-/** A Ticket with the Ticket keys its description mentions, the texts mentioning it and what its Runs cost. */
+/** A Ticket with the Ticket and Decision keys its description mentions, the texts mentioning it and what its Runs cost. */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
-  mentions: Type.Array(Mention, { description: "The Ticket keys its description mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, {
+    description: "The Ticket and Decision keys its description mentions and the Artifacts it embeds that the caller may read.",
+  }),
   mentionedIn: Type.Array(MentioningText, {
     description:
       "Mentioned in: each other text whose Markdown mentions its key, outside code and links, that the caller may " +
@@ -224,11 +194,6 @@ export const Ticket = Type.Object({
   }),
 });
 export type Ticket = Static<typeof Ticket>;
-
-/** Selects a Ticket as a TicketRef, from `tickets` and its `projects` joined as the given aliases. */
-export const ticketRefColumn = (tickets: string, projects: string) =>
-  `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
-     'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
 /** A SQL condition that the Viewer may read the Ticket `alias`. */
 type Reach = (alias: string) => string;
@@ -395,7 +360,7 @@ export async function findTicketByKey(
 }
 
 /**
- * The Ticket as the API shows one alone: its summary, the Ticket keys its description mentions that the Viewer may
+ * The Ticket as the API shows one alone: its summary, the Ticket and Decision keys its description mentions that the Viewer may
  * read, and its Runs' cost.
  */
 async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket> {
@@ -403,7 +368,13 @@ async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket
   return {
     ...ticketSummary(row),
     mentions: await mentionsOfOne(db, viewer, "ticket", row.id),
-    mentionedIn: await mentionedIn(db, viewer, row),
+    mentionedIn: await mentionedIn(db, viewer, {
+      kind: "ticket",
+      id: row.id,
+      workspaceId: row.workspaceId,
+      projectKey: row.key.split("-")[0]!,
+      number: Number(row.key.split("-")[1]),
+    }),
     cost: rows[0]!.cost,
   };
 }
@@ -439,73 +410,6 @@ export async function mentionsInEach(
   );
   const found = new Map(rows.map((mention) => [mention.text, mention]));
   return written.map((keys) => keys.flatMap((text) => found.get(text) ?? []));
-}
-
-/**
- * The texts mentioning a Ticket, by its key, that the Viewer may read, most recently saved first: other Tickets'
- * descriptions, Comments, Documents and Reports, Terms and Decisions. Its own description is left out.
- */
-async function mentionedIn(db: Db | Tx, viewer: Viewer, ticket: Row): Promise<MentioningText[]> {
-  const [projectKey, number] = ticket.key.split("-");
-  const hit = "workspace_id = $1 and target_kind = 'ticket' and project_key = $2 and number = $3";
-  // Most Tickets are mentioned nowhere, which this finds without reading every kind of text.
-  const { rowCount } = await db.query(`select 1 from mentions where ${hit} limit 1`, [
-    ticket.workspaceId,
-    projectKey,
-    Number(number),
-  ]);
-  if (rowCount === 0) return [];
-  const reach = (project: string, workspace: string) => inReach(viewer, { project, workspace }, "$5").sql;
-  const { value } = inReach(viewer, { project: "null", workspace: "null" }, "$5");
-  const ref = (tickets: string, projects: string) =>
-    `(select ${ticketRefColumn(tickets, projects)} from projects ${projects} where ${projects}.id = ${tickets}.project_id)`;
-  const { rows } = await db.query<MentioningText>(
-    `with hits as (
-       select source_ticket_id, source_comment_id, source_document_id, source_term_id, source_decision_id,
-         max(id) as seq
-       from mentions where ${hit}
-       group by source_ticket_id, source_comment_id, source_document_id, source_term_id, source_decision_id
-     )
-     select * from (
-       select hits.seq, 'ticket' as kind, tickets.id, tickets.project_id as "projectId", tickets.title,
-         ${ref("tickets", "ref_projects")} as ticket, null as slug, null::integer as number
-       from hits join tickets on tickets.id = hits.source_ticket_id
-       where tickets.id <> $4 and ${reach("tickets.project_id", "tickets.workspace_id")}
-       union all
-       select hits.seq, 'comment', comments.id, tickets.project_id, tickets.title,
-         ${ref("tickets", "ref_projects")}, null, null
-       from hits join comments on comments.id = hits.source_comment_id join tickets on tickets.id = comments.ticket_id
-       where ${reach("tickets.project_id", "tickets.workspace_id")}
-       union all
-       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, null,
-         ${slugColumn("artifact", "artifacts.id", "versions.title")}, null
-       from hits join comments on comments.id = hits.source_comment_id join artifacts on artifacts.id = comments.artifact_id
-       join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version
-       where ${reach("artifacts.project_id", "artifacts.workspace_id")}
-       union all
-       select hits.seq, case when documents.ticket_id is null then 'document' else 'report' end, documents.id,
-         documents.project_id, versions.title,
-         (select ${ticketRefColumn("report_tickets", "report_projects")} from tickets report_tickets
-          join projects report_projects on report_projects.id = report_tickets.project_id
-          where report_tickets.id = documents.ticket_id),
-         ${slugColumn("document", "documents.id", "versions.title")}, null
-       from hits join documents on documents.id = hits.source_document_id
-       join document_versions versions on versions.document_id = documents.id and versions.number = documents.version
-       where ${reach("documents.project_id", "documents.workspace_id")}
-       union all
-       select hits.seq, 'term', terms.id, terms.project_id, terms.name, null, null, null
-       from hits join terms on terms.id = hits.source_term_id
-       where ${reach("terms.project_id", "terms.workspace_id")}
-       union all
-       select hits.seq, 'decision', decisions.id, decisions.project_id, versions.title, null, null, decisions.number
-       from hits join decisions on decisions.id = hits.source_decision_id
-       join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version
-       where ${reach("decisions.project_id", "decisions.workspace_id")}
-     ) texts
-     order by seq desc`,
-    [ticket.workspaceId, projectKey, Number(number), ticket.id, value],
-  );
-  return rows.map(({ seq: _seq, ...text }: MentioningText & { seq?: unknown }) => text);
 }
 
 /** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. The create route's body. */
