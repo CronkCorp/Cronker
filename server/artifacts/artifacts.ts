@@ -10,6 +10,7 @@ import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import type { Place } from "../knowledge/places.js";
 import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import { title } from "../work/fields.js";
 import { describeSize, forgetAttachments } from "../attachments/attachments.js";
 import { ownerName } from "../agents/tokens.js";
 import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
@@ -58,12 +59,51 @@ export const Artifact = Type.Object({
 });
 export type Artifact = Static<typeof Artifact>;
 
+export const FilePath = Type.String({
+  minLength: 1,
+  maxLength: 500,
+  description: "A path relative to the Version, such as `index.html` or `scripts/app.js`.",
+});
+const Description = Type.String({ maxLength: 10_000, description: "What it shows, in a sentence or two." });
+
 /** A file as a create or save gives it. */
-export interface FileInput {
-  path: string;
-  contentBase64: string;
-  mediaType?: string;
-}
+export const FileInput = Type.Object({
+  path: FilePath,
+  contentBase64: Type.String({ description: "The file's bytes, in standard base64." }),
+  mediaType: Type.Optional(
+    Type.String({ description: "The media type to serve it with; from its extension when left out, such as `text/html` for `.html`." }),
+  ),
+});
+export type FileInput = Static<typeof FileInput>;
+
+/** The create-an-Artifact route's body. */
+export const ArtifactCreate = Type.Object({
+  title: title(),
+  description: Type.Optional(Description),
+  page: Type.Optional(
+    Type.String({ ...FilePath, description: "The path of the file that is its page; `index.html` when left out." }),
+  ),
+  files: Type.Array(FileInput, { maxItems: 1000 }),
+  runId: Type.Optional(
+    Type.String({
+      description:
+        "For an Agent, its running Run the Artifact is made in: the Artifact is linked to the Run's " +
+        "Ticket, so it must be kept in that Ticket's Project or the Workspace (`artifact_outside_project`).",
+    }),
+  ),
+});
+export type ArtifactCreate = Static<typeof ArtifactCreate>;
+
+/** The save-an-Artifact route's body. */
+export const ArtifactSave = Type.Object({
+  baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
+  title: Type.Optional(title()),
+  description: Type.Optional(Description),
+  page: Type.Optional(FilePath),
+  files: Type.Optional(Type.Array(FileInput, { maxItems: 1000, description: "Files to add, or to replace at their paths." })),
+  remove: Type.Optional(Type.Array(FilePath, { maxItems: 1000, description: "Paths of files to remove." })),
+});
+export type ArtifactSave = Static<typeof ArtifactSave>;
 
 /** Where a Version's files are served, by its key: each file at its relative path under it. */
 export const sandboxPath = (key: string, path = "") => `/sandbox/${key}/${path.split("/").map(encodeURIComponent).join("/")}`;
@@ -98,14 +138,24 @@ export function artifactNotFound(): ApiError {
   return new ApiError(404, "not_found", "No such Artifact.");
 }
 
-/** An Artifact in the Viewer's view, at its current Version; otherwise nothing, as if it didn't exist. */
-export async function findArtifact(db: Db | Tx, viewer: Viewer, artifactId: string): Promise<Artifact | undefined> {
+/**
+ * An Artifact in the Viewer's view, at its current Version or the one given; otherwise nothing, as if it didn't
+ * exist, as for a Version it never had.
+ */
+export async function findArtifact(db: Db | Tx, viewer: Viewer, artifactId: string, version?: number): Promise<Artifact | undefined> {
   if (!isUuid(artifactId)) return undefined;
   const view = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
-  const { rows } = await db.query<Row>(`select ${columns} from ${fromArtifacts} where artifacts.id = $1 and ${view.sql}`, [
-    artifactId,
-    view.value,
-  ]);
+  const [select, from] =
+    version === undefined
+      ? [columns, fromArtifacts]
+      : [
+          columns.replace("files.version = artifacts.version", "files.version = versions.number"),
+          fromArtifacts.replace("versions.number = artifacts.version", "versions.number = $3"),
+        ];
+  const { rows } = await db.query<Row>(
+    `select ${select} from ${from} where artifacts.id = $1 and ${view.sql}`,
+    version === undefined ? [artifactId, view.value] : [artifactId, view.value, version],
+  );
   return rows[0] && present(rows[0]);
 }
 
@@ -279,7 +329,7 @@ export async function createArtifact(
   context: Context,
   actor: Caller,
   place: Place,
-  input: { title: string; description?: string; page?: string; files: FileInput[]; runId?: string },
+  input: ArtifactCreate,
 ): Promise<Artifact> {
   const { db, clock } = context;
   if (input.runId !== undefined && actor.kind === "user") {
@@ -344,17 +394,6 @@ export async function servedFile(db: Db, key: string, path: string): Promise<Ser
   return row.blobId ? { mediaType: row.mediaType, size: Number(row.size), blobId: row.blobId } : undefined;
 }
 
-export interface ArtifactSave {
-  /** The number of the Version the save is based on. */
-  baseVersion?: number;
-  title?: string;
-  description?: string;
-  page?: string;
-  /** Files to add, or to replace at their paths. */
-  files?: FileInput[];
-  /** Paths of files to remove. */
-  remove?: string[];
-}
 
 /**
  * Saves an Artifact as its next Version by the Actor, holding the whole set of files: the current Version's, with
@@ -427,7 +466,8 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
       `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
       [artifact.id],
     );
-    // Its Versions, their files and its links go with it.
+    // Its Versions, their files and its links go with it, and the texts embedding it no longer do.
+    await tx.query("delete from mentions where target_artifact_id = $1", [artifact.id]);
     await tx.query("delete from artifacts where id = $1", [artifact.id]);
     afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
     live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });

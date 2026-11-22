@@ -121,7 +121,8 @@ describe("uploading a transcript", () => {
       id: expect.any(String),
       workspaceId: workspace.id,
       slug: `claude-max-${transcript.id.slice(0, 8)}`,
-      sessionId: "session_01ABC",
+      // claude.ai's `session_…` names its `cse_…` session.
+      sessionId: "cse_01ABC",
       agent: { id: agent.id, name: "claude-max" },
       runId: null,
       tickets: [],
@@ -441,8 +442,9 @@ describe("a Run's Transcript", () => {
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
     const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
-    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/session_1", transcriptId: null, transcriptSlug: null });
+    expect(run).toMatchObject({ sessionUrl: "https://claude.ai/code/cse_1", transcriptId: null, transcriptSlug: null });
 
+    // claude.ai started it as `cse_1`; the Transcript hook names the same session `session_1`.
     const transcript = await uploaded(
       "session_1",
       [userSays("Triage CRONK-1.", 1), toolCall("t1", "mcp__cronk__read_ticket", { ticket: "CRONK-1" }, 2)],
@@ -454,7 +456,7 @@ describe("a Run's Transcript", () => {
     expect(transcript.tickets).toEqual([]);
     expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
     expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({
-      sessionUrl: "https://claude.ai/code/session_1",
+      sessionUrl: "https://claude.ai/code/cse_1",
       transcriptId: transcript.id,
       transcriptSlug: `claude-max-${transcript.id.slice(0, 8)}`,
     });
@@ -472,6 +474,49 @@ describe("a Run's Transcript", () => {
 
     expect(transcript.runId).toBeNull();
     expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: null }]);
+  });
+
+  test("an upload naming the session as claude.ai started it, `cse_…`, is that Run's Transcript too", async () => {
+    const { ada, ticket, agent, asAgent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+
+    const first = await uploaded("cse_1", [userSays("Triage CRONK-1.", 1)], asAgent);
+    const again = await upload("session_1", [userSays("Triage CRONK-1.", 1), assistantSays("Reading it.", 2)], asAgent);
+
+    expect(first).toMatchObject({ sessionId: "cse_1", runId: run.id });
+    // Both names are one session, so the second upload replaces the first.
+    expect(again.status).toBe(200);
+    expect(again.json).toMatchObject({ id: first.id, sessionId: "cse_1", runId: run.id, entryCount: 2 });
+  });
+
+  test("an upgrade gives each Run the Transcript an earlier Cronk kept as a session of no Run", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ migrateBefore: "0064_claude_session_ids.sql" });
+    // Reading a Ticket needs the conflict that last set its Merge Queue entry aside.
+    await cronk.applyAhead("0065_merge_queue_conflicts.sql");
+    const { workspace, ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    // claude.ai started the Run as `cse_1`, and the hook's uploads, as `session_1`, matched none of its Runs: each
+    // became a Transcript of no Run, linked to the Ticket its calls named.
+    const transcriptId = crypto.randomUUID();
+    await cronk.stage(
+      "insert into transcripts (id, workspace_id, agent_id, session_id, uploaded_at) values ($1, $2, $3, 'session_1', now())",
+      [transcriptId, workspace.id, agent.id],
+    );
+    await cronk.stage(
+      "insert into transcript_tickets (transcript_id, ticket_id, workspace_id, named_at, position) values ($1, $2, $3, now(), 1)",
+      [transcriptId, ticket.id, workspace.id],
+    );
+
+    await cronk.upgrade();
+
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({ transcriptId });
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({ sessionId: "cse_1", runId: run.id, tickets: [] });
+    expect(await ok("GET", `/api/tickets/${ticket.id}/transcripts`, ada)).toEqual([]);
   });
 });
 
@@ -659,7 +704,7 @@ describe("deleting a Transcript", () => {
     expect(deleted).toEqual(
       expect.objectContaining({
         field: "transcriptDeleted",
-        from: { runId: run.id, step: "Triage", sessionId: "session_1", agent: { id: agent.id, name: "claude-max" } },
+        from: { runId: run.id, step: "Triage", sessionId: "cse_1", agent: { id: agent.id, name: "claude-max" } },
         to: null,
         actor: expect.objectContaining({ kind: "user", name: "ada@example.com" }),
         runId: null,

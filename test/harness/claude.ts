@@ -70,7 +70,7 @@ export async function startStandInClaude(): Promise<StandInClaude> {
       return json(401, { type: "error", error: { type: "authentication_error", message: "Invalid bearer token." } });
     }
     sessions += 1;
-    const sessionId = `session_0${sessions}STANDIN`;
+    const sessionId = `cse_0${sessions}STANDIN`;
     return json(200, {
       type: "routine_fire",
       claude_code_session_id: sessionId,

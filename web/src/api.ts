@@ -13,7 +13,7 @@ import type {
   ArtifactVersion,
   ComparedFile,
 } from "../../server/artifacts/artifacts.js";
-import type { LinkedArtifact } from "../../server/artifacts/linked-artifacts.js";
+import type { ArtifactLink, LinkedArtifact } from "../../server/artifacts/linked-artifacts.js";
 import type { Attachment, Owner as AttachmentOwner } from "../../server/attachments/attachments.js";
 import type { GitHubApp, ManifestStart } from "../../server/github/app.js";
 import type { Import as GitHubImport } from "../../server/github/importing.js";
@@ -28,15 +28,25 @@ import type { ComparedLine } from "../../server/knowledge/compare.js";
 import type {
   Decision,
   DecisionComparison,
+  DecisionCreate,
+  DecisionEdit,
   DecisionStatus,
   DecisionSummary,
   DecisionVersion,
   DecisionVersionWithBody,
 } from "../../server/knowledge/decisions.js";
-import type { Comparison, Document, DocumentSummary, Version, VersionWithBody } from "../../server/knowledge/documents.js";
-import type { LinkedDocument } from "../../server/knowledge/linked-documents.js";
+import type {
+  Comparison,
+  Document,
+  DocumentCreate,
+  DocumentEdit,
+  DocumentSummary,
+  Version,
+  VersionWithBody,
+} from "../../server/knowledge/documents.js";
+import type { DocumentLink, LinkedDocument } from "../../server/knowledge/linked-documents.js";
 import type { Report, ReportRef } from "../../server/knowledge/reports.js";
-import type { Term, TermComparison, TermVersion } from "../../server/knowledge/terms.js";
+import type { Term, TermComparison, TermCreate, TermEdit, TermVersion } from "../../server/knowledge/terms.js";
 import type { AuthorizationRequest as ConnectRequest } from "../../server/oauth/authorizations.js";
 import type { Brief } from "../../server/runs/brief.js";
 import type { Cost } from "../../server/runs/costs.js";
@@ -51,7 +61,7 @@ import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work
 import type { Actor, ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
 import type { Comment, CommentCreate } from "../../server/work/comments.js";
-import type { Mention } from "../../server/work/mentions.js";
+import type { ArtifactMention, Mention, TicketMention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
 import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type { LabelRule, Outcome, Step, StepKind } from "../../server/work/steps.js";
@@ -69,9 +79,10 @@ import type { Completion, TicketReopen } from "../../server/work/verification.js
 import type { AddedMember, Member, PendingAdd } from "../../server/workspaces/members.js";
 import type { Membership as WorkspaceSummary, Workspace, WorkspaceSettings } from "../../server/workspaces/workspaces.js";
 
-export type { Change, Comment, Cost, Mention, MentioningText, Priority, Relation, RelationKind, Report, RunState };
+export type { ArtifactMention, Change, Comment, Cost, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
+export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
 export type { Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
 export type { LabelRule, ListedUser, Outcome, Project, ProjectAccess, ProjectSummary, Status, StatusKind, Step, StepKind, Visibility };
 export type { Agent, AgentToken, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
@@ -155,35 +166,13 @@ export class ApiError extends Error {
   }
 }
 
-export interface DocumentEdit {
-  baseVersion?: number;
-  title?: string;
-  body?: string;
-  parentId?: string | null;
-  position?: number;
-}
-
 /** Which page tree: a Project's, or the Workspace's. */
 export type Tree = { kind: "project"; id: string } | { kind: "workspace"; id: string };
-
-export interface TermContent {
-  name: string;
-  definition: string;
-  avoid: string[];
-}
 
 /** Where knowledge is kept: a Project, or the Workspace. */
 export type Place = Tree;
 
 export const decisionStatuses = ["proposed", "accepted", "rejected", "deprecated", "superseded"] as const satisfies readonly DecisionStatus[];
-
-export interface DecisionEdit {
-  baseVersion: number;
-  title?: string;
-  body?: string;
-  status?: DecisionStatus;
-  supersededById?: string | null;
-}
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   // A file is sent as itself, with its media type; anything else as JSON.
@@ -302,6 +291,8 @@ export const api = {
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),
   editTicket: (id: string, edit: TicketEdit) => call<Ticket>("PATCH", `/api/tickets/${encodeURIComponent(id)}`, edit),
   acceptTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/accept`),
+  mergeTicket: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/merge`),
+  removeFromQueue: (id: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/queue/remove`),
   reopenTicket: (id: string, comment: string) =>
     call<Ticket>("POST", `/api/tickets/${encodeURIComponent(id)}/reopen`, { comment } satisfies TicketReopen),
   comments: (ticketId: string) => call<Comment[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/comments`),
@@ -374,14 +365,15 @@ export const api = {
   linkedDocuments: (ticketId: string) =>
     call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>
-    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId }),
+    call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId } satisfies DocumentLink),
   unlinkDocument: (ticketId: string, documentId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/documents/${encodeURIComponent(documentId)}`),
   documents: (tree: Tree) => call<DocumentSummary[]>("GET", treePath(tree)),
-  createDocument: (tree: Tree, input: { title: string; body?: string; parentId?: string | null }) =>
+  createDocument: (tree: Tree, input: DocumentCreate) =>
     call<Document>("POST", treePath(tree), input),
   document: (id: string) => call<Document>("GET", doc(id)),
-  artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}`),
+  artifact: (id: string, version?: number | null) =>
+    call<Artifact>("GET", `/api/artifacts/${encodeURIComponent(id)}${version ? `?version=${version}` : ""}`),
   artifactVersions: (id: string) => call<ArtifactVersion[]>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions`),
   compareArtifactVersions: (id: string, from: number, to: number) =>
     call<ArtifactComparison>("GET", `/api/artifacts/${encodeURIComponent(id)}/versions/compare?from=${from}&to=${to}`),
@@ -391,7 +383,7 @@ export const api = {
   linkedArtifacts: (ticketId: string) =>
     call<LinkedArtifact[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`),
   linkArtifact: (ticketId: string, artifactId: string) =>
-    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId }),
+    call<LinkedArtifact>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts`, { artifactId } satisfies ArtifactLink),
   unlinkArtifact: (ticketId: string, artifactId: string) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/artifacts/${encodeURIComponent(artifactId)}`),
   editDocument: (id: string, edit: DocumentEdit) => call<Document>("PATCH", doc(id), edit),
@@ -402,9 +394,9 @@ export const api = {
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
   terms: (place: Place) => call<Term[]>("GET", `${placePath(place)}/terms`),
   glossary: (projectId: string) => call<Term[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/glossary`),
-  createTerm: (place: Place, input: TermContent) => call<Term>("POST", `${placePath(place)}/terms`, input),
+  createTerm: (place: Place, input: TermCreate) => call<Term>("POST", `${placePath(place)}/terms`, input),
   term: (id: string) => call<Term>("GET", term(id)),
-  editTerm: (id: string, edit: Partial<TermContent> & { baseVersion: number }) => call<Term>("PATCH", term(id), edit),
+  editTerm: (id: string, edit: TermEdit) => call<Term>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
   termVersion: (termId: string, number: number) => call<TermVersion>("GET", `${term(termId)}/versions/${number}`),
@@ -416,7 +408,7 @@ export const api = {
   removeAttachment: (id: string) => call<void>("DELETE", `/api/attachments/${encodeURIComponent(id)}`),
   decisions: (place: Place) => call<DecisionSummary[]>("GET", `${placePath(place)}/decisions`),
   artifacts: (place: Place) => call<ArtifactSummary[]>("GET", `${placePath(place)}/artifacts`),
-  createDecision: (place: Place, input: { title: string; body?: string }) =>
+  createDecision: (place: Place, input: DecisionCreate) =>
     call<Decision>("POST", `${placePath(place)}/decisions`, input),
   decision: (id: string) => call<Decision>("GET", decision(id)),
   editDecision: (id: string, edit: DecisionEdit) => call<Decision>("PATCH", decision(id), edit),

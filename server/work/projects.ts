@@ -4,6 +4,7 @@ import { transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { accessIn, archivedRefusal, inReach, readAccessRefusal, userViewer, type Viewer } from "../identity/viewers.js";
+import { dropAutonomousEntries } from "../pipeline/merge-queue.js";
 import { recheckWaiting, waitingTickets } from "../runs/runs.js";
 import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
@@ -282,9 +283,12 @@ export async function editProject(
       );
       live.publish(tx, project.workspaceId, { type: "project.changed", projectId: project.id });
     }
-    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now.
+    // Merge Steps decide afresh for Tickets still waiting in them, as they would on entering them now. Turning agents
+    // may merge off also takes the Tickets only Autonomous Delegation queued out of the Merge Queue, to be passed on.
     if (next.agentsMayMerge !== project.agentsMayMerge) {
-      recheckWaiting(context, tx, await waitingTickets(tx, "tickets.project_id = $1", [project.id]));
+      const dropped = next.agentsMayMerge ? [] : await dropAutonomousEntries(context, tx, project.id);
+      const waiting = await waitingTickets(tx, "tickets.project_id = $1", [project.id]);
+      recheckWaiting(context, tx, [...waiting, ...dropped.filter((d) => !waiting.some((w) => w.id === d.id))]);
     }
     return (await findProject(tx, viewer, project.id))!;
   });

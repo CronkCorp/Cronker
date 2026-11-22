@@ -190,6 +190,7 @@ describe("MCP with an Agent token", () => {
         producingStep: null,
         reviewState: null,
         sentBack: null,
+        conflict: null,
         manual: false,
       },
     ]);
@@ -457,6 +458,118 @@ describe("MCP with an Agent token", () => {
       expect.objectContaining({ maxLength: 300, description: "A short title, such as `Findings`." }),
     );
     expect(input("write_report").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000 }));
+  });
+
+  test("a value a knowledge route refuses is refused by its tool, before anything is written", async () => {
+    const { cookie, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const base64 = (text: string) => Buffer.from(text).toString("base64");
+    const document = (await call(client, "create_document", { project: "CRONK", title: "Setup", body: "# Setup\n" })).json;
+    const term = (await call(client, "create_term", { project: "CRONK", name: "Ticket" })).json;
+    const decision = (await call(client, "propose_decision", { project: "CRONK", title: "Use Postgres" })).json;
+    const artifact = (
+      await call(client, "create_artifact", { title: "Board", files: [{ path: "index.html", contentBase64: base64("<p>") }] })
+    ).json;
+    const read = async () => ({
+      documents: await (await cronk.request("GET", `/api/projects/${document.projectId}/documents`, { cookie })).json(),
+      document: await (await cronk.request("GET", `/api/documents/${document.id}`, { cookie })).json(),
+      terms: await (await cronk.request("GET", `/api/projects/${document.projectId}/terms`, { cookie })).json(),
+      decisions: await (await cronk.request("GET", `/api/projects/${document.projectId}/decisions`, { cookie })).json(),
+      artifacts: await (await cronk.request("GET", `/api/workspaces/${artifact.workspaceId}/artifacts`, { cookie })).json(),
+      attachments: await (await cronk.request("GET", `/api/documents/${document.id}/attachments`, { cookie })).json(),
+    });
+    const before = await read();
+    const tooLong = "x".repeat(301);
+
+    const refusals: [string, Record<string, unknown>, RegExp][] = [
+      // Length.
+      ["create_document", { project: "CRONK", title: tooLong }, /title/],
+      ["replace_section", { document: document.id, section: "x".repeat(1001), baseVersion: 1, body: "# Setup\n" }, /section/],
+      ["edit_term", { term: term.id, baseVersion: 1, definition: "x".repeat(20_001) }, /definition/],
+      ["edit_term", { term: term.id, baseVersion: 1, avoid: ["x".repeat(201)] }, /avoid/],
+      ["propose_decision", { project: "CRONK", title: tooLong }, /title/],
+      ["save_artifact", { artifact: artifact.id, baseVersion: 1, remove: [""] }, /remove/],
+      ["attach_file", { document: document.id, name: "x".repeat(256), contentBase64: base64("x") }, /name/],
+      // Not only spaces.
+      ["create_term", { project: "CRONK", name: "   " }, /name/],
+      ["attach_file", { document: document.id, name: " ", contentBase64: base64("x") }, /name/],
+      // Minimum.
+      ["edit_document", { document: document.id, baseVersion: 0, title: "Set up" }, /baseVersion/],
+      ["edit_document", { document: document.id, position: -1 }, /position/],
+      // Most items.
+      ["create_term", { project: "CRONK", name: "Run", avoid: Array.from({ length: 51 }, (_, i) => `word ${i}`) }, /avoid/],
+      // Shape, and a field the tool asks for up front.
+      ["create_artifact", { title: "Board", files: [{ path: "index.html" }] }, /contentBase64/],
+      ["save_artifact", { artifact: artifact.id, title: "Board 2" }, /baseVersion/],
+      ["edit_decision", { decision: decision.id, title: "Use SQLite" }, /baseVersion/],
+    ];
+    for (const [tool, args, field] of refusals) {
+      const result = await client.callTool({ name: tool, arguments: args });
+      const [content] = result.content as { type: string; text: string }[];
+      expect({ tool, args, isError: result.isError }).toEqual({ tool, args, isError: true });
+      expect(content!.text).toMatch(/validation/i);
+      expect(content!.text).toMatch(field);
+    }
+
+    // Nothing was written: no Document, Term, Decision, Artifact, Version or Attachment.
+    expect(await read()).toEqual(before);
+    // Null still moves a Document to the top, and an Agent can't change a Decision's status by naming one.
+    const top = await call(client, "edit_document", { document: document.id, parent: null, position: 0 });
+    expect(top).toEqual({ isError: false, json: expect.objectContaining({ parentId: null, position: 0 }) });
+    const text = await call(client, "edit_decision", { decision: decision.id, baseVersion: 1, title: "Use it", status: "accepted" });
+    expect(text).toEqual({ isError: false, json: expect.objectContaining({ title: "Use it", status: "proposed" }) });
+  });
+
+  test("the knowledge tools' inputs carry the routes' field descriptions and limits", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+
+    const { tools } = await client.listTools();
+    const input = (name: string) => tools.find((tool) => tool.name === name)!.inputSchema as {
+      properties: Record<string, Record<string, unknown>>;
+      required?: string[];
+    };
+    const fields = (name: string) => Object.keys(input(name).properties).sort();
+
+    expect(input("create_document").properties.title).toEqual(expect.objectContaining({ maxLength: 300, pattern: "\\S" }));
+    expect(input("create_document").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000, description: "Markdown." }));
+    // The tools name a Document's parent their own way, by its slug or id.
+    expect(fields("create_document")).toEqual(["body", "parent", "position", "project", "title"]);
+    expect(fields("edit_document")).toEqual(["baseVersion", "body", "document", "parent", "position", "title"]);
+    expect(input("edit_document").required).toEqual(["document"]);
+    expect(input("edit_document").properties.position).toEqual(
+      expect.objectContaining({ minimum: 0, description: expect.stringContaining("counting from 0") }),
+    );
+    expect(input("replace_section").properties.section).toEqual(expect.objectContaining({ maxLength: 1000 }));
+    expect(input("replace_section").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000 }));
+    expect(input("replace_section").required?.sort()).toEqual(["baseVersion", "body", "document", "section"]);
+
+    expect(input("create_term").properties.name).toEqual(expect.objectContaining({ maxLength: 200, pattern: "\\S" }));
+    expect(input("create_term").properties.avoid).toEqual(
+      expect.objectContaining({ maxItems: 50, items: expect.objectContaining({ maxLength: 200 }) }),
+    );
+    expect(input("edit_term").properties.definition).toEqual(expect.objectContaining({ maxLength: 20_000 }));
+    expect(input("edit_term").required?.sort()).toEqual(["baseVersion", "term"]);
+
+    // Agents are offered a Decision's text, never its status.
+    expect(fields("propose_decision")).toEqual(["body", "project", "title"]);
+    expect(fields("edit_decision")).toEqual(["baseVersion", "body", "decision", "title"]);
+    expect(input("edit_decision").required?.sort()).toEqual(["baseVersion", "decision"]);
+    expect(input("propose_decision").properties.body).toEqual(
+      expect.objectContaining({ maxLength: 500_000, description: expect.stringContaining("reasoning") }),
+    );
+
+    expect(fields("create_artifact")).toEqual(["description", "files", "page", "project", "run", "title"]);
+    expect(input("create_artifact").properties.files).toEqual(expect.objectContaining({ maxItems: 1000 }));
+    expect(input("create_artifact").properties.description).toEqual(
+      expect.objectContaining({ maxLength: 10_000, description: "What it shows, in a sentence or two." }),
+    );
+    expect(JSON.stringify(input("create_artifact").properties.page)).toContain("`index.html` when left out");
+    expect(input("save_artifact").required?.sort()).toEqual(["artifact", "baseVersion"]);
+    expect(input("save_artifact").properties.remove).toEqual(expect.objectContaining({ maxItems: 1000 }));
+    expect(input("attach_file").properties.name).toEqual(
+      expect.objectContaining({ maxLength: 255, pattern: "\\S", description: "The file's name, such as `screenshot.png`." }),
+    );
   });
 
   test("during its Run an Agent links and unlinks Documents on its Ticket", async () => {

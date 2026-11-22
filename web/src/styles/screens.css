@@ -1517,6 +1517,59 @@
   border-radius: var(--radius-panel);
   background: var(--canvas);
 }
+/* An Embed: an Artifact shown in place in Markdown, in the same frame as on its page, with a handle to resize it. */
+.embed {
+  margin: var(--space-3) 0;
+}
+.embed-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+  font-size: 13px;
+}
+.embed-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.embed-open {
+  margin-left: auto;
+}
+.markdown .embed-frame {
+  display: block;
+  /* The frame's height is set on it, from its starting height and the handle. */
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.embed-dragging .embed-frame {
+  /* While dragging, the page inside doesn't take the pointer from the handle. */
+  pointer-events: none;
+}
+.embed-handle {
+  height: 12px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
+  background: var(--surface-2);
+  cursor: ns-resize;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.embed-handle::before {
+  content: "";
+  width: 32px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+}
+.embed-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .artifact-files {
   list-style: none;
   margin: 0;

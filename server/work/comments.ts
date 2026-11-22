@@ -20,7 +20,7 @@ export const Comment = Type.Object({
   body: Type.String({ description: "Markdown." }),
   actor: ActorOrCronk,
   createdAt: Type.String({ format: "date-time" }),
-  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket keys its body mentions and the Artifacts it embeds that the caller may read." }),
   attachments: Type.Array(Attachment, { description: "The files attached to the Comment, oldest first." }),
   questionId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "The Question this Comment asks, if a Run asked one with it; the first User's reply answers it.",
