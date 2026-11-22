@@ -19,7 +19,7 @@ What a web address, the HTTP API and the MCP tools name a thing by in place of i
 _Avoid_: Alias, handle, permalink
 
 **Project**:
-The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it.
+The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it. GitHub moves no work there either: its Pull Requests stay recorded and linked, but their merges, failing checks, requested changes and conflicts move none of its Tickets, nor are they caught up on after it is unarchived.
 _Avoid_: Board, space, repo
 
 ### Work
