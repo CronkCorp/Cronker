@@ -26,7 +26,7 @@ export class FakeRunner implements Runner {
     if (refusal) return { started: false, refusal };
     return {
       started: true,
-      reference: { sessionId: `session_${this.starts.length}`, url: `https://claude.ai/code/session_${this.starts.length}` },
+      reference: { sessionId: `cse_${this.starts.length}`, url: `https://claude.ai/code/cse_${this.starts.length}` },
     };
   }
 

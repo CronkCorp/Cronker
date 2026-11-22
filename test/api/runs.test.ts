@@ -66,7 +66,7 @@ describe("starting Runs", () => {
         question: null,
         questionBy: null,
         endReason: null,
-        sessionUrl: "https://claude.ai/code/session_1",
+        sessionUrl: "https://claude.ai/code/cse_1",
         cost: null,
         transcriptId: null,
         transcriptSlug: null,

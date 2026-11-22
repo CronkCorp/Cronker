@@ -65,8 +65,8 @@ async function adaWithRunningRun() {
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: triage });
   const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
-  // The fake Runner's first session is `session_1`; in it, Claude Code on the web names itself `cse_1`.
-  expect(run).toMatchObject({ state: "running", sessionUrl: "https://claude.ai/code/session_1" });
+  // The fake Runner's first session is `cse_1`, as claude.ai names it; the hook sends it to Cronk as `session_1`.
+  expect(run).toMatchObject({ state: "running", sessionUrl: "https://claude.ai/code/cse_1" });
   // The cloud environment's variables: the token, and the session Claude Code on the web runs in.
   const sessionEnv = { CRONK_TOKEN: hookToken.secret, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_1" };
   return { workspace, ada, agent, ticket, run, hookToken, sessionEnv };
@@ -126,7 +126,7 @@ describe("the Transcript hook on Stop", () => {
 
     expect(hook).toEqual({ code: 0, stdout: "", stderr: "" });
     const { transcriptId } = await ok("GET", `/api/runs/${run.id}`, ada);
-    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({ sessionId: "session_1", runId: run.id });
+    expect(await ok("GET", `/api/transcripts/${transcriptId}`, ada)).toMatchObject({ sessionId: "cse_1", runId: run.id });
     const { entries } = await ok("GET", `/api/transcripts/${transcriptId}/entries`, ada);
     expect(entries.map((e: { text: string }) => e.text)).toEqual(["Triage CRONK-1.", "Reading it."]);
   });
