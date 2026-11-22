@@ -24,6 +24,7 @@ export type LiveEvent =
   | { type: "term.changed"; projectId: string | null; termId: string }
   | { type: "decision.changed"; projectId: string | null; decisionId: string }
   | { type: "artifact.changed"; projectId: string | null; artifactId: string }
+  | { type: "artifact.comments.changed"; projectId: string | null; artifactId: string }
   | { type: "transcript.changed"; transcriptId: string; runId: string | null };
 
 export const liveEventTypes: Record<LiveEvent["type"], string> = {
@@ -36,7 +37,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "statuses.changed": "A Project's Statuses were added, renamed, moved, given another kind or removed, or a Status's Step changed.",
   "ticket.created": "A Ticket was created.",
   "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
-  "comment.added": "A Comment was added to a Ticket.",
+  "comment.added":
+    "A Comment was added to a Ticket, or to an Artifact the Ticket links (`artifact.comments.changed` tells the Artifact's page).",
   "report.added": "A Run wrote a Report on a Ticket.",
   "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
   "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state, checks or reviews.",
@@ -47,10 +49,11 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "term.changed": "A Term in a glossary, the Workspace's (`projectId` null) or a Project's, was created, saved or deleted.",
   "decision.changed": "A Decision in a register, the Workspace's (`projectId` null) or a Project's, was recorded or saved.",
   "artifact.changed": "An Artifact of the Workspace (`projectId` null) or of a Project was created, saved or deleted.",
+  "artifact.comments.changed": "A Comment was added to an Artifact, or a file attached to or removed from one of its Comments.",
   "transcript.changed":
     "A Transcript was uploaded again, with the session's newer entries, or deleted; `runId` names the Run it records, or null.",
   "attachments.changed":
-    "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), or a Document (naming only the Document).",
+    "A file was attached to or removed from a Ticket or one of its Comments (naming the Ticket), one of the Comments on an Artifact the Ticket links (naming the Ticket), or a Document (naming only the Document).",
 };
 
 /**
@@ -94,6 +97,7 @@ export interface Subscriber {
  */
 export class Live {
   private readonly subscribers = new Set<Subscriber>();
+  private readonly listeners = new Set<(workspaceId: string, event: LiveEvent) => void>();
   private isClosed = false;
 
   /** Whether the server is closing, so no stream may stay open. */
@@ -112,6 +116,15 @@ export class Live {
     }
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
+  }
+
+  /**
+   * Adds an in-process listener, told about every event published to a Workspace once it commits, whoever it goes to,
+   * such as the notifier that sends Inbox items to webhooks. A listener that throws doesn't stop the others.
+   */
+  listen(listener: (workspaceId: string, event: LiveEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   /** Ends every stream, and every stream subscribed from now on, as the server closes. */
@@ -149,6 +162,15 @@ export class Live {
         subscriber.workspaceId === workspaceId && (recipients === "all" || recipients.has(subscriber.userId)),
       event,
     );
+    afterCommit(tx, () => {
+      for (const listener of this.listeners) {
+        try {
+          listener(workspaceId, event);
+        } catch {
+          // A listener's failure is its own; the change has committed.
+        }
+      }
+    });
   }
 
   /** Tells the Runner's Owner's Runners streams about the event once the transaction commits. */

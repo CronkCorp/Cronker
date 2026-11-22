@@ -3,7 +3,6 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { slugColumn } from "../http/readable.js";
 import { accessOf, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
@@ -25,13 +24,10 @@ import {
   MentioningText,
   mentionsOfOne,
   type TicketMention,
-  TicketRef,
-  ticketRefColumn,
 } from "./mentions.js";
+import { TicketRef, ticketRefColumn } from "./ticket-refs.js";
 
-export { MentioningText, TicketRef, ticketRefColumn };
-
-export { keysWritten, Mention };
+export { keysWritten, Mention, MentioningText, TicketRef, ticketRefColumn };
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -180,11 +176,12 @@ export type TicketSummary = Static<typeof TicketSummary>;
 export const TicketList = Type.Array(TicketSummary);
 export type TicketList = Static<typeof TicketList>;
 
-/** A Ticket with the Ticket keys its description mentions, the texts mentioning it and what its Runs cost. */
+/** A Ticket with the Ticket and Decision keys and Term names its description mentions, the texts mentioning it and what its Runs cost. */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
   mentions: Type.Array(Mention, {
-    description: "The Ticket keys and Term names its description mentions and the Artifacts it embeds that the caller may read.",
+    description:
+      "The Ticket and Decision keys and Term names its description mentions and the Artifacts it embeds that the caller may read.",
   }),
   mentionedIn: Type.Array(MentioningText, {
     description:
@@ -364,7 +361,7 @@ export async function findTicketByKey(
 }
 
 /**
- * The Ticket as the API shows one alone: its summary, the Ticket keys its description mentions that the Viewer may
+ * The Ticket as the API shows one alone: its summary, the Ticket and Decision keys its description mentions that the Viewer may
  * read, and its Runs' cost.
  */
 async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket> {
@@ -372,7 +369,13 @@ async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket
   return {
     ...ticketSummary(row),
     mentions: await mentionsOfOne(db, viewer, "ticket", row.id),
-    mentionedIn: await mentionedIn(db, viewer, { kind: "ticket", id: row.id, workspaceId: row.workspaceId, key: row.key }),
+    mentionedIn: await mentionedIn(db, viewer, {
+      kind: "ticket",
+      id: row.id,
+      workspaceId: row.workspaceId,
+      projectKey: row.key.split("-")[0]!,
+      number: Number(row.key.split("-")[1]),
+    }),
     cost: rows[0]!.cost,
   };
 }

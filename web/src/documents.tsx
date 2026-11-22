@@ -524,6 +524,9 @@ function Move({
   );
 }
 
+/** Two Versions with a title and a body, their bodies compared line by line: a Document's, a Decision's or a Term's. */
+type VersionsCompared<V extends VersionWithBody> = Omit<Comparison, "from" | "to"> & { from: V; to: V };
+
 /** A Version as a list of Versions shows it: its number, and who saved it and when. */
 type ListedVersion = Pick<Version, "number" | "actor" | "savedAt">;
 
@@ -531,7 +534,7 @@ type ListedVersion = Pick<Version, "number" | "actor" | "savedAt">;
  * Where a Document's, Decision's, Term's or Artifact's Versions come from. Each Document's, Decision's or Term's is
  * read with a title and a body, and compares as a Diff of them; an Artifact's are only compared, file by file.
  */
-export interface VersionSource<V extends VersionWithBody = VersionWithBody, C = Comparison<V>> {
+export interface VersionSource<V extends VersionWithBody = VersionWithBody, C = VersionsCompared<V>> {
   list: () => Promise<ListedVersion[]>;
   /** Reads one Version; its list entries open nothing when left out. */
   read?: (number: number) => Promise<V>;
@@ -554,7 +557,7 @@ function BodiesCompared({ comparison }: { comparison: Comparison }) {
  * when: read any one, or pick two to see what changed. A new current Version, such as one saved elsewhere, joins the
  * list in place, leaving whatever is open and picked as it is.
  */
-export function Versions<V extends VersionWithBody, C = Comparison<V>>({
+export function Versions<V extends VersionWithBody, C = VersionsCompared<V>>({
   source,
   current,
   revision,

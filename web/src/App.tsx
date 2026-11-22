@@ -329,7 +329,7 @@ function SignedIn({
       />
     );
   } else if (path === "/account" || path === "/password") {
-    page = <AccountSettingsPage user={user} onChanged={reload} />;
+    page = <AccountSettingsPage user={user} onChanged={reload} workspaces={workspaces} current={current} />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {
@@ -351,7 +351,7 @@ function SignedIn({
         case "document":
           return <DocumentScreen key={`${workspace.id} ${id}`} workspace={workspace} documentId={id} />;
         case "artifact":
-          return <ArtifactScreen key={`${workspace.id} ${id}`} workspace={workspace} artifactId={id} />;
+          return <ArtifactScreen key={`${workspace.id} ${id}`} workspace={workspace} user={user} artifactId={id} />;
         case "transcript":
           return <TranscriptScreen key={`${workspace.id} ${id}`} workspace={workspace} transcriptId={id} />;
         default:
@@ -364,7 +364,7 @@ function SignedIn({
       </Resolve>
     );
   } else if (routed && route?.kind === "agent") {
-    page = <AgentScreen key={`${routed.id} ${route.agentId}`} workspace={routed} agentId={route.agentId} />;
+    page = <AgentScreen key={`${routed.id} ${route.agentId}`} user={user} workspace={routed} agentId={route.agentId} />;
   } else if (routed && route?.kind === "workspace") {
     const workspace = routed;
     switch (route.page) {

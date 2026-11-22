@@ -3,12 +3,13 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
-import { User, userColumns, type User as UserRecord } from "../identity/user.js";
+import { Email, User, userColumns, type User as UserRecord } from "../identity/user.js";
 import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
 import { nameOf, releaseTickets } from "../work/releasing.js";
+import { removeWebhooksOf } from "../webhooks/webhooks.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
@@ -113,6 +114,16 @@ const pendingAddNotFound = () => new ApiError(404, "not_found", "No such pending
  * Adds a User to the Workspace by email, creating them without a password if no User
  * has it. They get a one-time join link either way, so nobody joins without their say.
  */
+/** The add-a-User-by-email route's body. */
+export const MemberAdd = Type.Object({ email: Email });
+export type MemberAdd = Static<typeof MemberAdd>;
+
+/** The add-a-User-by-GitHub-login route's body. */
+export const MemberAddByGitHub = Type.Object({
+  login: Type.String({ minLength: 1, maxLength: 39, pattern: "^[A-Za-z0-9-]+$" }),
+});
+export type MemberAddByGitHub = Static<typeof MemberAddByGitHub>;
+
 export async function addMember(context: Context, workspaceId: string, email: string): Promise<AddedMember> {
   return transaction(context.db, async (tx) => {
     await tx.query("insert into users (email, created_at) values ($1, $2) on conflict do nothing", [
@@ -181,6 +192,10 @@ const lastAdmin = () =>
   new ApiError(409, "last_admin", "A Workspace can't be left without an Admin. Make another member Admin first.");
 
 /** Makes a member Admin or not; refused if it would leave the Workspace without an Admin. */
+/** The make-a-member-Admin-or-not route's body. */
+export const MemberEdit = Type.Object({ isAdmin: Type.Boolean() });
+export type MemberEdit = Static<typeof MemberEdit>;
+
 export async function setAdmin(db: Db, workspaceId: string, userId: string, isAdmin: boolean): Promise<Member> {
   return transaction(db, async (tx) => {
     const members = await lockMembers(tx, workspaceId);
@@ -215,6 +230,8 @@ export async function removeMember(context: Context, adminId: string, workspaceI
       "delete from links where kind = 'join' and workspace_id = $1 and user_id = $2 and used_at is null",
       [workspaceId, userId],
     );
+    // Nothing of the Workspace reaches them any more.
+    await removeWebhooksOf(tx, userId, workspaceId);
     const now = clock.now();
     const reason = `${await nameOf(tx, adminId)} removed ${await nameOf(tx, userId)} from the Workspace.`;
     // Their Tickets, and any delegated to their Agents, lose them, waiting in every Admin's Inbox.

@@ -496,7 +496,8 @@ describe("a Run's Transcript", () => {
     cronk = await startCronk({ migrateBefore: "0064_claude_session_ids.sql" });
     // Reading a Ticket needs the conflict that last set its Merge Queue entry aside, and its Term Mentions.
     await cronk.applyAhead("0065_merge_queue_conflicts.sql");
-    await cronk.applyAhead("0066_term_mentions.sql");
+    await cronk.applyAhead("0068_decision_mentions.sql");
+    await cronk.applyAhead("0070_term_mentions.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

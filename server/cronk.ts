@@ -22,6 +22,8 @@ import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
+import { InboxNotifier } from "./webhooks/notifier.js";
+import { deliverWebhooks } from "./webhooks/webhooks.js";
 
 export interface CronkOptions {
   config: Config;
@@ -54,6 +56,8 @@ export interface Cronk {
   checkQueue(): Promise<void>;
   /** Reads the next page of issues of each running import of a Repository's GitHub issues. */
   runImports(): Promise<void>;
+  /** Sends the webhook deliveries that are due, once the Inbox items queued so far have their deliveries. */
+  deliverWebhooks(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -94,6 +98,9 @@ export async function createCronk({
     context.jobs.onError = (error, key) => app.log.error({ err: error, job: key }, "A job after a change failed.");
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
+    const notifier = new InboxNotifier(context, (error) => app.log.error(error));
+    // A database migrated only partway, as a test of one migration has it, may have no webhooks yet.
+    if (!migrateBefore) await notifier.start();
     return {
       app,
       async listen() {
@@ -108,9 +115,14 @@ export async function createCronk({
       jobsSettled: () => context.jobs.settled(),
       checkQueue: () => queuePass(context),
       runImports: () => runImports(context),
+      async deliverWebhooks() {
+        await notifier.idle();
+        await deliverWebhooks(context);
+      },
       async close() {
         await app.close();
         await context.jobs.settled();
+        await notifier.stop();
         await endPool(db);
       },
     };

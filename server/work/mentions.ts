@@ -1,31 +1,18 @@
 import type { Nodes, Paragraph } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { Type, type Static } from "typebox";
-import { sandboxPath } from "../artifacts/artifacts.js";
+import { sandboxPath } from "../artifacts/sandbox-path.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { slugColumn } from "../http/readable.js";
 import { inReach, type Viewer } from "../identity/viewers.js";
+import { TicketRef, ticketRefColumn } from "./ticket-refs.js";
 
 /*
- * The Mention index: the Ticket keys and Term names each Markdown text mentions, and the Artifacts it embeds, recorded
- * in the transaction that saves the text, and recorded again for the texts a Term's creation, rename or removal
- * changes. Kept apart from
- * `tickets.ts`, which loads `runs.ts`, as the modules writing texts (Comments among them) are loaded by it in turn.
+ * The Mention index: the Ticket and Decision keys and Term names each Markdown text mentions, and the Artifacts it
+ * embeds, recorded in the transaction that saves the text, and recorded again for the texts a Term's creation, rename
+ * or removal changes. Kept apart from `tickets.ts`, which loads `runs.ts`, as the modules writing texts (Comments
+ * among them) are loaded by it in turn.
  */
-
-/** A Ticket as another Ticket's Relations, parent, Sub-Tickets and Changes name it. */
-export const TicketRef = Type.Object({
-  id: Type.String({ format: "uuid" }),
-  projectId: Type.String({ format: "uuid" }),
-  key: Type.String(),
-  title: Type.String(),
-});
-export type TicketRef = Static<typeof TicketRef>;
-
-/** Selects a Ticket as a TicketRef, from `tickets` and its `projects` joined as the given aliases. */
-export const ticketRefColumn = (tickets: string, projects: string) =>
-  `json_build_object('id', ${tickets}.id, 'projectId', ${tickets}.project_id,
-     'key', ${projects}.key || '-' || ${tickets}.number, 'title', ${tickets}.title)`;
 
 /** A Ticket key written in Markdown that names a Ticket of the Workspace. */
 export const TicketMention = Type.Object({
@@ -47,6 +34,18 @@ export const TermMention = Type.Object({
   }),
 });
 export type TermMention = Static<typeof TermMention>;
+/** A Decision key written in Markdown that names a Decision of the Workspace or of one of its Projects. */
+export const DecisionMention = Type.Object({
+  kind: Type.Literal("decision"),
+  text: Type.String({ description: "The key as written, such as `web-d7` or `d7`." }),
+  key: Type.String({ description: "The Decision's key: `WEB-D7` for a Project's, `D7` for the Workspace's own." }),
+  decisionId: Type.String({ format: "uuid" }),
+  projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+    description: "The Decision's Project, or null for the Workspace's own.",
+  }),
+  number: Type.Integer({ minimum: 1, description: "The Decision's number." }),
+});
+export type DecisionMention = Static<typeof DecisionMention>;
 
 /** An Embed: an Artifact's address alone in its paragraph, which shows the Artifact in place. */
 export const ArtifactMention = Type.Object({
@@ -66,9 +65,9 @@ export const ArtifactMention = Type.Object({
 });
 export type ArtifactMention = Static<typeof ArtifactMention>;
 
-/** What a text mentions: a Ticket by its key, a Term by its name, or an Artifact it embeds. */
-export const Mention = Type.Union([TicketMention, TermMention, ArtifactMention], {
-  description: "A Ticket key, a Term name or an Embed of an Artifact the text holds; `kind` says which.",
+/** What a text mentions: a Ticket or Decision by its key, a Term by its name, or an Artifact it embeds. */
+export const Mention = Type.Union([TicketMention, DecisionMention, TermMention, ArtifactMention], {
+  description: "A Ticket or Decision key, a Term name or an Embed of an Artifact the text holds; `kind` says which.",
 });
 export type Mention = Static<typeof Mention>;
 
@@ -88,6 +87,23 @@ const writtenKey = /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b/g;
 
 /** Ticket keys as written in plain text, each once, in order of first mention. */
 export const keysWritten = (text: string) => [...new Set([...text.matchAll(writtenKey)].map((m) => m[0]))];
+
+/**
+ * A Ticket key (`WEB-4`), or else a Decision key: a Project's (`WEB-D7`) or the Workspace's own (`D7`), in any letter
+ * case. Ticket keys come first, so `D7-3` is the Ticket it names; a Decision key starts after no letter, digit or
+ * hyphen, so `WEB-D7` isn't also `D7`. The web client matches with the same boundaries.
+ */
+const mentionedKey =
+  /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b|(?<![\w-])(?:([A-Za-z][A-Za-z0-9]{1,9})-)?[Dd]([1-9][0-9]{0,8})(?!\w)/g;
+
+/** A key as written in a text, with what it names: a Ticket by Project key and number, a Decision also by none. */
+interface WrittenKey {
+  kind: "ticket" | "decision";
+  written: string;
+  /** In upper case as Projects keep it; null for a Decision of the Workspace's own. */
+  projectKey: string | null;
+  number: number;
+}
 
 /** An Artifact's address as an Embed writes it, taken apart. */
 export interface EmbedAddress {
@@ -178,15 +194,27 @@ function walked(markdown: string): { texts: string[]; embeds: string[] } {
 /** The plain text of Markdown, one string per text node, outside code, links and Embeds. */
 const plainTexts = (markdown: string) => walked(markdown).texts;
 
-/** What Markdown mentions: its Ticket keys and its Embeds, each once, in order of first mention. */
-export function mentioned(markdown: string): { keys: string[]; embeds: string[] } {
+/**
+ * What Markdown mentions, as the web client shows it: the Ticket and Decision keys in its text, each once, in order of
+ * first mention, outside code and links; and its Embeds, each once, in order.
+ */
+export function mentioned(markdown: string): { keys: WrittenKey[]; embeds: string[] } {
   const { texts, embeds } = walked(markdown);
-  return { keys: [...new Set(texts.flatMap(keysWritten))], embeds };
-}
-
-/** Ticket keys as written in Markdown, each once, in order of first mention, outside code and links. */
-export function keysMentioned(markdown: string): string[] {
-  return mentioned(markdown).keys;
+  const keys = new Map<string, WrittenKey>();
+  for (const text of texts) {
+    for (const match of text.matchAll(mentionedKey)) {
+      const [written, decisionProject, decisionNumber] = match;
+      if (keys.has(written)) continue;
+      if (decisionNumber === undefined) {
+        const [projectKey, number] = written.split("-");
+        keys.set(written, { kind: "ticket", written, projectKey: projectKey!.toUpperCase(), number: Number(number) });
+      } else {
+        const projectKey = decisionProject?.toUpperCase() ?? null;
+        keys.set(written, { kind: "decision", written, projectKey, number: Number(decisionNumber) });
+      }
+    }
+  }
+  return { keys: [...keys.values()], embeds };
 }
 
 /** A Term a text may mention: one of its place's glossary. */
@@ -256,10 +284,10 @@ interface IndexedText {
 }
 
 /**
- * Records the Ticket keys and Term names a text mentions and the Artifacts it embeds, replacing what was recorded for
- * it: call it in the transaction that saves the text, with the text as it now reads (for knowledge, its current
- * Version's). A Term's own definition doesn't mention itself. An address naming no Artifact of the text's Workspace,
- * or naming one of its Workspace by another slug, is no Embed.
+ * Records the Ticket and Decision keys and Term names a text mentions and the Artifacts it embeds, replacing what was
+ * recorded for it: call it in the transaction that saves the text, with the text as it now reads (for knowledge, its
+ * current Version's). A Term's own definition doesn't mention itself. An address naming no Artifact of the text's
+ * Workspace, or naming one of its Workspace by another slug, is no Embed.
  */
 export async function indexMentions(
   tx: Tx | Db,
@@ -270,17 +298,24 @@ export async function indexMentions(
 ): Promise<void> {
   const column = sourceColumn[kind];
   await tx.query(`delete from mentions where ${column} = $1`, [text.id]);
-  const { keys: written, embeds } = mentioned(markdown);
-  if (written.length > 0) {
+  const { keys, embeds } = mentioned(markdown);
+  if (keys.length > 0) {
     await tx.query(
       `insert into mentions (workspace_id, ${column}, target_kind, project_key, number, written, position)
-       select $1, $2, 'ticket', upper(split_part(written, '-', 1)), split_part(written, '-', 2)::integer, written,
-         position - 1
-       from unnest($3::text[]) with ordinality as keys (written, position)`,
-      [text.workspaceId, text.id, written],
+       select $1, $2, kind, project_key, number, written, position - 1
+       from unnest($3::text[], $4::text[], $5::integer[], $6::text[]) with ordinality
+         as keys (kind, project_key, number, written, position)`,
+      [
+        text.workspaceId,
+        text.id,
+        keys.map((key) => key.kind),
+        keys.map((key) => key.projectKey),
+        keys.map((key) => key.number),
+        keys.map((key) => key.written),
+      ],
     );
   }
-  let position = written.length;
+  let position = keys.length;
   for (const address of embeds) {
     const parsed = embedAddress(address)!;
     const artifactId = await embeddedArtifact(tx, text.workspaceId, parsed);
@@ -368,8 +403,8 @@ async function insertTermMentions(
 }
 
 /**
- * Records again the Term names a text mentions, by its place's glossary as it now reads, leaving its Ticket keys be;
- * writes nothing when they are as recorded, so the text keeps its place under Mentioned in.
+ * Records again the Term names a text mentions, by its place's glossary as it now reads, leaving its keys and Embeds
+ * be; writes nothing when they are as recorded, so the text keeps its place under Mentioned in.
  */
 async function reindexTermMentions(tx: Tx, kind: MentioningKind, text: StoredText, glossaries: Glossaries): Promise<void> {
   const column = sourceColumn[kind];
@@ -387,20 +422,10 @@ async function reindexTermMentions(tx: Tx, kind: MentioningKind, text: StoredTex
   await insertTermMentions(tx, kind, text, text.markdown, rows.length - recorded.length, glossaries, terms);
 }
 
-type MentionRow = {
-  sourceId: string;
-  kind: "ticket" | "term";
-  text: string;
-  key: string | null;
-  ticketId: string | null;
-  termId: string | null;
-  position: number;
-};
-
 /**
- * The Mentions of each text of a kind, by the text's id, in order of first mention: only Tickets and Terms that still
- * exist and that the Viewer may read, and Embeds of Artifacts the Viewer may read at a Version they have; anything
- * else stays plain text. Every id given has an entry.
+ * The Mentions of each text of a kind, by the text's id, in order of first mention: only keys naming a Ticket or
+ * Decision and Terms that still exist and that the Viewer may read, and Embeds of Artifacts the Viewer may read at a
+ * Version they have; anything else stays plain text. Every id given has an entry.
  */
 export async function mentionsOf(
   db: Db | Tx,
@@ -412,33 +437,41 @@ export async function mentionsOf(
   if (ids.length === 0) return found;
   const column = sourceColumn[kind];
   const reach = inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, "$2");
-  // Terms are looked up only for texts mentioning some, as a database migrated short of Terms has no `terms`.
-  const { rows } = await db.query<MentionRow>(
-    `select * from (
-       select mentions.${column} as "sourceId", 'ticket' as kind, mentions.written as text,
-         projects.key || '-' || tickets.number as key, tickets.id as "ticketId", null::uuid as "termId", mentions.position
-       from mentions
-       join projects on projects.workspace_id = mentions.workspace_id and projects.key = mentions.project_key
-       join tickets on tickets.project_id = projects.id and tickets.number = mentions.number
-       where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'ticket' and ${reach.sql}
-       union all
-       select mentions.${column}, 'term', mentions.written, null, null, mentions.target_term_id, mentions.position
-       from mentions
-       where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'term'
-     ) found
-     order by position`,
+  const tickets = await db.query<TicketMention & { sourceId: string; position: number }>(
+    `select mentions.${column} as "sourceId", mentions.position, 'ticket' as kind, mentions.written as text,
+       projects.key || '-' || tickets.number as key, tickets.id as "ticketId"
+     from mentions
+     join projects on projects.workspace_id = mentions.workspace_id and projects.key = mentions.project_key
+     join tickets on tickets.project_id = projects.id and tickets.number = mentions.number
+     where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'ticket' and ${reach.sql}`,
     [ids, reach.value],
   );
-  const termIds = [...new Set(rows.flatMap((row) => row.termId ?? []))];
-  const terms = new Map<string, { name: string; projectId: string | null }>();
-  if (termIds.length > 0) {
-    const termReach = inReach(viewer, { project: "terms.project_id", workspace: "terms.workspace_id" }, "$2");
-    const readable = await db.query<{ id: string; name: string; projectId: string | null }>(
-      `select id, name, project_id as "projectId" from terms where id = any($1::uuid[]) and ${termReach.sql}`,
-      [termIds, termReach.value],
-    );
-    for (const term of readable.rows) terms.set(term.id, term);
-  }
+  const decisionReach = inReach(viewer, { project: "decisions.project_id", workspace: "decisions.workspace_id" }, "$2");
+  const decisions = await db.query<DecisionMention & { sourceId: string; position: number }>(
+    `select mentions.${column} as "sourceId", mentions.position, 'decision' as kind, mentions.written as text,
+       concat(projects.key || '-', 'D', decisions.number) as key, decisions.id as "decisionId",
+       decisions.project_id as "projectId", decisions.number
+     from mentions
+     left join projects on projects.workspace_id = mentions.workspace_id and projects.key = mentions.project_key
+     join decisions on decisions.workspace_id = mentions.workspace_id and decisions.number = mentions.number
+       and (decisions.project_id = projects.id or (mentions.project_key is null and decisions.project_id is null))
+     where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'decision' and ${decisionReach.sql}`,
+    [ids, decisionReach.value],
+  );
+  // Terms are read only for texts mentioning some, as a database migrated short of Terms has no `terms`.
+  const { rowCount: naming } = await db.query(
+    `select 1 from mentions where ${column} = any($1::uuid[]) and target_kind = 'term' limit 1`,
+    [ids],
+  );
+  const termReach = inReach(viewer, { project: "terms.project_id", workspace: "terms.workspace_id" }, "$2");
+  const terms = !naming ? undefined : await db.query<TermMention & { sourceId: string; position: number }>(
+    `select mentions.${column} as "sourceId", mentions.position, 'term' as kind, mentions.written as text,
+       terms.id as "termId", terms.name, terms.project_id as "projectId"
+     from mentions
+     join terms on terms.id = mentions.target_term_id
+     where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'term' and ${termReach.sql}`,
+    [ids, termReach.value],
+  );
   // Most texts embed nothing, which this finds without reading Artifacts.
   const { rowCount: embedding } = await db.query(
     `select 1 from mentions where ${column} = any($1::uuid[]) and target_kind = 'artifact' limit 1`,
@@ -457,24 +490,13 @@ export async function mentionsOf(
      where mentions.${column} = any($1::uuid[]) and mentions.target_kind = 'artifact' and ${artifactReach.sql}`,
     [ids, artifactReach.value],
   );
-  const all: { sourceId: string; position: number; mention: Mention }[] = [];
-  for (const row of rows) {
-    if (row.kind === "ticket") {
-      const mention: Mention = { kind: "ticket", text: row.text, key: row.key!, ticketId: row.ticketId! };
-      all.push({ sourceId: row.sourceId, position: row.position, mention });
-      continue;
-    }
-    const term = terms.get(row.termId!);
-    if (term) {
-      const mention: Mention = { kind: "term", text: row.text, termId: row.termId!, ...term };
-      all.push({ sourceId: row.sourceId, position: row.position, mention });
-    }
-  }
-  for (const { sourceId, position, serveKey, page, ...artifact } of artifacts?.rows ?? []) {
-    all.push({ sourceId, position, mention: { ...artifact, url: sandboxPath(serveKey, page) } });
-  }
-  all.sort((a, b) => a.position - b.position);
-  for (const { sourceId, mention } of all) found.get(sourceId)?.push(mention);
+  const all = [
+    ...tickets.rows,
+    ...decisions.rows,
+    ...(terms?.rows ?? []),
+    ...(artifacts?.rows ?? []).map(({ serveKey, page, ...row }) => ({ ...row, url: sandboxPath(serveKey, page) })),
+  ].sort((a, b) => a.position - b.position);
+  for (const { sourceId, position: _, ...mention } of all) found.get(sourceId)?.push(mention);
   return found;
 }
 
@@ -483,7 +505,7 @@ export async function mentionsOfOne(db: Db | Tx, viewer: Viewer, kind: Mentionin
   return (await mentionsOf(db, viewer, kind, [id])).get(id)!;
 }
 
-/** A text that mentions a Ticket or a Term, as its Mentioned in lists it, with what linking to it takes. */
+/** A text that mentions a Ticket, Decision or Term, as its Mentioned in lists it, with what linking to it takes. */
 export const MentioningText = Type.Object({
   kind: Type.Union(
     [
@@ -500,44 +522,53 @@ export const MentioningText = Type.Object({
   projectId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Project, or null for the Workspace's own knowledge.",
   }),
-  title: Type.String({ description: "Its title; a Term's name; for a Comment, its Ticket's title." }),
-  ticket: Type.Union([TicketRef, Type.Null()], {
-    description: "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for other knowledge.",
+  title: Type.String({
+    description: "Its title; a Term's name; for a Comment, its Ticket's title, or for a Comment on an Artifact the Artifact's.",
   }),
-  slug: Type.Union([Type.String(), Type.Null()], { description: "A Document's or Report's slug; otherwise null." }),
+  ticket: Type.Union([TicketRef, Type.Null()], {
+    description:
+      "The Ticket it is: a Ticket's own, a Comment's or a Report's Ticket; null for a Comment on an Artifact and other knowledge.",
+  }),
+  slug: Type.Union([Type.String(), Type.Null()], {
+    description: "A Document's or Report's slug, or for a Comment on an Artifact the Artifact's; otherwise null.",
+  }),
   number: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], { description: "A Decision's number; otherwise null." }),
 });
 export type MentioningText = Static<typeof MentioningText>;
 
-/** What is mentioned: a Ticket by its key, or a Term by its id. */
+/**
+ * What a Mentioned in list is for: a Ticket or a Decision, by the key texts write (its Project's key, in upper case,
+ * or null for a Decision of the Workspace's own, and its number), or a Term; each with its id, so its own text is left
+ * out.
+ */
 export type MentionTarget =
-  | { kind: "ticket"; id: string; workspaceId: string; key: string }
+  | { kind: "ticket" | "decision"; id: string; workspaceId: string; projectKey: string | null; number: number }
   | { kind: "term"; id: string; workspaceId: string };
 
 /**
- * The texts mentioning a Ticket or a Term that the Viewer may read, most recently saved first: Tickets' descriptions,
- * Comments, Documents and Reports, Terms and Decisions. The target's own text is left out.
+ * Mentioned in: the texts mentioning a Ticket or Decision, by its key, or a Term, that the Viewer may read, most
+ * recently saved first: Tickets' descriptions, Comments, Documents and Reports, Terms and Decisions. Its own text is
+ * left out.
  */
 export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTarget): Promise<MentioningText[]> {
   let hit: string;
   let params: unknown[];
-  if (target.kind === "ticket") {
-    const [projectKey, number] = target.key.split("-");
-    hit = "workspace_id = $1 and target_kind = 'ticket' and project_key = $2 and number = $3::integer";
-    params = [target.workspaceId, projectKey, Number(number)];
+  if (target.kind === "term") {
+    hit = "workspace_id = $1 and target_kind = $2 and target_term_id = $3::uuid and $4::integer is null";
+    params = [target.workspaceId, target.kind, target.id, null];
   } else {
-    hit = "workspace_id = $1 and target_kind = 'term' and target_term_id = $2 and $3::integer is null";
-    params = [target.workspaceId, target.id, null];
+    // Spelled out for a Workspace's own Decision, so either way the index on the key serves it.
+    const projectKey = target.projectKey === null ? "project_key is null and $3::text is null" : "project_key = $3";
+    hit = `workspace_id = $1 and target_kind = $2 and ${projectKey} and number = $4`;
+    params = [target.workspaceId, target.kind, target.projectKey, target.number];
   }
   // Most targets are mentioned nowhere, which this finds without reading every kind of text.
   const { rowCount } = await db.query(`select 1 from mentions where ${hit} limit 1`, params);
   if (rowCount === 0) return [];
-  const reach = (project: string, workspace: string) => inReach(viewer, { project, workspace }, "$5").sql;
-  const { value } = inReach(viewer, { project: "null", workspace: "null" }, "$5");
+  const reach = (project: string, workspace: string) => inReach(viewer, { project, workspace }, "$6").sql;
+  const { value } = inReach(viewer, { project: "null", workspace: "null" }, "$6");
   const ref = (tickets: string, projects: string) =>
     `(select ${ticketRefColumn(tickets, projects)} from projects ${projects} where ${projects}.id = ${tickets}.project_id)`;
-  const own = (kind: MentionTarget["kind"], column: string) =>
-    target.kind === kind ? `${column} <> $4::uuid` : "$4::uuid is not null";
   const { rows } = await db.query<MentioningText & { seq?: unknown }>(
     `with hits as (
        select source_ticket_id, source_comment_id, source_document_id, source_term_id, source_decision_id,
@@ -549,12 +580,18 @@ export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTa
        select hits.seq, 'ticket' as kind, tickets.id, tickets.project_id as "projectId", tickets.title,
          ${ref("tickets", "ref_projects")} as ticket, null as slug, null::integer as number
        from hits join tickets on tickets.id = hits.source_ticket_id
-       where ${own("ticket", "tickets.id")} and ${reach("tickets.project_id", "tickets.workspace_id")}
+       where tickets.id <> $5 and ${reach("tickets.project_id", "tickets.workspace_id")}
        union all
        select hits.seq, 'comment', comments.id, tickets.project_id, tickets.title,
          ${ref("tickets", "ref_projects")}, null, null
        from hits join comments on comments.id = hits.source_comment_id join tickets on tickets.id = comments.ticket_id
        where ${reach("tickets.project_id", "tickets.workspace_id")}
+       union all
+       select hits.seq, 'comment', comments.id, artifacts.project_id, versions.title, null,
+         ${slugColumn("artifact", "artifacts.id", "versions.title")}, null
+       from hits join comments on comments.id = hits.source_comment_id join artifacts on artifacts.id = comments.artifact_id
+       join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version
+       where ${reach("artifacts.project_id", "artifacts.workspace_id")}
        union all
        select hits.seq, case when documents.ticket_id is null then 'document' else 'report' end, documents.id,
          documents.project_id, versions.title,
@@ -568,12 +605,12 @@ export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTa
        union all
        select hits.seq, 'term', terms.id, terms.project_id, terms.name, null, null, null
        from hits join terms on terms.id = hits.source_term_id
-       where ${own("term", "terms.id")} and ${reach("terms.project_id", "terms.workspace_id")}
+       where terms.id <> $5 and ${reach("terms.project_id", "terms.workspace_id")}
        union all
        select hits.seq, 'decision', decisions.id, decisions.project_id, versions.title, null, null, decisions.number
        from hits join decisions on decisions.id = hits.source_decision_id
        join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version
-       where ${reach("decisions.project_id", "decisions.workspace_id")}
+       where decisions.id <> $5 and ${reach("decisions.project_id", "decisions.workspace_id")}
      ) texts
      order by seq desc`,
     [...params, target.id, value],
@@ -584,9 +621,10 @@ export async function mentionedIn(db: Db | Tx, viewer: Viewer, target: MentionTa
 /** Each kind of text, as stored: its id, Workspace, Project and Markdown (for knowledge, its current Version's). */
 const storedTexts: Record<MentioningKind, string> = {
   ticket: `select id, workspace_id as "workspaceId", project_id as "projectId", description as markdown from tickets`,
-  comment: `select comments.id, comments.workspace_id as "workspaceId", tickets.project_id as "projectId",
-      comments.body as markdown
-    from comments join tickets on tickets.id = comments.ticket_id`,
+  comment: `select comments.id, comments.workspace_id as "workspaceId",
+      coalesce(tickets.project_id, artifacts.project_id) as "projectId", comments.body as markdown
+    from comments left join tickets on tickets.id = comments.ticket_id
+    left join artifacts on artifacts.id = comments.artifact_id`,
   document: `select documents.id, documents.workspace_id as "workspaceId", documents.project_id as "projectId",
       versions.body as markdown
     from documents join document_versions versions
@@ -608,6 +646,11 @@ const lockedRow: Record<MentioningKind, string> = {
   term: "terms",
   decision: "decisions",
 };
+
+/** A Comment as stored before Comments on Artifacts, as a database migrated short of them keeps it. */
+const storedTicketComments = `select comments.id, comments.workspace_id as "workspaceId", tickets.project_id as "projectId",
+    comments.body as markdown
+  from comments join tickets on tickets.id = comments.ticket_id`;
 
 type StoredText = { id: string; workspaceId: string; projectId: string | null; markdown: string };
 
@@ -648,12 +691,12 @@ export async function reindexMentions(db: Db, scope: IndexScope): Promise<void> 
 }
 
 /** The backfills of the Mention index, each recorded by a migration in `pending_backfills` and done once. */
-const backfills = ["mentions", "embeds", "term-mentions"];
+const backfills = ["mentions", "embeds", "decision-mentions", "term-mentions"];
 
 /**
- * Indexes the texts stored before the Mention index existed, before it recorded Embeds, or before it indexed Term
- * names, once: migrations 0055, 0057 and 0066 leave this to do on the next start, as it takes parsing their Markdown. Does nothing on a database
- * migrated short of them, or once done.
+ * Indexes the texts stored before the Mention index existed, before it recorded Embeds, Decision keys or Term names,
+ * once: migrations 0055, 0057, 0068 and 0070 leave this to do on the next start, as it takes parsing their Markdown.
+ * Does nothing on a database migrated short of them, or once done.
  */
 export async function backfillMentions(db: Db): Promise<void> {
   const client = await db.connect();
@@ -667,7 +710,11 @@ export async function backfillMentions(db: Db): Promise<void> {
       ((await client.query("delete from pending_backfills where name = any($1::text[])", [backfills])).rowCount ?? 0) > 0;
     if (pending) {
       const glossaries: Glossaries = new Map();
-      for (const [kind, sql] of Object.entries(storedTexts) as [MentioningKind, string][]) {
+      const { rowCount: artifactComments } = await client.query(
+        "select 1 from information_schema.columns where table_name = 'comments' and column_name = 'artifact_id'",
+      );
+      const texts = { ...storedTexts, ...(artifactComments ? {} : { comment: storedTicketComments }) };
+      for (const [kind, sql] of Object.entries(texts) as [MentioningKind, string][]) {
         const texts = await client.query<StoredText>(sql);
         for (const text of texts.rows) await indexMentions(client, kind, text, text.markdown, glossaries);
       }

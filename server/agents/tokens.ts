@@ -63,6 +63,13 @@ export async function tokensOf(db: Db, clock: Clock, agent: Agent): Promise<Agen
   return rows.map(present);
 }
 
+/** The issue-a-token route's body. */
+export const TokenIssue = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S", description: "Where it's used, such as `laptop`." }),
+  access: TokenAccess,
+});
+export type TokenIssue = Static<typeof TokenIssue>;
+
 export async function issueToken(
   db: Db | Tx,
   clock: Clock,

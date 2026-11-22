@@ -1,4 +1,5 @@
 import { useAddresses } from "./addresses.js";
+import { AgentRecordPanel, useAgentRecord } from "./agent-record.js";
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
@@ -118,7 +119,9 @@ function AgentCard({
       <header className="agent-card-head">
         <Avatar actor={{ kind: "agent", name: agent.name }} size="medium" />
         <div>
-          <h2 className="actor-agent-name">{mine ? <Link to={page}>{agent.name}</Link> : agent.name}</h2>
+          <h2 className="actor-agent-name">
+            <Link to={page}>{agent.name}</Link>
+          </h2>
           <p className="muted small">{mine ? "Yours" : `for ${nameOf(agent.owner)}`}</p>
         </div>
         {mine && (
@@ -195,11 +198,18 @@ function RenameAgent({ agent, onClose, onRenamed }: { agent: Agent; onClose: () 
   );
 }
 
-/** One of the User's own Agents: its Runner, and its tokens behind Manage tokens; Rename and Remove in its "…" menu. */
-export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummary; agentId: string }) {
+/**
+ * An Agent's page, any member's Agent, removed ones included: its Record. On the User's own Agent, its Runner, its
+ * tokens behind Manage tokens and its Transcripts come first, with Rename and Remove in its "…" menu.
+ */
+export function AgentScreen({ user, workspace, agentId }: { user: User; workspace: WorkspaceSummary; agentId: string }) {
   const to = useAddresses();
   usePlace("agents");
-  const [agent, setAgent] = useState<Agent | null>(null);
+  const recorded = useAgentRecord(agentId).data?.pages[0]?.agent;
+  const [listed, setAgent] = useState<Agent | null>(null);
+  // Only the Owner changes an Agent, and only while it is in use.
+  const agent = listed && listed.owner.id === user.id ? listed : null;
+  const name = listed?.name ?? recorded?.name;
   const [runners, setRunners] = useState<Runner[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -231,8 +241,10 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
         ]}
         title={
           <span className="actor actor-agent">
-            {agent && <Avatar actor={{ kind: "agent", name: agent.name }} size="medium" />}
-            <span className="actor-name">{agent?.name ?? "Agent"}</span>
+            {name && <Avatar actor={{ kind: "agent", name }} size="medium" />}
+            <span className="actor-name">{name ?? "Agent"}</span>
+            {recorded && recorded.owner.id !== user.id && <span className="muted small"> for {nameOf(recorded.owner)}</span>}
+            {recorded?.removedAt && <span className="muted small"> removed</span>}
           </span>
         }
         actions={
@@ -269,6 +281,7 @@ export function AgentScreen({ workspace, agentId }: { workspace: WorkspaceSummar
         </Panel>
       )}
       {agent && <AgentTranscripts agent={agent} />}
+      <AgentRecordPanel agentId={agentId} />
       {agent && renaming && <RenameAgent agent={agent} onClose={() => setRenaming(false)} onRenamed={setAgent} />}
       {agent && (
         <ConfirmDialog

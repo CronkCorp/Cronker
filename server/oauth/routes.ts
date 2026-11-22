@@ -13,6 +13,7 @@ import {
   issueTokens,
   lookUpRequest,
   mcpResource,
+  RequestApproval,
   requestAuthorization,
   type AuthorizeQuery,
   type TokenParams,
@@ -136,7 +137,7 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "The client gets a one-time code to trade for tokens acting as the Agent, until the Agent is removed or the token is revoked from the Agent's tokens. Refused with `not_owner` for someone else's Agent.",
           params: RequestParams,
-          body: Type.Object({ agentId: Type.String() }),
+          body: RequestApproval,
           response: { 200: Redirect, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

@@ -12,12 +12,13 @@ const mentioningKinds: Record<MentioningText["kind"], string> = {
   decision: "Decision",
 };
 
-/** The page a text mentioning a Ticket or a Term is read on: a Comment's is its Ticket's. */
+/** The page a text mentioning a Ticket, Decision or Term is read on: a Comment's is its Ticket's, or its Artifact's. */
 function mentioningPage(to: Addresses, text: MentioningText): string {
   switch (text.kind) {
     case "ticket":
-    case "comment":
       return to.ticket(text.ticket!);
+    case "comment":
+      return text.ticket ? to.ticket(text.ticket) : to.artifact({ slug: text.slug! });
     case "document":
     case "report":
       return to.document({ slug: text.slug! });
@@ -28,7 +29,7 @@ function mentioningPage(to: Addresses, text: MentioningText): string {
   }
 }
 
-/** Mentioned in: each text whose Markdown mentions a Ticket's key or a Term's name, linked, with what kind of text it is. */
+/** Mentioned in: each text whose Markdown mentions a Ticket's or Decision's key or a Term's name, linked, with its kind of text. */
 export function MentionedIn({ texts }: { texts: MentioningText[] }) {
   const to = useAddresses();
   if (texts.length === 0) return null;

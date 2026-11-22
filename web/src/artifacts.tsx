@@ -1,6 +1,6 @@
 import { useAddresses, useCanonicalAddress } from "./addresses.js";
 import { useCallback, useEffect, useState } from "react";
-import { api, type Artifact, type ArtifactComparison, type ArtifactSummary, type ComparedFile, type Place, type ProjectSummary, type VersionWithBody, type Workspace } from "./api.js";
+import { api, type Artifact, type ArtifactComparison, type ArtifactSummary, type Comment, type ComparedFile, type Place, type ProjectSummary, type User, type VersionWithBody, type Workspace } from "./api.js";
 import { sized } from "./attachments.js";
 import { VersionMeta, Versions } from "./documents.js";
 import { usePlace } from "./frame.js";
@@ -8,7 +8,7 @@ import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./li
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { ArtifactFrame } from "./embed.js";
 import { Link, navigate, useQuery } from "./router.js";
-import { Actor } from "./ui/actor.js";
+import { Actor, Avatar } from "./ui/actor.js";
 import {
   Banner,
   buttonClass,
@@ -23,7 +23,8 @@ import {
 } from "./ui/controls.js";
 import { Diff } from "./ui/diff.js";
 import { Chip, type Tone } from "./ui/labels.js";
-import { ProjectNote } from "./write-access.js";
+import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.js";
+import { CommentForm, CommentThread } from "./tickets.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
@@ -114,9 +115,11 @@ export function ProjectArtifacts({ workspace, project }: { workspace: Workspace;
  */
 export function ArtifactScreen({
   workspace,
+  user,
   artifactId,
 }: {
   workspace: Workspace;
+  user: User;
   artifactId: string;
 }) {
   const to = useAddresses();
@@ -236,6 +239,12 @@ export function ArtifactScreen({
           />
         </aside>
       </div>
+      {!gone && (
+        // The Workspace's own Artifacts are for every User to change; a Project's, with Write in it.
+        <ProjectAccessProvider access={project?.access ?? "write"}>
+          <ArtifactComments workspace={workspace} artifact={artifact} user={user} />
+        </ProjectAccessProvider>
+      )}
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -249,6 +258,68 @@ export function ArtifactScreen({
         It goes with all its Versions and their files, and the Tickets linking it lose the link. It can't be brought back.
       </ConfirmDialog>
     </div>
+  );
+}
+
+/**
+ * The Artifact's Comments, oldest first, each with its replies and Attachments, and the Comment box; they update live,
+ * and also show on the Tickets linking the Artifact.
+ */
+function ArtifactComments({ workspace, artifact, user }: { workspace: Workspace; artifact: Artifact; user: User }) {
+  const [comments, setComments] = useState<Comment[] | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const canWrite = useCanWrite();
+  const latest = useLatest();
+  const load = useCallback(
+    () => latest(api.artifactComments(artifact.id), setComments, (e) => setFailure(e.message)),
+    [artifact.id, latest],
+  );
+  useEffect(load, [load]);
+  useLiveEvents(workspace.id, (event) => {
+    if (event.type === "reconnected" || (event.type === "artifact.comments.changed" && event.artifactId === artifact.id)) load();
+  });
+  const shown = comments ?? [];
+  const arrived = useArrivals(shown.map((c) => `comment:${c.id}`), comments !== null);
+  // The live refetch may have shown the new Comment already.
+  const added = (comment: Comment) =>
+    setComments((list) => (list ?? []).some((c) => c.id === comment.id) ? list : [...(list ?? []), comment]);
+  const threads = shown.filter((c) => c.replyToId === null);
+  return (
+    <section aria-label="Comments" className="artifact-comments">
+      <h2>Comments</h2>
+      <FormError error={failure} />
+      {comments && threads.length === 0 && <p className="muted">No Comments yet.</p>}
+      {threads.length > 0 && (
+        <ol className="artifact-comment-list">
+          {threads.map((comment) => (
+            <li key={comment.id} className="entry">
+              <span className="gutter">
+                <Avatar actor={comment.actor} />
+              </span>
+              <CommentThread
+                comment={comment}
+                comments={shown}
+                ticket={null}
+                user={user}
+                runs={[]}
+                depth={0}
+                arrived={arrived}
+                onAdded={added}
+                onChanged={load}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+      {canWrite && (
+        <CommentForm
+          label="New Comment"
+          button="Comment"
+          placeholder="Comment… Ticket keys link to their Tickets"
+          onSend={async (body) => added(await api.commentOnArtifact(artifact.id, { body }))}
+        />
+      )}
+    </section>
   );
 }
 

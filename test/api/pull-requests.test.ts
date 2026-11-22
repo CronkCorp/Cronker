@@ -1563,7 +1563,8 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.applyAhead("0053_display_name.sql");
     await cronk.applyAhead("0055_mentions.sql");
     await cronk.applyAhead("0057_embeds.sql");
-    await cronk.applyAhead("0066_term_mentions.sql");
+    await cronk.applyAhead("0068_decision_mentions.sql");
+    await cronk.applyAhead("0070_term_mentions.sql");
     await cronk.applyAhead("0056_concise_reports.sql");
     await cronk.applyAhead("0057_archived_projects.sql");
     await cronk.applyAhead("0059_conflict_markers.sql");

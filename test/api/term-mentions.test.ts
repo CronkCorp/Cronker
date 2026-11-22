@@ -133,6 +133,34 @@ describe("which names are Mentions", () => {
       ["term", run.id],
     ]);
   });
+
+  test("a text mentions Terms beside Decision keys, and a Comment on a Project's Artifact by its Project's glossary", async () => {
+    const s = await workspaceWithProject();
+    const workspaceLane = await workspaceTerm(s, "Lane");
+    const projectLane = await projectTerm(s, "Lane");
+    const decision = await ok("POST", `/api/projects/${s.project.id}/decisions`, s.ada, { title: "Lanes", body: "" });
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const board = await ok("POST", `/api/projects/${s.project.id}/artifacts`, s.ada, { title: "Board", files });
+
+    const written = await document(s, "Per CRONK-D1, one Lane.");
+    expect(written.mentions).toEqual([
+      { kind: "decision", text: "CRONK-D1", key: "CRONK-D1", decisionId: decision.id, projectId: s.project.id, number: 1 },
+      mentionOf(projectLane),
+    ]);
+    const comment = await ok("POST", `/api/artifacts/${board.id}/comments`, s.ada, { body: "One Lane per column." });
+    expect(comment.mentions).toEqual([mentionOf(projectLane)]);
+
+    // Indexed again after a rename, the Comment keeps its Project's glossary.
+    await ok("PATCH", `/api/terms/${projectLane.id}`, s.ada, { name: "Swimlane", baseVersion: 1 });
+    await ok("PATCH", `/api/terms/${projectLane.id}`, s.ada, { name: "Lane", baseVersion: 2 });
+    await cronk.jobsSettled();
+    expect(await mentionedIn(s.ada, projectLane.id)).toEqual([
+      ["document", written.id],
+      ["comment", comment.id],
+    ]);
+    expect(await mentionedIn(s.ada, workspaceLane.id)).toEqual([]);
+    expect((await document(s, "Per CRONK-D1, one Lane.")).mentions).toHaveLength(2);
+  });
 });
 
 describe("indexing again as Terms change", () => {

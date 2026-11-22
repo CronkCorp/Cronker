@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncTypebox } from "@fastify/type-provider-typebox";
 import { Type } from "typebox";
 import type { Context } from "../context.js";
+import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { ErrorBody } from "../http/errors.js";
 import { requireCaller } from "../identity/callers.js";
 import { findProject, projectNotFound } from "../work/projects.js";
@@ -72,17 +73,18 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             summary: `Create a Term in ${place.name} glossary`,
             description:
               "Creates the Term at Version 1 by its Actor. Its name is unique ignoring case among the Project's own " +
-              "Terms, or the Workspace's: a taken one is refused with `term_name_taken`.",
+              "Terms, or the Workspace's: a taken one is refused with `term_name_taken`. An Agent's save answers with " +
+              "`avoidedWords`: the words the glossary avoids that its name and definition use.",
             params,
             body: TermCreate,
-            response: { 201: TermDetail, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+            response: { 201: withAvoidedWords(TermDetail), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
           },
         },
         async (request, reply) => {
           const caller = await requireCaller(context, request);
           const { definition = "", avoid = [], name } = tidy(request.body);
           const created = await createTerm(context, caller, await place.find(request, caller), { name, definition, avoid });
-          return reply.code(201).send(created);
+          return reply.code(201).send(await warnAgent(db, caller, created, { plain: [name], markdown: [definition] }, created));
         },
       );
     }
@@ -136,13 +138,19 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Saves the Term as its next Version, by the caller, keeping what the save leaves out; a new name another " +
             "Term of its glossary has, ignoring case, is refused with `term_name_taken`. `baseVersion` is the " +
             "number of the Version the save is based on. A save based on an outdated Version is refused with " +
-            "`outdated_version`, carrying the current Version as `current`.",
+            "`outdated_version`, carrying the current Version as `current`. An Agent's save answers with " +
+            "`avoidedWords`: the words the glossary avoids that the name and definition it gives use.",
           params: TermParams,
           body: TermEdit,
-          response: { 200: TermDetail, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Term", TermVersion) },
+          response: { 200: withAvoidedWords(TermDetail), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Term", TermVersion) },
         },
       },
-      async (request) => editTerm(context, await requireCaller(context, request), request.params.termId, tidy(request.body)),
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const edit = tidy(request.body);
+        const saved = await editTerm(context, caller, request.params.termId, edit);
+        return warnAgent(db, caller, saved, given({ plain: [edit.name], markdown: [edit.definition] }), saved);
+      },
     );
 
     app.get(

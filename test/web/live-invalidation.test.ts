@@ -31,6 +31,7 @@ const samples: { [type in StreamEvent["type"]]: Extract<StreamEvent, { type: typ
   "term.changed": [{ type: "term.changed", projectId: p, termId: "term-1" }],
   "decision.changed": [{ type: "decision.changed", projectId: null, decisionId: "decision-1" }],
   "artifact.changed": [{ type: "artifact.changed", projectId: p, artifactId: "artifact-1" }],
+  "artifact.comments.changed": [{ type: "artifact.comments.changed", projectId: p, artifactId: "artifact-1" }],
   "transcript.changed": [{ type: "transcript.changed", transcriptId: "transcript-1", runId: null }],
 };
 
@@ -69,11 +70,12 @@ test("a Ticket's change refreshes what its screen shows of it, and only that Tic
     keys.relations(t),
     keys.documentLinks(t),
     keys.artifactLinks(t),
+    // Linking or unlinking an Artifact brings its Comments onto the timeline, or takes them off.
+    keys.comments(t),
     keys.projectTickets(p),
   ]) {
     expect(stale(changed, loaded), loaded.join(" ")).toBe(true);
   }
-  expect(stale(changed, keys.comments(t))).toBe(false);
   expect(stale(changed, keys.ticket("ticket-2"))).toBe(false);
   expect(stale(changed, keys.projectTickets("project-2"))).toBe(false);
 });
@@ -112,4 +114,25 @@ test("the board's events refresh its Project and each filter's list of its Ticke
     expect(stale(event, keys.project("project-2")), type).toBe(false);
   }
   expect(stale({ type: "reconnected" }, filtered)).toBe(true);
+});
+
+test("whatever an Agent may have done refreshes the Agent Records, and the rest leave them be", () => {
+  for (const type of [
+    "ticket.changed",
+    "comment.added",
+    "report.added",
+    "report.changed",
+    "transcripts.changed",
+    "document.changed",
+    "term.changed",
+    "decision.changed",
+    "artifact.changed",
+    "artifact.comments.changed",
+    "transcript.changed",
+  ] as const) {
+    expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(true);
+  }
+  for (const type of ["project.changed", "statuses.changed", "pull_requests.changed"] as const) {
+    expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(false);
+  }
 });

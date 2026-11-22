@@ -9,6 +9,7 @@ import { dropFromQueue, queueDue } from "../pipeline/merge-queue.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
 import { findTicketRow, keysWritten, ticketNotFound } from "../work/tickets.js";
 import type { EventHandler } from "./webhooks.js";
+import { literals } from "../literals.js";
 
 /**
  * Pull Requests in the Repositories Projects list, and the Tickets they link to: those whose
@@ -27,8 +28,8 @@ export type CheckState = (typeof checkStates)[number];
 
 export const Check = Type.Object({
   name: Type.String({ description: "The check run's name, or the commit status's context." }),
-  state: Type.Union(
-    checkStates.map((s) => Type.Literal(s)),
+  state: literals(
+    checkStates,
     {
       description:
         "`pending` until it ends; then `passed`, `failed` (failed, timed out or cancelled, or a commit status's error) or `neutral` (neutral, skipped, stale or waiting for an action).",
@@ -100,8 +101,8 @@ const reviewStates = ["approved", "changes_requested"] as const;
 
 export const PullRequestReview = Type.Object(
   {
-    state: Type.Union(
-      reviewStates.map((s) => Type.Literal(s)),
+    state: literals(
+      reviewStates,
       { description: "`approved` or `changes_requested`." },
     ),
     reviewer: Type.String({ description: "The login of the GitHub account that wrote the review." }),
@@ -122,8 +123,8 @@ export const PullRequest = Type.Object({
   title: Type.String(),
   branch: Type.String({ description: "The branch it proposes to merge." }),
   url: Type.String({ description: "Where GitHub shows it." }),
-  state: Type.Union(
-    pullRequestStates.map((s) => Type.Literal(s)),
+  state: literals(
+    pullRequestStates,
     { description: "`open`, `draft` (open but not ready for review), `merged` or `closed` (closed unmerged)." },
   ),
   checks: Type.Array(Check, { description: "The checks on its latest commit, the latest of each by name." }),

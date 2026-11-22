@@ -15,11 +15,12 @@ import {
   entriesOf,
   EntryPage,
   findTranscript,
-  redactionMaxLength,
+  RedactionCreate,
   redactTranscript,
   TicketTranscript,
   ticketTranscripts,
   Transcript,
+  TranscriptUpload,
   uploadTranscript,
 } from "./transcripts.js";
 
@@ -55,7 +56,7 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
             "whatever it held for that session of the Agent. Answers 201 for a new Transcript, 200 for a replaced one, and " +
             "refuses with 410 `transcript_deleted` once a User deleted the session's Transcript.",
           params: Type.Object({ sessionId: Type.String({ minLength: 1, maxLength: 200 }) }),
-          body: Type.String(),
+          body: TranscriptUpload,
           response: { 200: Transcript, 201: Transcript, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 410: ErrorBody, 413: ErrorBody },
         },
       },
@@ -202,7 +203,7 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
             "string shorter than 4 characters with `redaction_too_short`. The string is never returned, and a " +
             "Redaction can't be removed. Answers with the Transcript.",
           params: TranscriptParams,
-          body: Type.Object({ text: Type.String({ minLength: 1, maxLength: redactionMaxLength }) }),
+          body: RedactionCreate,
           response: { 201: Transcript, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

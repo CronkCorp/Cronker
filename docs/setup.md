@@ -183,6 +183,77 @@ Saving checks only that the secret starts with `whsec_`. With a wrong one, or no
 
 Each Run records what its session cost at Anthropic's list prices once it ends: the Run shows it on the Ticket's timeline, the Ticket's side panel totals its Runs, and the Runner's card totals its Runs that ended this calendar month (in UTC). List prices are not what a discounted contract bills, so your invoice may be lower. Subscription Runs report no cost. To cap what one Run may spend, set the card's **Budget per Run** (in US dollars; empty, the default, is none): each session started from then on gets it as its budget, and a Run whose session reaches it fails with *budget reached* and waits in your Inbox with **Retry**. A session may pass its budget by up to one model request before Anthropic stops it.
 
+## 11. Get your Inbox on your phone (optional)
+
+Each User can add **webhooks** for a Workspace under **Account settings → Webhooks**: a name, an `https` URL and the Inbox kinds it gets. A new webhook gets Questions, *needs you* and Runs gone wrong (failed, lost and unstarted Runs); To review, Unverified, Discovered and, for Admins, To reassign can be added. Plain `http` is accepted only to `localhost`, `127.0.0.1` or `[::1]`, and only when Cronk itself runs on `http://localhost`. Webhooks need `CRONK_SECRET_KEY`, since Cronk keeps each one's secret encrypted to sign with.
+
+Adding one shows its **secret** once, `whsec_` and 32 random bytes in base64. **Send test** sends a delivery about a made-up Ticket, `TEST-1`, within a few seconds, and the webhook lists its last 20 deliveries with each try's status code and time. A delivery your receiver doesn't answer with a 2xx in 10 seconds is tried again 30 seconds later, then after 1, 2, 4 minutes and so on, doubling, the last try 24 hours after the first (13 tries in all). Retries repeat the body and `webhook-id`, with a fresh timestamp and signature. If the last try fails too, the webhook shows **Failing** on the settings page until a delivery to it succeeds, such as a Send test once the receiver is fixed. Removing a User from the Workspace removes their webhooks there.
+
+### The delivery
+
+Each delivery is a `POST` with `Content-Type: application/json` and a body such as:
+
+```json
+{
+  "id": "8d0f6f8e-5f4b-4f63-9d0e-3c4b9a8a1e21",
+  "kind": "question",
+  "workspace": "acme",
+  "ticket": { "key": "CRONK-12", "title": "Fix the lost Runs", "url": "https://cronk.example.com/acme/tickets/CRONK-12" },
+  "run": "a19d534d-457c-4bbe-b025-c6d78095207f",
+  "at": "2026-11-22T15:22:29.347Z"
+}
+```
+
+- `kind`: the Inbox kind, `question`, `needsYou`, `run`, `review`, `unverified`, `discovered` or `reassign`, or `test` for **Send test**.
+- `workspace`: the Workspace's slug.
+- `ticket`: its key, title and address. A delivery never carries a description or Comments.
+- `run`: the Run's id, when the item has one.
+- `at`: when the item appeared.
+- `id`: the delivery's id.
+
+Its headers follow [Standard Webhooks](https://www.standardwebhooks.com), so its libraries verify it with the secret as it is:
+
+- `webhook-id`: the delivery's id.
+- `webhook-timestamp`: when it was sent, in seconds since 1970.
+- `webhook-signature`: `v1,` then the base64 HMAC-SHA256 of `<webhook-id>.<webhook-timestamp>.<body>`, keyed with the secret's bytes after `whsec_`, decoded from base64.
+
+To check one by hand, compute that HMAC over the body exactly as received, compare it in constant time, and refuse timestamps more than five minutes old. A receiver answering anything but 2xx, or not answering within 10 seconds, shows the delivery as failed.
+
+### Example: ntfy
+
+[ntfy](https://ntfy.sh) shows a plain `POST`'s body as a phone notification, but doesn't check signatures. Point a webhook straight at a topic with a long, unguessable name to try it (`https://ntfy.sh/cronk-<random>`): the notification is the raw JSON. To verify deliveries and send a readable message, put a few lines in between, such as this Node script (any host with a public `https` address, or n8n's Webhook and Crypto nodes doing the same):
+
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { createServer } from "node:http";
+
+const secret = Buffer.from(process.env.CRONK_WEBHOOK_SECRET.replace(/^whsec_/, ""), "base64");
+const topic = process.env.NTFY_TOPIC; // such as https://ntfy.sh/cronk-3k9f2
+
+createServer((req, res) => {
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
+  req.on("end", async () => {
+    const body = Buffer.concat(chunks).toString("utf8");
+    const id = req.headers["webhook-id"];
+    const timestamp = req.headers["webhook-timestamp"];
+    const expected = `v1,${createHmac("sha256", secret).update(`${id}.${timestamp}.${body}`).digest("base64")}`;
+    const fresh = Math.abs(Date.now() / 1000 - Number(timestamp)) < 300;
+    const signed = String(req.headers["webhook-signature"] ?? "")
+      .split(" ")
+      .some((s) => s.length === expected.length && timingSafeEqual(Buffer.from(s), Buffer.from(expected)));
+    if (!fresh || !signed) return res.writeHead(401).end();
+    const { kind, ticket } = JSON.parse(body);
+    await fetch(topic, {
+      method: "POST",
+      headers: { Title: `${ticket.key}: ${kind}`, Click: ticket.url },
+      body: ticket.title,
+    });
+    res.writeHead(204).end();
+  });
+}).listen(8080);
+```
+
 ## Upgrading
 
 Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releases](https://github.com/CronkCorp/Cronker/releases). Read the notes of every release you skip: they call out anything to do by hand, such as a GitHub App permission to accept.

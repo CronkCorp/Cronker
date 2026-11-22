@@ -16,6 +16,7 @@ import { ownerName } from "../agents/tokens.js";
 import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
 import { insertLink } from "./linked-artifacts.js";
 import { ComparedLine, compareWords } from "../knowledge/compare.js";
+import { sandboxPath } from "./sandbox-path.js";
 
 /**
  * Artifacts: live pages an Actor builds, such as an HTML prototype, with the files the page refers to by relative
@@ -106,7 +107,7 @@ export const ArtifactSave = Type.Object({
 export type ArtifactSave = Static<typeof ArtifactSave>;
 
 /** Where a Version's files are served, by its key: each file at its relative path under it. */
-export const sandboxPath = (key: string, path = "") => `/sandbox/${key}/${path.split("/").map(encodeURIComponent).join("/")}`;
+export { sandboxPath };
 
 type Row = Omit<Artifact, "url" | "files" | "version"> & {
   serveKey: string;
@@ -439,7 +440,7 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
 
 /**
  * Deletes the Artifact with all its Versions, their files' bytes once the delete is committed. Only a User may, so an
- * agent can't remove work. It drops out of its links, and the Tickets linking it show the change.
+ * agent can't remove work. Its Comments go with it. It drops out of its links, and the Tickets linking it show the change.
  */
 export async function deleteArtifact(context: Context, actor: Caller, artifactId: string): Promise<void> {
   const { db, live } = context;
@@ -466,10 +467,19 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
       `select distinct blob_id as "blobId" from artifact_files where artifact_id = $1`,
       [artifact.id],
     );
+    // Its Comments go with it, with the files attached to them; replies before what they answer.
+    const attached = await tx.query<{ id: string }>(
+      `delete from attachments where comment_id in (select id from comments where artifact_id = $1) returning id`,
+      [artifact.id],
+    );
+    await tx.query("update comments set reply_to_id = null where artifact_id = $1", [artifact.id]);
+    await tx.query("delete from comments where artifact_id = $1", [artifact.id]);
     // Its Versions, their files and its links go with it, and the texts embedding it no longer do.
     await tx.query("delete from mentions where target_artifact_id = $1", [artifact.id]);
     await tx.query("delete from artifacts where id = $1", [artifact.id]);
-    afterCommit(tx, () => forgetAttachments(context, blobs.rows.map((row) => row.blobId)));
+    afterCommit(tx, () =>
+      forgetAttachments(context, [...blobs.rows.map((row) => row.blobId), ...attached.rows.map((row) => row.id)]),
+    );
     live.publish(tx, artifact.workspaceId, { type: "artifact.changed", projectId: artifact.projectId, artifactId: artifact.id });
   });
 }
