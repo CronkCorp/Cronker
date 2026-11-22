@@ -772,7 +772,7 @@ export interface Check {
   url: string | null;
 }
 
-/** A Pull Request linked to a Ticket by its key in the Pull Request's branch or title. */
+/** A Pull Request linked to a Ticket by its key in the Pull Request's branch or title, or by hand by a User. */
 export interface PullRequest {
   id: number;
   repository: string;
@@ -803,6 +803,8 @@ export interface PullRequest {
         at: string;
       }
     | null;
+  /** Whether a User linked it by hand; only such a link can be unlinked. */
+  manual: boolean;
 }
 
 /** What completed a Ticket, and where Reopen sends it. */
@@ -1098,6 +1100,10 @@ export const api = {
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
+  linkPullRequest: (ticketId: string, pullRequest: string) =>
+    call<PullRequest>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`, { pullRequest }),
+  unlinkPullRequest: (ticketId: string, pullRequestId: number) =>
+    call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests/${pullRequestId}`),
   linkedDocuments: (ticketId: string) =>
     call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>

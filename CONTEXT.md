@@ -161,7 +161,7 @@ A GitHub repository that one or more Projects list as holding their code, reache
 _Avoid_: Repo (in the product), codebase
 
 **Pull Request**:
-A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains. A merge by a User of the Ticket's Workspace completes the Ticket as Verified, unless a Run is running on the Ticket: then it counts as that Run's Agent's. Any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified. A Project can turn this **Pull Request automation** off, so merges complete nothing.
+A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains, and to those a User linked it to by hand, which only a User can unlink; either way it must be of a Repository the Ticket's Project lists, and links the same. A merge by a User of the Ticket's Workspace completes the Ticket as Verified, unless a Run is running on the Ticket: then it counts as that Run's Agent's. Any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified. A Project can turn this **Pull Request automation** off, so merges complete nothing.
 _Avoid_: PR (in the product), merge request, change
 
 ### Actors
