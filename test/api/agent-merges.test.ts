@@ -343,15 +343,15 @@ describe("Cronk refuses a merge, naming the rule, and the Run goes on", () => {
     });
   });
 
-  test("an archived Project, where GitHub changes nothing", async () => {
+  test("an archived Project, where GitHub changes nothing: archiving stopped the Merge Run", async () => {
     const setup = await mergeRunning();
     await ok("POST", `/api/projects/${setup.project.id}/archive`, setup.ada);
 
-    await refused(setup, setup.merge(), {
-      status: 403,
-      code: "project_archived",
-      rule: "An archived Project is read-only for everyone, Admins and Agents included, until an Admin unarchives it.",
-    });
+    const { status, json } = await setup.merge();
+    expect({ status, code: json.error.code }).toEqual({ status: 409, code: "run_stopped" });
+    expect(cronk.github.merges).toEqual([]);
+    expect(await ok("GET", `/api/runs/${setup.run.id}`, setup.ada)).toMatchObject({ state: "stopped" });
+    expect(await ok("GET", `/api/tickets/${setup.ticket.id}`, setup.ada)).toMatchObject({ statusId: setup.status("Merge") });
   });
 
   test("GitHub's own refusal, such as a merge its settings or branch protection forbid, goes to the Assignee", async () => {
