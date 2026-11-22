@@ -2,12 +2,12 @@ import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
-import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
-import type { User } from "../identity/user.js";
-import { startRunIfNeeded, blockingChanged } from "../runs/runs.js";
+import { accessIn, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
+import { userName, type User } from "../identity/user.js";
+import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { insertComment } from "./comment-writes.js";
 import { markdown } from "./fields.js";
-import { writeTicket } from "./ticket-writes.js";
+import { lockTickets, writeTicket } from "./ticket-writes.js";
 import { findTicket, findTicketRow, ticketNotFound, TicketRef, ticketRefColumn, type Ticket, type TicketRow } from "./tickets.js";
 
 /**
@@ -29,6 +29,15 @@ export async function acceptTicket(context: Context, user: User, ticketId: strin
 /** The reopen route's body. */
 export const TicketReopen = Type.Object({
   comment: markdown(100_000, "Why it is reopened, in Markdown; added to the Ticket's Comments."),
+  sendBack: Type.Optional(
+    Type.Array(Type.String({ format: "uuid" }), {
+      maxItems: 1000,
+      description:
+        "The ids of the dependents to send back to their Project's first Backlog Status, stopping any running Run: each " +
+        "one `reopen-preview` lists, in a Project where the User has Write. The others are left where they are. None " +
+        "when left out.",
+    }),
+  ),
 });
 export type TicketReopen = Static<typeof TicketReopen>;
 
@@ -38,7 +47,13 @@ export type TicketReopen = Static<typeof TicketReopen>;
  * A Ticket completed by work no Step produced, such as a merge of a Pull Request a User opened, stays
  * where it is, no longer Unverified, for the User to move.
  */
-export async function reopenTicket(context: Context, user: User, ticketId: string, comment: string): Promise<Ticket> {
+export async function reopenTicket(
+  context: Context,
+  user: User,
+  ticketId: string,
+  comment: string,
+  sendBack: string[] = [],
+): Promise<Ticket> {
   const { db, clock } = context;
   await transaction(db, async (tx) => {
     const ticket = await unverifiedTicket(tx, user, ticketId, "Reopened");
@@ -69,12 +84,42 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
     }
     // Read before the move, while its Status still says when it was completed.
     const movedOn = await dependentsMovedOn(tx, userViewer(user.id), ticket.id);
+    // Every dependent to send back is checked before anything changes, so a refusal leaves everything as it was.
+    const toSendBack = new Set(sendBack);
+    for (const id of toSendBack) {
+      const dependent = movedOn.find((d) => d.ticket.id === id);
+      if (!dependent) {
+        throw new ApiError(
+          400,
+          "not_in_preview",
+          `Only a Ticket ${ticket.key} blocks that moved on since it was completed, as \`reopen-preview\` lists it, can be sent back.`,
+        );
+      }
+      await requireWrite(tx, userViewer(user.id), dependent.ticket);
+    }
     const now = clock.now();
     // Sent back by a User, like a move by hand, it starts its rounds afresh.
     await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     await insertComment(context, tx, ticket, { kind: "user", id: user.id }, comment, null);
+    const backlogs = await firstBacklogs(tx, movedOn.filter((d) => toSendBack.has(d.ticket.id)).map((d) => d.ticket.projectId));
+    const locked = new Map((await lockTickets(tx, [...toSendBack])).map((row) => [row.id, row]));
+    const who = toSendBack.size > 0 ? await nameOf(tx, user.id) : "";
     for (const dependent of movedOn) {
-      await insertComment(context, tx, dependent.ticket, { kind: "cronk" }, reopenedNotice(ticket.key, comment), null);
+      const row = locked.get(dependent.ticket.id);
+      const backlog = row ? backlogs.get(row.projectId)! : null;
+      await insertComment(
+        context,
+        tx,
+        dependent.ticket,
+        { kind: "cronk" },
+        reopenedNotice(ticket.key, comment, backlog?.name ?? null),
+        null,
+      );
+      if (!row || !backlog) continue;
+      // Sent back like a move by hand: its Run stops, it starts its rounds afresh, and it still waits on the reopened one.
+      await stopRunningRun(context, tx, row.id, `${who} sent ${dependent.ticket.key} back to ${backlog.name}, Reopening ${ticket.key}.`, now);
+      await writeTicket(context, tx, row, user.id, { statusId: backlog.id }, { at: now });
+      await tx.query("delete from round_counts where ticket_id = $1", [row.id]);
     }
     // Its Status's Changes come after the Comment saying why, and clearing `verification` forgets where it came from.
     await writeTicket(
@@ -86,8 +131,9 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
       { at: now },
     );
     await startRunIfNeeded(context, tx, ticket.id, now);
-    // Sent back out of Done, it blocks again what it blocks.
+    // Sent back out of Done, it blocks again what it blocks; a dependent sent back waits for it again.
     await blockingChanged(context, tx, [ticket.id]);
+    for (const id of locked.keys()) await startRunIfNeeded(context, tx, id, now);
   });
   return (await findTicket(db, userViewer(user.id), ticketId))!;
 }
@@ -96,13 +142,33 @@ export async function reopenTicket(context: Context, user: User, ticketId: strin
  * What Cronk writes on a dependent that moved on when the Ticket it builds on is Reopened: names that Ticket, so
  * the Mention links it, and quotes the reason.
  */
-export function reopenedNotice(reopenedKey: string, reason: string): string {
+export function reopenedNotice(reopenedKey: string, reason: string, sentBackTo: string | null): string {
   const quoted = reason
     .trim()
     .split("\n")
     .map((line) => (line === "" ? ">" : `> ${line}`))
     .join("\n");
-  return `${reopenedKey}, which blocks this Ticket, was Reopened after this one moved on, so the work this one builds on may change:\n\n${quoted}`;
+  const choice = sentBackTo
+    ? `It was sent back to ${sentBackTo}, to wait until ${reopenedKey} is done again.`
+    : "It was left where it is.";
+  return `${reopenedKey}, which blocks this Ticket, was Reopened after this one moved on, so the work this one builds on may change:\n\n${quoted}\n\n${choice}`;
+}
+
+/** Each Project's first Backlog Status, by Project id. */
+async function firstBacklogs(tx: Tx, projectIds: string[]): Promise<Map<string, { id: string; name: string }>> {
+  if (projectIds.length === 0) return new Map();
+  const { rows } = await tx.query<{ projectId: string; id: string; name: string }>(
+    `select distinct on (project_id) project_id as "projectId", id, name from statuses
+     where project_id = any($1::uuid[]) and kind = 'backlog' order by project_id, position`,
+    [[...new Set(projectIds)]],
+  );
+  return new Map(rows.map(({ projectId, ...status }) => [projectId, status]));
+}
+
+/** How a stop reason names the User. */
+async function nameOf(tx: Tx, userId: string): Promise<string> {
+  const { rows } = await tx.query<{ name: string }>(`select ${userName()} as name from users where id = $1`, [userId]);
+  return rows[0]!.name;
 }
 
 /** The Ticket, locked, if it is Unverified; otherwise a refusal saying it can't be Accepted or Reopened. */
@@ -202,6 +268,7 @@ export const MovedOnDependent = Type.Object({
     ]),
   }),
   running: Type.Boolean({ description: "Whether a Run is running on it." }),
+  canWrite: Type.Boolean({ description: "Whether the caller has Write in its Project, so Reopen may send it back." }),
 });
 export type MovedOnDependent = Static<typeof MovedOnDependent>;
 
@@ -233,11 +300,14 @@ async function dependentsMovedOn(
   viewer: Viewer,
   ticketId: string,
 ): Promise<(MovedOnDependent & { ticket: { workspaceId: string } })[]> {
-  const reach = inReach(viewer, { project: "dependent.project_id", workspace: "dependent.workspace_id" }, "$2");
+  const place = { project: "dependent.project_id", workspace: "dependent.workspace_id" };
+  const reach = inReach(viewer, place, "$2");
+  const access = accessIn(viewer, place, "$3");
   const { rows } = await db.query<MovedOnDependent & { workspaceId: string }>(
     `select ${ticketRefColumn("dependent", "dependent_projects")} as ticket, dependent.workspace_id as "workspaceId",
        json_build_object('id', status.id, 'name', status.name, 'kind', status.kind) as status,
-       exists (select 1 from runs where runs.ticket_id = dependent.id and runs.state = 'running') as running
+       exists (select 1 from runs where runs.ticket_id = dependent.id and runs.state = 'running') as running,
+       (${access.sql}) = 'write' as "canWrite"
      from tickets completed
      join relations on relations.kind = 'blocks' and relations.ticket_id = completed.id
      join tickets dependent on dependent.id = relations.other_ticket_id
@@ -253,7 +323,7 @@ async function dependentsMovedOn(
          )
        )
      order by dependent_projects.key, dependent.number`,
-    [ticketId, reach.value],
+    [ticketId, reach.value, access.value],
   );
   return rows.map(({ workspaceId, ...dependent }) => ({ ...dependent, ticket: { ...dependent.ticket, workspaceId } }));
 }

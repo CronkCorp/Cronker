@@ -6,10 +6,21 @@ import { RunState, StatusPill } from "./ui/labels.js";
 
 /**
  * In a Reopen dialog, the Tickets the reopened one blocks that moved on since it was completed, each with its Status
- * and whether a Run is running: Cronk tells each of them, quoting the reason. Fetched when the dialog opens; with none,
- * or until they load, nothing shows.
+ * and whether a Run is running: Cronk tells each of them, quoting the reason. For each, the User chooses to leave it
+ * (the default) or, with Write in its Project, send it back to wait; `onSendBackChange` gets the ids to send back.
+ * Fetched when the dialog opens; with none, or until they load, nothing shows.
  */
-export function MovedOnDependents({ ticketId, open }: { ticketId: string; open: boolean }) {
+export function MovedOnDependents({
+  ticketId,
+  open,
+  sendBack,
+  onSendBackChange,
+}: {
+  ticketId: string;
+  open: boolean;
+  sendBack: string[];
+  onSendBackChange: (ids: string[]) => void;
+}) {
   const to = useAddresses();
   const [dependents, setDependents] = useState<MovedOnDependent[]>([]);
   useEffect(() => {
@@ -24,22 +35,40 @@ export function MovedOnDependents({ ticketId, open }: { ticketId: string; open: 
     };
   }, [ticketId, open]);
   if (dependents.length === 0) return null;
+  const choose = (id: string, back: boolean) =>
+    onSendBackChange(back ? [...sendBack.filter((other) => other !== id), id] : sendBack.filter((other) => other !== id));
   return (
     <div className="moved-on">
       <p id={`moved-on-${ticketId}`} className="small">
         {dependents.length === 1 ? "A Ticket it blocks has" : `${dependents.length} Tickets it blocks have`} moved on since it
-        was completed. Cronk tells {dependents.length === 1 ? "it" : "each"}, quoting your Comment.
+        was completed. Cronk tells {dependents.length === 1 ? "it" : "each"}, quoting your Comment. Leave{" "}
+        {dependents.length === 1 ? "it" : "each"} where it is, or send it back to its Backlog to wait until this is done again.
       </p>
       <ul aria-labelledby={`moved-on-${ticketId}`} className="side-list">
-        {dependents.map(({ ticket, status, running }) => (
-          <li key={ticket.id} className="moved-on-row">
-            <Link to={to.ticket(ticket)} className="ticket-link">
-              <span className="ticket-key">{ticket.key}</span> {ticket.title}
-            </Link>
-            <StatusPill kind={status.kind} name={status.name} />
-            {running && <RunState state="running" />}
-          </li>
-        ))}
+        {dependents.map(({ ticket, status, running, canWrite }) => {
+          const back = sendBack.includes(ticket.id);
+          return (
+            <li key={ticket.id} className="moved-on-row">
+              <Link to={to.ticket(ticket)} className="ticket-link">
+                <span className="ticket-key">{ticket.key}</span> {ticket.title}
+              </Link>
+              <StatusPill kind={status.kind} name={status.name} />
+              {running && <RunState state="running" />}
+              {canWrite && (
+                <span role="radiogroup" aria-label={`What to do with ${ticket.key}`} className="moved-on-choice">
+                  <label className="check">
+                    <input type="radio" name={`moved-on-${ticket.id}`} checked={!back} onChange={() => choose(ticket.id, false)} />
+                    <span>Leave it</span>
+                  </label>
+                  <label className="check">
+                    <input type="radio" name={`moved-on-${ticket.id}`} checked={back} onChange={() => choose(ticket.id, true)} />
+                    <span>Send back</span>
+                  </label>
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
