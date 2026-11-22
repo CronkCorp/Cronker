@@ -118,9 +118,15 @@ export const TicketSummary = Type.Object({
     [
       Type.Object({
         position: Type.Integer({ minimum: 1, description: "Its place in its queue, the head being 1." }),
-        state: Type.Union([Type.Literal("queued"), Type.Literal("merging")], {
-          description: "`merging` while Cronk asks GitHub to merge it; `queued` while it waits.",
-        }),
+        state: Type.Union(
+          [Type.Literal("queued"), Type.Literal("merging"), Type.Literal("updating-branch"), Type.Literal("waiting-for-checks")],
+          {
+            description:
+              "`merging` while Cronk asks GitHub to merge it; `updating-branch` while Cronk asks GitHub to bring its branch, " +
+              "behind its base branch, up to date; `waiting-for-checks` until the updated commit's checks are green; " +
+              "`queued` while it waits.",
+          },
+        ),
         pullRequestId: Type.Number({ description: "GitHub's id for the queued Pull Request." }),
       }),
       Type.Null(),
@@ -248,7 +254,7 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
     'waiting', tickets.discovery_waits) end as discovered`;
 
 /**
- * SQL for the Ticket `alias`'s first entry in the Merge Queue, with its place among the entries whose Pull Requests
+ * SQL for the Ticket `alias`'s first entry in the Merge Queue, one Cronk is merging or updating if any, with its place among the entries whose Pull Requests
  * share its Repository and base branch, in the order they joined.
  */
 const queueColumn = (alias: string) => `(select json_build_object('pullRequestId', entry.pull_request_id, 'state', entry.state,
@@ -256,7 +262,7 @@ const queueColumn = (alias: string) => `(select json_build_object('pullRequestId
       where ahead_pr.repository_id = queued_pr.repository_id
         and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '') and ahead.seq <= entry.seq))
   from merge_queue entry join pull_requests queued_pr on queued_pr.id = entry.pull_request_id
-  where entry.ticket_id = ${alias}.id order by entry.seq limit 1)`;
+  where entry.ticket_id = ${alias}.id order by entry.state <> 'queued' desc, entry.seq limit 1)`;
 
 /** SQL ordering a Status's Tickets: those in the Merge Queue first, by their place in it. */
 const queueOrder = (alias: string) => `(${queueColumn(alias)} ->> 'position')::int nulls last`;

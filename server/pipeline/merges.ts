@@ -12,6 +12,10 @@ import { inUnarchivedProject, listsPullRequestsRepository, moveByCronk, type Mov
  * that Agent in that Run, or that User, in their own Workspace. A User's own merge while a Run is running on the
  * Ticket completes them Unverified, as that Run's Agent's in that Run, so an agent merging with the User's credentials can't pass as the User vouching for the work. Other Pull Requests and
  * unfinished Sub-Tickets don't hold it back, and a Run running on it stops as if a User had moved it. Reopen then sends it back to the producing Step's Status, or, without one, leaves it.
+ *
+ * The exception is a merge the Merge Queue asked for, of one of several Pull Requests a Ticket has in the queue: it
+ * records the merge and takes that Pull Request out of the queue, leaving the Ticket in its Merge Status until the last
+ * of them merges. A merge outside the queue still completes the Ticket on its first merge.
  */
 
 /** The merge as GitHub reported it, or as an Agent's Run asked Cronk for it. */
@@ -33,6 +37,8 @@ export interface Merge {
   byUser?: { id: string; name: string; workspaceId: string };
   /** How it completes the Tickets, when Cronk was asked for it; otherwise by who merged it, as above. */
   verification?: "verified" | "unverified";
+  /** Whether the Merge Queue asked Cronk for it: a Ticket with other Pull Requests still queued then waits for them. */
+  viaQueue?: boolean;
 }
 
 /** Completes the Tickets the merged Pull Request links. Call it in the transaction that recorded the merge. */
@@ -92,6 +98,14 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
       : mergedBy
         ? `@${mergedBy.login}`
         : "GitHub";
+    const merged = { field: "merged" as const, from: null, to: { pullRequest, mergedBy: mergedBy?.login ?? null } };
+    if (merge.viaQueue && (await othersQueued(tx, ticket.id, pullRequest.id))) {
+      // Not its last queued Pull Request: the Ticket waits in the queue for the others, this one leaving it merged.
+      await tx.query("delete from merge_queue where ticket_id = $1 and pull_request_id = $2", [ticket.id, pullRequest.id]);
+      await recordChanges(tx, ticket, by, context.clock.now(), [merged]);
+      context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+      continue;
+    }
     await moveByCronk(context, tx, ticket, {
       target: { kind: "status", statusId: doneStatusId, completedFrom: producingStatusId, withoutStep: !produced },
       by,
@@ -102,10 +116,17 @@ export async function completeMergedTickets(context: Context, tx: Tx, merge: Mer
       pullRequestId: pullRequest.id,
       // Recorded at the move's time, ahead of the Changes moving it.
       beforeMove: async (_decision, now) => {
-        await recordChanges(tx, ticket, by, now, [
-          { field: "merged", from: null, to: { pullRequest, mergedBy: mergedBy?.login ?? null } },
-        ]);
+        await recordChanges(tx, ticket, by, now, [merged]);
       },
     });
   }
+}
+
+/** Whether the Ticket has Pull Requests in the Merge Queue other than this one. */
+async function othersQueued(tx: Tx, ticketId: string, pullRequestId: number): Promise<boolean> {
+  const { rowCount } = await tx.query("select from merge_queue where ticket_id = $1 and pull_request_id <> $2 limit 1", [
+    ticketId,
+    pullRequestId,
+  ]);
+  return (rowCount ?? 0) > 0;
 }

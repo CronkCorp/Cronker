@@ -795,10 +795,18 @@ function RunCard({
   );
 }
 
+/** The muted line under a queued Ticket's chip, by its state in the queue. */
+const queueLine: Record<NonNullable<TicketSummary["queue"]>["state"], string> = {
+  queued: "Cronk merges it once it reaches the front and is clean and green.",
+  merging: "Cronk is merging it now.",
+  "updating-branch": "Its branch is behind its base branch, so Cronk is asking GitHub to update it.",
+  "waiting-for-checks": "Cronk updated its branch and merges it once the new commit's checks are green.",
+};
+
 /**
- * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, or *Merging*) with Remove from queue;
- * otherwise Merge, where it applies: with Write, in a Review Status with an open Pull Request, in a Project with Pull
- * Request automation on and a Merge Status. Hidden otherwise.
+ * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, *Updating branch*, *Waiting for checks*
+ * or *Merging*) with Remove from queue while it waits; otherwise Merge, where it applies: with Write, in a Review Status
+ * with an open Pull Request, in a Project with Pull Request automation on and a Merge Status. Hidden otherwise.
  */
 function MergeQueueCard({
   ticket,
@@ -828,9 +836,9 @@ function MergeQueueCard({
           <QueueChip queue={queue} />
         </p>
         <p className="small muted">
-          {queue.state === "merging" ? "Cronk is merging it now." : "Cronk merges it once it reaches the front and is clean and green."}
+          {queueLine[queue.state]}
         </p>
-        {canWrite && queue.state === "queued" && (
+        {canWrite && (queue.state === "queued" || queue.state === "waiting-for-checks") && (
           <Actions>
             <Button size="small" disabled={busy} onClick={() => act(onRemove)}>
               Remove from queue
@@ -1457,6 +1465,11 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
 function describedWithReason(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
+    // A merge of one of several Pull Requests a Ticket has in the Merge Queue leaves it waiting for the others.
+    if (!moved) {
+      const { pullRequest } = change.to as Merged;
+      return `merged ${pullRequestName(pullRequest)} ${pullRequest.title}, waiting in the Merge Queue for its other Pull Requests`;
+    }
     const verification = related.find((c) => c.field === "verification")?.to;
     return (
       <>

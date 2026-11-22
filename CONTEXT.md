@@ -61,7 +61,7 @@ The Step on a Merge Status, where Tickets wait in the Merge Queue. It skips itse
 _Avoid_: Merge job, auto-merge
 
 **Merge Queue**:
-The Tickets waiting in a Merge Status for Cronk to merge their Pull Requests: one queue per Repository and base branch, in the order they joined, never reordered by hand. Cronk merges each queue's head once it is clean and green, one at a time, as the merge of the User who queued it by pressing **Merge** on it in a Review Status, completing it as Verified, or, for a Ticket Autonomous Delegation queued, as its Agent's, completing it as Unverified. **Remove from queue** sends it back to its Project's first Review Status, and a Pull Request merged or closed on GitHub leaves its queue.
+The Tickets waiting in a Merge Status for Cronk to merge their Pull Requests: one queue per Repository and base branch, in the order they joined, never reordered by hand. Cronk merges each queue's head once it is clean and green, one at a time, as the merge of the User who queued it by pressing **Merge** on it in a Review Status, completing it as Verified, or, for a Ticket Autonomous Delegation queued, as its Agent's, completing it as Unverified. A Ticket with several open Pull Requests queues each in its own queue and stays in Merge until the last of them merges. **Remove from queue** sends it back to its Project's first Review Status, and a Pull Request merged or closed on GitHub leaves its queue.
 _Avoid_: merge train, merge list
 
 **Outcome**:
