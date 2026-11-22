@@ -645,7 +645,7 @@ const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "lab
 /**
  * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
  * edit any field; an Agent only those it may, and only during its own running Run on the Ticket, which
- * each of its Changes names. Assigning a Ticket whose Assignee was removed from the Workspace takes it out
+ * each of its Changes names. Assigning a Ticket whose Assignee was removed from the Workspace, or lost Write in its Project, takes it out
  * of the Admins' Inbox.
  */
 export async function editTicket(

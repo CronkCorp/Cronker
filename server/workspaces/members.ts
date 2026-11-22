@@ -3,13 +3,12 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { adminReaches, issueLink, Link } from "../identity/links.js";
-import { User, userColumns, userName, type User as UserRecord } from "../identity/user.js";
+import { User, userColumns, type User as UserRecord } from "../identity/user.js";
 import { userViewer } from "../identity/viewers.js";
 import { findWorkspace, type Workspace } from "./workspaces.js";
 import { findApp, githubNotSetUp } from "../github/app.js";
 import { accountByLogin } from "../github/client.js";
-import { startRunIfNeeded, stopRunningRun } from "../runs/runs.js";
-import { recordChanges } from "../work/changes.js";
+import { nameOf, releaseTickets } from "../work/releasing.js";
 
 export const Member = Type.Object({ user: User, isAdmin: Type.Boolean() });
 export type Member = Static<typeof Member>;
@@ -218,51 +217,10 @@ export async function removeMember(context: Context, adminId: string, workspaceI
     );
     const now = clock.now();
     const reason = `${await nameOf(tx, adminId)} removed ${await nameOf(tx, userId)} from the Workspace.`;
-    // Their Tickets, and any delegated to their Agents, lose them: a running Run is stopped, and the Admin's
-    // Changes record the Assignee and Delegate taken away. Tickets left without an Assignee wait in every
-    // Admin's Inbox until someone assigns them.
-    const { rows: tickets } = await tx.query<{
-      id: string;
-      projectId: string;
-      assignee: { id: string; name: string } | null;
-      delegate: { id: string; name: string } | null;
-    }>(
-      `select tickets.id, tickets.project_id as "projectId",
-         case when tickets.assignee_id = $2 then json_build_object('id', users.id, 'name', ${userName()}) end as assignee,
-         case when agents.owner_id = $2 then json_build_object('id', agents.id, 'name', agents.name) end as delegate
-       from tickets left join users on users.id = tickets.assignee_id
-       left join agents on agents.id = tickets.delegate_id
-       where tickets.workspace_id = $1 and (tickets.assignee_id = $2 or agents.owner_id = $2)
-       order by tickets.id for update of tickets`,
-      [workspaceId, userId],
-    );
-    for (const ticket of tickets) {
-      if (ticket.delegate) await stopRunningRun(context, tx, ticket.id, reason, now);
-      await tx.query(
-        `update tickets set assignee_id = case when $2 then null else assignee_id end,
-           former_assignee_id = case when $2 then $4::uuid else former_assignee_id end,
-           delegate_id = case when $3 then null else delegate_id end where id = $1`,
-        [ticket.id, ticket.assignee !== null, ticket.delegate !== null, userId],
-      );
-      await recordChanges(tx, { id: ticket.id, workspaceId }, adminId, now, [
-        ...(ticket.assignee ? [{ field: "assignee" as const, from: ticket.assignee, to: null }] : []),
-        ...(ticket.delegate ? [{ field: "delegate" as const, from: ticket.delegate, to: null }] : []),
-      ]);
-      // Losing its Delegate ends a Ticket's wait for a Run.
-      if (ticket.delegate) await startRunIfNeeded(context, tx, ticket.id, now);
-      live.publish(tx, workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-    }
+    // Their Tickets, and any delegated to their Agents, lose them, waiting in every Admin's Inbox.
+    await releaseTickets(context, tx, adminId, { workspaceId, userId, projectId: null }, reason, now);
     live.endAfterCommit(tx, (stream) => stream.workspaceId === workspaceId && stream.userId === userId);
   });
-}
-
-/** How Cronk names a User in what it writes, as `userName` says. */
-async function nameOf(tx: Tx, userId: string): Promise<string> {
-  const { rows } = await tx.query<{ name: string }>(
-    `select ${userName()} as name from users where id = $1`,
-    [userId],
-  );
-  return rows[0]!.name;
 }
 
 /**

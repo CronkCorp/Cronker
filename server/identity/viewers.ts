@@ -134,3 +134,13 @@ export async function readersIn(db: Db | Tx, workspaceId: string, projectIds: (s
   );
   return new Set(rows.map((row) => row.userId));
 }
+
+/** The Users of a Workspace with Write in the Project, by the same rule as {@link accessIn}. */
+export async function writersIn(db: Db | Tx, workspaceId: string, projectId: string): Promise<Set<string>> {
+  const access = userAccess("writers.user_id", { project: "$2::uuid", workspace: "$1::uuid" });
+  const { rows } = await db.query<{ userId: string }>(
+    `select writers.user_id as "userId" from memberships writers where writers.workspace_id = $1 and ${access} = 'write'`,
+    [workspaceId, projectId],
+  );
+  return new Set(rows.map((row) => row.userId));
+}

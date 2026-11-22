@@ -38,6 +38,7 @@ import { Actor, Avatar } from "./ui/actor.js";
 import { Actions, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
+  ConfirmDialog,
   ContextMenu,
   Dialog,
   DialogActions,
@@ -1253,9 +1254,10 @@ function AccessSettings({
   members: Member[];
   onChange: () => void;
 }) {
-  const { error, busy, saved, save } = useSave();
+  const { error, busy, saved, save, clear } = useSave();
   const [access, setAccess] = useState<ProjectAccess | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ access: ProjectAccess; tickets: number } | null>(null);
   useEffect(() => {
     if (!workspace.isAdmin) return;
     api.projectAccess(project.id).then(setAccess, (e: Error) => setFailure(e.message));
@@ -1276,11 +1278,21 @@ function AccessSettings({
   if (failure) return <FormError error={failure} />;
   if (!access) return <p className="muted">Loading…</p>;
   const listed = new Set(access.users.map((u) => u.userId));
-  const apply = (next: ProjectAccess) =>
-    save(async () => {
-      setAccess(await api.setProjectAccess(project.id, next));
-      onChange();
+  const commit = async (next: ProjectAccess) => {
+    setAccess(await api.setProjectAccess(project.id, next));
+    onChange();
+  };
+  // A change that takes Users' Write, and so their Tickets here, asks first; one that affects no Ticket saves at once.
+  const apply = async (next: ProjectAccess) => {
+    let asked = false;
+    await save(async () => {
+      const { tickets } = await api.previewProjectAccess(project.id, next);
+      asked = tickets > 0;
+      if (asked) setPending({ access: next, tickets });
+      else await commit(next);
     });
+    if (asked) clear();
+  };
   const toggle = (userId: string, on: boolean) =>
     void apply({
       ...access,
@@ -1340,6 +1352,21 @@ function AccessSettings({
       </fieldset>
       <FormError error={error} />
       <Saved shown={saved} />
+      <ConfirmDialog
+        open={pending !== null}
+        onOpenChange={(open) => !open && setPending(null)}
+        title="Change Access?"
+        confirm="Change Access"
+        onConfirm={async () => {
+          await commit(pending!.access);
+          setPending(null);
+        }}
+      >
+        {pending &&
+          `This takes Write in ${project.key} from Users who have it now, so ${pending.tickets} ${
+            pending.tickets === 1 ? "Ticket" : "Tickets"
+          } will be unassigned or undelegated, stopping their running Runs. They wait in the Admins' Inbox to be assigned again.`}
+      </ConfirmDialog>
     </Panel>
   );
 }

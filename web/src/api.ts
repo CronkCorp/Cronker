@@ -643,12 +643,12 @@ export interface DiscoveredItem {
   since: string;
 }
 
-/** A Ticket whose Assignee was removed from the Workspace, waiting for an Admin to assign it. */
+/** A Ticket whose Assignee was removed from the Workspace or lost Write in its Project, waiting for an Admin to assign it. */
 export interface ReassignItem {
   kind: "reassign";
   ticket: TicketSummary;
   formerAssignee: User;
-  /** When it began waiting: when the Assignee of the Ticket was removed from the Workspace. */
+  /** When it began waiting: when the Assignee of the Ticket was taken off it. */
   since: string;
 }
 
@@ -1028,6 +1028,9 @@ export const api = {
   projectAccess: (id: string) => call<ProjectAccess>("GET", `/api/projects/${encodeURIComponent(id)}/access`),
   setProjectAccess: (id: string, access: ProjectAccess) =>
     call<ProjectAccess>("PUT", `/api/projects/${encodeURIComponent(id)}/access`, access),
+  /** How many Tickets setting the Access would unassign or undelegate, changing nothing. */
+  previewProjectAccess: (id: string, access: ProjectAccess) =>
+    call<{ tickets: number }>("POST", `/api/projects/${encodeURIComponent(id)}/access/preview`, access),
   repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
   addRepository: (projectId: string, id: number) =>
     call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
