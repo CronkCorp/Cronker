@@ -7,8 +7,9 @@ import {
   compareDecisionVersions,
   createDecision,
   Decision,
+  DecisionCreate,
+  DecisionEdit,
   DecisionComparison,
-  DecisionStatus,
   decisionNotFound,
   decisionsOf,
   DecisionSummary,
@@ -23,15 +24,9 @@ import {
 import { knowledgePlaces } from "./places.js";
 import { OutdatedVersionBody } from "./versions.js";
 
-const Title = Type.String({ minLength: 1, maxLength: 300, pattern: "\\S" });
-const Body = Type.String({ maxLength: 500_000, description: "Markdown: the choice and its reasoning." });
 const tags = ["Decisions"];
 const DecisionParams = Type.Object({ decisionId: Type.String() });
 const VersionNumber = Type.Integer({ minimum: 1 });
-const SupersededById = Type.Union([Type.String(), Type.Null()], {
-  description: "With the status superseded: the Decision replacing it, of the same Project, or of the Workspace for one of the Workspace's.",
-});
-
 const statusRules =
   "Only a User changes a Decision's status; an Agent's change is refused with `agent_not_allowed`. Superseded needs " +
   "`supersededById`, another Decision of the same Project, or of the Workspace for one of the Workspace's " +
@@ -70,12 +65,7 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
               "Records the Decision numbered next in order of creation, at Version 1 by its Actor, as proposed unless " +
               `a status is given. ${statusRules}`,
             params,
-            body: Type.Object({
-              title: Title,
-              body: Type.Optional(Body),
-              status: Type.Optional(DecisionStatus),
-              supersededById: Type.Optional(SupersededById),
-            }),
+            body: DecisionCreate,
             response: { 201: Decision, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
           },
         },
@@ -117,13 +107,7 @@ export function decisionRoutes(context: Context): FastifyPluginAsyncTypebox {
             "as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying the " +
             `current Version as \`current\`. Accepted Decisions stay editable. ${statusRules}`,
           params: DecisionParams,
-          body: Type.Object({
-            baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
-            title: Type.Optional(Title),
-            body: Type.Optional(Body),
-            status: Type.Optional(DecisionStatus),
-            supersededById: Type.Optional(SupersededById),
-          }),
+          body: DecisionEdit,
           response: { 200: Decision, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: OutdatedVersionBody("Decision", DecisionVersionWithBody) },
         },
       },

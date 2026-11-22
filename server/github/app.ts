@@ -54,6 +54,7 @@ export const requiredPermissions: Readonly<Record<string, Access>> = {
   pull_requests: "write",
   checks: "read",
   statuses: "read",
+  issues: "read",
 };
 
 /** The webhook events the App subscribes to; `repository` reports renames and transfers. */

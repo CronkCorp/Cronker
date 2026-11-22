@@ -15,6 +15,7 @@ import {
   type Member,
   type Priority,
   type Project,
+  type PullRequest,
   type RelationKind,
   type Report,
   type Run,
@@ -36,7 +37,7 @@ import { shortcutStandsAside } from "./keys.js";
 import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
-import { priorityLabel } from "./projects.js";
+import { priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
@@ -333,6 +334,13 @@ export function TicketScreen({
             )}
           </Fields>
           <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
+          <MergeQueueCard
+            ticket={ticket}
+            project={project}
+            pullRequests={pullRequests}
+            onMerge={() => apply(api.mergeTicket(ticket.id))}
+            onRemove={() => apply(api.removeFromQueue(ticket.id))}
+          />
           <PullRequestRows pullRequests={pullRequests} linking={canWrite ? { ticketId: ticket.id, onChanged: loadPullRequests } : undefined} />
           <Relations
             ticket={ticket}
@@ -788,6 +796,90 @@ function RunCard({
   );
 }
 
+/** The muted line under a queued Ticket's chip, by its state in the queue and whether it stepped aside for a conflict. */
+function queueLine(queue: NonNullable<TicketSummary["queue"]>): string {
+  switch (queue.state) {
+    case "queued":
+      return "Cronk merges it once it reaches the front and is clean and green.";
+    case "merging":
+      return "Cronk is merging it now.";
+    case "updating-branch":
+      return "Its branch is behind its base branch, so Cronk is asking GitHub to update it.";
+    case "resolving-conflict":
+      return "It conflicts with its base branch, so it stepped aside while a Merge Run resolves the conflict; the queue moves on meanwhile.";
+    case "waiting-for-checks":
+      return queue.position === null
+        ? "Its conflict was resolved: it rejoins the queue at the front once the new commit's checks are green."
+        : "Cronk updated its branch and merges it once the new commit's checks are green.";
+  }
+}
+
+/**
+ * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, *Updating branch*, *Resolving conflict*,
+ * *Waiting for checks* or *Merging*) with Remove from queue while it waits; otherwise Merge, where it applies: with Write, in a Review Status
+ * with an open Pull Request, in a Project with Pull Request automation on and a Merge Status. Hidden otherwise.
+ */
+function MergeQueueCard({
+  ticket,
+  project,
+  pullRequests,
+  onMerge,
+  onRemove,
+}: {
+  ticket: Ticket;
+  project: Project;
+  pullRequests: PullRequest[];
+  onMerge: () => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const canWrite = useCanWrite();
+  const act = (action: () => Promise<void>) => {
+    setBusy(true);
+    action().finally(() => setBusy(false));
+  };
+  const { queue } = ticket;
+  if (queue) {
+    return (
+      <section aria-label="Merge Queue" className="panel side-section">
+        <h2 className="side-title">Merge Queue</h2>
+        <p>
+          <QueueChip queue={queue} />
+        </p>
+        <p className="small muted">
+          {queueLine(queue)}
+        </p>
+        {canWrite && (queue.state === "queued" || queue.state === "waiting-for-checks" || queue.state === "resolving-conflict") && (
+          <Actions>
+            <Button size="small" disabled={busy} onClick={() => act(onRemove)}>
+              Remove from queue
+            </Button>
+          </Actions>
+        )}
+      </section>
+    );
+  }
+  const status = project.statuses.find((s) => s.id === ticket.statusId);
+  const applies =
+    canWrite &&
+    status?.kind === "review" &&
+    project.pullRequestAutomation &&
+    project.statuses.some((s) => s.step?.kind === "merge") &&
+    pullRequests.some((pr) => pr.state === "open");
+  if (!applies) return null;
+  return (
+    <section aria-label="Merge Queue" className="panel side-section">
+      <h2 className="side-title">Merge Queue</h2>
+      <p className="small muted">Cronk merges it in turn, once it is clean and green, as your merge, completing it as Verified.</p>
+      <Actions>
+        <Button variant="primary" size="small" disabled={busy} onClick={() => act(onMerge)}>
+          Merge
+        </Button>
+      </Actions>
+    </section>
+  );
+}
+
 const relationGroups: { kind: RelationKind; label: string }[] = [
   { kind: "blockedBy", label: "Blocked by" },
   { kind: "blocks", label: "Blocks" },
@@ -1178,7 +1270,19 @@ function CommentForm({
 const fieldNames: Record<
   Exclude<
     Change["field"],
-    "created" | "subTicket" | "stepSkipped" | "dismissed" | "linkedDocument" | "linkedArtifact" | "merged" | "sentBack" | "transcriptDeleted" | "runStopped" | RelationKind
+    | "created"
+    | "subTicket"
+    | "stepSkipped"
+    | "dismissed"
+    | "linkedDocument"
+    | "linkedArtifact"
+    | "merged"
+    | "queueJoined"
+    | "queueLeft"
+    | "sentBack"
+    | "transcriptDeleted"
+    | "runStopped"
+    | RelationKind
   >,
   string
 > = {
@@ -1213,19 +1317,25 @@ const relationChanges: Record<"subTicket" | RelationKind, { added: string; remov
 interface StepSkipped {
   status: { id: string; name: string };
   labelRule: LabelRule | null;
-  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation";
+  mergeRule?: "agentsMayMergeOff" | "noAutonomousDelegation" | "pullRequestAutomationOff";
   outcome: string;
 }
 
 const mergeRulesShown = {
   agentsMayMergeOff: "agents may not merge in this Project",
   noAutonomousDelegation: "no Autonomous Delegation",
+  pullRequestAutomationOff: "Pull Request automation is off in this Project",
 };
 
 /** What a `merged` Change records: the Pull Request as it was then, and the login of the GitHub account that merged it. */
 interface Merged {
   pullRequest: { repository: string; number: number; title: string };
   mergedBy: string | null;
+}
+
+/** What a `queueJoined` Change goes to, and a `queueLeft` Change from: the Pull Request in the Merge Queue. */
+interface Queued {
+  pullRequest: { repository: string; number: number; url: string };
 }
 
 /**
@@ -1259,6 +1369,19 @@ interface RunStopped {
   why: "projectArchived";
 }
 
+/** A Change as `described` says it, with the GitHub issue a Ticket was imported from linked. */
+function describedWithLink(change: Change): ReactNode {
+  const imported = change.field === "created" ? (change.to as { source?: string; url?: string } | null) : null;
+  if (imported?.source === "github" && typeof imported.url === "string") {
+    return (
+      <>
+        imported the Ticket from <ExternalLink url={imported.url}>its GitHub issue</ExternalLink>
+      </>
+    );
+  }
+  return described(change);
+}
+
 function described(change: Change): string {
   if (change.field === "created") return "created the Ticket";
   if (change.field === "merged") {
@@ -1279,6 +1402,12 @@ function described(change: Change): string {
     return failure.kind === "check"
       ? `sent it back: the check ${failure.name} failed on ${name}`
       : `sent it back: ${failure.reviewer ? `@${failure.reviewer}` : "a reviewer"} requested changes on ${name}`;
+  }
+  if (change.field === "queueJoined") {
+    return `queued ${pullRequestName((change.to as Queued).pullRequest)} in the Merge Queue`;
+  }
+  if (change.field === "queueLeft") {
+    return `took ${pullRequestName((change.from as Queued).pullRequest)} out of the Merge Queue`;
   }
   if (change.field === "dismissed") return "dismissed it from the Inbox";
   if (change.field === "transcriptDeleted") {
@@ -1360,6 +1489,11 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
 function describedWithReason(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
+    // A merge of one of several Pull Requests a Ticket has in the Merge Queue leaves it waiting for the others.
+    if (!moved) {
+      const { pullRequest } = change.to as Merged;
+      return `merged ${pullRequestName(pullRequest)} ${pullRequest.title}, waiting in the Merge Queue for its other Pull Requests`;
+    }
     const verification = related.find((c) => c.field === "verification")?.to;
     return (
       <>
@@ -1533,7 +1667,7 @@ function Timeline({
           </span>
           <p className="entry-line">
             <Actor actor={change.actor.kind === "cronk" ? { kind: "cronk" } : change.actor} />{" "}
-            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : described(change)}
+            {saysWhy(change) ? describedWithReason(change, explained.get(change.id) ?? []) : describedWithLink(change)}
             {run && <> in its {run.step.name} Run</>} <RelativeTime at={change.at} clock />
           </p>
         </li>,

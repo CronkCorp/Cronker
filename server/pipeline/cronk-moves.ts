@@ -25,6 +25,13 @@ export const listsPullRequestsRepository = `exists (
   select from pull_requests join project_repositories on project_repositories.repository_id = pull_requests.repository_id
   where pull_requests.id = $1 and project_repositories.project_id = tickets.project_id)`;
 
+/**
+ * SQL condition, for a query over `tickets`: the Ticket's Project isn't archived. GitHub moves no work in an archived
+ * Project, so its merges and failures move none of its Tickets, while its Pull Requests stay recorded and linked.
+ */
+export const inUnarchivedProject = `not exists (
+  select from projects archived where archived.id = tickets.project_id and archived.archived_at is not null)`;
+
 /** The Ticket a move by Cronk moves, locked by the caller's transaction. */
 export interface MovedTicket {
   id: string;
@@ -71,6 +78,8 @@ export interface CronkMove {
   runId?: string;
   /** Why a Run still running on the Ticket stops, as a User's move stops it; it is left alone without one. */
   stopReason?: string;
+  /** Cronk's own Question, for a move by a *needs you* Outcome; past the round limit Cronk asks its own instead. */
+  question?: string;
   /** How a move to a Done Status completes the Ticket. */
   verification: "unverified" | "verified";
   /** The merged Pull Request completing the Ticket, by GitHub's id, when a merge moves it. */
@@ -96,7 +105,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
   const now = context.clock.now();
   const statuses = await statusesOf(tx, ticket.projectId);
   const { target } = move;
-  const decision: CronkMoveDecision = { outcome: target.kind === "outcome" ? target.outcome : null, question: null };
+  const decision: CronkMoveDecision = { outcome: target.kind === "outcome" ? target.outcome : null, question: move.question ?? null };
   if (target.kind === "outcome" || target.kind === "sentBack") {
     const step = statuses.find((s) => s.id === target.step.statusId)?.step;
     // An Outcome counting as a round, or work sent back, adds one for this Ticket and Step, until the count has
@@ -115,7 +124,7 @@ export async function moveByCronk(context: Context, tx: Tx, ticket: MovedTicket,
           target.kind === "outcome"
             ? `${target.step.name} sent ${ticket.key} back by ${target.outcome.name} ${times(step.roundLimit)}, its round limit, ` +
               "so it comes to you instead. Read the latest Reports, then move it on yourself."
-            : `Failing checks, requested changes and merge conflicts sent ${ticket.key} back to ${target.step.name} ${times(step.roundLimit)}, ` +
+            : `Failing checks and requested changes sent ${ticket.key} back to ${target.step.name} ${times(step.roundLimit)}, ` +
               "its round limit, so it comes to you instead. Read the latest Comments, then move it on yourself.";
       } else {
         await tx.query(

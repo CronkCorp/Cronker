@@ -35,7 +35,8 @@ describe("creating the GitHub App", () => {
     expect(back.headers.get("location")).toBe("/github?created=1");
 
     const [created] = cronk.github.apps;
-    // Exactly these: writing contents and Pull Requests lets Runs push and open them, and agents merge (ADR 0007).
+    // Exactly these: writing contents and Pull Requests lets Runs push and open them, and agents merge (ADR 0007);
+    // reading issues lets an Admin import them.
     expect(start.manifest.default_permissions).toEqual({
       emails: "read",
       metadata: "read",
@@ -43,6 +44,7 @@ describe("creating the GitHub App", () => {
       pull_requests: "write",
       checks: "read",
       statuses: "read",
+      issues: "read",
     });
     expect(await (await cronk.request("GET", "/api/github/app")).json()).toEqual({
       app: { name: created!.name, githubAccount: "ada", htmlUrl: `${cronk.github.url}/apps/${created!.slug}` },

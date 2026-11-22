@@ -44,6 +44,12 @@ export async function linkedDocumentsOf(db: Db, viewer: Viewer, ticketId: string
   return rows;
 }
 
+/** The link-a-Document route's body. */
+export const DocumentLink = Type.Object({
+  documentId: Type.String({ description: "A Document of the Ticket's Project or Workspace." }),
+});
+export type DocumentLink = Static<typeof DocumentLink>;
+
 /** A Document as a link's Change names it: its id, and its title then. */
 type Named = { id: string; title: string };
 

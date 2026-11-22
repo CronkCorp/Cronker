@@ -64,6 +64,28 @@ export const schema = new Schema({
       parseDOM: [{ tag: "td", getAttrs: (dom) => ({ align: (dom as HTMLElement).style?.textAlign || null }) }],
       toDOM: (node) => ["td", { style: node.attrs.align ? `text-align: ${node.attrs.align}` : null }, 0],
     })
+    // An Embed: an Artifact's address alone in its paragraph, shown as the
+    // Artifact in place. One block, moved or removed whole; its address is
+    // edited in the Markdown source mode. `address` is the address the Embed
+    // shows, `markdown` the paragraph as written (`<…>` for an autolink).
+    .addToEnd("embed", {
+      group: "block",
+      atom: true,
+      selectable: true,
+      draggable: true,
+      attrs: { ...block, address: {}, markdown: {} },
+      parseDOM: [
+        {
+          tag: "div[data-embed]",
+          getAttrs: (dom) => {
+            const element = dom as HTMLElement;
+            const address = element.getAttribute("data-embed");
+            return address ? { address, markdown: element.getAttribute("data-markdown") ?? address } : false;
+          },
+        },
+      ],
+      toDOM: (node) => ["div", { "data-embed": node.attrs.address, "data-markdown": node.attrs.markdown }, node.attrs.markdown],
+    })
     // Markdown the editor can't show, such as raw HTML or a footnote, kept as
     // its source text and edited as such.
     .addToEnd("source_block", {

@@ -7,13 +7,16 @@ import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
 export const ChangedBy = ActorOrCronk;
 
 /**
- * What a Change changed. `created` marks the Ticket's creation. `parent` is this Ticket's parent; `subTicket`,
+ * What a Change changed. `created` marks the Ticket's creation; for one imported from a GitHub issue it goes to
+ * `{ source: "github", url }`, the issue's address. `parent` is this Ticket's parent; `subTicket`,
  * `blocks`, `blockedBy` and `relatesTo` each show one Ticket added (from null) or removed (to null). `stepSkipped`
  * marks Cronk passing the Ticket on past a Step it didn't pass, by its Label rule or as a Merge Step skipping itself,
  * before the `status` Change moving it. `dismissed` marks a
  * User dismissing a Discovered Ticket from their Inbox. `linkedDocument` shows one Document linked (from null) or
  * unlinked (to null), as `{ id, title }` titled then, and `linkedArtifact` one Artifact likewise. `merged` marks Cronk completing the Ticket for a merged Pull Request,
- * before the `status` and `verification` Changes moving it. `sentBack` marks Cronk sending the Ticket back for a failing check,
+ * before the `status` and `verification` Changes moving it. `queueJoined` marks a User pressing Merge, queuing
+ * one of its Pull Requests in the Merge Queue, before the `status` Change moving it into the Merge Status;
+ * `queueLeft` marks it leaving the queue without being merged. `sentBack` marks Cronk sending the Ticket back for a failing check,
  * requested changes or a merge conflict on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
  * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket. `runStopped` marks
  * Cronk stopping the Ticket's running Run when nothing else about the Ticket changed, as when its Project is archived.
@@ -41,6 +44,8 @@ export const changeFields = [
   "linkedDocument",
   "linkedArtifact",
   "merged",
+  "queueJoined",
+  "queueLeft",
   "sentBack",
   "transcriptDeleted",
   "runStopped",
@@ -55,13 +60,19 @@ export const Change = Type.Object({
   from: Type.Unknown({
     description:
       "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
-      "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `stepSkipped` Change goes " +
+      "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `created` Change goes " +
+      "from null to null, or for a Ticket imported from a GitHub issue to `{ source: \"github\", url }`, the issue's " +
+      "address. A `stepSkipped` Change goes " +
       "from null to `{ status: { id, name }, labelRule, outcome }`: the Status whose Step was skipped, its Label rule " +
       "and the default Outcome the Ticket moved on by. A Merge Step that skipped itself records `labelRule` null and " +
-      "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, otherwise " +
-      "`noAutonomousDelegation`. A `merged` Change goes from null to " +
+      "`mergeRule` beside it: `agentsMayMergeOff` when its Project has agents may merge off, " +
+      "`noAutonomousDelegation` when the Ticket has no Autonomous Delegation, otherwise `pullRequestAutomationOff`, " +
+      "when its Project has Pull Request automation off. A `merged` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, title, url }, mergedBy }`: the Pull Request as it was then and the " +
-      "login of the GitHub account that merged it, or null when GitHub named none. A `sentBack` Change goes from null to " +
+      "login of the GitHub account that merged it, or null when GitHub named none. A `queueJoined` Change goes from null " +
+      "to `{ pullRequest: { id, repository, number, url } }`, the Pull Request queued in the Merge Queue, by the User " +
+      "who pressed Merge or, for Autonomous Delegation, by Cronk; a `queueLeft` " +
+      "Change goes from that to null, when it leaves the queue unmerged. A `sentBack` Change goes from null to " +
       "`{ pullRequest: { id, repository, number, url }, failure }`: the Pull Request and what failed on it: a check " +
       "`{ kind: \"check\", name, url }`, a review requesting changes `{ kind: \"review\", reviewer, url }`, the reviewer " +
       "being the login of the GitHub account that wrote it, or null when GitHub named none, or a conflict with its base branch " +
