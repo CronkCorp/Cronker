@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { Type, type Static } from "typebox";
 import { authenticateAgent, ownerName } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
@@ -6,7 +7,7 @@ import { transaction } from "../db.js";
 import { endResetLinks } from "./links.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { hashSecret, issueSecret } from "./secrets.js";
-import { userColumns, type User } from "./user.js";
+import { DisplayName, Password, userColumns, type User } from "./user.js";
 
 /** A sign-in lasts 30 days from when the User signed in. */
 export const signInLifetimeSeconds = 30 * 24 * 60 * 60;
@@ -15,6 +16,10 @@ export const signInCookie = "cronk_sign_in";
 // Hashed once so that an unknown email costs as much as a wrong password.
 const decoyPasswordHash =
   "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+/** The sign-in route's body. */
+export const SignIn = Type.Object({ email: Type.String(), password: Type.String() });
+export type SignIn = Static<typeof SignIn>;
 
 export async function signIn(
   context: Context,
@@ -114,6 +119,10 @@ export async function requireSignIn(
  * Changes the signed-in User's own password, given their current one, and ends every
  * other sign-in and unused reset link of theirs; the one making the change stays signed in.
  */
+/** The change-one's-password route's body. */
+export const PasswordChange = Type.Object({ currentPassword: Type.String(), newPassword: Password });
+export type PasswordChange = Static<typeof PasswordChange>;
+
 export async function changePassword(
   context: Context,
   request: FastifyRequest,
@@ -143,6 +152,10 @@ export async function changePassword(
  * Sets or clears the signed-in User's display name: trimmed, and empty or `null` clearing it. Refused with
  * `invalid_display_name` for one with line breaks or other control characters.
  */
+/** The change-one's-settings route's body: a display name, or `null` to clear it. */
+export const MeEdit = Type.Object({ displayName: Type.Union([DisplayName, Type.Null()]) });
+export type MeEdit = Static<typeof MeEdit>;
+
 export async function changeDisplayName(context: Context, request: FastifyRequest, displayName: string | null): Promise<User> {
   const user = await requireUser(context, request);
   const trimmed = displayName?.trim() || null;

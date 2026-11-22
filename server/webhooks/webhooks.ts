@@ -6,6 +6,7 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { literals } from "../literals.js";
 import type { Workspace } from "../workspaces/workspaces.js";
 
 /**
@@ -18,7 +19,7 @@ import type { Workspace } from "../workspaces/workspaces.js";
 
 /** The Inbox kinds a webhook may get. */
 export const webhookKinds = ["question", "needsYou", "run", "review", "unverified", "discovered", "reassign"] as const;
-export const WebhookKind = Type.Union(webhookKinds.map((kind) => Type.Literal(kind)));
+export const WebhookKind = literals(webhookKinds);
 export type WebhookKind = (typeof webhookKinds)[number];
 
 /** What a new webhook gets unless told otherwise: where work has stalled. `run` covers failed, lost and unstarted Runs. */
@@ -49,6 +50,24 @@ export function nextAttemptAt(createdAt: Date, attempts: number, now: Date): Dat
 
 export const WebhookName = Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" });
 export const WebhookUrl = Type.String({ minLength: 1, maxLength: 2000 });
+
+/** The create route's body: a name, the address to deliver to, and the Inbox kinds it gets, the defaults if left out. */
+export const WebhookCreate = Type.Object({
+  name: WebhookName,
+  url: WebhookUrl,
+  kinds: Type.Optional(Type.Array(WebhookKind)),
+  enabled: Type.Optional(Type.Boolean()),
+});
+export type WebhookCreate = Static<typeof WebhookCreate>;
+
+/** The edit route's body: whichever of a webhook's name, address, kinds and whether it is enabled change. */
+export const WebhookEdit = Type.Object({
+  name: Type.Optional(WebhookName),
+  url: Type.Optional(WebhookUrl),
+  kinds: Type.Optional(Type.Array(WebhookKind)),
+  enabled: Type.Optional(Type.Boolean()),
+});
+export type WebhookEdit = Static<typeof WebhookEdit>;
 
 export const Webhook = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -170,7 +189,7 @@ export async function createWebhook(
   { db, clock, config }: Context,
   userId: string,
   workspaceId: string,
-  input: { name: string; url: string; kinds?: string[]; enabled?: boolean },
+  input: WebhookCreate,
 ): Promise<Webhook & { secret: string }> {
   const url = checkWebhookUrl(config, input.url);
   const kinds = checkKinds(input.kinds ?? defaultWebhookKinds);
@@ -190,7 +209,7 @@ export async function editWebhook(
   userId: string,
   workspaceId: string,
   webhookId: string,
-  input: { name?: string; url?: string; kinds?: string[]; enabled?: boolean },
+  input: WebhookEdit,
 ): Promise<Webhook> {
   const current = await findOwn(db, userId, workspaceId, webhookId);
   const url = input.url === undefined ? current.url : checkWebhookUrl(config, input.url);

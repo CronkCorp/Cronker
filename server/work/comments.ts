@@ -188,7 +188,7 @@ export async function addArtifactComment(
   context: Context,
   actor: Caller,
   artifactId: string,
-  input: { body: string; replyToId?: string },
+  input: CommentCreate,
 ): Promise<Comment> {
   return transaction(context.db, async (tx) => {
     const artifact = await findArtifact(tx, actor, artifactId);

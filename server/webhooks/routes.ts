@@ -13,11 +13,10 @@ import {
   removeWebhook,
   sendTest,
   Webhook,
+  WebhookCreate,
   WebhookDelivery,
-  WebhookKind,
-  WebhookName,
+  WebhookEdit,
   webhooksOf,
-  WebhookUrl,
 } from "./webhooks.js";
 
 const only =
@@ -59,12 +58,7 @@ export function webhookRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Kinds default to `question`, `needsYou` and `run` (failed, lost and unstarted Runs). The answer carries the " +
             "signing secret, which is shown only this once; Cronk keeps it encrypted, so it needs `CRONK_SECRET_KEY` (`no_secret_key` otherwise).",
           params: WorkspaceParams,
-          body: Type.Object({
-            name: WebhookName,
-            url: WebhookUrl,
-            kinds: Type.Optional(Type.Array(WebhookKind)),
-            enabled: Type.Optional(Type.Boolean()),
-          }),
+          body: WebhookCreate,
           response: { 201: CreatedWebhook, ...responses },
         },
       },
@@ -101,12 +95,7 @@ export function webhookRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Edit a webhook",
           description: `${only} Changes whichever of name, URL, kinds and on or off are given; the URL by the same rule as when added.`,
           params: WebhookParams,
-          body: Type.Object({
-            name: Type.Optional(WebhookName),
-            url: Type.Optional(WebhookUrl),
-            kinds: Type.Optional(Type.Array(WebhookKind)),
-            enabled: Type.Optional(Type.Boolean()),
-          }),
+          body: WebhookEdit,
           response: { 200: Webhook, ...responses },
         },
       },

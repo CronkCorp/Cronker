@@ -6,7 +6,7 @@ import { requireCaller } from "../identity/callers.js";
 import { knowledgePlaces, placeOfComment } from "../knowledge/places.js";
 import { Artifact, ArtifactCreate, ArtifactSave, FilePath, ArtifactFileContent, artifactNotFound, deleteArtifact, artifactTooLarge, readArtifactFile, artifactsIn, ArtifactSummary, ArtifactVersion, artifactVersionsOf, ArtifactComparison, compareArtifactVersions, createArtifact, deleteArtifactVersion, readArtifactVersion, ArtifactVersionRead, findArtifact, saveArtifact } from "./artifacts.js";
 import { OutdatedVersionBody } from "../knowledge/versions.js";
-import { addArtifactComment, Comment, commentsOnArtifact } from "../work/comments.js";
+import { addArtifactComment, Comment, CommentCreate, commentsOnArtifact } from "../work/comments.js";
 import { ArtifactLink, linkArtifact, LinkedArtifact, linkedArtifactsOf, unlinkArtifact } from "./linked-artifacts.js";
 // After the Comments and linked Artifacts: imported before them, the glossary check reaches Documents ahead of Mentions.
 import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
@@ -124,10 +124,7 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Comment also shows on the Tickets linking the Artifact; nobody is notified of it. An Agent's Comment answers " +
             "with `avoidedWords`: the words the glossary avoids that its body uses.",
           params: ArtifactParams,
-          body: Type.Object({
-            body: Type.String({ minLength: 1, maxLength: 100_000, pattern: "\\S", description: "Markdown." }),
-            replyToId: Type.Optional(Type.String({ description: "The Comment on this Artifact being replied to." })),
-          }),
+          body: CommentCreate,
           response: { 201: withAvoidedWords(Comment), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

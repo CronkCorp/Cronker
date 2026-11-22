@@ -22,14 +22,17 @@ import {
   saveTrigger,
   saveWebhookSecret,
   updateRunner,
-  BudgetPerRun,
+  RunnerCreate,
+  RunnerEdit,
+  TriggerSave,
+  TriggerToken,
+  WebhookSecret,
 } from "./runners.js";
 import { managedAgentsWebhookPath, receiveManagedAgentsDelivery } from "./managed-agents.js";
-import { instructionsPath, reportSetup, setupInstructions, startSetup, StartedSetup } from "./runner-setups.js";
-import { briefOfRun, findRun, finishRun, retryRun, Run, runReports, runsOf } from "./runs.js";
-import { mergePullRequest } from "./merging.js";
+import { instructionsPath, reportSetup, setupInstructions, SetupReport, SetupStart, startSetup, StartedSetup } from "./runner-setups.js";
+import { briefOfRun, findRun, finishRun, retryRun, Run, RunFinish, runReports, runsOf } from "./runs.js";
+import { mergePullRequest, RunMerge } from "./merging.js";
 import { Ticket } from "../work/tickets.js";
-import { ModelLabel } from "../workspaces/model-ids.js";
 
 export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
   return async (app) => {
@@ -103,18 +106,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "may finish it, once, and only while its Ticket is still in the Status the Run started in. It answers with " +
             "`avoidedWords`: the words the Project's glossary avoids that the Report and Question use.",
           params: RunParams,
-          body: Type.Object({
-            outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
-            question: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000, description: "For the Assignee, in Markdown." })),
-            report: Type.Optional(
-              Type.String({
-                minLength: 1,
-                maxLength: 500_000,
-                pattern: "\\S",
-                description: "Markdown, added to the Ticket's Reports titled after the Run's Step, such as `Triage report`.",
-              }),
-            ),
-          }),
+          body: RunFinish,
           response: { 200: withAvoidedWords(Run), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -141,9 +133,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "GitHub says it is mergeable. The merge ends the Run, finished with the Outcome `merged`, without `finish`, " +
             "and completes the Ticket as Unverified, recorded as the Agent's in that Run.",
           params: RunParams,
-          body: Type.Object({
-            pullRequestId: Type.Integer({ description: "GitHub's id for the Pull Request, as the Ticket's Pull Requests list it." }),
-          }),
+          body: RunMerge,
           response: { 200: Run, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 502: ErrorBody },
         },
       },
@@ -214,13 +204,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "server, tools allowed without asking) and a cloud environment with it in the key's Anthropic workspace, " +
             "and is refused with `api_key_rejected` when Anthropic rejects the key, with `api_key_required` without one, " +
             "and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
-          body: Type.Object({
-            name: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" }),
-            kind: Type.String({ minLength: 1, maxLength: 50 }),
-            apiKey: Type.Optional(
-              Type.String({ maxLength: 1000, description: "For a `managed_agents` Runner: the Anthropic API key its Runs spend." }),
-            ),
-          }),
+          body: RunnerCreate,
           response: { 201: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 502: ErrorBody },
         },
       },
@@ -242,10 +226,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "lowering it stops no running Run. A `managed_agents` Runner's budget per Run applies to Runs started from " +
             "then on; other kinds are refused one with `runner_has_no_budget`.",
           params: Type.Object({ runnerId: Type.String() }),
-          body: Type.Object(
-            { limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), budgetPerRun: Type.Optional(BudgetPerRun) },
-            { minProperties: 1 },
-          ),
+          body: RunnerEdit,
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -292,19 +273,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "with `runner_has_no_triggers` for other kinds of Runner, and with `no_secret_key`, when it has a token, " +
             "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
-          body: Type.Object({
-            model: ModelLabel,
-            projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
-            triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
-            token: Type.Optional(
-              Type.String({
-                minLength: 1,
-                maxLength: 1000,
-                pattern: "\\S",
-                description: "The trigger's token; leave it out to save the trigger waiting for it.",
-              }),
-            ),
-          }),
+          body: TriggerSave,
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -328,10 +297,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "whose new *Transcript hook* token the instructions hand over; it may be left out when there is only one. " +
             "Users only.",
           params: Type.Object({ runnerId: Type.String() }),
-          body: Type.Object({
-            projectId: Type.String({ format: "uuid" }),
-            agentId: Type.Optional(Type.String({ format: "uuid" })),
-          }),
+          body: SetupStart,
           response: { 201: StartedSetup, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -366,15 +332,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "triggers for all Projects stay. Marks the setup used. Refused with `setup_used`, `setup_expired` or " +
             "`setup_not_found` (press Set up with Claude Code again), and to Agents.",
           params: Type.Object({ setupToken: Type.String() }),
-          body: Type.Object({
-            triggers: Type.Array(
-              Type.Object({
-                label: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, as the plan names it." }),
-                triggerId: Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" }),
-              }),
-              { maxItems: 50 },
-            ),
-          }),
+          body: SetupReport,
           response: {
             200: Type.Object({ triggers: Type.Array(Trigger) }),
             400: ErrorBody,
@@ -407,7 +365,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "rechecked, so they start or wait for a slot; otherwise they wait for Retry. Refused with `no_secret_key` " +
             "while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String(), triggerId: Type.String() }),
-          body: Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) }),
+          body: TriggerToken,
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
@@ -449,7 +407,7 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
             "`invalid_webhook_secret` for one not starting `whsec_`, with `runner_has_no_webhook` for other kinds of " +
             "Runner, and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
           params: Type.Object({ runnerId: Type.String() }),
-          body: Type.Object({ secret: Type.String({ minLength: 1, maxLength: 200 }) }),
+          body: WebhookSecret,
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

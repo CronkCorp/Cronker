@@ -4,7 +4,7 @@ import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { hashSecret, issueSecret } from "./secrets.js";
-import { userColumns, type User } from "./user.js";
+import { Password, userColumns, type User } from "./user.js";
 
 /**
  * One-time links Cronk hands to an Admin (or an operator) to pass on: a **join** link
@@ -128,6 +128,14 @@ function joinsWithGitHub(link: LinkRow): boolean {
 }
 
 /** What a link would do, so its page can say so before it is used. */
+/** The look-up-a-link route's body: the secret from the link's fragment. */
+export const LinkLookup = Type.Object({ token: Type.String() });
+export type LinkLookup = Static<typeof LinkLookup>;
+
+/** The use-a-link route's body. */
+export const LinkUse = Type.Object({ token: Type.String(), password: Password });
+export type LinkUse = Static<typeof LinkUse>;
+
 export async function lookUpLink(context: Context, token: string): Promise<LinkDetails> {
   return transaction(context.db, async (tx) => {
     const link = await findLink(tx, context, token, false);

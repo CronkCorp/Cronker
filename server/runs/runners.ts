@@ -6,6 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
+import { ModelLabel } from "../workspaces/model-ids.js";
 import { Cost, costTotalsSql } from "./costs.js";
 import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
@@ -141,10 +142,20 @@ export async function runnersOf(context: Context, userId: string): Promise<Runne
   return rows.map((row) => present(context, row));
 }
 
+/** The set-up-a-Runner route's body. */
+export const RunnerCreate = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" }),
+  kind: Type.String({ minLength: 1, maxLength: 50 }),
+  apiKey: Type.Optional(
+    Type.String({ maxLength: 1000, description: "For a `managed_agents` Runner: the Anthropic API key its Runs spend." }),
+  ),
+});
+export type RunnerCreate = Static<typeof RunnerCreate>;
+
 export async function createRunner(
   context: Context,
   userId: string,
-  input: { name: string; kind: string; apiKey?: string },
+  input: RunnerCreate,
 ): Promise<RunnerRecord> {
   const { db, clock, runners } = context;
   if (!Object.hasOwn(runners, input.kind)) {
@@ -189,11 +200,30 @@ export const noSuchProject = () => new ApiError(404, "project_not_found", "There
  * replacing the one it had for the same model and Project. The token is sealed under `CRONK_SECRET_KEY` and never returned;
  * without one, the trigger keeps the token it had under the same trigger id, or else waits for its token.
  */
+/** A routine's trigger id, as claude.ai shows it. */
+export const TriggerId = Type.String({ minLength: 1, maxLength: 200, pattern: "^\\s*[A-Za-z0-9_-]+\\s*$" });
+
+/** The save-a-trigger route's body. */
+export const TriggerSave = Type.Object({
+  model: ModelLabel,
+  projectId: Type.Optional(Type.Union([Type.String({ format: "uuid" }), Type.Null()])),
+  triggerId: TriggerId,
+  token: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 1000,
+      pattern: "\\S",
+      description: "The trigger's token; leave it out to save the trigger waiting for it.",
+    }),
+  ),
+});
+export type TriggerSave = Static<typeof TriggerSave>;
+
 export async function saveTrigger(
   context: Context,
   userId: string,
   runnerId: string,
-  input: { model: string; projectId?: string | null; triggerId: string; token?: string },
+  input: TriggerSave,
 ): Promise<RunnerRecord> {
   const runner = await findRunner(context, userId, runnerId);
   if (!runner) throw noSuchRunner();
@@ -251,6 +281,10 @@ export async function replaceProjectTriggers(
  * returned. Pasted into a trigger waiting for it, the Tickets whose Runs couldn't start for want of it are rechecked; a
  * token replacing a working one leaves them to Retry.
  */
+/** The paste-a-trigger's-token route's body. */
+export const TriggerToken = Type.Object({ token: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }) });
+export type TriggerToken = Static<typeof TriggerToken>;
+
 export async function pasteTriggerToken(
   context: Context,
   userId: string,
@@ -319,6 +353,10 @@ export async function removeTrigger(context: Context, userId: string, runnerId: 
  * Saves the signing secret of a `managed_agents` Runner's webhook endpoint, as the Anthropic Console shows it once,
  * sealed under `CRONK_SECRET_KEY` and never returned, replacing any saved before.
  */
+/** The save-the-webhook-secret route's body. */
+export const WebhookSecret = Type.Object({ secret: Type.String({ minLength: 1, maxLength: 200 }) });
+export type WebhookSecret = Static<typeof WebhookSecret>;
+
 export async function saveWebhookSecret(context: Context, userId: string, runnerId: string, secret: string): Promise<RunnerRecord> {
   const trimmed = secret.trim();
   if (!/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(trimmed)) {
@@ -414,6 +452,13 @@ export const BudgetPerRun = Type.Union(
 );
 export type BudgetPerRun = Static<typeof BudgetPerRun>;
 
+/** The change-a-Runner route's body: whichever of its limit and budget per Run are given, at least one. */
+export const RunnerEdit = Type.Object(
+  { limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), budgetPerRun: Type.Optional(BudgetPerRun) },
+  { minProperties: 1 },
+);
+export type RunnerEdit = Static<typeof RunnerEdit>;
+
 /**
  * Changes one of the User's own Runners: how many Runs it keeps running at once, where a higher limit starts waiting
  * Tickets, and for a `managed_agents` Runner its budget per Run, which Runs started from then on get.
@@ -422,7 +467,7 @@ export async function updateRunner(
   context: Context,
   userId: string,
   runnerId: string,
-  input: { limit?: number; budgetPerRun?: BudgetPerRun },
+  input: RunnerEdit,
 ): Promise<RunnerRecord> {
   return transaction(context.db, async (tx) => {
     const { rows: found } = isUuid(runnerId)
