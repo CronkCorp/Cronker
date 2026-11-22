@@ -229,6 +229,7 @@ describe("Merge on the default board", () => {
       labelRule: null,
       outcomes: [
         { name: "review", statusId: status("In Review"), default: true, needsYou: false, countsAsRound: false },
+        { name: "resolved", statusId: status("Merge"), default: false, needsYou: false, countsAsRound: false },
         { name: "send back", statusId: status("Implement"), default: false, needsYou: false, countsAsRound: true },
         { name: "needs you", statusId: status("In Review"), default: false, needsYou: true, countsAsRound: false },
       ],

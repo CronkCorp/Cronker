@@ -795,17 +795,27 @@ function RunCard({
   );
 }
 
-/** The muted line under a queued Ticket's chip, by its state in the queue. */
-const queueLine: Record<NonNullable<TicketSummary["queue"]>["state"], string> = {
-  queued: "Cronk merges it once it reaches the front and is clean and green.",
-  merging: "Cronk is merging it now.",
-  "updating-branch": "Its branch is behind its base branch, so Cronk is asking GitHub to update it.",
-  "waiting-for-checks": "Cronk updated its branch and merges it once the new commit's checks are green.",
-};
+/** The muted line under a queued Ticket's chip, by its state in the queue and whether it stepped aside for a conflict. */
+function queueLine(queue: NonNullable<TicketSummary["queue"]>): string {
+  switch (queue.state) {
+    case "queued":
+      return "Cronk merges it once it reaches the front and is clean and green.";
+    case "merging":
+      return "Cronk is merging it now.";
+    case "updating-branch":
+      return "Its branch is behind its base branch, so Cronk is asking GitHub to update it.";
+    case "resolving-conflict":
+      return "It conflicts with its base branch, so it stepped aside while a Merge Run resolves the conflict; the queue moves on meanwhile.";
+    case "waiting-for-checks":
+      return queue.position === null
+        ? "Its conflict was resolved: it rejoins the queue at the front once the new commit's checks are green."
+        : "Cronk updated its branch and merges it once the new commit's checks are green.";
+  }
+}
 
 /**
- * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, *Updating branch*, *Waiting for checks*
- * or *Merging*) with Remove from queue while it waits; otherwise Merge, where it applies: with Write, in a Review Status
+ * The Merge Queue on the Ticket: while it is queued, its place (*#2 in queue*, *Updating branch*, *Resolving conflict*,
+ * *Waiting for checks* or *Merging*) with Remove from queue while it waits; otherwise Merge, where it applies: with Write, in a Review Status
  * with an open Pull Request, in a Project with Pull Request automation on and a Merge Status. Hidden otherwise.
  */
 function MergeQueueCard({
@@ -836,9 +846,9 @@ function MergeQueueCard({
           <QueueChip queue={queue} />
         </p>
         <p className="small muted">
-          {queueLine[queue.state]}
+          {queueLine(queue)}
         </p>
-        {canWrite && (queue.state === "queued" || queue.state === "waiting-for-checks") && (
+        {canWrite && (queue.state === "queued" || queue.state === "waiting-for-checks" || queue.state === "resolving-conflict") && (
           <Actions>
             <Button size="small" disabled={busy} onClick={() => act(onRemove)}>
               Remove from queue

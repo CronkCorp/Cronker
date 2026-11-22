@@ -5,15 +5,18 @@ import type { Caller } from "../identity/callers.js";
 import { userName } from "../identity/user.js";
 import { requireWrite } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
-import { statusesOf } from "../work/projects.js";
+import { statusesOf, type Status } from "../work/projects.js";
+import type { Outcome, Step } from "../work/steps.js";
 import { editTicketIn, findTicketRow, ticketNotFound, type Ticket } from "../work/tickets.js";
-import { moveByCronk } from "./cronk-moves.js";
+import { moveByCronk, type MovedTicket } from "./cronk-moves.js";
 import {
   askMerge,
   behindCode,
+  ConflictingPullRequest,
   GitHubRefusedMerge,
   linkedPullRequest,
   mergeAsAsked,
+  pendingCheckOn,
   updateBranch,
   type AskedMerge,
   type CompleteAs,
@@ -22,6 +25,8 @@ import {
   type MergeAdvice,
 } from "./pull-request-merging.js";
 import { failingCheckOn, sendBackForFailure, type Failure } from "./sending-back.js";
+import { startRunIfNeeded } from "../runs/runs.js";
+import { insertComment } from "../work/comment-writes.js";
 
 /**
  * Pipeline: the Merge Queue (ADR 0011, amending ADR 0005). A User with Write presses Merge on a Ticket in a Review
@@ -50,7 +55,17 @@ import { failingCheckOn, sendBackForFailure, type Failure } from "./sending-back
  * of checks and reviews on a queued Pull Request have the queue act on it at once (`queueDue`).
  *
  * Leaving the Merge Status takes all of a Ticket's entries out at once, so one Pull Request sending it back takes the
- * others with it. For now a head that conflicts waits (Merge Queue 7).
+ * others with it.
+ *
+ * A head GitHub says conflicts with its base branch steps aside, out of line, so the queue moves on to the next entry
+ * (`stepAside`): Cronk writes a Comment naming the merge that caused the conflict, and a Run of the Merge Step starts
+ * (*resolving conflict*), whatever the Merge Step's rule says. Its Agent resolves the conflict, pushes to the Pull
+ * Request's branch and finishes with *resolved*, the Merge Step's Outcome leaving the Ticket in the Merge Status
+ * (`resolvingOutcome`); the entry then waits, still out of line, for the new commit's checks (*waiting for checks*),
+ * and once they are green rejoins its queue at the front (`rejoin`). A resolution that isn't mechanical goes back to
+ * Implement by the Merge Step's Outcome sending it back, which then counts as no round. Each entry steps aside at most
+ * 3 times: a fourth conflict, a Ticket with no Delegate to resolve it, or a Merge Step without *resolved*, hands the
+ * Ticket to its Assignee by the Merge Step's *needs you* Outcome with Cronk's Question, not as a round.
  */
 
 const rules = {
@@ -255,8 +270,42 @@ export async function dropFromQueue(context: Context, tx: Tx, pullRequestId: num
   }
 }
 
-/** Where an entry is: waiting, being merged, having its branch updated, or waiting for its new commit's checks. */
-export type QueueState = "queued" | "merging" | "updating-branch" | "waiting-for-checks";
+/**
+ * Where an entry is: waiting, being merged, having its branch updated, having a conflict resolved, or waiting for its
+ * new commit's checks.
+ */
+export type QueueState = "queued" | "merging" | "updating-branch" | "resolving-conflict" | "waiting-for-checks";
+
+/** How many times an entry steps aside for a conflict before its Ticket comes to its Assignee instead. */
+export const conflictCap = 3;
+
+/**
+ * The Merge Step's Outcome a Run resolving a conflict finishes with once it pushed a resolution: the one, neither the
+ * default nor *needs you*, that leaves the Ticket in the Merge Status, as the default Merge Step's *resolved* does.
+ */
+export function resolvingOutcome(status: Pick<Status, "id"> & { step: Step | null }): Outcome | undefined {
+  if (status.step?.kind !== "merge") return undefined;
+  return status.step.outcomes.find((o) => o.statusId === status.id && !o.default && !o.needsYou);
+}
+
+/** Whether one of the Ticket's entries waits for a Run of the Merge Step to resolve its conflict. */
+export async function resolvingConflict(tx: Tx, ticketId: string): Promise<boolean> {
+  const { rowCount } = await tx.query("select from merge_queue where ticket_id = $1 and state = 'resolving-conflict'", [ticketId]);
+  return rowCount !== 0;
+}
+
+/**
+ * A Run resolving a conflict finished with *resolved*: the Ticket's entries resolving a conflict wait, still out of
+ * line, for their new commits' checks. Says whether any did. Call it in the transaction that locked the Ticket.
+ */
+export async function conflictResolved(context: Context, tx: Tx, ticket: { id: string; workspaceId: string; projectId: string }): Promise<boolean> {
+  const { rowCount } = await tx.query(
+    "update merge_queue set state = 'waiting-for-checks' where ticket_id = $1 and state = 'resolving-conflict'",
+    [ticket.id],
+  );
+  if (rowCount) context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  return rowCount !== 0;
+}
 
 /** The head of one queue, as the pass read it. */
 interface Head {
@@ -279,21 +328,32 @@ const waiting: QueueState[] = ["queued", "waiting-for-checks"];
  * off since wait too. Given Pull Requests, it acts only on the heads among them, as a delivery about them asks.
  */
 export async function queuePass(context: Context, only?: { pullRequestIds: number[] }): Promise<void> {
+  const wanted = (entry: Head & { active: boolean }) => entry.active && (!only || only.pullRequestIds.includes(Number(entry.pullRequestId)));
+  // Entries that stepped aside and wait for their resolving commits' checks rejoin first, at the front of their queues.
+  const { rows: aside } = await context.db.query<Head & { active: boolean }>(
+    `select ${headColumns} from merge_queue join tickets on tickets.id = merge_queue.ticket_id
+     join projects on projects.id = tickets.project_id
+     where merge_queue.aside and merge_queue.state = 'waiting-for-checks'
+     order by merge_queue.seq`,
+  );
+  for (const entry of aside) if (wanted(entry)) await rejoin(context, entry);
   const { rows: heads } = await context.db.query<Head & { active: boolean }>(
-    `select distinct on (pull_requests.repository_id, coalesce(pull_requests.base_branch, ''))
-       merge_queue.pull_request_id::text as "pullRequestId", merge_queue.ticket_id as "ticketId", merge_queue.state,
-       merge_queue.queued_by_user_id as "queuedBy", merge_queue.queued_by_agent_id as "queuedByAgent",
-       projects.archived_at is null and projects.pull_request_automation as active
+    `select distinct on (pull_requests.repository_id, coalesce(pull_requests.base_branch, '')) ${headColumns}
      from merge_queue join pull_requests on pull_requests.id = merge_queue.pull_request_id
      join tickets on tickets.id = merge_queue.ticket_id join projects on projects.id = tickets.project_id
-     order by pull_requests.repository_id, coalesce(pull_requests.base_branch, ''), merge_queue.seq`,
+     -- An entry that stepped aside is out of line; one Cronk is acting on stays the head.
+     where not merge_queue.aside
+     order by pull_requests.repository_id, coalesce(pull_requests.base_branch, ''), merge_queue.state = 'queued', merge_queue.seq`,
   );
   for (const head of heads) {
-    if (!waiting.includes(head.state) || !head.active) continue;
-    if (only && !only.pullRequestIds.includes(Number(head.pullRequestId))) continue;
+    if (!waiting.includes(head.state) || !wanted(head)) continue;
     await mergeHead(context, head);
   }
 }
+
+const headColumns = `merge_queue.pull_request_id::text as "pullRequestId", merge_queue.ticket_id as "ticketId", merge_queue.state,
+  merge_queue.queued_by_user_id as "queuedBy", merge_queue.queued_by_agent_id as "queuedByAgent",
+  projects.archived_at is null and projects.pull_request_automation as active`;
 
 /**
  * Has the queue act at once on those of the Pull Requests that are queued, once the transaction commits, as a delivery
@@ -302,7 +362,7 @@ export async function queuePass(context: Context, only?: { pullRequestIds: numbe
 export async function queueDue(context: Context, tx: Tx, pullRequestIds: number[]): Promise<void> {
   if (pullRequestIds.length === 0) return;
   const { rows } = await tx.query<{ id: string }>(
-    "select pull_request_id::text as id from merge_queue where pull_request_id = any($1::bigint[])",
+    "select pull_request_id::text as id from merge_queue where pull_request_id = any($1::bigint[]) and state <> 'resolving-conflict'",
     [pullRequestIds],
   );
   if (rows.length === 0) return;
@@ -378,7 +438,7 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
     // Read again under the Ticket's lock: it may have left the queue, or another pass taken it, since the pass read it.
     const { rows: entries } = await tx.query<{ state: QueueState; updatedFrom: string | null }>(
       `select state, updated_from_sha as "updatedFrom" from merge_queue
-       where pull_request_id = $1 and ticket_id = $2 and state = any($3::text[]) for update`,
+       where pull_request_id = $1 and ticket_id = $2 and state = any($3::text[]) and not aside for update`,
       [head.pullRequestId, head.ticketId, waiting],
     );
     const entry = entries[0];
@@ -427,7 +487,8 @@ async function mergeHead(context: Context, head: Head): Promise<void> {
   } catch (error) {
     if (error instanceof ApiError && error.code === behindCode) return updateHead(context, head, asked.asked);
     await transaction(context.db, (tx) => setState(context, tx, head, asked.from, ["merging"]));
-    if (error instanceof GitHubRefusedMerge) await handOver(context, head, error);
+    if (error instanceof ConflictingPullRequest) await stepAside(context, head, asked.asked, error);
+    else if (error instanceof GitHubRefusedMerge) await handOver(context, head, error);
     else if (!(error instanceof ApiError)) throw error;
   }
 }
@@ -471,41 +532,210 @@ async function failureOf(tx: Tx, pullRequest: LinkedPullRequest, code: string): 
  */
 async function handOver(context: Context, head: Head, refusal: GitHubRefusedMerge): Promise<void> {
   await transaction(context.db, async (tx) => {
-    const { rows: tickets } = await tx.query<{
-      id: string;
-      key: string;
-      workspaceId: string;
-      projectId: string;
-      statusId: string;
-      verification: "unverified" | "verified" | null;
-    }>(
-      `select tickets.id, projects.key || '-' || tickets.number as key, tickets.workspace_id as "workspaceId",
-         tickets.project_id as "projectId", tickets.status_id as "statusId", tickets.verification
-       from tickets join projects on projects.id = tickets.project_id where tickets.id = $1 for update of tickets`,
-      [head.ticketId],
-    );
-    const ticket = tickets[0];
-    const { rows: entries } = await tx.query<{ statusId: string; repository: string; number: number }>(
-      `select merge_queue.status_id as "statusId", pull_requests.repository_full_name as repository, pull_requests.number
-       from merge_queue join pull_requests on pull_requests.id = merge_queue.pull_request_id
-       where merge_queue.pull_request_id = $1 and merge_queue.ticket_id = $2 and merge_queue.state = any($3::text[]) for update of merge_queue`,
-      [head.pullRequestId, head.ticketId, waiting],
-    );
-    const entry = entries[0];
-    // It may have left the queue meanwhile.
-    if (!ticket || !entry || ticket.statusId !== entry.statusId) return;
-    const status = (await statusesOf(tx, ticket.projectId)).find((s) => s.id === entry.statusId);
-    const needsYou = status?.step?.outcomes.find((o) => o.needsYou);
-    if (!status?.step || !needsYou) return;
+    const locked = await lockHead(tx, head);
+    if (!locked) return;
+    const { ticket, entry, status } = locked;
     const name = `${entry.repository}#${entry.number}`;
     const why = refusal.reason ? `GitHub refused to merge ${name}: “${refusal.reason}”` : `GitHub refused to merge ${name} without saying why`;
-    await moveByCronk(context, tx, ticket, {
-      target: { kind: "outcome", step: { statusId: status.id, name: status.name }, outcome: { ...needsYou, countsAsRound: false } },
-      by: { kind: "cronk" },
-      verification: "unverified",
-      question:
-        `${why}, so ${ticket.key} left the Merge Queue. Change what GitHub needs, such as the Repository's branch protection or ` +
+    await askAssignee(
+      context,
+      tx,
+      ticket,
+      status,
+      `${why}, so ${ticket.key} left the Merge Queue. Change what GitHub needs, such as the Repository's branch protection or ` +
         "rulesets, then press Merge again, or merge it on GitHub yourself.",
-    });
+    );
   });
+}
+
+/** The Ticket the pass read the head of, locked, with its entry while it still waits in the Merge Status it entered. */
+async function lockHead(
+  tx: Tx,
+  head: Head,
+): Promise<
+  | {
+      ticket: MovedTicket & { delegateId: string | null; delegateRemoved: boolean };
+      entry: { statusId: string; repository: string; number: number; url: string; branch: string | null; repositoryId: string; conflictCount: number };
+      status: Status & { step: Step };
+    }
+  | undefined
+> {
+  const { rows: tickets } = await tx.query<MovedTicket & { delegateId: string | null; delegateRemoved: boolean }>(
+    `select tickets.id, projects.key || '-' || tickets.number as key, tickets.workspace_id as "workspaceId",
+       tickets.project_id as "projectId", tickets.status_id as "statusId", tickets.verification,
+       tickets.delegate_id as "delegateId", coalesce(agents.removed_at is not null, false) as "delegateRemoved"
+     from tickets join projects on projects.id = tickets.project_id left join agents on agents.id = tickets.delegate_id
+     where tickets.id = $1 for update of tickets`,
+    [head.ticketId],
+  );
+  const ticket = tickets[0];
+  const { rows: entries } = await tx.query<{
+    statusId: string;
+    repository: string;
+    number: number;
+    url: string;
+    branch: string | null;
+    repositoryId: string;
+    conflictCount: number;
+  }>(
+    `select merge_queue.status_id as "statusId", pull_requests.repository_full_name as repository, pull_requests.number,
+       pull_requests.url, pull_requests.base_branch as branch, pull_requests.repository_id as "repositoryId",
+       merge_queue.conflict_count as "conflictCount"
+     from merge_queue join pull_requests on pull_requests.id = merge_queue.pull_request_id
+     where merge_queue.pull_request_id = $1 and merge_queue.ticket_id = $2 and merge_queue.state = any($3::text[])
+       and not merge_queue.aside
+     for update of merge_queue`,
+    [head.pullRequestId, head.ticketId, waiting],
+  );
+  const entry = entries[0];
+  // It may have left the queue meanwhile.
+  if (!ticket || !entry || ticket.statusId !== entry.statusId) return undefined;
+  const status = (await statusesOf(tx, ticket.projectId)).find((s) => s.id === entry.statusId);
+  if (!status?.step) return undefined;
+  return { ticket, entry, status: status as Status & { step: Step } };
+}
+
+/**
+ * Hands the queued Ticket to its Assignee by its Merge Step's *needs you* Outcome, with Cronk's Question, which takes
+ * it out of the queue. Not a round.
+ */
+async function askAssignee(context: Context, tx: Tx, ticket: MovedTicket, status: Status & { step: Step }, question: string): Promise<void> {
+  const needsYou = status.step.outcomes.find((o) => o.needsYou);
+  if (!needsYou) return;
+  await moveByCronk(context, tx, ticket, {
+    target: { kind: "outcome", step: { statusId: status.id, name: status.name }, outcome: { ...needsYou, countsAsRound: false } },
+    by: { kind: "cronk" },
+    verification: "unverified",
+    question,
+  });
+}
+
+const linkedName = (repository: string, number: number, url: string | null) =>
+  url ? `[${repository}#${number}](${url})` : `${repository}#${number}`;
+
+/**
+ * Takes a head GitHub says conflicts with its base branch out of line, so the queue moves on: with Cronk's Comment
+ * naming the merge that caused the conflict, it waits for a Run of the Merge Step to resolve it, which starts now. A
+ * fourth conflict, a Ticket with no Delegate, or a Merge Step without a resolving Outcome hands the Ticket to its
+ * Assignee instead.
+ */
+async function stepAside(context: Context, head: Head, asked: AskedMerge, conflict: ConflictingPullRequest): Promise<void> {
+  await transaction(context.db, async (tx) => {
+    const locked = await lockHead(tx, head);
+    if (!locked) return;
+    const { ticket, entry, status } = locked;
+    const branch = conflict.base.ref ?? entry.branch;
+    // The merge whose commit GitHub compared against, if Cronk knows it.
+    const { rows: merges } = conflict.base.sha
+      ? await tx.query<{ id: string; repository: string; number: number; url: string }>(
+          `select id::text, repository_full_name as repository, number, url from pull_requests
+           where repository_id = $1 and state = 'merged' and $2 in (merge_commit_sha, answered_merge_sha) order by id limit 1`,
+          [entry.repositoryId, conflict.base.sha],
+        )
+      : { rows: [] };
+    const merge = merges[0];
+    const name = linkedName(entry.repository, entry.number, entry.url);
+    const conflicts = `${name} conflicts with \`${branch ?? "its base branch"}\`${merge ? ` since ${linkedName(merge.repository, merge.number, merge.url)} merged` : ""}`;
+    const plainName = `${entry.repository}#${entry.number}`;
+    const plainConflicts = `${plainName} conflicts with ${branch ?? "its base branch"}${merge ? ` since ${merge.repository}#${merge.number} merged` : ""}`;
+    if (entry.conflictCount >= conflictCap) {
+      await askAssignee(
+        context,
+        tx,
+        ticket,
+        status,
+        `${plainConflicts}, and ${ticket.key} already stepped aside for conflicts ${conflictCap} times, so it left the Merge Queue. ` +
+          "Resolve the conflict yourself, or send it back to work, then press Merge again.",
+      );
+      return;
+    }
+    const resolving = resolvingOutcome(status);
+    if (!resolving || !ticket.delegateId || ticket.delegateRemoved) {
+      const why = !resolving
+        ? `its ${status.name} Step has no Outcome for a resolved conflict, so no Run can resolve it`
+        : `${ticket.key} isn't delegated, so no Run can resolve it`;
+      await askAssignee(
+        context,
+        tx,
+        ticket,
+        status,
+        `${plainConflicts}: ${why}, and it left the Merge Queue. Resolve the conflict, then press Merge again.`,
+      );
+      return;
+    }
+    const now = context.clock.now();
+    await tx.query(
+      `update merge_queue set state = 'resolving-conflict', aside = true, conflict_count = conflict_count + 1,
+         conflict_merged_pull_request_id = $2, conflict_base_sha = $3, conflict_at = $4, updated_from_sha = $5
+       where pull_request_id = $1`,
+      [head.pullRequestId, merge?.id ?? null, conflict.base.sha, now, asked.pullRequest.sha],
+    );
+    await insertComment(
+      context,
+      tx,
+      ticket,
+      { kind: "cronk" },
+      `${conflicts}, so ${ticket.key} stepped aside in the Merge Queue, which moves on meanwhile; a Run of ${status.name} ` +
+        `resolves the conflict (${entry.conflictCount + 1} of ${conflictCap}). Once the resolution's checks are green, ` +
+        `${ticket.key} rejoins the queue at the front.`,
+      null,
+    );
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    await startRunIfNeeded(context, tx, ticket.id, now);
+  });
+}
+
+/**
+ * Judges an entry that stepped aside and waits for its resolving commit's checks, by what GitHub reported, asking
+ * GitHub nothing: once GitHub reports a commit other than the conflicting one, and its checks are green, it rejoins
+ * its queue at the front, ahead of the entries waiting there; a failing check or a review requesting changes sends
+ * it back, as a round; otherwise it waits, out of line.
+ */
+async function rejoin(context: Context, entry: Head): Promise<void> {
+  return transaction(context.db, async (tx) => {
+    const { rows: tickets } = await tx.query<{ id: string; projectId: string; workspaceId: string }>(
+      `select tickets.id, tickets.project_id as "projectId", tickets.workspace_id as "workspaceId"
+       from tickets where tickets.id = $1 for update`,
+      [entry.ticketId],
+    );
+    const ticket = tickets[0];
+    const { rows: entries } = await tx.query<{ updatedFrom: string | null }>(
+      `select updated_from_sha as "updatedFrom" from merge_queue
+       where pull_request_id = $1 and ticket_id = $2 and aside and state = 'waiting-for-checks' for update`,
+      [entry.pullRequestId, entry.ticketId],
+    );
+    if (!ticket || !entries[0]) return;
+    const pullRequest = await linkedPullRequest(tx, ticket, Number(entry.pullRequestId));
+    if (!pullRequest || pullRequest.state !== "open") return;
+    const { updatedFrom } = entries[0];
+    // Until GitHub reports the resolving push, the conflicting commit's checks would be judged.
+    if (updatedFrom !== null && pullRequest.sha === updatedFrom) return;
+    if (updatedFrom !== null && (await hasChecks(tx, pullRequest.repositoryId, updatedFrom)) && !(await hasChecks(tx, pullRequest.repositoryId, pullRequest.sha))) {
+      return;
+    }
+    const failure = (await failingCheckOn(tx, pullRequest.repositoryId, pullRequest.sha)) ?? (await failureOf(tx, pullRequest, "changes_requested"));
+    if (failure) {
+      const failed = { id: Number(pullRequest.id), repository: pullRequest.repository, number: pullRequest.number, url: pullRequest.url };
+      if (await sendBackForFailure(context, tx, failed, failure, { ticketId: ticket.id, again: true })) {
+        context.live.publish(tx, ticket.workspaceId, { type: "pull_requests.changed", projectId: ticket.projectId, ticketId: ticket.id });
+      }
+      return;
+    }
+    if (await pendingCheckOn(tx, pullRequest.repositoryId, pullRequest.sha)) return;
+    // At the front: ahead of every entry waiting in its queue, behind none but one Cronk is acting on, which sorts first.
+    await tx.query(
+      `update merge_queue set aside = false, state = 'queued', updated_from_sha = null,
+         seq = coalesce((select min(other.seq) - 1 from merge_queue other join pull_requests other_pr on other_pr.id = other.pull_request_id
+           where other.pull_request_id <> $1 and not other.aside and other.state = 'queued'
+             and other_pr.repository_id = $2 and coalesce(other_pr.base_branch, '') = coalesce($3, '')), seq)
+       where pull_request_id = $1`,
+      [entry.pullRequestId, pullRequest.repositoryId, await baseBranchOf(tx, entry.pullRequestId)],
+    );
+    context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+  });
+}
+
+async function baseBranchOf(tx: Tx, pullRequestId: string): Promise<string | null> {
+  const { rows } = await tx.query<{ branch: string | null }>("select base_branch as branch from pull_requests where id = $1", [pullRequestId]);
+  return rows[0]?.branch ?? null;
 }

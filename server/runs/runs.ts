@@ -22,7 +22,7 @@ import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
 import { isBlocked, queueOrder } from "./waiting.js";
 import { userName } from "../identity/user.js";
-import { joinQueueAutonomously } from "../pipeline/merge-queue.js";
+import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
 
 /**
  * Runs: when a Ticket gets one, starting it through its Delegate's Runner, and ending it.
@@ -236,22 +236,25 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   const status = statuses.find((s) => s.id === ticket.statusId)!;
   // Finished or canceled work gets no Runs, even from a Step saved there before that was refused.
   if (!status.step || !mayHaveStep(status.kind)) return needsNone();
-  // A Ticket a User queued in the Merge Queue waits there for Cronk to merge it, with no Merge Run (ADR 0011).
+  // A Ticket queued in the Merge Queue waits there for Cronk to merge it, with no Merge Run (ADR 0011), unless one of its
+  // entries stepped aside for a conflict: then it gets a Run to resolve it, whatever the Step's rules say.
+  let resolving = false;
   if (status.step.kind === "merge") {
     const { rowCount: queued } = await tx.query("select from merge_queue where ticket_id = $1 and status_id = $2", [ticketId, status.id]);
-    if (queued) return needsNone();
+    if (queued && !(await resolvingConflict(tx, ticketId))) return needsNone();
+    resolving = queued !== 0;
   }
   // A Merge Step skips itself unless an agent may merge this Ticket, or a User queued it; otherwise the Label rule decides.
   const mergeRule =
-    status.step.kind === "merge"
+    status.step.kind === "merge" && !resolving
       ? mergeRefusal(ticket.agentsMayMerge, ticket.autonomousDelegation === true, await pullRequestAutomation(tx, ticket.projectId))
       : null;
   // An agent may merge it: it joins the Merge Queue for its Agent, with no Merge Run, if it has a Pull Request to queue.
   // One with none gets a Run, to find out why.
-  if (status.step.kind === "merge" && !mergeRule && passes(status.step.labelRule, ticket.labels)) {
+  if (status.step.kind === "merge" && !resolving && !mergeRule && passes(status.step.labelRule, ticket.labels)) {
     if (await joinQueueAutonomously(context, tx, { id: ticketId, ...ticket }, status.id, ticket.delegateId, now)) return needsNone();
   }
-  if (mergeRule || !passes(status.step.labelRule, ticket.labels)) {
+  if (!resolving && (mergeRule || !passes(status.step.labelRule, ticket.labels))) {
     const outcome = status.step.outcomes.find((o) => o.default)!;
     if (skipped.has(status.id) || outcome.statusId === status.id) return needsNone();
     skipped.add(status.id);
@@ -723,7 +726,19 @@ export async function finishRun(
     const statuses = await statusesOf(tx, ticket.projectId);
     const step = statuses.find((s) => s.id === run.statusId)?.step;
     const offered = step ? offeredOutcomes(step, statuses, ticket.autonomousDelegation === true) : [];
-    const outcome = offered.find((o) => o.name.toLowerCase() === input.outcome.trim().toLowerCase());
+    const chosen = offered.find((o) => o.name.toLowerCase() === input.outcome.trim().toLowerCase());
+    // A Run of a Merge Step resolving a conflict: sending the Ticket back counts as no round, the conflict cap
+    // counting instead; its resolving Outcome is for that Run only.
+    const stepStatus = statuses.find((s) => s.id === run.statusId);
+    const resolving = step?.kind === "merge" && (await resolvingConflict(tx, ticket.id));
+    const resolves = chosen !== undefined && stepStatus !== undefined && resolvingOutcome(stepStatus)?.name === chosen.name;
+    if (resolves && !resolving) {
+      throw new ApiError(409, "nothing_to_resolve", `${ticket.key} has no conflict in the Merge Queue to resolve, so it can't finish ${chosen.name}.`, {
+        rule: `${chosen.name} is for a Run resolving a conflict that set its Ticket aside in the Merge Queue.`,
+        advice: `Finish with another Outcome: ${offered.filter((o) => o !== chosen).map((o) => o.name).join(", ")}.`,
+      });
+    }
+    const outcome = chosen && resolving && chosen.countsAsRound ? { ...chosen, countsAsRound: false } : chosen;
     if (!outcome) {
       throw new ApiError(400, "outcome_not_offered", `${input.outcome} isn't an Outcome this Run may choose.`, {
         rule: finishRule,
@@ -757,6 +772,8 @@ export async function finishRun(
           [run.id, applied!.name, question, questionBy, now],
         );
         await tellRunnerEnded(context, tx, run.id);
+        // Resolved: the entry waits, out of line, for the resolution's checks, so the Ticket gets no other Run here.
+        if (resolves) await conflictResolved(context, tx, ticket);
         if (input.report !== undefined) {
           await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
         }

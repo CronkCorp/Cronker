@@ -77,6 +77,12 @@ export function buildBrief(
       return `${moves}, completing it as Unverified until its Assignee Accepts or Reopens it.`;
     }
     if (o.needsYou) return `${moves} and hands it back to its Assignee. Give a Question saying what you need.`;
+    if (step.kind === "merge" && o.statusId === status.id && !o.default) {
+      return `- **${o.name}**: once you've pushed a resolution of the conflict, leaves ${ticketKey} in ${status.name}, waiting for the new commit's checks to go green, when it rejoins the Merge Queue at the front.`;
+    }
+    if (o.countsAsRound && step.kind === "merge") {
+      return `${moves}. From a Run resolving a conflict it counts as no round; otherwise it counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
+    }
     if (o.countsAsRound) {
       return `${moves}. It counts as a round: after ${step.roundLimit}, the Step's *needs you* Outcome applies instead.`;
     }

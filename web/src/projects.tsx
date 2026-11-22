@@ -502,7 +502,8 @@ function People({ ticket, members, agents }: { ticket: TicketSummary; members: M
  */
 /**
  * A queued Ticket's place in the Merge Queue: *#2 in queue*; *Updating branch* while GitHub brings its branch, behind its
- * base branch, up to date, then *Waiting for checks* on the new commit; or *Merging* while Cronk merges it.
+ * base branch, up to date, then *Waiting for checks* on the new commit; *Resolving conflict* while, stepped aside for
+ * a conflict, a Merge Run resolves it, then *Waiting for checks* on the resolution; or *Merging* while Cronk merges it.
  */
 export function QueueChip({ queue }: { queue: NonNullable<TicketSummary["queue"]> }) {
   switch (queue.state) {
@@ -510,6 +511,8 @@ export function QueueChip({ queue }: { queue: NonNullable<TicketSummary["queue"]
       return <Chip tone="ok">Merging</Chip>;
     case "updating-branch":
       return <Chip tone="info">Updating branch</Chip>;
+    case "resolving-conflict":
+      return <Chip tone="warn">Resolving conflict</Chip>;
     case "waiting-for-checks":
       return <Chip tone="info">Waiting for checks</Chip>;
     default:

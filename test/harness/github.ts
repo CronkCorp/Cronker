@@ -76,6 +76,13 @@ export interface StandInPullRequest {
    * `behind` and, as in a Repository requiring up-to-date branches, refuses to merge it until its branch is updated.
    */
   behind: boolean;
+  /**
+   * The other Pull Requests its merge makes conflict with their base branch: once it merges, each answers it can't be
+   * merged, worked out against the merge commit.
+   */
+  conflicts: StandInPullRequest[];
+  /** The merge commit GitHub made merging it, `m<number>`; null until it merges. */
+  mergeCommit: string | null;
 }
 
 /** A branch update GitHub made at the App's request, moving a Pull Request's head to a new commit. */
@@ -347,6 +354,8 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         baseSha: "b0",
         answers: [],
         behind: false,
+        conflicts: [],
+        mergeCommit: null,
       };
       Object.assign(pullRequest, fields);
       pullRequests.set(key, pullRequest);
@@ -774,10 +783,15 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       }
       pullRequest.state = "closed";
       pullRequest.merged = true;
+      pullRequest.mergeCommit = `m${pullRequest.number}`;
+      for (const other of pullRequest.conflicts) {
+        other.mergeable = false;
+        other.baseSha = pullRequest.mergeCommit;
+      }
       const merge = { repository: repository.fullName, number: pullRequest.number, method, sha: body.sha ?? null, installationId: installation.id };
       github.merges.push(merge);
       await github.onMerge?.(merge);
-      return json(response, 200, { sha: randomBytes(20).toString("hex"), merged: true, message: "Pull Request successfully merged" });
+      return json(response, 200, { sha: pullRequest.mergeCommit, merged: true, message: "Pull Request successfully merged" });
     }
 
     return json(response, 404, { message: "Not Found" });
