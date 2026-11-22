@@ -189,6 +189,7 @@ describe("Document sections", () => {
         actor: { kind: "agent", id: agent.id, name: "claude-max" },
         savedAt: "2026-01-01T09:01:00.000Z",
       },
+      avoidedWords: [],
     });
     const read = await ok("GET", `/api/documents/${document.id}`, ada);
     expect(read.body).toBe(guide.replace("### Linux\n\napt remove cronk", "### Linux and WSL\n\napt purge cronk"));

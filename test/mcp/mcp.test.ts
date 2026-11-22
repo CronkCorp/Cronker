@@ -509,6 +509,17 @@ describe("MCP with an Agent token", () => {
     expect(refused).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run", rule: expect.any(String) }) });
   });
 
+  test("a save tells the Agent which words the glossary avoids its text uses, with the Term to use", async () => {
+    const { workspace, cookie, secret } = await workspaceWithTicket();
+    await post(cookie, `/api/workspaces/${workspace.id}/terms`, { name: "Ticket", avoid: ["task"] });
+    const client = await connect(secret);
+
+    const created = await call(client, "create_document", { project: "CRONK", title: "Plan", body: "One task, then `task`." });
+
+    expect(created.isError).toBe(false);
+    expect(created.json.avoidedWords).toEqual([{ word: "task", term: { name: "Ticket", readable: "Ticket" } }]);
+  });
+
   test("an Agent creates, edits, moves and reads Documents in a Project's page tree and the Workspace's", async () => {
     const { cookie, agent, secret } = await workspaceWithTicket();
     const client = await connect(secret);

@@ -8,6 +8,8 @@ import { requireCaller } from "../identity/callers.js";
 import { Change, changesOf } from "./changes.js";
 import { addComment, Comment, commentsOn } from "./comments.js";
 import { Report, reportsOn, writeReport } from "../knowledge/reports.js";
+import { placeOfDocument } from "../knowledge/documents.js";
+import { warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { acceptTicket, Completion, completionOf, reopenTicket } from "./verification.js";
 import { addRelation, Relation, RelationKind, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
@@ -357,12 +359,15 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             title: Title,
             body: Type.String({ minLength: 1, maxLength: 500_000, pattern: "\\S", description: "Markdown." }),
           }),
-          response: { 201: Report, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          response: { 201: withAvoidedWords(Report), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
         const caller = await requireCaller(context, request);
-        return reply.code(201).send(await writeReport(context, caller, request.params.ticketId, request.body));
+        const report = await writeReport(context, caller, request.params.ticketId, request.body);
+        const { title, body } = request.body;
+        const place = await placeOfDocument(db, report.id);
+        return reply.code(201).send(await warnAgent(db, caller, place, { plain: [title], markdown: [body] }, report));
       },
     );
 

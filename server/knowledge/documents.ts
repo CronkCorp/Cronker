@@ -548,3 +548,12 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
     documentChanged(live, tx, document);
   });
 }
+
+/** Where a saved Document, or Report, is kept: its page tree's Project or Workspace, a Report's being its Ticket's Project. */
+export async function placeOfDocument(db: Db, documentId: string): Promise<Place> {
+  const { rows } = await db.query<Place>(
+    `select workspace_id as "workspaceId", project_id as "projectId" from documents where id = $1`,
+    [documentId],
+  );
+  return rows[0]!;
+}
