@@ -29,10 +29,18 @@ export type LiveEvent =
   | { type: "artifact.changed"; projectId: string | null; artifactId: string }
   /** A Transcript was uploaded again, with its session's newer entries, or deleted. */
   | { type: "transcript.changed"; transcriptId: string; runId: string | null }
-  /** The stream reconnected after a break, so events may have been missed: fetch everything again. */
+  /**
+   * An Access change let the User read a Project, or took one away. The stream also tells it as `reconnected`, so
+   * every screen fetches again: what the Project adds shows up, and a screen of something in a lost one finds it gone.
+   */
+  | { type: "project.gained" | "project.lost"; projectId: string }
+  /**
+   * The stream reconnected after a break, so events may have been missed, or the User gained or lost a Project:
+   * fetch everything again.
+   */
   | { type: "reconnected" };
 
-const eventTypes = ["project.created", "project.changed", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "transcripts.changed", "document.changed", "term.changed", "decision.changed", "artifact.changed", "transcript.changed"];
+const eventTypes = ["project.created", "project.changed", "project.gained", "project.lost", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "transcripts.changed", "document.changed", "term.changed", "decision.changed", "artifact.changed", "transcript.changed"];
 
 /** What the User's own Runners' stream tells: a Run started or ended on one, or its queue paused or resumed. */
 export type RunnerEvent = { type: "runner.changed"; runnerId: string } | { type: "reconnected" };
@@ -96,7 +104,11 @@ function open(url: string, types: string[]): Stream {
         }, Math.min(reopenDelayMs * 2 ** (failures - 1), maxReopenDelayMs));
       });
       for (const type of types) {
-        source.addEventListener(type, (message) => emit({ type, ...JSON.parse(message.data) } as LiveEvent | RunnerEvent));
+        source.addEventListener(type, (message) => {
+          emit({ type, ...JSON.parse(message.data) } as LiveEvent | RunnerEvent);
+          // Gaining or losing a Project changes what every screen may show, as missed events would.
+          if (type === "project.gained" || type === "project.lost") emit({ type: "reconnected" });
+        });
       }
     };
     watch(created.source);

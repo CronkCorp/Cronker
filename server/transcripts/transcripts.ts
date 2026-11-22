@@ -217,7 +217,7 @@ export async function uploadTranscript(
     const transcript = present((await transcriptRow(tx, "transcripts.id = $1", [id]))!);
     // A Run that gains its Transcript links it on its Ticket's timeline.
     if (transcript.runId && transcript.runId !== held.rows[0]?.runId) await runTicketChanged(context, tx, transcript.runId);
-    transcriptChanged(context, tx, agent.workspace.id, transcript);
+    await transcriptChanged(context, tx, agent.workspace.id, transcript);
     return { transcript, created };
   });
 }
@@ -335,7 +335,7 @@ export async function appendTranscript(context: Context, tx: Tx, session: RunSes
   ]);
   // A Run that gains its Transcript links it on its Ticket's timeline.
   if (created) await runTicketChanged(context, tx, session.runId);
-  transcriptChanged(context, tx, session.workspaceId, { id, runId: session.runId });
+  await transcriptChanged(context, tx, session.workspaceId, { id, runId: session.runId });
   return true;
 }
 
@@ -646,6 +646,7 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
       const ticket = await runTicketChanged(context, tx, transcript.runId);
       await recordTranscriptDeleted(context, tx, ticket, actor.id, { ...deleted, step: ticket.step });
     }
+    await transcriptChanged(context, tx, rows[0].workspaceId, transcript);
     // A session outside a Run drops out of the Tickets it named, each recording that it was deleted.
     const unlinked = await tx.query<{ id: string; projectId: string; workspaceId: string }>(
       `with unlinked as (delete from transcript_tickets where transcript_id = $1 returning ticket_id)
@@ -657,7 +658,6 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
       await recordTranscriptDeleted(context, tx, ticket, actor.id, deleted);
       context.live.publish(tx, ticket.workspaceId, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
     }
-    transcriptChanged(context, tx, rows[0].workspaceId, transcript);
   });
 }
 
@@ -708,7 +708,30 @@ async function runTicketChanged(context: Context, tx: Tx, runId: string): Promis
   return ticket;
 }
 
-/** Tells the Workspace's streams that a Transcript changed, so an open Transcript page shows it. */
-function transcriptChanged({ live }: Context, tx: Tx, workspaceId: string, transcript: Pick<Transcript, "id" | "runId">): void {
-  live.publish(tx, workspaceId, { type: "transcript.changed", transcriptId: transcript.id, runId: transcript.runId });
+/**
+ * Tells the Workspace's streams that a Transcript changed, so an open Transcript page shows it: a Run's goes to the
+ * readers of its Ticket's Project; a session outside a Run to its Agent's Owner and the Users who can read every
+ * Ticket it names. Call it before a deletion unlinks those Tickets.
+ */
+async function transcriptChanged(
+  { live }: Context,
+  tx: Tx,
+  workspaceId: string,
+  transcript: Pick<Transcript, "id" | "runId">,
+): Promise<void> {
+  const event = { type: "transcript.changed", transcriptId: transcript.id, runId: transcript.runId } as const;
+  if (transcript.runId) {
+    const ticket = await runTicket(tx, transcript.runId);
+    live.publish(tx, workspaceId, event, { readersOf: [ticket.projectId] });
+    return;
+  }
+  const { rows } = await tx.query<{ ownerId: string; projectIds: string[] }>(
+    `select agents.owner_id as "ownerId",
+       array(select distinct tickets.project_id from transcript_tickets join tickets on tickets.id = transcript_tickets.ticket_id
+             where transcript_tickets.transcript_id = transcripts.id) as "projectIds"
+     from transcripts join agents on agents.id = transcripts.agent_id where transcripts.id = $1`,
+    [transcript.id],
+  );
+  const { ownerId, projectIds } = rows[0]!;
+  live.publish(tx, workspaceId, event, { readersOf: projectIds, users: [ownerId] });
 }
