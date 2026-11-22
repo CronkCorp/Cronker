@@ -667,9 +667,11 @@ function Card({
           event.dataTransfer.effectAllowed = "move";
         }}
       >
-        {/* Not draggable itself: a press on the link starts the card's drag, not the browser's own drag of a link,
-            which browsers start differently from an element's and which would carry the link's address. */}
-        <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
+        {/* Explicitly draggable, as an element rather than as a link: its dragstart bubbles to the card's handler,
+            which sets the card's data and image, so the drag is the card's wherever it starts. Not draggable={false}:
+            Vivaldi (and Opera) take that as "this link's text is always selectable", ignore user-select on it and
+            select the card's text instead of dragging it; draggable="true" is their documented way to say "always drag". */}
+        <Link to={to.ticket(ticket)} className="card-link" draggable>
           <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
           <span className="card-priority">
             <PriorityTag priority={ticket.priority} />
