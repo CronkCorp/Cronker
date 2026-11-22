@@ -454,3 +454,37 @@ describe("Search", () => {
     ]);
   });
 });
+
+describe("Search and archived Projects", () => {
+  test("an archived Project's results of every kind are left out, unless the Project filter names it", async () => {
+    const { workspace, ada, project, ticket, asAgent } = await workspaceWithRun();
+    const transcript = await uploadTranscript("session_1", ["Triage CRONK-1.", "Deploy it first."], asAgent);
+    const files = [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }];
+    const found = {
+      ticket: await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Deploy the board" }),
+      report: await ok("POST", `/api/tickets/${ticket.id}/reports`, asAgent, { title: "Findings", body: "Deploys fail." }),
+      document: await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Deploying", body: "How." }),
+      term: await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Deploy", definition: "Ship it.", avoid: [] }),
+      decision: await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Deploy weekly", body: "Fridays." }),
+      artifact: await ok("POST", `/api/projects/${project.id}/artifacts`, ada, { title: "Deploy button", files }),
+      transcript,
+    };
+    const workspaces = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Deploy guide", body: "Ours." });
+    const other = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Other", key: "OTHER" });
+    const elsewhere = await ok("POST", `/api/projects/${other.id}/tickets`, ada, { title: "Deploy elsewhere" });
+    const archived = Object.entries(found).map(([kind, { id }]) => [kind, id]).sort();
+    const pairs = (results: { kind: string; id: string }[]) => results.map((r) => [r.kind, r.id]).sort();
+
+    await ok("POST", `/api/projects/${project.id}/archive`, ada);
+
+    expect(pairs(await search(workspace.id, ada, { q: "deploy" }))).toEqual(
+      [["document", workspaces.id], ["ticket", elsewhere.id]].sort(),
+    );
+    expect(pairs(await search(workspace.id, ada, { q: "deploy", project: project.id }))).toEqual(archived);
+
+    await ok("POST", `/api/projects/${project.id}/unarchive`, ada);
+    expect(pairs(await search(workspace.id, ada, { q: "deploy" }))).toEqual(
+      [...archived, ["document", workspaces.id], ["ticket", elsewhere.id]].sort(),
+    );
+  });
+});
