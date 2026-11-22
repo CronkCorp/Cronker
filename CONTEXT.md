@@ -19,7 +19,7 @@ What a web address, the HTTP API and the MCP tools name a thing by in place of i
 _Avoid_: Alias, handle, permalink
 
 **Project**:
-The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's.
+The main container of work and its knowledge, usually one product or repository, inside one Workspace. Its knowledge layers on top of the Workspace's. An Admin may **archive** a finished or trial Project, recording when and by whom: it stays readable, its key and addresses keep working, but every write in it is refused for everyone, Admins and Agents included, until an Admin **unarchives** it.
 _Avoid_: Board, space, repo
 
 ### Work
@@ -179,7 +179,7 @@ A User who manages one Workspace: who belongs to it and its settings. Whoever cr
 _Avoid_: Owner, superuser
 
 **Access**:
-What a User may do in a Project: **Write**, **Read**, or nothing. A Project is **open** or **private**, and may list Users with Read or Write; a User it doesn't list has Write in an open Project and nothing in a private one, which answers as if it didn't exist. An Admin has Write in every Project of their Workspace, and only Admins change a Project's Access. The Workspace's own knowledge is Write for all its Users. What a User can't read answers as if it didn't exist, except that a Ticket blocked by one still counts it.
+What a User may do in a Project: **Write**, **Read**, or nothing. A Project is **open** or **private**, and may list Users with Read or Write; a User it doesn't list has Write in an open Project and nothing in a private one, which answers as if it didn't exist. An Admin has Write in every Project of their Workspace, and only Admins change a Project's Access. In an archived Project everyone who can read it has only Read. The Workspace's own knowledge is Write for all its Users. What a User can't read answers as if it didn't exist, except that a Ticket blocked by one still counts it.
 _Avoid_: Permission, role, membership
 
 **Agent Access**:

@@ -35,7 +35,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Actor, Avatar } from "./ui/actor.js";
-import { Actions, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Banner, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
   ConfirmDialog,
@@ -70,7 +70,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
   useEffect(load, [load]);
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "project.created" || event.type === "reconnected") load();
+    if (event.type === "project.created" || event.type === "project.changed" || event.type === "reconnected") load();
   });
 
   const { error, busy, onSubmit } = useSubmit(async (form) => {
@@ -92,6 +92,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
                 <li key={project.id}>
                   <Link to={to.project(project)} className="row">
                     <span className="row-title">{project.name}</span> <span className="ticket-key">{project.key}</span>
+                    {project.archivedAt !== null && <Chip>Archived</Chip>}
                   </Link>
                 </li>
               ))}
@@ -131,18 +132,82 @@ type View = "board" | "list" | "settings" | "documents" | "glossary" | "decision
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
-/** The Project's other pages, in the page head's "…" menu. */
-export function ProjectMenu({ project }: { project: ProjectSummary }) {
+/** The Project's other pages, in the page head's "…" menu, and, for an Admin, Archive… after them. */
+export function ProjectMenu({
+  project,
+  workspace,
+  onChange,
+}: {
+  project: ProjectSummary;
+  workspace: WorkspaceSummary;
+  onChange: (project: Project) => void;
+}) {
   const to = useAddresses();
   const base = to.project(project);
+  const [archiving, setArchiving] = useState(false);
   return (
-    <Menu label="More of this Project">
-      <MenuLink to={`${base}/documents`}>Documents</MenuLink>
-      <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
-      <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
-      <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
-      <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
-    </Menu>
+    <>
+      <Menu label="More of this Project">
+        <MenuLink to={`${base}/documents`}>Documents</MenuLink>
+        <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
+        <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
+        <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
+        <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
+        {workspace.isAdmin && project.archivedAt === null && (
+          <>
+            <MenuSeparator />
+            <MenuItem onSelect={() => setArchiving(true)}>Archive…</MenuItem>
+          </>
+        )}
+      </Menu>
+      <ConfirmDialog
+        open={archiving}
+        onOpenChange={setArchiving}
+        title={`Archive ${project.key}?`}
+        confirm="Archive"
+        onConfirm={async () => {
+          onChange(await api.archiveProject(project.id));
+          setArchiving(false);
+        }}
+      >
+        It becomes read-only for everyone, Admins and Agents included, and moves to Archived in the sidebar. Its key and
+        addresses keep working, and an Admin can unarchive it.
+      </ConfirmDialog>
+    </>
+  );
+}
+
+/** Says an archived Project is read-only, with Unarchive for an Admin. */
+function ArchivedBanner({
+  project,
+  workspace,
+  onChange,
+}: {
+  project: Project;
+  workspace: WorkspaceSummary;
+  onChange: (project: Project) => void;
+}) {
+  const { busy, error, save } = useSave();
+  if (project.archivedAt === null) return null;
+  return (
+    <Banner tone="warn" label="Archived">
+      <div className="archived-banner">
+        <span>
+          This Project is archived: everyone reads it, but nothing in it changes until an Admin unarchives it.
+        </span>
+        {workspace.isAdmin && (
+          <Button
+            variant="secondary"
+            size="small"
+            disabled={busy}
+            onClick={() => save(async () => onChange(await api.unarchiveProject(project.id)))}
+          >
+            Unarchive
+          </Button>
+        )}
+      </div>
+      <FormError error={error} />
+    </Banner>
   );
 }
 
@@ -232,9 +297,10 @@ export function ProjectScreen({
         <PageHead
           crumbs={[home, { label: <span className="mono">{project.key}</span>, to: base }]}
           title="Project settings"
-          actions={<ProjectMenu project={project} />}
+          actions={<ProjectMenu project={project} workspace={workspace} onChange={setProject} />}
         />
-        <ReadOnlyNote access={project.access} />
+        <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
+        {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
         <SettingsLayout
           sections={[
             {
@@ -314,12 +380,13 @@ export function ProjectScreen({
         }
         actions={
           <>
-            <ProjectMenu project={project} />
+            <ProjectMenu project={project} workspace={workspace} onChange={setProject} />
             {project.access === "write" && <NewTicket project={project} onCreated={loadTickets} />}
           </>
         }
       />
-      <ReadOnlyNote access={project.access} />
+      <ArchivedBanner project={project} workspace={workspace} onChange={setProject} />
+      {project.archivedAt === null && <ReadOnlyNote access={project.access} />}
       <Filters project={project} members={members} filter={filter} onChange={setFilter} />
       {view === "board" && (
         <Board project={project} members={members} agents={agents} user={user} tickets={tickets} group={group} onChanged={ticketEdited} />

@@ -4,12 +4,12 @@ import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn } from "../http/readable.js";
-import { accessOf, inReach, readAccessRefusal, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
+import { accessOf, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { lockTickets, writeTicket } from "./ticket-writes.js";
-import { findProject, projectNotFound } from "./projects.js";
+import { findProject, projectNotFound, requireProjectWrite } from "./projects.js";
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
@@ -440,7 +440,7 @@ export async function createTicket(
   return transaction(db, async (tx) => {
     const project = await findProject(tx, creator, projectId, { lock: true });
     if (!project) throw projectNotFound();
-    if (project.access !== "write") throw readAccessRefusal();
+    requireProjectWrite(project);
     if (input.parentId !== undefined && input.runId !== undefined) {
       throw new ApiError(400, "parent_or_run", "Give a parent for a Sub-Ticket or a Run for a Discovered Ticket, not both.");
     }

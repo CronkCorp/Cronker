@@ -28,8 +28,11 @@ export function inView(viewer: Viewer, workspaceColumn: string, param: string): 
     : { sql: `${workspaceColumn} = ${param}`, value: viewer.workspace.id };
 }
 
-/** What a Viewer may do in a Project, or with a Workspace's own knowledge: nothing, Read or Write. */
-export type Access = "none" | "read" | "write";
+/**
+ * What a Viewer may do in a Project, or with a Workspace's own knowledge: nothing, Read or Write; or, in an archived
+ * Project, whatever they had there, `archived`: read it and change nothing, Admins included, until it is unarchived.
+ */
+export type Access = "none" | "archived" | "read" | "write";
 
 /**
  * Where a record is, as SQL expressions: its Project's id, null for a Workspace's own knowledge, and its Workspace's id.
@@ -39,14 +42,24 @@ export interface Place {
   workspace: string;
 }
 
-const levels = "array['none', 'read', 'write']::text[]";
+// Archived ranks below Read, so an Agent's least of the levels is archived whenever its Owner's is.
+const levels = "array['none', 'archived', 'read', 'write']::text[]";
 const rank = (access: string) => `array_position(${levels}, (${access})::text)`;
 
 /**
  * A User's Access, as SQL: nothing outside their Workspaces; Write in the Workspace's own knowledge and, for an Admin,
  * in every Project of it; otherwise their listed level, or, unlisted, Write in an open Project and nothing in a private one.
+ * In an archived Project, any of those but nothing is `archived`.
  */
-function userAccess(user: string, { project, workspace }: Place): string {
+function userAccess(user: string, place: Place): string {
+  const level = listedAccess(user, place);
+  return `(case when ${place.project} is not null and (${level}) <> 'none'
+      and exists (select 1 from projects archived_projects where archived_projects.id = ${place.project} and archived_projects.archived_at is not null)
+    then 'archived' else ${level} end)`;
+}
+
+/** A User's Access by their membership and the Project's list, before an archived Project counts. */
+function listedAccess(user: string, { project, workspace }: Place): string {
   return `coalesce((select case when ${project} is null or access_memberships.is_admin then 'write'
         else coalesce(
           (select project_members.level from project_members
@@ -100,6 +113,19 @@ export async function accessOf(db: Db | Tx, viewer: Viewer, place: { workspaceId
   return rows[0]!.access;
 }
 
+/** The refusal of a write to an archived Project, whoever makes it. */
+export function archivedRefusal(): ApiError {
+  return new ApiError(403, "project_archived", "This Project is archived, so it may only be read.", {
+    rule: "An archived Project is read-only for everyone, Admins and Agents included, until an Admin unarchives it.",
+    advice: "Read instead, or ask an Admin of this Workspace to unarchive the Project.",
+  });
+}
+
+/** The refusal of a write to a Viewer without Write at the Access given: archived, or only Read. */
+export function writeRefusal(access: Access): ApiError {
+  return access === "archived" ? archivedRefusal() : readAccessRefusal();
+}
+
 /** The refusal of a write to a Viewer with only Read where the write lands. */
 export function readAccessRefusal(): ApiError {
   return new ApiError(403, "read_access", "You have Read in this Project, so you may only read it.", {
@@ -117,7 +143,8 @@ export async function requireWrite(
   viewer: Viewer,
   place: { workspaceId: string; projectId: string | null },
 ): Promise<void> {
-  if ((await accessOf(db, viewer, place)) !== "write") throw readAccessRefusal();
+  const access = await accessOf(db, viewer, place);
+  if (access !== "write") throw writeRefusal(access);
 }
 
 /**

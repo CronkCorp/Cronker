@@ -28,7 +28,7 @@ import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
-import { ReadOnlyNote } from "./write-access.js";
+import { ProjectNote } from "./write-access.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
@@ -153,7 +153,7 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       <FormError error={failure} />
       {documents &&
         (documents.length === 0 ? (
@@ -306,7 +306,7 @@ export function DocumentScreen({
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       {gone && (
         <DeletedElsewhere back={{ to: home, label: document.ticketId ? "Back to its Ticket" : "Back to Documents" }}>
           this Document is no longer kept.

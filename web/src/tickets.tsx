@@ -1,4 +1,4 @@
-import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access.js";
+import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.js";
 import { useAddresses, type Addresses } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode, type Ref } from "react";
 import {
@@ -313,7 +313,7 @@ export function TicketScreen({
           )
         }
       />
-      <ReadOnlyNote access={project.access} />
+      <ProjectNote project={project} />
       <FormError error={error} />
       <div className="page-split">
         <div className="page ticket-main">
