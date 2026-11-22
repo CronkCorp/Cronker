@@ -183,6 +183,7 @@ describe("MCP with an Agent token", () => {
         producingStep: null,
         reviewState: null,
         sentBack: null,
+        manual: false,
       },
     ]);
   });
@@ -191,12 +192,13 @@ describe("MCP with an Agent token", () => {
     const { secret } = await workspaceWithTicket();
     const client = await connect(secret);
 
+    // CRONK-1 blocks CRONK-2, and a blocked Ticket lists before the rest of its Status.
     const all = await call(client, "list_tickets", {});
-    expect(all.json.map((t: { key: string }) => t.key)).toEqual(["CRONK-1", "CRONK-2"]);
+    expect(all.json.map((t: { key: string }) => t.key)).toEqual(["CRONK-2", "CRONK-1"]);
     const backlog = await call(client, "list_tickets", { project: "cronk", status: "backlog" });
     expect(backlog.json.map((t: { key: string; status: string }) => [t.key, t.status])).toEqual([
-      ["CRONK-1", "Backlog"],
       ["CRONK-2", "Backlog"],
+      ["CRONK-1", "Backlog"],
     ]);
     const triage = await call(client, "list_tickets", { project: "CRONK", status: "Triage" });
     expect(triage.json).toEqual([]);

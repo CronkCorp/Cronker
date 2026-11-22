@@ -183,6 +183,7 @@ describe("Pull Requests linking to Tickets", () => {
       producingStep: null,
       reviewState: null,
       sentBack: null,
+      manual: false,
     };
     expect(await pullRequestsOf(first.id, cookie)).toEqual([shown]);
     expect(await pullRequestsOf(second.id, cookie)).toEqual([shown]);
@@ -623,11 +624,11 @@ describe("Merges", () => {
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: statusNamed(project, "Done"), verification: "verified" });
   });
 
-  test("a merge by the GitHub account a password User linked from the password page completes the Ticket as Verified", async () => {
+  test("a merge by the GitHub account a password User linked from their settings page completes the Ticket as Verified", async () => {
     const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
     const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
     const account = cronk.github.account("bea-gh");
-    expect((await linkGitHub(cronk, bea.cookie, account)).location).toBe("/password?github=linked");
+    expect((await linkGitHub(cronk, bea.cookie, account)).location).toBe("/account?github=linked");
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Merge me" });
     const pr = { id: 501, number: 7, title: "CRONK-1", branch: "b" };
     await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
@@ -1502,11 +1503,12 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.stop();
     cronk = await startCronk({ migrateBefore: "0031_sent_back_comments.sql" });
     // Setting up and creating a Project, as today's API does, needs Workspace slugs and the Merge Step's columns;
-    // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access.
+    // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access; reading a User needs display names.
     await cronk.applyAhead("0033_merge_step.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
     await cronk.applyAhead("0049_run_costs.sql");
     await cronk.applyAhead("0051_access.sql");
+    await cronk.applyAhead("0053_display_name.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
@@ -1529,5 +1531,179 @@ describe("Send-back Comments written before they were marked", () => {
       ["cronk", true],
       ["user", false],
     ]);
+  });
+});
+
+describe("Pull Requests linked by hand", () => {
+  const link = (cookie: string, ticketId: string, pullRequest: string) =>
+    cronk.request("POST", `/api/tickets/${ticketId}/pull-requests`, { cookie, body: { pullRequest } });
+  const unlink = (cookie: string, ticketId: string, pullRequestId: number) =>
+    cronk.request("DELETE", `/api/tickets/${ticketId}/pull-requests/${pullRequestId}`, { cookie });
+  const ticketOf = async (ticketId: string, cookie: string) =>
+    (await cronk.request("GET", `/api/tickets/${ticketId}`, { cookie })).json();
+  const linked = async (ticketId: string, cookie: string) =>
+    (await pullRequestsOf(ticketId, cookie)).map((pr: { id: number; manual: boolean }) => [pr.id, pr.manual]);
+  const unnamed = { id: 501, number: 7, title: "Tidy the board", branch: "tidy-board" };
+
+  test("a User links a Pull Request naming no key by its address or as owner/name#number, and unlinks it", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Linked by hand" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 502, number: 8, title: "Other", branch: "other" }));
+    expect(await pullRequestsOf(ticket.id, cookie)).toEqual([]);
+    const stream = await openStream(cronk, cookie, workspace.id);
+
+    const byUrl = await link(cookie, ticket.id, "https://github.com/cronkcorp/cronker/pull/7");
+    expect(byUrl.status, await byUrl.clone().text()).toBe(201);
+    expect(await byUrl.json()).toMatchObject({ id: 501, number: 7, title: "Tidy the board", manual: true, producingStep: null });
+    expect(await stream.next()).toEqual({ type: "pull_requests.changed", data: { projectId: project.id, ticketId: ticket.id } });
+    expect((await link(cookie, ticket.id, "CronkCorp/Cronker#8")).status).toBe(201);
+    // Linking again changes nothing.
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(201);
+    expect(await linked(ticket.id, cookie)).toEqual([[501, true], [502, true]]);
+
+    expect((await unlink(cookie, ticket.id, 501)).status).toBe(204);
+    expect(await stream.next()).toEqual({ type: "pull_requests.changed", data: { projectId: project.id, ticketId: ticket.id } });
+    expect(await linked(ticket.id, cookie)).toEqual([[502, true]]);
+    expect((await unlink(cookie, ticket.id, 501)).status).toBe(404);
+    stream.close();
+  });
+
+  test("a link by hand survives GitHub's deliveries again and edits of the title and branch", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Kept" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(201);
+
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("edited", installation, cronker, { ...unnamed, title: "Tidy the whole board", branch: "tidy", updatedAt: "2026-01-01T10:00:00Z" }),
+    );
+
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 501, title: "Tidy the whole board", branch: "tidy", manual: true }]);
+  });
+
+  test("a link by hand and one by key on the same Pull Request are kept apart: unlinking leaves the key's, which can't be unlinked", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Both ways" });
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(404);
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(201);
+    // The title comes to name the key too.
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("edited", installation, cronker, { ...unnamed, title: "CRONK-1: tidy", updatedAt: "2026-01-01T10:00:00Z" }),
+    );
+
+    expect((await unlink(cookie, ticket.id, 501)).status).toBe(204);
+    expect(await linked(ticket.id, cookie)).toEqual([[501, false]]);
+    const byKey = await unlink(cookie, ticket.id, 501);
+    expect(byKey.status).toBe(409);
+    expect((await byKey.json()).error.code).toBe("linked_by_key");
+    // Linked by hand again, a later delivery naming the key leaves it linked by hand.
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(201);
+    await deliver(
+      app,
+      "pull_request",
+      pullRequestEvent("edited", installation, cronker, { ...unnamed, title: "CRONK-1: tidy it", updatedAt: "2026-01-01T11:00:00Z" }),
+    );
+    expect(await linked(ticket.id, cookie)).toEqual([[501, true]]);
+  });
+
+  test("only an open or merged Pull Request of a Repository the Ticket's Project lists links, named properly", async () => {
+    const { workspace, cookie, app, installation, project, cronker, website } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Picky" });
+    // Another Project lists `website`, so Cronk knows its Pull Requests, but CRONK doesn't list it.
+    const web = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Website", key: "WEB" });
+    await post(cookie, `/api/projects/${web.id}/repositories`, { id: website.id });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, website, { id: 601, number: 7, title: "Site", branch: "site" }));
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, { ...unnamed, state: "closed" }));
+    const merged = { id: 503, number: 9, title: "Shipped", branch: "shipped", state: "closed" as const, merged: true };
+    await deliver(app, "pull_request", pullRequestEvent("closed", installation, cronker, merged));
+
+    const refusals: [string, number, string][] = [
+      ["cronkcorp/website#7", 404, "pull_request_not_found"],
+      ["cronkcorp/cronker#7", 409, "pull_request_closed"],
+      ["cronkcorp/cronker#99", 404, "pull_request_not_found"],
+      ["#7", 400, "invalid_pull_request"],
+      ["https://github.com/cronkcorp/cronker/issues/7", 400, "invalid_pull_request"],
+    ];
+    for (const [named, status, code] of refusals) {
+      const refused = await link(cookie, ticket.id, named);
+      expect(refused.status, named).toBe(status);
+      expect((await refused.json()).error.code, named).toBe(code);
+    }
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#9")).status).toBe(201);
+    expect(await pullRequestsOf(ticket.id, cookie)).toMatchObject([{ id: 503, state: "merged", manual: true }]);
+    // A merge before the link completes nothing.
+    expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: ticket.statusId, verification: null });
+  });
+
+  test("a Pull Request can't be linked to, or unlinked from, a Ticket of another Workspace", async () => {
+    const { cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ours = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Ada's" });
+    const other = await post(cookie, "/api/workspaces", { name: "Bea's Workspace" });
+    const bea = await addMember(cronk, cookie, other.id, "bea@example.com");
+    const beasProject = await post(bea.cookie, `/api/workspaces/${other.id}/projects`, { name: "Bea's", key: "BEA" });
+    await post(bea.cookie, `/api/projects/${beasProject.id}/repositories`, { id: cronker.id });
+    const theirs = await post(bea.cookie, `/api/projects/${beasProject.id}/tickets`, { title: "Bea's" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
+    expect((await link(cookie, ours.id, "cronkcorp/cronker#7")).status).toBe(201);
+
+    expect((await link(bea.cookie, ours.id, "cronkcorp/cronker#7")).status).toBe(404);
+    expect((await unlink(bea.cookie, ours.id, 501)).status).toBe(404);
+    // Bea links it to her own Ticket, whose Project lists the Repository too; Ada's link stays.
+    expect((await link(bea.cookie, theirs.id, "cronkcorp/cronker#7")).status).toBe(201);
+    expect(await linked(ours.id, cookie)).toEqual([[501, true]]);
+    expect(await linked(theirs.id, bea.cookie)).toEqual([[501, true]]);
+  });
+
+  test("an Agent reads links by hand but can't make or remove one", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Users only" });
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
+    expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(201);
+    const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+    const headers = { authorization: `Bearer ${secret}` };
+
+    const read = await cronk.request("GET", `/api/tickets/${ticket.id}/pull-requests`, { headers });
+    expect(await read.json()).toMatchObject([{ id: 501, manual: true }]);
+    const linking = await cronk.request("POST", `/api/tickets/${ticket.id}/pull-requests`, { headers, body: { pullRequest: "cronkcorp/cronker#7" } });
+    expect(linking.status).toBe(403);
+    expect((await linking.json()).error.code).toBe("agent_not_allowed");
+    const unlinking = await cronk.request("DELETE", `/api/tickets/${ticket.id}/pull-requests/501`, { headers });
+    expect(unlinking.status).toBe(403);
+    expect(await linked(ticket.id, cookie)).toEqual([[501, true]]);
+  });
+
+  test("a merge completes a Ticket linked by hand under the same rules as one linked by key", async () => {
+    const { workspace, cookie, app, installation, project, cronker } = await projectWithRepository();
+    const account = cronk.github.account("bea", "bea@example.com");
+    expect((await cronk.request("POST", `/api/workspaces/${workspace.id}/members/github`, { cookie, body: { login: "bea" } })).status).toBe(201);
+    await signInWithGitHub(cronk, account);
+    const done = project.statuses.find((s: { name: string }) => s.name === "Done")!.id;
+    const byUser = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Merged by Bea" });
+    const byOutsider = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Merged by Mallory" });
+    const automationOff = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Unlinked again" });
+    const prs = [1, 2, 3].map((n) => ({ id: 500 + n, number: n, title: `Change ${n}`, branch: `change-${n}` }));
+    for (const pr of prs) await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, pr));
+    for (const [ticket, n] of [[byUser, 1], [byOutsider, 2], [automationOff, 3]] as const) {
+      expect((await link(cookie, ticket.id, `cronkcorp/cronker#${n}`)).status).toBe(201);
+    }
+    const merged = (pr: PullRequestFields, mergedBy: { login: string; id: number }) =>
+      pullRequestEvent("closed", installation, cronker, { ...pr, state: "closed", merged: true, mergedBy, updatedAt: "2026-01-01T12:00:00Z" });
+
+    await deliver(app, "pull_request", merged(prs[0]!, { login: "bea", id: account.id }));
+    await deliver(app, "pull_request", merged(prs[1]!, { login: "mallory", id: 666 }));
+    expect(await ticketOf(byUser.id, cookie)).toMatchObject({ statusId: done, verification: "verified" });
+    expect(await ticketOf(byOutsider.id, cookie)).toMatchObject({ statusId: done, verification: "unverified" });
+
+    expect((await cronk.request("PATCH", `/api/projects/${project.id}`, { cookie, body: { pullRequestAutomation: false } })).status).toBe(200);
+    await deliver(app, "pull_request", merged(prs[2]!, { login: "bea", id: account.id }));
+    expect(await ticketOf(automationOff.id, cookie)).toMatchObject({ statusId: automationOff.statusId, verification: null });
   });
 });

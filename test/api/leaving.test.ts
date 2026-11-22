@@ -109,7 +109,7 @@ describe("removing a User from a Workspace", () => {
 
     await remove();
 
-    const formerAssignee = { id: bea.id, email: "bea@example.com", githubLogin: null };
+    const formerAssignee = { id: bea.id, email: "bea@example.com", githubLogin: null, displayName: null };
     const expected = {
       count: 2,
       items: [

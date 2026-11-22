@@ -1,5 +1,7 @@
-import { type Check, type PullRequest } from "./api.js";
-import { ExternalLink, RelativeTime } from "./ui/controls.js";
+import { useState } from "react";
+import { api, type Check, type PullRequest } from "./api.js";
+import { field, useSubmit } from "./forms.js";
+import { Button, ExternalLink, FormError, RelativeTime } from "./ui/controls.js";
 import { Key, PullRequestState } from "./ui/labels.js";
 
 const marks: { state: Check["state"]; mark: string }[] = [
@@ -29,31 +31,92 @@ export function CheckCounts({ checks }: { checks: Check[] }) {
 }
 
 /**
- * The Pull Requests whose branch or title names the Ticket's key, one row each: number, title, state and check
- * counts, review state, and the failing check that last sent the Ticket back. Hidden until there is one; GitHub's webhooks keep them current.
+ * The Pull Requests linked to the Ticket, by its key in their branch or title or by hand, one row each: number, title,
+ * state and check counts, review state, and the failing check that last sent the Ticket back; those linked by hand say
+ * so. GitHub's webhooks keep them current. Given the Ticket (`linking`), the section always shows, with Unlink on those
+ * linked by hand and a form to link another by its address; otherwise it is hidden until there is one.
  */
-export function PullRequestRows({ pullRequests }: { pullRequests: PullRequest[] }) {
-  if (pullRequests.length === 0) return null;
+export function PullRequestRows({
+  pullRequests,
+  linking,
+}: {
+  pullRequests: PullRequest[];
+  linking?: { ticketId: string; onChanged: () => void };
+}) {
+  const [unlinkError, setUnlinkError] = useState<string | null>(null);
+  const [unlinking, setUnlinking] = useState(false);
+  if (pullRequests.length === 0 && !linking) return null;
+  const unlink = async (pullRequestId: number) => {
+    if (!linking || unlinking) return;
+    setUnlinking(true);
+    setUnlinkError(null);
+    try {
+      await api.unlinkPullRequest(linking.ticketId, pullRequestId);
+      linking.onChanged();
+    } catch (e) {
+      setUnlinkError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUnlinking(false);
+    }
+  };
   return (
     <section aria-label="Pull Requests" className="panel side-section">
       <h2 className="side-title">Pull Requests</h2>
-      <ul className="side-list pr-rows">
-        {pullRequests.map((pr) => (
-          <li key={pr.id}>
-            <a href={pr.url} target="_blank" rel="noreferrer">
-              <Key>#{pr.number}</Key> {pr.title}
-            </a>
-            <span className="pr-meta">
-              <PullRequestState state={pr.state} />
-              <CheckCounts checks={pr.checks} />
-              <ReviewState pullRequest={pr} />
-            </span>
-            {pr.sentBack?.kind === "check" && <SentBackBy sentBack={pr.sentBack} />}
-            {pr.sentBack?.kind === "conflict" && <SentBackByConflict sentBack={pr.sentBack} />}
-          </li>
-        ))}
-      </ul>
+      {pullRequests.length > 0 && (
+        <ul className="side-list pr-rows">
+          {pullRequests.map((pr) => (
+            <li key={pr.id}>
+              <a href={pr.url} target="_blank" rel="noreferrer">
+                <Key>#{pr.number}</Key> {pr.title}
+              </a>
+              <span className="pr-meta">
+                <PullRequestState state={pr.state} />
+                <CheckCounts checks={pr.checks} />
+                <ReviewState pullRequest={pr} />
+                {pr.manual && <span className="small muted">Linked by hand</span>}
+                {pr.manual && linking && (
+                  <Button variant="ghost" size="small" disabled={unlinking} onClick={() => void unlink(pr.id)} aria-label={`Unlink #${pr.number}`}>
+                    Unlink
+                  </Button>
+                )}
+              </span>
+              {pr.sentBack?.kind === "check" && <SentBackBy sentBack={pr.sentBack} />}
+              {pr.sentBack?.kind === "conflict" && <SentBackByConflict sentBack={pr.sentBack} />}
+            </li>
+          ))}
+        </ul>
+      )}
+      <FormError error={unlinkError} />
+      {linking && <LinkPullRequest {...linking} />}
     </section>
+  );
+}
+
+/** Links a Pull Request whose branch or title doesn't name the Ticket's key, by its address or `owner/name#number`. */
+function LinkPullRequest({ ticketId, onChanged }: { ticketId: string; onChanged: () => void }) {
+  const { error, busy, onSubmit } = useSubmit(async (form, element) => {
+    await api.linkPullRequest(ticketId, field(form, "pullRequest"));
+    element.reset();
+    onChanged();
+  });
+  return (
+    <form onSubmit={onSubmit} className="side-form">
+      <div className="side-form-row">
+        <input
+          name="pullRequest"
+          required
+          placeholder="Pull Request address, or owner/name#12"
+          aria-label="Pull Request to link"
+          className="mono"
+        />
+      </div>
+      <div>
+        <Button type="submit" size="small" disabled={busy}>
+          Link Pull Request
+        </Button>
+      </div>
+      <FormError error={error} />
+    </form>
   );
 }
 

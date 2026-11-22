@@ -33,13 +33,13 @@ export function takeQueryParameter(name: string): string | null {
     params.delete(name);
     const rest = params.toString();
     // Only the query changes, so nothing routed on the path needs telling.
-    window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}${window.location.hash}`);
   }
   return value;
 }
 
 /**
- * The signed-in User's GitHub account on their password page: the login once linked, else
+ * The signed-in User's GitHub account on their settings page: the login once linked, else
  * a button that links one through GitHub, which sends the browser back here.
  */
 export function GitHubAccountPanel({ user }: { user: User }) {

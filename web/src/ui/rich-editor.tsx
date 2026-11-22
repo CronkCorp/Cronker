@@ -1,7 +1,7 @@
 import { EditorView, type NodeView } from "prosemirror-view";
 import type { Node } from "prosemirror-model";
 import type { Command, EditorState } from "prosemirror-state";
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
 import { api, attachmentUrl, type AttachmentOwner } from "../api.js";
 import { markdownReference } from "../attachments.js";
 import { schema } from "../editor/schema.js";
@@ -40,6 +40,7 @@ import {
   undo,
   type Draft,
 } from "../editor/state.js";
+import { submitOnCtrlOrCmdEnter } from "../forms.js";
 import { chooseEditorMode, storedEditorMode, type EditorMode } from "../storage.js";
 import { Button, Field, FormError } from "./controls.js";
 import { Dialog, DialogActions, DialogClose } from "./overlays.js";
@@ -298,6 +299,33 @@ function LinkDialog({ view, onClose }: { view: EditorView; onClose: () => void }
   );
 }
 
+/** What a screen can do with an editor it holds: reach its text, in whichever mode it is. */
+export interface RichEditorHandle {
+  /** The text being edited: the formatted text, or the Markdown source. */
+  textbox(): HTMLElement | null;
+}
+
+export interface RichEditorProps {
+  value: string;
+  onChange: (markdown: string) => void;
+  label?: string;
+  /** The label is for screen readers only, as a Comment box's is. */
+  hideLabel?: boolean;
+  hint?: ReactNode;
+  /** Shown in the empty text. */
+  placeholder?: string;
+  /** A short box, for a Comment, a Reply or an answer. */
+  compact?: boolean;
+  disabled?: boolean;
+  autoFocus?: boolean;
+  /** Ctrl+Enter, or Cmd+Enter, submits the form the editor is in, as a Comment box does. */
+  submitOnCtrlOrCmdEnter?: boolean;
+  /** Where files dropped or pasted in are attached, if anywhere. */
+  attachTo?: AttachmentOwner;
+  onAttached?: () => void;
+  handle?: Ref<RichEditorHandle>;
+}
+
 /**
  * The shared rich editor: Markdown in, Markdown out. It edits formatted text, with a toolbar, the usual keys and
  * Markdown shortcuts as one types, or the Markdown source itself; the last mode is kept on this browser. Saving writes
@@ -308,18 +336,17 @@ export function RichEditor({
   value,
   onChange,
   label = "Body",
+  hideLabel = false,
   hint,
+  placeholder,
+  compact = false,
+  disabled = false,
+  autoFocus = false,
+  submitOnCtrlOrCmdEnter: submits = false,
   attachTo,
   onAttached,
-}: {
-  value: string;
-  onChange: (markdown: string) => void;
-  label?: string;
-  hint?: ReactNode;
-  /** Where files dropped or pasted in are attached, if anywhere. */
-  attachTo?: AttachmentOwner;
-  onAttached?: () => void;
-}) {
+  handle,
+}: RichEditorProps) {
   const labelId = useId();
   const [mode, setMode] = useState<EditorMode>(storedEditorMode);
   const [state, setState] = useState<EditorState | null>(null);
@@ -332,8 +359,10 @@ export function RichEditor({
   const draftRef = useRef<Draft | null>(null);
   // The Markdown last given out, so a value coming back in isn't loaded again.
   const emitted = useRef(value);
-  const latest = useRef({ value, onChange, attachTo, onAttached });
-  latest.current = { value, onChange, attachTo, onAttached };
+  const latest = useRef({ value, onChange, attachTo, onAttached, submits, disabled, placeholder });
+  latest.current = { value, onChange, attachTo, onAttached, submits, disabled, placeholder };
+
+  useImperativeHandle(handle, () => ({ textbox: () => viewRef.current?.dom ?? source.current }), []);
 
   const hooks = { editLink: () => setLinking(true) };
 
@@ -379,12 +408,19 @@ export function RichEditor({
     draftRef.current = draft;
     const view: EditorView = new EditorView(mount.current, {
       state: draft.state,
-      attributes: {
-        class: "markdown rich-editor-text",
-        role: "textbox",
-        "aria-multiline": "true",
-        "aria-labelledby": labelId,
-        spellcheck: "true",
+      editable: () => !latest.current.disabled,
+      attributes: (state) => {
+        const empty = state.doc.childCount === 1 && state.doc.firstChild!.isTextblock && state.doc.firstChild!.content.size === 0;
+        const placeholder = latest.current.placeholder;
+        return {
+          class: "markdown rich-editor-text",
+          role: "textbox",
+          "aria-multiline": "true",
+          "aria-labelledby": labelId,
+          spellcheck: "true",
+          ...(latest.current.disabled ? { "aria-disabled": "true" } : {}),
+          ...(placeholder ? { "aria-placeholder": placeholder, ...(empty ? { "data-placeholder": placeholder } : {}) } : {}),
+        };
       },
       nodeViews: { image: imageView, list_item: listItemView },
       clipboardTextParser: (text, $context) => sliceFromText(text, $context),
@@ -411,7 +447,8 @@ export function RichEditor({
         void attach([...files], view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos);
         return true;
       },
-      handleKeyDown(_view, event) {
+      handleKeyDown(view, event) {
+        if (latest.current.submits && submitOnCtrlOrCmdEnter(event, view.dom)) return true;
         // Alt+F10 reaches the toolbar from the text, as in other editors.
         if (event.altKey && event.key === "F10") {
           event.preventDefault();
@@ -429,12 +466,18 @@ export function RichEditor({
     });
     viewRef.current = view;
     setState(view.state);
+    if (autoFocus) view.focus();
     return () => {
       view.destroy();
       viewRef.current = null;
       setState(null);
     };
   }, [mode]);
+
+  // Disabled, as while what was written is being sent, the text can't be changed.
+  useEffect(() => {
+    viewRef.current?.setProps({ editable: () => !disabled });
+  }, [disabled]);
 
   // Markdown changed from outside, such as a draft put back, is loaded afresh.
   useEffect(() => {
@@ -461,8 +504,8 @@ export function RichEditor({
   };
 
   return (
-    <div className="field rich-editor">
-      <span className="field-label" id={labelId}>
+    <div className={`field rich-editor${compact ? " compact" : ""}`}>
+      <span className={hideLabel ? "sr-only" : "field-label"} id={labelId}>
         {label}
       </span>
       <div className="rich-editor-frame">
@@ -489,8 +532,14 @@ export function RichEditor({
             className="markdown-source rich-editor-source"
             aria-label={`${label}, as Markdown`}
             value={value}
-            rows={20}
+            rows={compact ? 4 : 20}
+            placeholder={placeholder}
+            disabled={disabled}
+            autoFocus={autoFocus}
             onChange={(e) => give(e.target.value)}
+            onKeyDown={(event) => {
+              if (submits) submitOnCtrlOrCmdEnter(event.nativeEvent, event.currentTarget);
+            }}
             onDrop={onSourceDrop}
             onPaste={onSourcePaste}
           />

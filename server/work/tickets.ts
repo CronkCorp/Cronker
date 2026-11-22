@@ -12,6 +12,7 @@ import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.
 import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
 import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
+import { userName } from "../identity/user.js";
 
 /** How urgent a Ticket is. */
 export const priorities = ["urgent", "high", "medium", "low", "none"] as const;
@@ -147,6 +148,14 @@ const blockersColumns = (alias: string, reach: Reach) =>
      from projects blocker_projects, ${unfinishedBlockers(alias)}
        and blocker_projects.id = blockers.project_id and ${reach("blockers")}), '[]'::json) as "blockedBy",
    (select count(*)::int from ${unfinishedBlockers(alias)} and not ${reach("blockers")}) as "blockedByHidden"`;
+
+/**
+ * SQL ranking the Ticket `alias` within its Status: 0 while a Run on it is running, 1 while an unfinished Ticket
+ * blocks it, 2 otherwise. Running is tested first, so a Ticket both running and blocked ranks as running.
+ */
+const runningFirstThenBlocked = (alias: string) =>
+  `case when exists (select 1 from runs where runs.ticket_id = ${alias}.id and runs.state = 'running') then 0
+     when exists (select 1 from ${unfinishedBlockers(alias)}) then 1 else 2 end`;
 
 /**
  * The columns of a Ticket as the Viewer sees it, for queries joining `tickets` to `projects`, with the value to bind
@@ -524,7 +533,7 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, tickets.number`,
+     order by statuses.position, ${runningFirstThenBlocked("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
@@ -588,7 +597,7 @@ export async function editTicket(
       changes.push({ field, from: await shown(ticket[key]), to: await shown(value) });
     };
     const statusNamed = (id: string) => named(tx, "select id, name from statuses where id = $1", id);
-    const userNamed = (id: string | null) => named(tx, "select id, email as name from users where id = $1", id);
+    const userNamed = (id: string | null) => named(tx, `select id, ${userName()} as name from users where id = $1`, id);
     const agentNamed = (id: string | null) => named(tx, "select id, name from agents where id = $1", id);
     const ticketRef = (id: string) => findTicketRef(tx, ticket.workspaceId, id);
 
@@ -863,7 +872,7 @@ async function passDelegationDown(
        select tickets.id from tickets join descendants on tickets.parent_id = descendants.id
      )
      select tickets.id, projects.key || '-' || tickets.number as key,
-       tickets.assignee_id as "assigneeId", users.email as assignee,
+       tickets.assignee_id as "assigneeId", ${userName()} as assignee,
        tickets.delegate_id as "delegateId", agents.name as delegate
      from tickets join descendants using (id) join projects on projects.id = tickets.project_id
      left join users on users.id = tickets.assignee_id left join agents on agents.id = tickets.delegate_id
@@ -872,7 +881,7 @@ async function passDelegationDown(
     undelegated ? [ticket.id, ticket.delegateId] : [ticket.id, next.delegateId, next.assigneeId],
   );
   if (rows.length === 0) return;
-  const assignee = undelegated ? null : await named(tx, "select id, email as name from users where id = $1", next.assigneeId);
+  const assignee = undelegated ? null : await named(tx, `select id, ${userName()} as name from users where id = $1`, next.assigneeId);
   const delegate = await named(tx, "select id, name from agents where id = $1", next.delegateId);
   const who = await nameOfUser(tx, userId);
   for (const subTicket of rows) {
@@ -1104,7 +1113,7 @@ async function checkDelegate(
   assigneeId: string | null,
 ): Promise<{ id: string }> {
   const { rows } = await tx.query<{ id: string; name: string; ownerId: string; owner: string }>(
-    `select agents.id, agents.name, agents.owner_id as "ownerId", coalesce(owners.email, '@' || owners.github_login) as owner
+    `select agents.id, agents.name, agents.owner_id as "ownerId", ${userName("owners")} as owner
      from agents join users owners on owners.id = agents.owner_id
      where agents.id = $1 and agents.workspace_id = $2 and agents.removed_at is null
      for share of agents`,
@@ -1120,7 +1129,7 @@ async function checkDelegate(
     );
   }
   if (assigneeId !== null && assigneeId !== userId) {
-    const assignee = await named(tx, "select id, coalesce(email, '@' || github_login) as name from users where id = $1", assigneeId);
+    const assignee = await named(tx, `select id, ${userName()} as name from users where id = $1`, assigneeId);
     throw new ApiError(
       409,
       "delegate_not_assignees",
@@ -1147,10 +1156,10 @@ async function heldDelegationOf(
   return delegateId !== null && (await holdAgentInUse(tx, delegateId)) ? { assigneeId, delegateId } : null;
 }
 
-/** How a stop reason names the User: their email, or else their GitHub login. */
+/** How a stop reason names the User, as `userName` says. */
 async function nameOfUser(tx: Tx, userId: string): Promise<string> {
   const { rows } = await tx.query<{ name: string }>(
-    "select coalesce(email, '@' || github_login) as name from users where id = $1",
+    `select ${userName()} as name from users where id = $1`,
     [userId],
   );
   return rows[0]!.name;
