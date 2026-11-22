@@ -329,7 +329,7 @@ function SignedIn({
       />
     );
   } else if (path === "/account" || path === "/password") {
-    page = <AccountSettingsPage user={user} onChanged={reload} />;
+    page = <AccountSettingsPage user={user} onChanged={reload} workspaces={workspaces} current={current} />;
   } else if (path === "/github") {
     page = <GitHubPage workspaces={workspaces} />;
   } else if (path === "/runners") {

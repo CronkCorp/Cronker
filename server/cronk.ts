@@ -21,6 +21,7 @@ import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
+import { deliverWebhooks } from "./webhooks/webhooks.js";
 
 export interface CronkOptions {
   config: Config;
@@ -51,6 +52,8 @@ export interface Cronk {
   checkQueue(): Promise<void>;
   /** Reads the next page of issues of each running import of a Repository's GitHub issues. */
   runImports(): Promise<void>;
+  /** Sends the webhook deliveries that are due. */
+  deliverWebhooks(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -102,6 +105,7 @@ export async function createCronk({
       checkMergeability: () => checkMergeability(context),
       checkQueue: () => queuePass(context),
       runImports: () => runImports(context),
+      deliverWebhooks: () => deliverWebhooks(context),
       async close() {
         await app.close();
         await endPool(db);

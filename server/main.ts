@@ -102,11 +102,26 @@ const everyFiveSecondsForImports = setInterval(() => {
     });
 }, 5_000);
 
+// Every five seconds too: the webhook deliveries that are due are sent. One pass at a time, since a pass waits on
+// the receivers.
+let deliveringWebhooks = false;
+const everyFiveSecondsForWebhooks = setInterval(() => {
+  if (deliveringWebhooks) return;
+  deliveringWebhooks = true;
+  cronk
+    .deliverWebhooks()
+    .catch((error: unknown) => cronk.app.log.error(error))
+    .finally(() => {
+      deliveringWebhooks = false;
+    });
+}, 5_000);
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     clearInterval(everyFiveSeconds);
     clearInterval(everyFiveSecondsForTheQueue);
     clearInterval(everyFiveSecondsForImports);
+    clearInterval(everyFiveSecondsForWebhooks);
     clearInterval(everyMinute);
     clearInterval(everyMinuteForTokens);
     clearInterval(everyThreeMinutes);
