@@ -1613,6 +1613,16 @@
   padding: 0;
   list-style: none;
 }
+/* Redact: a button under a text selection in the Transcript, which asks before redacting. */
+.redact-pop {
+  position: fixed;
+  z-index: 20;
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow);
+}
+.redact-text {
+  overflow-wrap: anywhere;
+}
 .transcript-entry {
   display: grid;
   gap: var(--space-2);

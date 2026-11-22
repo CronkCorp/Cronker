@@ -154,6 +154,10 @@ _Avoid_: Prototype (as the general term), preview, app
 The verbatim record of an agent's conversation that led it to change things in Cronk, linked to the Run or Agent it came from.
 _Avoid_: Chat log, conversation, session log
 
+**Redaction**:
+A string a User removed from a Transcript because the secret scrubbing missed it: every appearance becomes `[redacted]`, in what Cronk holds and in every later upload or fetch of the session. Cronk keeps the string only to apply it again and never shows it; a Redaction can't be removed, and only a User adds one.
+_Avoid_: Scrub (for what a User does), mask, censor
+
 ### Code
 
 **Repository**:
