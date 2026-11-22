@@ -1786,3 +1786,17 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* An Artifact's Comments, under the Artifact, as Comments show on a Ticket's timeline. */
+.artifact-comments {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 760px;
+  margin-top: var(--space-5);
+}
+.artifact-comment-list {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0;
+  list-style: none;
+}

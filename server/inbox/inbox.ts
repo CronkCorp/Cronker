@@ -120,7 +120,7 @@ export type Inbox = Static<typeof Inbox>;
 
 /**
  * The User's Inbox in the Workspace; the caller checks they belong to it, and whether they are its Admin. It holds
- * only Tickets of Projects the User may read.
+ * only Tickets of Projects the User may read and that aren't archived: unarchiving a Project brings back what still waits.
  */
 export async function inboxOf(db: Db, userId: string, workspace: { id: string; isAdmin: boolean }): Promise<Inbox> {
   const workspaceId = workspace.id;
@@ -128,7 +128,9 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
   /** The Ticket's columns as the User sees them and the condition that they may read it, both bound to `param`. */
   const seen = (param: string) => ({
     columns: ticketColumns(viewer, param).sql,
-    readable: inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, param).sql,
+    // An archived Project's Tickets wait on nobody until it is unarchived; every query joins `projects`.
+    readable: `${inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, param).sql}
+       and projects.archived_at is null`,
     value: inReach(viewer, { project: "tickets.project_id", workspace: "tickets.workspace_id" }, param).value,
   });
   const questions = await openQuestionsFor(db, userId, workspaceId);

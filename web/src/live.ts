@@ -40,6 +40,7 @@ const eventTypes = Object.keys({
   "term.changed": true,
   "decision.changed": true,
   "artifact.changed": true,
+  "artifact.comments.changed": true,
   "transcript.changed": true,
 } satisfies Record<LiveEvent["type"], true>);
 
