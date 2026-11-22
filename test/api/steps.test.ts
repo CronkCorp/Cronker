@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { setUp, signIn } from "../harness/flows.js";
+import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -282,35 +282,138 @@ describe("attaching, editing and removing a Step", () => {
 });
 
 describe("Agents and Steps", () => {
-  test("an Agent is refused any change to Statuses or Steps, and nothing changes", async () => {
-    const { workspace, cookie, project, id } = await projectOnDefaultBoard();
-    const agent = await (
-      await cronk.request("POST", `/api/workspaces/${workspace.id}/agents`, { cookie, body: { name: "claude-max" } })
-    ).json();
+  /** An Agent of the User whose cookie is given, with a token of that access. */
+  async function agentOf(workspaceId: string, cookie: string, name: string, access: "full" | "read" = "full") {
+    const agent = await (await cronk.request("POST", `/api/workspaces/${workspaceId}/agents`, { cookie, body: { name } })).json();
     const token = await (
-      await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access: "full" } })
+      await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access } })
     ).json();
-    const headers = { authorization: `Bearer ${token.secret}` };
+    return { authorization: `Bearer ${token.secret}` };
+  }
 
-    for (const [method, path, body] of [
+  /** Every change to the board's Statuses and Steps; but for removing Ready, which Outcomes target, each would succeed in turn. */
+  function boardChanges(project: Project, id: (name: string) => string) {
+    return [
       ["POST", `/api/projects/${project.id}/statuses`, { name: "Mine", kind: "active" }],
-      ["PATCH", `/api/projects/${project.id}/statuses/${id("Ready")}`, { name: "Mine" }],
-      ["DELETE", `/api/projects/${project.id}/statuses/${id("Ready")}`],
+      ["PATCH", `/api/projects/${project.id}/statuses/${id("Ready")}`, { name: "Ready to go", position: 0 }],
       ["PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, readyStep(id)],
-      ["PUT", `/api/projects/${project.id}/statuses/${id("Triage")}/step`, readyStep(id)],
-      ["DELETE", `/api/projects/${project.id}/statuses/${id("Triage")}/step`],
+      ["DELETE", `/api/projects/${project.id}/statuses/${id("Ready")}/step`],
+      ["DELETE", `/api/projects/${project.id}/statuses/${id("Ready")}`],
+    ] as const;
+  }
+
+  test("an Agent of an Admin with Write changes Statuses and Steps as a User does", async () => {
+    const { workspace, cookie, project, id } = await projectOnDefaultBoard();
+    const headers = await agentOf(workspace.id, cookie, "claude-max");
+
+    let after = project;
+    for (const [method, path, body] of boardChanges(project, id).slice(0, -1)) {
+      const response = await cronk.request(method, path, { headers, body });
+      expect(response.status, `${method} ${path}`).toBeLessThan(300);
+      after = (await response.json()) as Project;
+    }
+    const mine = after.statuses.find((s) => s.name === "Mine")!;
+    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${mine.id}`, { headers });
+    expect(removed.status).toBe(200);
+    after = (await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()) as Project;
+    expect(after.statuses.find((s) => s.id === id("Ready"))!.step).toBeNull();
+    expect(after.statuses.map((s) => s.name)).toEqual([
+      "Ready to go",
+      "Backlog",
+      "Triage",
+      "Investigate",
+      "Implement",
+      "Code review",
+      "Merge",
+      "In Review",
+      "Done",
+      "Canceled",
+    ]);
+  });
+
+  test("an Agent meets the same rules as a User", async () => {
+    const { workspace, cookie, project, id } = await projectOnDefaultBoard();
+    const headers = await agentOf(workspace.id, cookie, "claude-max");
+    await cronk.request("POST", `/api/projects/${project.id}/tickets`, { cookie, body: { title: "Waits in Backlog" } });
+
+    for (const [method, path, body, code] of [
+      ["DELETE", `/api/projects/${project.id}/statuses/${id("Backlog")}`, undefined, "status_has_tickets"],
+      ["DELETE", `/api/projects/${project.id}/statuses/${id("Done")}`, undefined, "status_kind_needed"],
+      ["PUT", `/api/projects/${project.id}/statuses/${id("Done")}/step`, readyStep(id), "step_on_done_or_canceled_status"],
+      ["PATCH", `/api/projects/${project.id}/statuses/${id("Triage")}`, { kind: "done" }, "step_on_done_or_canceled_status"],
     ] as const) {
       const response = await cronk.request(method, path, { headers, body });
-      expect(response.status, `${method} ${path}`).toBe(403);
-      expect((await response.json()).error, `${method} ${path}`).toEqual({
+      expect(response.status, `${method} ${path}`).toBe(409);
+      expect((await response.json()).error.code, `${method} ${path}`).toBe(code);
+    }
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { headers })).json()).toEqual(project);
+  });
+
+  test("an Agent whose Owner isn't an Admin changes Statuses and removes Steps, but doesn't give or change one", async () => {
+    const { workspace, cookie, project, id } = await projectOnDefaultBoard();
+    const grace = await addMember(cronk, cookie, workspace.id, "grace@example.com");
+    const headers = await agentOf(workspace.id, grace.cookie, "grace-claude");
+
+    for (const status of ["Ready", "Triage"]) {
+      const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id(status)}/step`, {
+        headers,
+        body: readyStep(id),
+      });
+      expect(response.status, status).toBe(403);
+      expect((await response.json()).error).toEqual({
         code: "agent_not_allowed",
-        message: expect.any(String),
-        rule:
-          "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, create and save Terms, and propose Decisions and edit their text; during their running Run on a Ticket they may also edit it, split it into Sub-Tickets, write Reports on it and finish the Run, and they edit a Discovered Ticket they filed, add blocks from it, and link Documents and Artifacts to it and unlink them, until a User takes it up. Everything else needs a User.",
-        advice: expect.stringContaining("ada@example.com"),
+        message: expect.stringContaining("isn't an Admin"),
+        rule: expect.stringContaining("only when its Owner is an Admin of the Workspace"),
+        advice: expect.stringContaining("grace@example.com"),
       });
     }
     expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { headers })).json()).toEqual(project);
+
+    const added = await cronk.request("POST", `/api/projects/${project.id}/statuses`, { headers, body: { name: "Mine", kind: "active" } });
+    expect(added.status).toBe(201);
+    const removed = await cronk.request("DELETE", `/api/projects/${project.id}/statuses/${id("Triage")}/step`, { headers });
+    expect(removed.status).toBe(200);
+    // Grace herself, a User with Write, may.
+    const put = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, {
+      cookie: grace.cookie,
+      body: readyStep(id),
+    });
+    expect(put.status).toBe(200);
+  });
+
+  test("without Write in the Project, Users and Agents are refused, and nothing changes", async () => {
+    const { workspace, cookie, project, id } = await projectOnDefaultBoard();
+    const grace = await addMember(cronk, cookie, workspace.id, "grace@example.com");
+    const adasAgent = await agentOf(workspace.id, cookie, "claude-max");
+    const gracesAgent = await agentOf(workspace.id, grace.cookie, "grace-claude");
+    const reader = await agentOf(workspace.id, cookie, "reader", "read");
+    await cronk.stage(
+      "insert into project_members (project_id, workspace_id, user_id, level, created_at) values ($1, $2, $3, 'read', now())",
+      [project.id, workspace.id, grace.user.id],
+    );
+
+    const refusals = async (as: { cookie?: string; headers?: Record<string, string> }, code: string) => {
+      for (const [method, path, body] of boardChanges(project, id)) {
+        const response = await cronk.request(method, path, { ...as, body });
+        expect(response.status, `${method} ${path}`).toBe(403);
+        expect((await response.json()).error.code, `${method} ${path}`).toBe(code);
+      }
+    };
+    // Grace has Read, and her Agent no more than its Owner.
+    await refusals({ cookie: grace.cookie }, "no_write_access");
+    await refusals({ headers: gracesAgent }, "no_write_access");
+    await refusals({ headers: reader }, "read_only_token");
+    await cronk.stage("update projects set agent_access = 'read' where id = $1", [project.id]);
+    await refusals({ headers: adasAgent }, "no_write_access");
+
+    const refused = await cronk.request("POST", `/api/projects/${project.id}/statuses`, { headers: adasAgent, body: { name: "Mine", kind: "active" } });
+    expect((await refused.json()).error).toEqual({
+      code: "no_write_access",
+      message: "claude-max may only read CRONK.",
+      rule: expect.stringContaining("needs Write in it"),
+      advice: expect.stringContaining("ada@example.com"),
+    });
+    expect(await (await cronk.request("GET", `/api/projects/${project.id}`, { cookie })).json()).toEqual(project);
   });
 });
 
