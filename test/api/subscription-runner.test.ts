@@ -72,7 +72,7 @@ describe("starting a Run", () => {
       expect.objectContaining({
         state: "running",
         model: "haiku",
-        sessionUrl: "https://claude.ai/code/session_01STANDIN",
+        sessionUrl: "https://claude.ai/code/cse_01STANDIN",
         transcriptId: null,
       }),
     );

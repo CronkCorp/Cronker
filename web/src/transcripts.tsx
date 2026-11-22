@@ -1,5 +1,5 @@
 import { useAddresses } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { api, type Project, type Run, type Ticket, type Transcript, type TranscriptEntry, type Workspace } from "./api.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
@@ -40,7 +40,7 @@ async function entriesFromStart(transcriptId: string, count: number): Promise<{ 
  * A Transcript's page: the conversation's messages in full, each tool call collapsed to its name and a one-line
  * summary of what it was called with, opening on click to its input and result. Entries load a page at a time.
  * It follows new uploads of its session live, so a running Run's turns appear as they arrive, and offers Users
- * Delete, for when the scrubbing missed a secret.
+ * Redact, on a text selection, and Delete, for when the scrubbing missed a secret.
  */
 export function TranscriptScreen({ workspace, transcriptId }: { workspace: Workspace; transcriptId: string }) {
   const to = useAddresses();
@@ -52,6 +52,10 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   const [loading, setLoading] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const list = useRef<HTMLOListElement>(null);
+  const selection = useSelectionIn(list);
+  // The selected string a User chose to redact, waiting for them to confirm.
+  const [redacting, setRedacting] = useState<string | null>(null);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
   usePlace("project", ofRun?.project.id ?? null);
   // How far the page has read, so a refetch after an upload reads at least as far again: to the end when it was
@@ -201,6 +205,11 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
               {transcript.entryCount} {transcript.entryCount === 1 ? "entry" : "entries"}, uploaded{" "}
               <RelativeTime at={transcript.uploadedAt} />
             </span>
+            {transcript.redactions.length > 0 && (
+              <span title={transcript.redactions.map((redaction) => `${redaction.addedBy.name}, ${new Date(redaction.addedAt).toLocaleString()}`).join("\n")}>
+                {transcript.redactions.length} {transcript.redactions.length === 1 ? "redaction" : "redactions"}
+              </span>
+            )}
             {run?.sessionUrl && <ExternalLink url={run.sessionUrl}>Session</ExternalLink>}
           </span>
         }
@@ -212,7 +221,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
           Its entries appear once the agent's next turn is uploaded.
         </EmptyState>
       ) : (
-        <ol className="transcript" aria-label="Entries">
+        <ol className="transcript" aria-label="Entries" ref={list}>
           {entries.map((entry) => (
             <TranscriptItem
               key={entry.position}
@@ -224,11 +233,45 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
           ))}
         </ol>
       )}
+      {selection && !gone && redacting === null && (
+        <div className="redact-pop" style={{ top: selection.bottom + 6, left: selection.left }}>
+          <Button
+            variant="secondary"
+            disabled={selection.text.length < redactionMinLength}
+            title={
+              selection.text.length < redactionMinLength
+                ? `Select at least ${redactionMinLength} characters to redact`
+                : "Redact every appearance of this text"
+            }
+            // Keeps the selection while the button is pressed.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setRedacting(selection.text)}
+          >
+            Redact
+          </Button>
+        </div>
+      )}
       {next !== null && !gone && (
         <Button variant="secondary" disabled={loading} onClick={more}>
           Show more
         </Button>
       )}
+      <ConfirmDialog
+        open={redacting !== null}
+        onOpenChange={(open) => !open && setRedacting(null)}
+        title="Redact this text?"
+        confirm="Redact"
+        onConfirm={async () => {
+          setTranscript(await api.redactTranscript(transcript.id, redacting!));
+          setRedacting(null);
+          window.getSelection()?.removeAllRanges();
+          refresh();
+        }}
+      >
+        Every appearance of <code className="redact-text">{redacting}</code> in this Transcript's messages, tool inputs and
+        tool results becomes [redacted], for good, and so it does in every later upload of its session. A redaction can't
+        be undone.
+      </ConfirmDialog>
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -244,6 +287,37 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
       </ConfirmDialog>
     </div>
   );
+}
+
+/** The shortest text a Redaction takes, as Cronk refuses anything shorter. */
+const redactionMinLength = 4;
+
+/**
+ * The text selected within the element, trimmed, with where it ends on screen for the Redact button; null while
+ * nothing there is selected.
+ */
+function useSelectionIn(within: RefObject<HTMLElement | null>): { text: string; bottom: number; left: number } | null {
+  const [selected, setSelected] = useState<{ text: string; bottom: number; left: number } | null>(null);
+  useEffect(() => {
+    const read = () => {
+      const current = window.getSelection();
+      const element = within.current;
+      if (!current || current.isCollapsed || current.rangeCount === 0 || !element) return setSelected(null);
+      const range = current.getRangeAt(0);
+      if (!element.contains(range.commonAncestorContainer)) return setSelected(null);
+      const text = current.toString().trim();
+      if (!text) return setSelected(null);
+      const rect = range.getBoundingClientRect();
+      setSelected({ text, bottom: rect.bottom, left: rect.left });
+    };
+    document.addEventListener("selectionchange", read);
+    window.addEventListener("scroll", read, true);
+    return () => {
+      document.removeEventListener("selectionchange", read);
+      window.removeEventListener("scroll", read, true);
+    };
+  }, [within]);
+  return selected;
 }
 
 /** An entry, followed by the mark of the gap after it when that is where a Transcript past 50 MB was cut. */

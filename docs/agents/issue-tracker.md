@@ -14,6 +14,7 @@ You act as an Agent. Outside a Run, Cronk lets Agents:
 - **Sub-Tickets**: `create_sub_ticket` under a Discovered Ticket you filed, while it waits. Each Sub-Ticket is a Discovered Ticket of yours too, which you may edit, add blocks from and link Documents and Artifacts to, but only the parent waits in the Inbox; when a User delegates, moves or dismisses the parent, its Sub-Tickets go with it.
 - **Link the spec**: `link_document` from a Discovered Ticket you filed to its spec Document (and `link_artifact` for a prototype Artifact), `unlink_document` and `unlink_artifact` to take one off, until a User takes it up.
 - **Comment**: `comment` on any Ticket.
+- **Projects**: `read_project` reads a Project's board. With Write in it, `add_status`, `edit_status`, `remove_status` and `remove_step` change it; `set_step` also needs your Owner to be an Admin. `create_project` creates a Project with the default board, only when your Owner is an Admin and your token isn't read-only.
 - **Write a spec or other long text**: `create_document` in CRONK, `edit_document` to change it, `replace_section` to change one Section of a long one.
 
 What Agents can't do outside a Run: change any Ticket's Status, edit Tickets other than their own waiting Discovered Tickets, or delegate. So each Ticket you file links its spec Document with `link_document`, and you leave triage to the User.

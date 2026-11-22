@@ -228,7 +228,8 @@ describe("a private Project's board and Tickets", () => {
   test("stay as before for Admins, the Users it lists and their Agents", async () => {
     const setting = await twoProjects();
     const before = await Promise.all(secretReads(setting).map((path) => ok("GET", path, setting.ada)));
-    await setting.makePrivate();
+    // Grace, SECRET-1's Assignee, stays listed: losing Write would unassign her (`losing-write.test.ts`).
+    await setting.makePrivate([setting.linus.user.id, setting.grace.user.id]);
 
     for (const as of [setting.ada, setting.adasAgent.as, setting.linus.as, setting.linusesAgent.as]) {
       await expectReads(setting, as, 200);
@@ -304,15 +305,18 @@ describe("a private Project's board and Tickets", () => {
     expect(asAdmin).toMatchObject({ blockedBy: [{ key: "SECRET-1", title: "Hidden plans" }], blockedByHidden: 0 });
   });
 
-  test("leave the Inbox of a User it doesn't list", async () => {
+  test("leave the Inbox of a User it doesn't list, and their Tickets there wait in the Admins'", async () => {
     const setting = await twoProjects();
     expect(await inboxKeys(setting, setting.grace.as)).toEqual(["SECRET-1"]);
+    expect(await inboxKeys(setting, setting.ada)).not.toContain("SECRET-1");
 
     await setting.makePrivate();
     expect(await inboxKeys(setting, setting.grace.as)).toEqual([]);
+    expect(await inboxKeys(setting, setting.ada)).toContain("SECRET-1");
 
+    // Losing Write unassigned her, so listing her again doesn't hand SECRET-1 back.
     await setting.makePrivate([setting.grace.user.id]);
-    expect(await inboxKeys(setting, setting.grace.as)).toEqual(["SECRET-1"]);
+    expect(await inboxKeys(setting, setting.grace.as)).toEqual([]);
   });
 
   test("answer as not found to the Agents of a User it doesn't list over MCP", async () => {

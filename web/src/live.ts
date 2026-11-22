@@ -1,53 +1,51 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { LiveEvent, RunnerEvent } from "../../server/live/live.js";
+import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api.js";
+import { invalidations } from "./live-queries.js";
 
 /**
  * Live updates: one server-sent event stream per Workspace, and one for the User's own Runners, each shared by
  * every screen that listens to it. Events only name what changed; screens fetch it again through the API.
  */
 
-export type LiveEvent =
-  | { type: "project.created"; projectId: string }
-  | { type: "project.changed" | "statuses.changed"; projectId: string }
-  | { type: "ticket.created" | "ticket.changed"; projectId: string; ticketId: string }
-  | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
-  | { type: "report.added" | "report.changed"; projectId: string; ticketId: string; reportId: string }
-  /** A file was attached to or removed from a Ticket or one of its Comments, or a Document. */
-  | { type: "attachments.changed"; projectId: string; ticketId: string }
-  | { type: "attachments.changed"; documentId: string }
-  /** A Pull Request linked to a Ticket, or one linked to it changed its title, branch, state, checks or reviews. */
-  | { type: "pull_requests.changed"; projectId: string; ticketId: string }
-  /** A session outside a Run was uploaded, linking its Transcript to a Ticket, uploading it again, or unlinking it. */
-  | { type: "transcripts.changed"; projectId: string; ticketId: string }
-  /** A Document in a page tree, the Workspace's (`projectId` null) or a Project's, was created, saved, moved or deleted. */
-  | { type: "document.changed"; projectId: string | null; documentId: string }
-  /** A Term in a glossary was created, saved or deleted. */
-  | { type: "term.changed"; projectId: string | null; termId: string }
-  /** A Decision in a register was recorded or saved. */
-  | { type: "decision.changed"; projectId: string | null; decisionId: string }
-  /** An Artifact of the Workspace (`projectId` null) or of a Project was created or saved. */
-  | { type: "artifact.changed"; projectId: string | null; artifactId: string }
-  /** A Transcript was uploaded again, with its session's newer entries, or deleted. */
-  | { type: "transcript.changed"; transcriptId: string; runId: string | null }
-  /**
-   * An Access change let the User read a Project, or took one away. The stream also tells it as `reconnected`, so
-   * every screen fetches again: what the Project adds shows up, and a screen of something in a lost one finds it gone.
-   */
-  | { type: "project.gained" | "project.lost"; projectId: string }
-  /**
-   * The stream reconnected after a break, so events may have been missed, or the User gained or lost a Project:
-   * fetch everything again.
-   */
-  | { type: "reconnected" };
+/**
+ * The stream reconnected after a break, so events may have been missed, or the User gained or lost a Project
+ * (`project.gained`, `project.lost`): fetch everything again. The web client tells it itself; the server never sends it.
+ */
+export type Reconnected = { type: "reconnected" };
 
-const eventTypes = ["project.created", "project.changed", "project.gained", "project.lost", "statuses.changed", "ticket.created", "ticket.changed", "comment.added", "report.added", "report.changed", "attachments.changed", "pull_requests.changed", "transcripts.changed", "document.changed", "term.changed", "decision.changed", "artifact.changed", "transcript.changed"];
+/** What the Workspace's stream tells a screen: the server's Live events, or that it reconnected. */
+export type StreamEvent = LiveEvent | Reconnected;
 
 /** What the User's own Runners' stream tells: a Run started or ended on one, or its queue paused or resumed. */
-export type RunnerEvent = { type: "runner.changed"; runnerId: string } | { type: "reconnected" };
+export type RunnerStreamEvent = RunnerEvent | Reconnected;
 
-const runnerEventTypes = ["runner.changed"];
+/** Each event type the server sends, listened for by name: one the server adds fails the type check until listed. */
+const eventTypes = Object.keys({
+  "project.created": true,
+  "project.changed": true,
+  "project.gained": true,
+  "project.lost": true,
+  "statuses.changed": true,
+  "ticket.created": true,
+  "ticket.changed": true,
+  "comment.added": true,
+  "report.added": true,
+  "report.changed": true,
+  "attachments.changed": true,
+  "pull_requests.changed": true,
+  "transcripts.changed": true,
+  "document.changed": true,
+  "term.changed": true,
+  "decision.changed": true,
+  "artifact.changed": true,
+  "transcript.changed": true,
+} satisfies Record<LiveEvent["type"], true>);
 
-type Listener = (event: LiveEvent | RunnerEvent) => void;
+const runnerEventTypes = Object.keys({ "runner.changed": true } satisfies Record<RunnerEvent["type"], true>);
+
+type Listener = (event: StreamEvent | RunnerStreamEvent) => void;
 
 /** Whether a stream is connected, or away and reconnecting. */
 export type LiveState = "live" | "reconnecting";
@@ -76,7 +74,7 @@ function open(url: string, types: string[]): Stream {
   let stream = streams.get(url);
   if (!stream) {
     const created: Stream = { source: new EventSource(url), listeners: new Set(), state: "live", stateListeners: new Set() };
-    const emit = (event: LiveEvent | RunnerEvent) => created.listeners.forEach((l) => l(event));
+    const emit = (event: StreamEvent | RunnerStreamEvent) => created.listeners.forEach((l) => l(event));
     const setState = (state: LiveState) => {
       created.state = state;
       created.stateListeners.forEach((l) => l(state));
@@ -167,13 +165,32 @@ function useStreamEvents<E>(url: string | null, types: string[], onEvent: (event
 }
 
 /** Calls `onEvent` with each event of the Workspace's stream while the component is shown. */
-export function useLiveEvents(workspaceId: string, onEvent: (event: LiveEvent) => void): void {
+export function useLiveEvents(workspaceId: string, onEvent: (event: StreamEvent) => void): void {
   // Nothing streams without a Workspace, such as for a User who belongs to none.
   useStreamEvents(workspaceId ? workspaceStream(workspaceId) : null, eventTypes, onEvent);
 }
 
+/**
+ * The app's one query client. Live events, not focus or time, say when loaded data is stale, and a failed load
+ * shows at once rather than after retries.
+ */
+export const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false } },
+});
+
+/**
+ * Makes stale what each event of the Workspace's stream changed (`invalidations`, the Live invalidation table), so
+ * every query shown refetches. Called once, for the Workspace shown.
+ */
+export function useLiveInvalidation(workspaceId: string): void {
+  const client = useQueryClient();
+  useLiveEvents(workspaceId, (event) => {
+    for (const queryKey of invalidations(event)) void client.invalidateQueries({ queryKey });
+  });
+}
+
 /** Calls `onEvent` with each event of the User's own Runners' stream while the component is shown. */
-export function useRunnerEvents(onEvent: (event: RunnerEvent) => void): void {
+export function useRunnerEvents(onEvent: (event: RunnerStreamEvent) => void): void {
   useStreamEvents(runnersStream, runnerEventTypes, onEvent);
 }
 

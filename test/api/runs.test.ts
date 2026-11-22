@@ -66,7 +66,7 @@ describe("starting Runs", () => {
         question: null,
         questionBy: null,
         endReason: null,
-        sessionUrl: "https://claude.ai/code/session_1",
+        sessionUrl: "https://claude.ai/code/cse_1",
         cost: null,
         transcriptId: null,
         transcriptSlug: null,
@@ -112,8 +112,11 @@ describe("starting Runs", () => {
         "- *needs you* takes a Question.",
         "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
           "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
-        "- File anything you find that isn't part of CRONK-1's work with `file_ticket`, giving your Run id: it waits " +
-          "for CRONK-1's Assignee as a Discovered Ticket.",
+        "- Before filing anything you find that isn't part of CRONK-1's work, `search` for an open Ticket that " +
+          "already covers it and, for a fault in the code, check it still happens on the Repository's default branch. " +
+          "If an open Ticket covers it, add what you found there as a Comment instead. Otherwise file it with " +
+          "`file_ticket`, giving your Run id and naming any related Tickets in its description: it waits for " +
+          "CRONK-1's Assignee as a Discovered Ticket.",
         "- Give your Run id when you create an Artifact with `create_artifact`, so it is linked to CRONK-1.",
         "- Don't merge pull requests on GitHub directly.",
       ].join("\n"),
@@ -123,6 +126,29 @@ describe("starting Runs", () => {
     expect(brief.text.startsWith(`${brief.preamble}\n\nTriage this Ticket`)).toBe(true);
     expect(brief.text.endsWith("\n\nCRONK-1")).toBe(true);
     expect(start!.brief).toBe(brief.text);
+  });
+
+  test("with Concise Reports on, the preview and a started Run's Brief ask for concise Reports; off, they don't", async () => {
+    const { ada, ticket, agent, project, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const rule = /^- This Project keeps Reports concise, even where the Step's brief asks for more: lead with the outcome/m;
+    expect((await ok("GET", `/api/tickets/${ticket.id}/brief`, ada)).preamble).not.toMatch(rule);
+
+    expect(project.conciseReports).toBe(false);
+    expect(await ok("PATCH", `/api/projects/${project.id}`, ada, { conciseReports: true })).toMatchObject({ conciseReports: true });
+    expect(await ok("GET", `/api/projects/${project.id}`, ada)).toMatchObject({ conciseReports: true });
+
+    const preview = await ok("GET", `/api/tickets/${ticket.id}/brief`, ada);
+    expect(preview.preamble).toMatch(rule);
+    expect(preview.preamble.endsWith("as a step-by-step log of what you read or tried.")).toBe(true);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    const [run] = await runsOf(ticket.id, ada);
+    expect((await ok("GET", `/api/runs/${run.id}/brief`, ada)).preamble).toMatch(rule);
+    expect(cronk.runner.starts[0]!.brief).toMatch(rule);
+
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { conciseReports: false });
+    expect((await ok("GET", `/api/tickets/${ticket.id}/brief`, ada)).preamble).not.toMatch(rule);
   });
 
   test("undelegated Tickets never get Runs, and Statuses without a Step start none", async () => {
@@ -403,6 +429,7 @@ describe("Runners and Agents", () => {
         id: agent.runnerId,
         name: "Fake",
         kind: "fake",
+        cloud: false,
         limit: 2,
         running: 0,
         pausedUntil: null,

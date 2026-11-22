@@ -22,7 +22,7 @@ import { Actor } from "./ui/actor.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Banner, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, Saved } from "./ui/controls.js";
 import { DecisionStatusPill, decisionStatusLabel } from "./ui/labels.js";
-import { ReadOnlyNote } from "./write-access.js";
+import { ProjectNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { MentionedIn } from "./mentioned-in.js";
 
@@ -81,7 +81,7 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
           </>
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       <FormError error={failure} />
       {decisions &&
         (decisions.length === 0 ? (
@@ -324,7 +324,7 @@ export function DecisionScreen({
           )
         }
       />
-      {project && <ReadOnlyNote access={project.access} />}
+      {project && <ProjectNote project={project} />}
       {!editing && <FormError error={status.error} />}
       <RejectDialog
         decision={decision}

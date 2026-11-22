@@ -8,6 +8,7 @@ import { requireWrite, type Viewer } from "../identity/viewers.js";
 import { findTicketRow, runOfAgent, ticketNotFound } from "../work/tickets.js";
 import { insertVersion } from "./documents.js";
 import { Mention, mentionsOf } from "../work/mentions.js";
+import { markdown, title } from "../work/fields.js";
 
 /**
  * Reports: Documents a Run writes on its Ticket, such as an investigation's findings, listed with the Ticket instead
@@ -23,7 +24,7 @@ export const Report = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown; its current Version's." }),
   createdAt: Type.String({ format: "date-time" }),
-  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
 });
 export type Report = Static<typeof Report>;
 
@@ -106,12 +107,19 @@ export async function recordReport(
   return viewer && (await present(tx, viewer, [report!]))[0];
 }
 
+/** The write-a-Report route's body. */
+export const ReportCreate = Type.Object({
+  title: title("A short title, such as `Findings`."),
+  body: markdown(500_000),
+});
+export type ReportCreate = Static<typeof ReportCreate>;
+
 /** An Agent writes a Report on a Ticket during its own running Run on it; Users comment instead. */
 export async function writeReport(
   context: Context,
   writer: Caller,
   ticketId: string,
-  input: { title: string; body: string },
+  input: ReportCreate,
 ): Promise<Report> {
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, writer, ticketId, { lock: true });

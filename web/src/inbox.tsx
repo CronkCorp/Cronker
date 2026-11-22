@@ -118,7 +118,7 @@ function summary(item: InboxItem): string {
       return `Discovered by ${item.agent.name}${source ? ` while on ${source.key}` : ""}: delegate, move or dismiss it`;
     }
     case "reassign":
-      return `${nameOf(item.formerAssignee)} was removed from the Workspace: assign it to someone`;
+      return `${nameOf(item.formerAssignee)} can no longer work on it: assign it to someone`;
   }
 }
 
@@ -228,7 +228,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
     else if (key === "k") move(-1);
-    else if (key === "a" && canWrite && current?.kind === "question" && !resolved) answerBox.current?.textbox()?.focus();
+    else if (key === "a" && canWrite && current?.kind === "question" && !resolved) answerBox.current?.focus();
     else if (key === "c" && canWrite && current?.kind === "unverified" && !resolved) acceptRef.current?.();
     else if (key === "r" && canWrite && current?.kind === "unverified" && !resolved) setReopening(true);
     else return;

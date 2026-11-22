@@ -15,6 +15,7 @@ import type { Place } from "./places.js";
 import { findSection, pathOf, replaceSection, sectionsOf, sectionText, type Section } from "./sections.js";
 import { outdatedVersion } from "./versions.js";
 import { indexMentions, Mention, mentionsOfOne } from "../work/mentions.js";
+import { nullable, title } from "../work/fields.js";
 
 /**
  * Documents: written knowledge kept as Markdown in the page tree of a Project or of the Workspace, or, as a Report,
@@ -52,7 +53,7 @@ export const Document = Type.Object({
   slug: Type.String({ description: slugDescription }),
   body: Type.String({ description: "Markdown." }),
   version: Type.Object(Version.properties, { description: "The current Version, which a save names as its base." }),
-  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions that the caller may read." }),
+  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its body mentions and the Artifacts it embeds that the caller may read." }),
 });
 export type Document = Static<typeof Document>;
 
@@ -204,6 +205,22 @@ async function shiftSiblings(
   );
 }
 
+const Body = Type.String({ maxLength: 500_000, description: "Markdown." });
+const ParentId = nullable(Type.String(), "A Document of the same page tree to sit under, or null for the top.");
+const Position = Type.Integer({
+  minimum: 0,
+  description: "A place among its siblings, counting from 0; last when left out or past the end.",
+});
+
+/** The create-a-Document route's body. */
+export const DocumentCreate = Type.Object({
+  title: title(),
+  body: Type.Optional(Body),
+  parentId: Type.Optional(ParentId),
+  position: Type.Optional(Position),
+});
+export type DocumentCreate = Static<typeof DocumentCreate>;
+
 /**
  * Creates a Document in the page tree, under a parent of the same tree or at the top, at a place among its
  * siblings or last, at Version 1 by its Actor.
@@ -212,7 +229,7 @@ export async function createDocument(
   { db, clock, live }: Context,
   actor: Caller,
   tree: Tree,
-  input: { title: string; body: string; parentId?: string | null; position?: number },
+  input: DocumentCreate & { body: string },
 ): Promise<Document> {
   return transaction(db, async (tx) => {
     await requireWrite(tx, actor, tree);
@@ -365,16 +382,15 @@ async function saveNextVersion(
   await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
 }
 
-export interface DocumentEdit {
-  /** The number of the Version the save is based on; needed for a new title or body. */
-  baseVersion?: number;
-  title?: string;
-  body?: string;
-  /** Another parent in the same page tree, or null for the top. */
-  parentId?: string | null;
-  /** A place among its siblings, counting from 0; last if past the end, or when moving to another parent without one. */
-  position?: number;
-}
+/** The save-rename-or-move route's body. */
+export const DocumentEdit = Type.Object({
+  baseVersion: Type.Optional(Type.Integer({ minimum: 1, description: "The Version the save is based on." })),
+  title: Type.Optional(title()),
+  body: Type.Optional(Body),
+  parentId: Type.Optional(ParentId),
+  position: Type.Optional(Position),
+});
+export type DocumentEdit = Static<typeof DocumentEdit>;
 
 /**
  * Saves or moves a Document. A new title or body makes the next Version by the Actor, and must be based on the
@@ -435,6 +451,24 @@ export async function readSection(db: Db, viewer: Viewer, documentId: string, na
   return presentSection(document, document.body, findSection(document.body, name));
 }
 
+/** A Section's name, as a read or a replace gives it. */
+export const SectionName = Type.String({
+  minLength: 1,
+  maxLength: 1000,
+  description: "Its heading's text, or a path joining headings with `/`, such as `Install/Linux`.",
+});
+
+/** The replace-a-Section route's body. */
+export const SectionReplace = Type.Object({
+  section: SectionName,
+  baseVersion: Type.Integer({ minimum: 1, description: "The Version the replace is based on." }),
+  body: Type.String({
+    maxLength: 500_000,
+    description: "Markdown: the Section's heading, of its own level, and everything under it.",
+  }),
+});
+export type SectionReplace = Static<typeof SectionReplace>;
+
 /**
  * Replaces one Section of a Document, making its next Version by the Actor based on the given one, as a whole save
  * does. The new body keeps the Section's heading level; the rest of the Document stays as it was.
@@ -443,7 +477,7 @@ export async function replaceDocumentSection(
   { db, clock, live }: Context,
   actor: Caller,
   documentId: string,
-  input: { section: string; baseVersion: number; body: string },
+  input: SectionReplace,
 ): Promise<DocumentSection> {
   return transaction(db, async (tx) => {
     const document = await lockDocument(tx, actor, documentId);

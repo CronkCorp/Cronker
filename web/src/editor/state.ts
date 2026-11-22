@@ -19,7 +19,8 @@ import { liftListItem, sinkListItem, splitListItem, wrapInList } from "prosemirr
 import { EditorState, TextSelection, type Command, type Plugin, type Transaction } from "prosemirror-state";
 import { addColumnAfter, addRowAfter, deleteColumn, deleteRow, goToNextCell, isInTable, tableEditing } from "prosemirror-tables";
 import { markdownParser, markdownSerializer } from "./markdown.js";
-import { openMarkdown, type MarkdownDocument } from "./round-trip.js";
+import { embedAddress } from "./embed-address.js";
+import { embedNode, openMarkdown, type MarkdownDocument } from "./round-trip.js";
 import { schema } from "./schema.js";
 
 const nodes = schema.nodes as Record<string, NodeType>;
@@ -379,8 +380,26 @@ export function editorKeys(hooks: EditorHooks = {}): Record<string, Command> {
 /** Plain text pasted is read as Markdown, so pasted Markdown arrives formatted. */
 export function sliceFromText(text: string, $context: ResolvedPos): Slice {
   if ($context.parent.type.spec.code) return new Slice(Fragment.from(schema.text(text)), 0, 0);
-  const parsed = markdownParser.parse(text);
-  return Slice.maxOpen(stripBlocks(parsed).content);
+  const parsed = stripBlocks(markdownParser.parse(text));
+  // An address pasted on a line of its own at the top level is an Embed; in a sentence, or nested, it stays text.
+  const ownLine = $context.depth <= 1 && (parsed.childCount > 1 || $context.parent.content.size === 0);
+  return Slice.maxOpen(ownLine ? Fragment.from(mapChildren(parsed).map(asEmbed)) : parsed.content);
+}
+
+/**
+ * A pasted paragraph holding an Artifact's address alone, bare or as an autolink, as its Embed; any other node as it
+ * is. The tokenizer reads no bare links, so a bare address is plain text here.
+ */
+function asEmbed(node: Node): Node {
+  if (node.type !== nodes.paragraph || node.childCount !== 1) return node;
+  const only = node.firstChild!;
+  if (!only.isText) return node;
+  const text = only.text!;
+  const link = only.marks.find((mark) => mark.type === marks.link);
+  const plain = only.marks.length === 0;
+  const autolink = link !== undefined && only.marks.length === 1 && link.attrs.href === text;
+  if ((!plain && !autolink) || !embedAddress(text.trim())) return node;
+  return embedNode(text.trim(), autolink ? `<${text}>` : text.trim());
 }
 
 /** Clears the loaded-block marks, so pasted blocks save as new ones. */
