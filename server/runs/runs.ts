@@ -668,11 +668,26 @@ export async function presentRun(tx: Tx, viewer: Viewer, runId: string): Promise
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
  * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
  */
+/** The finish route's body: the Outcome, and for *needs you* the Question, with an optional Report. */
+export const RunFinish = Type.Object({
+  outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
+  question: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000, description: "For the Assignee, in Markdown." })),
+  report: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 500_000,
+      pattern: "\\S",
+      description: "Markdown, added to the Ticket's Reports titled after the Run's Step, such as `Triage report`.",
+    }),
+  ),
+});
+export type RunFinish = Static<typeof RunFinish>;
+
 export async function finishRun(
   context: Context,
   caller: Caller,
   runId: string,
-  input: { outcome: string; question?: string; report?: string },
+  input: RunFinish,
 ): Promise<Run> {
   const { db } = context;
   return transaction(db, async (tx) => {

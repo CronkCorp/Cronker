@@ -206,6 +206,10 @@ async function transcriptRow(db: Context["db"] | Tx, where: string, params: unkn
  * Stores the Agent's upload of a session's transcript, converted into entries, in place of what Cronk held for
  * that session. Says whether the session's Transcript is new.
  */
+/** The upload route's body: a Claude Code transcript, its JSONL file as it is. */
+export const TranscriptUpload = Type.String();
+export type TranscriptUpload = Static<typeof TranscriptUpload>;
+
 export async function uploadTranscript(
   context: Context,
   agent: AgentCaller,
@@ -770,6 +774,10 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
 export const redactionMinLength = 4;
 /** The longest string a Redaction takes. */
 export const redactionMaxLength = 10_000;
+/** The redact route's body: the string to redact. */
+export const RedactionCreate = Type.Object({ text: Type.String({ minLength: 1, maxLength: redactionMaxLength }) });
+export type RedactionCreate = Static<typeof RedactionCreate>;
+
 /** How many entries a Redaction rewrites at a time. */
 const redactBatch = 500;
 

@@ -1,3 +1,4 @@
+import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { mergeOnGitHub, pullRequestOnGitHub, repositoryById, type MergeMethod, type RepositoryOnGitHub } from "../github/client.js";
@@ -270,6 +271,12 @@ async function mergeAsAsked(context: Context, { step, ticketKey, pullRequest }: 
  * Merges the Pull Request, by GitHub's id, for the Agent's running Merge Run, as the module says, and returns the
  * Run, finished with *merged*.
  */
+/** The merge route's body: which of the Ticket's Pull Requests to merge. */
+export const RunMerge = Type.Object({
+  pullRequestId: Type.Integer({ description: "GitHub's id for the Pull Request, as the Ticket's Pull Requests list it." }),
+});
+export type RunMerge = Static<typeof RunMerge>;
+
 export async function mergePullRequest(context: Context, caller: Caller, runId: string, pullRequestId: number): Promise<Run> {
   const asked = await askMerge(context, caller, runId, pullRequestId);
   try {

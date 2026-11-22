@@ -7,7 +7,13 @@ import type { Guidance } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ReportCreate } from "../knowledge/reports.js";
 import { CommentCreate } from "../work/comments.js";
-import { AgentTicketEdit, TicketCreate } from "../work/tickets.js";
+import { AgentTicketEdit, TicketCreate, type TicketSummary } from "../work/tickets.js";
+import { ProjectCreate, type Project, type ProjectSummary } from "../work/projects.js";
+import { StatusAdd, StatusEdit } from "../work/statuses.js";
+import { Outcome, outcomeCount, StepPut } from "../work/steps.js";
+import { RunFinish } from "../runs/runs.js";
+import { RunMerge } from "../runs/merging.js";
+import type { Workspace } from "../workspaces/workspaces.js";
 
 /**
  * Cronk's MCP tools for an Agent. They hold no rules of their own: each calls the HTTP
@@ -37,31 +43,6 @@ class Refused extends Error {
   }
 }
 
-interface Workspace {
-  id: string;
-  name: string;
-}
-interface ProjectSummary {
-  id: string;
-  key: string;
-  name: string;
-}
-interface Project extends ProjectSummary {
-  statuses: { id: string; name: string; kind: string }[];
-}
-interface TicketSummary {
-  id: string;
-  projectId: string;
-  key: string;
-  title: string;
-  statusId: string;
-  priority: string;
-  labels: string[];
-  assigneeId: string | null;
-  dueDate: string | null;
-  estimate: number | null;
-}
-
 /**
  * A route body's fields as a tool's input: the route's own limits and descriptions, so a value the route refuses is
  * refused before the tool calls the API, and nothing is written. The tool adds only its own fields, such as the
@@ -75,6 +56,14 @@ function bodyFields<T extends TObject>(body: T): BodyFields<Static<T>> {
 type BodyFields<B> = {
   [K in keyof B]-?: undefined extends B[K] ? z.ZodOptional<z.ZodType<Exclude<B[K], undefined>>> : z.ZodType<B[K]>;
 };
+
+/**
+ * `set_step`'s fields but its Outcomes. The tool's Outcomes are the documented exception to building inputs from the
+ * route's body: they name their Status by name or id, where the route takes `statusId`, and their flags default to
+ * false; so the array keeps its own zod, reusing only the route's Outcome name and the route's item limits.
+ */
+const stepFields = bodyFields(Type.Omit(StepPut, ["outcomes"]));
+const outcomeName = bodyFields(Type.Pick(Outcome, ["name"]));
 
 /** A new Ticket's own fields; the tools name its parent or source their own way. */
 const newTicketFields = bodyFields(Type.Omit(TicketCreate, ["parentId", "runId"]));
@@ -1050,10 +1039,6 @@ export function buildMcpServer(api: Api): McpServer {
 
   const projectArgument = z.string().min(1).describe("The Project's key, such as `CRONK`.");
   const statusArgument = z.string().min(1).describe("A Status of the Project: its name, ignoring case, or its id.");
-  const statusKind = z
-    .enum(["backlog", "active", "review", "done", "canceled"])
-    .describe("What the Status means for its Tickets: `backlog`, `active`, `review`, `done` or `canceled`.");
-  const position = z.number().int().min(0).describe("Its place on the board, counting from 0.");
   const boardRule =
     "Needs Write in the Project: the least of its Agent Access, your Owner's Access and your token's access. " +
     "Returns the Project with its Statuses and Steps.";
@@ -1083,11 +1068,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Refused for a key or name another Project of the Workspace has, ignoring case. Returns the Project as " +
         "`read_project` does.",
       inputSchema: {
-        name: z.string().min(1).max(200).regex(/\S/).describe("The Project's name."),
-        key: z
-          .string()
-          .regex(/^[A-Za-z][A-Za-z0-9]{1,9}$/)
-          .describe("2 to 10 letters and digits, starting with a letter, such as `CRONK`; kept in capitals."),
+        ...bodyFields(ProjectCreate),
       },
     },
     ({ name, key }) =>
@@ -1103,9 +1084,7 @@ export function buildMcpServer(api: Api): McpServer {
         `ignoring case. ${boardRule}`,
       inputSchema: {
         project: projectArgument,
-        name: z.string().min(1).max(100),
-        kind: statusKind,
-        position: position.optional().describe("Its place on the board, counting from 0; last when left out."),
+        ...bodyFields(StatusAdd),
       },
     },
     ({ project, ...input }) =>
@@ -1123,9 +1102,7 @@ export function buildMcpServer(api: Api): McpServer {
       inputSchema: {
         project: projectArgument,
         status: statusArgument,
-        name: z.string().min(1).max(100).optional(),
-        kind: statusKind.optional(),
-        position: position.optional(),
+        ...bodyFields(StatusEdit),
       },
     },
     ({ project, status, ...edit }) =>
@@ -1165,42 +1142,19 @@ export function buildMcpServer(api: Api): McpServer {
       inputSchema: {
         project: projectArgument,
         status: statusArgument,
-        kind: z
-          .enum(["ordinary", "merge"])
-          .optional()
-          .describe(
-            "`ordinary` (when left out), or `merge`: a Merge Step skips itself by its default Outcome unless the Ticket " +
-              "has Autonomous Delegation and its Project has agents may merge on.",
-          ),
-        brief: z.string().min(1).max(50_000).describe("Markdown; the middle of the Brief each Run starts from."),
-        model: z.string().min(1).max(50).describe("The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`."),
-        roundLimit: z
-          .number()
-          .int()
-          .min(0)
-          .max(100)
-          .optional()
-          .describe("How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*; 2 when left out."),
-        labelRule: z
-          .object({
-            kind: z.enum(["requires", "skippedBy"]).describe("`requires`: only Tickets with the Label pass. `skippedBy`: Tickets with it don't."),
-            label: z.string().min(1).max(50),
-          })
-          .nullable()
-          .optional()
-          .describe("Which Tickets get a Run; every Ticket when left out. One that doesn't pass moves on by the default Outcome."),
+        ...stepFields,
         outcomes: z
           .array(
             z.object({
-              name: z.string().min(1).max(50).describe("Unique within the Step, ignoring case."),
+              ...outcomeName,
               status: statusArgument.describe("The Status it moves the Ticket to: its name, ignoring case, or its id."),
               default: z.boolean().optional().describe("Where a skipped Step sends the Ticket."),
               needsYou: z.boolean().optional().describe("Hands the Ticket back to its Assignee with a Question."),
               countsAsRound: z.boolean().optional().describe("Sends work back, counting toward the round limit."),
             }),
           )
-          .min(2)
-          .max(20),
+          .min(outcomeCount.minItems)
+          .max(outcomeCount.maxItems),
       },
     },
     ({ project, status, outcomes, ...step }) =>
@@ -1246,13 +1200,7 @@ export function buildMcpServer(api: Api): McpServer {
         "This is the only way an Agent moves a Ticket: Agents never set a Status.",
       inputSchema: {
         run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
-        outcome: z.string().min(1).describe("The Outcome's name, such as `ready`, ignoring case."),
-        question: z.string().min(1).optional().describe("For *needs you*: what you need from the Ticket's Assignee."),
-        report: z
-          .string()
-          .min(1)
-          .optional()
-          .describe("What you found or did, in Markdown; added to the Ticket's Reports, titled after your Run's Step."),
+        ...bodyFields(RunFinish),
       },
     },
     ({ run, outcome, question, report }) =>
@@ -1272,7 +1220,8 @@ export function buildMcpServer(api: Api): McpServer {
         "changes and GitHub says it is mergeable. Never merge on GitHub directly.",
       inputSchema: {
         run: z.string().min(1).describe("Your Run's id, as your Brief gives it."),
-        pullRequest: z.number().int().describe("GitHub's id for the Pull Request, as `read_ticket` lists it under `pullRequests`."),
+        // The route's field, under the name Agents already use.
+        pullRequest: bodyFields(RunMerge).pullRequestId,
       },
     },
     ({ run, pullRequest }) =>

@@ -101,6 +101,12 @@ export async function isAnyAdmin(db: Db, userId: string): Promise<boolean> {
 }
 
 /** Starts the manifest flow for an Admin: where to post which manifest. */
+/** The start-creating-the-GitHub-App route's body. */
+export const ManifestRequest = Type.Object({
+  githubOrganization: Type.Optional(Type.String({ minLength: 1, maxLength: 100, pattern: "^[A-Za-z0-9-]+$" })),
+});
+export type ManifestRequest = Static<typeof ManifestRequest>;
+
 export async function startManifestFlow(
   { db, config, clock }: Context,
   userId: string,

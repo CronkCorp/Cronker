@@ -459,6 +459,142 @@ describe("MCP with an Agent token", () => {
     expect(input("write_report").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000 }));
   });
 
+  /** Calls each tool with a value its route refuses: each is a validation error naming the field. */
+  async function expectRefused(client: Client, refusals: [string, Record<string, unknown>, RegExp][]) {
+    for (const [tool, args, field] of refusals) {
+      const result = await client.callTool({ name: tool, arguments: args });
+      const [content] = result.content as { type: string; text: string }[];
+      expect({ tool, args, isError: result.isError }).toEqual({ tool, args, isError: true });
+      // The tool's own input check, before it calls the API.
+      expect(content!.text).toMatch(/^MCP error -32602: Input validation error/);
+      expect(content!.text).toMatch(field);
+    }
+  }
+
+  test("a value a Project-board route refuses is refused by its tool, before anything is written", async () => {
+    const { workspace, cookie, ticket, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const { json: before } = await call(client, "read_project", { project: "CRONK" });
+    const outcomes = [
+      { name: "done", status: "Ready", default: true },
+      { name: "needs you", status: "Backlog", needsYou: true },
+    ];
+    const step = { project: "CRONK", status: "Ready", brief: "Do it.", model: "sonnet", outcomes };
+
+    await expectRefused(client, [
+      // Length, and a name that is only spaces.
+      ["create_project", { name: "x".repeat(201), key: "DOCS" }, /name/],
+      ["add_status", { project: "CRONK", name: "x".repeat(101), kind: "active" }, /name/],
+      ["add_status", { project: "CRONK", name: "   ", kind: "active" }, /name/],
+      ["edit_status", { project: "CRONK", status: "Ready", name: "   " }, /name/],
+      ["set_step", { ...step, brief: " " }, /brief/],
+      ["set_step", { ...step, outcomes: [...outcomes, { name: "x".repeat(51), status: "Done" }] }, /name/],
+      // Pattern.
+      ["create_project", { name: "Docs", key: "1DOCS" }, /key/],
+      ["set_step", { ...step, model: "two words" }, /model/],
+      // Minimum and maximum.
+      ["add_status", { project: "CRONK", name: "Design", kind: "active", position: -1 }, /position/],
+      ["set_step", { ...step, roundLimit: 101 }, /roundLimit/],
+      // Enum.
+      ["add_status", { project: "CRONK", name: "Design", kind: "weird" }, /kind/],
+      ["edit_status", { project: "CRONK", status: "Ready", kind: "weird" }, /kind/],
+      ["set_step", { ...step, kind: "weird" }, /kind/],
+      ["set_step", { ...step, labelRule: { kind: "weird", label: "docs" } }, /labelRule/],
+      // Item counts.
+      ["set_step", { ...step, outcomes: outcomes.slice(0, 1) }, /outcomes/],
+    ]);
+
+    // Nothing was written: the board and the Workspace's Projects are as they were.
+    expect((await call(client, "read_project", { project: "CRONK" })).json).toEqual(before);
+    const projects = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/projects`, { cookie })).json();
+    expect(projects.map((p: { key: string }) => p.key)).toEqual(["CRONK"]);
+    expect(ticket.projectId).toBe(before.id);
+    // The same Step within the limits goes through, its round limit and Label rule left to their defaults.
+    const stepped = await call(client, "set_step", step);
+    expect(stepped.isError).toBe(false);
+    const ready = stepped.json.statuses.find((s: { name: string }) => s.name === "Ready");
+    expect(ready.step).toEqual(expect.objectContaining({ kind: "ordinary", roundLimit: 2, labelRule: null }));
+  });
+
+  test("a value finish or merge_pull_request refuses is refused before the Run ends", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: triage } });
+    const client = await connect(secret);
+    const { json: before } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    const run = before.runs[0].id;
+
+    await expectRefused(client, [
+      // Length, and a Report that is only spaces.
+      ["finish", { run, outcome: "x".repeat(51) }, /outcome/],
+      ["finish", { run, outcome: "" }, /outcome/],
+      ["finish", { run, outcome: "ready", report: "   " }, /report/],
+      ["finish", { run, outcome: "ready", question: "" }, /question/],
+      // Integer.
+      ["merge_pull_request", { run, pullRequest: 1.5 }, /pullRequest/],
+    ]);
+
+    // Nothing was written: the Run still runs, and the Ticket is where it was, with no Report.
+    const { json: after } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+    expect(after.runs).toEqual([expect.objectContaining({ id: run, state: "running" })]);
+    expect(after.ticket.statusId).toBe(triage);
+    expect(after.reports).toEqual([]);
+    expect((await call(client, "finish", { run, outcome: "ready", report: "Clear." })).isError).toBe(false);
+  });
+
+  test("the board, finish and merge tools' inputs carry the routes' field descriptions and limits", async () => {
+    const { secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const { tools } = await client.listTools();
+    const input = (name: string) => tools.find((tool) => tool.name === name)!.inputSchema as {
+      properties: Record<string, Record<string, unknown>>;
+      required?: string[];
+    };
+
+    const create = input("create_project");
+    expect(Object.keys(create.properties).sort()).toEqual(["key", "name"]);
+    expect(create.properties.name).toEqual(expect.objectContaining({ maxLength: 200, pattern: "\\S" }));
+    expect(create.properties.key).toEqual(
+      expect.objectContaining({ pattern: "^[A-Za-z][A-Za-z0-9]{1,9}$", description: expect.stringContaining("capitals") }),
+    );
+    const add = input("add_status");
+    expect(Object.keys(add.properties).sort()).toEqual(["kind", "name", "position", "project"]);
+    expect(add.required?.sort()).toEqual(["kind", "name", "project"]);
+    expect(add.properties.name).toEqual(expect.objectContaining({ maxLength: 100, pattern: "\\S" }));
+    expect(add.properties.position).toEqual(expect.objectContaining({ minimum: 0, description: expect.stringContaining("board") }));
+    expect(JSON.stringify(add.properties.kind)).toContain("canceled");
+    expect(String(add.properties.kind!.description)).toContain("What the Status means");
+    expect(Object.keys(input("edit_status").properties).sort()).toEqual(["kind", "name", "position", "project", "status"]);
+
+    // set_step is the documented exception: its Outcomes name their Status, where the route takes `statusId`.
+    const step = input("set_step");
+    expect(Object.keys(step.properties).sort()).toEqual(
+      ["brief", "kind", "labelRule", "model", "outcomes", "project", "roundLimit", "status"],
+    );
+    expect(step.properties.brief).toEqual(expect.objectContaining({ maxLength: 50_000, pattern: "\\S" }));
+    expect(step.properties.model).toEqual(expect.objectContaining({ maxLength: 50, pattern: "^\\S+$" }));
+    expect(step.properties.roundLimit).toEqual(expect.objectContaining({ minimum: 0, maximum: 100 }));
+    expect(step.properties.outcomes).toEqual(expect.objectContaining({ minItems: 2, maxItems: 20 }));
+    expect(JSON.stringify(step.properties.outcomes)).toContain("Unique within the Step");
+
+    const finish = input("finish");
+    expect(Object.keys(finish.properties).sort()).toEqual(["outcome", "question", "report", "run"]);
+    expect(finish.required?.sort()).toEqual(["outcome", "run"]);
+    expect(finish.properties.outcome).toEqual(expect.objectContaining({ maxLength: 50 }));
+    expect(finish.properties.question).toEqual(expect.objectContaining({ maxLength: 100_000 }));
+    expect(finish.properties.report).toEqual(
+      expect.objectContaining({ maxLength: 500_000, pattern: "\\S", description: expect.stringContaining("Triage report") }),
+    );
+    const merge = input("merge_pull_request");
+    expect(Object.keys(merge.properties).sort()).toEqual(["pullRequest", "run"]);
+    expect(merge.properties.pullRequest).toEqual(
+      expect.objectContaining({ type: "integer", description: expect.stringContaining("GitHub's id") }),
+    );
+  });
+
   test("during its Run an Agent links and unlinks Documents on its Ticket", async () => {
     const { cookie, ticket, agent, secret } = await workspaceWithTicket();
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });

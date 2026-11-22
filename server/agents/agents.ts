@@ -50,6 +50,17 @@ export async function agentsOf(db: Db, workspaceId: string): Promise<Agent[]> {
   return rows.map(present);
 }
 
+/** The create-an-Agent route's body. */
+export const AgentCreate = Type.Object({ name: AgentName });
+export type AgentCreate = Static<typeof AgentCreate>;
+
+/** The change-an-Agent route's body: whichever of its name and Runner are given change; a null Runner is none. */
+export const AgentEdit = Type.Object({
+  name: Type.Optional(AgentName),
+  runnerId: Type.Optional(Type.Union([Type.Null(), Type.String({ format: "uuid" })])),
+});
+export type AgentEdit = Static<typeof AgentEdit>;
+
 export async function createAgent(
   db: Db,
   clock: Clock,

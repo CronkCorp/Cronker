@@ -7,12 +7,12 @@ import { requireCaller } from "../identity/callers.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { beginSignIn, finishSignIn } from "./sign-in.js";
 import { beginLink, finishLink, isLinkState } from "./link.js";
-import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
+import { callbackPath, createdPath, findApp, finishManifestFlow, GitHubApp, ManifestRequest, ManifestStart, startManifestFlow, webhooksPath } from "./app.js";
 import { Installation, listInstallations } from "./installations.js";
 import { Checklist, checklist } from "./upgrade.js";
-import { addRepository, removeRepository, repositoriesOf, Repository } from "./repositories.js";
+import { addRepository, removeRepository, repositoriesOf, Repository, RepositoryAdd } from "./repositories.js";
 import { PullRequest, pullRequestsOf } from "./pull-requests.js";
-import { linkPullRequest, unlinkPullRequest } from "./manual-links.js";
+import { linkPullRequest, PullRequestLink, unlinkPullRequest } from "./manual-links.js";
 import { receiveDelivery } from "./webhooks.js";
 
 /** GitHub sends webhook payloads of up to 25 MB. */
@@ -130,7 +130,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Start creating the installation's GitHub App (Admins only)",
           description:
             "Returns a manifest and the GitHub address to post it to as the form field `manifest`, from the browser. GitHub creates the App under the Admin's GitHub account (or the `githubOrganization`) and sends the browser back to Cronk, which stores the App's credentials encrypted. Refused with `github_app_exists` once the installation has its App, and with `no_secret_key` while Cronk has no `CRONK_SECRET_KEY`.",
-          body: Type.Object({ githubOrganization: Type.Optional(Type.String({ minLength: 1, maxLength: 100, pattern: "^[A-Za-z0-9-]+$" })) }),
+          body: ManifestRequest,
           response: { 201: ManifestStart, 401: ErrorBody, 403: ErrorBody, 409: ErrorBody },
         },
       },
@@ -197,7 +197,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Adds a Repository one of the GitHub App's installations covers (see `GET /api/github/installations`), by GitHub's id. Refused with `repository_not_installed` if no installation covers it, `repository_already_listed` if the Project lists it already, `github_not_set_up` while there is no App, and `github_unavailable` if GitHub can't be asked.",
           params: Type.Object({ projectId: Type.String() }),
-          body: Type.Object({ id: Type.Integer({ minimum: 1, description: "GitHub's id for the Repository." }) }),
+          body: RepositoryAdd,
           response: { 201: Repository, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 502: ErrorBody },
         },
       },
@@ -249,9 +249,7 @@ export function githubRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "For a Pull Request whose branch or title doesn't name the Ticket's key: one of a Repository the Ticket's Project lists, named by its address on GitHub or as `owner/name#number`. It then counts as any linked Pull Request does: its merge completes the Ticket, under the same rules, and its failures send the Ticket back. A merge before the link completes nothing. Linking one already linked by hand changes nothing. Refused with `invalid_pull_request` for anything else, `pull_request_not_found` when Cronk knows no such Pull Request in those Repositories, and `pull_request_closed` for one closed without merging.",
           params: Type.Object({ ticketId: Type.String() }),
-          body: Type.Object({
-            pullRequest: Type.String({ minLength: 1, maxLength: 500, description: "Its address on GitHub, or `owner/name#number`." }),
-          }),
+          body: PullRequestLink,
           response: { 201: PullRequest, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },

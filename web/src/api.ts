@@ -21,10 +21,29 @@ import type {
   TicketSummary,
 } from "../../server/work/tickets.js";
 import type { TicketReopen } from "../../server/work/verification.js";
+// So are the request types of the other areas' calls, from each route's body schema.
+import type { AgentCreate, AgentEdit } from "../../server/agents/agents.js";
+import type { TokenIssue } from "../../server/agents/tokens.js";
+import type { ManifestRequest } from "../../server/github/app.js";
+import type { PullRequestLink } from "../../server/github/manual-links.js";
+import type { RepositoryAdd } from "../../server/github/repositories.js";
+import type { LinkLookup, LinkUse } from "../../server/identity/links.js";
+import type { SetupInput } from "../../server/identity/setup.js";
+import type { MeEdit, PasswordChange, SignIn } from "../../server/identity/sign-ins.js";
+import type { RequestApproval } from "../../server/oauth/authorizations.js";
+import type { SetupStart } from "../../server/runs/runner-setups.js";
+import type { RunnerCreate, RunnerEdit, TriggerSave, TriggerToken, WebhookSecret } from "../../server/runs/runners.js";
+import type { RedactionCreate } from "../../server/transcripts/transcripts.js";
+import type { ProjectCreate, ProjectEdit } from "../../server/work/projects.js";
+import type { StatusAdd, StatusEdit } from "../../server/work/statuses.js";
+import type { StepPut } from "../../server/work/steps.js";
+import type { MemberAdd, MemberAddByGitHub, MemberEdit } from "../../server/workspaces/members.js";
+import type { WorkspaceCreate, WorkspaceRename, WorkspaceSettingsEdit } from "../../server/workspaces/workspaces.js";
 
 export type { Change, Comment, Cost, Mention, MentioningText, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
+export type { ProjectCreate, ProjectEdit, StatusAdd, StatusEdit, StepPut, SetupInput, WorkspaceCreate, WorkspaceSettingsEdit };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
 export type ChangeActor = ActorOrCronk;
@@ -199,15 +218,6 @@ export interface Project extends ProjectSummary {
   /** Whether Briefs in this Project ask Runs to keep their Reports concise. */
   conciseReports: boolean;
   statuses: Status[];
-}
-
-/** The settings a User changes on a Project. */
-export interface ProjectEdit {
-  newTicketsDelegated?: boolean;
-  autonomousDelegationDefault?: boolean;
-  pullRequestAutomation?: boolean;
-  agentsMayMerge?: boolean;
-  conciseReports?: boolean;
 }
 
 export const priorities: { priority: Priority; label: string }[] = [
@@ -841,44 +851,44 @@ export interface SearchResult {
 
 export const api = {
   setupNeeded: () => call<{ needed: boolean }>("GET", "/api/setup").then((r) => r.needed),
-  setUp: (input: { setupCode: string; email: string; password: string; workspaceName: string }) =>
+  setUp: (input: SetupInput) =>
     call<{ user: User; workspace: Workspace }>("POST", "/api/setup", input),
-  signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password }),
+  signIn: (email: string, password: string) => call<{ user: User }>("POST", "/api/sign-in", { email, password } satisfies SignIn),
   signOut: () => call<void>("DELETE", "/api/sign-in"),
   me: () => call<{ user: User; workspaces: WorkspaceSummary[] }>("GET", "/api/me"),
-  changeDisplayName: (displayName: string | null) => call<{ user: User }>("PATCH", "/api/me", { displayName }),
+  changeDisplayName: (displayName: string | null) => call<{ user: User }>("PATCH", "/api/me", { displayName } satisfies MeEdit),
   changePassword: (currentPassword: string, newPassword: string) =>
-    call<void>("PUT", "/api/me/password", { currentPassword, newPassword }),
+    call<void>("PUT", "/api/me/password", { currentPassword, newPassword } satisfies PasswordChange),
   workspace: (id: string) => call<Workspace>("GET", ws(id)),
-  createWorkspace: (input: { name: string; slug?: string }) => call<WorkspaceSummary>("POST", "/api/workspaces", input),
-  renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name }),
+  createWorkspace: (input: WorkspaceCreate) => call<WorkspaceSummary>("POST", "/api/workspaces", input),
+  renameWorkspace: (id: string, name: string) => call<Workspace>("PATCH", ws(id), { name } satisfies WorkspaceRename),
   workspaceSettings: (id: string) => call<WorkspaceSettings>("GET", `${ws(id)}/settings`),
-  changeWorkspaceSettings: (id: string, change: Partial<WorkspaceSettings>) =>
+  changeWorkspaceSettings: (id: string, change: WorkspaceSettingsEdit) =>
     call<WorkspaceSettings>("PATCH", `${ws(id)}/settings`, change),
   members: (id: string) => call<Member[]>("GET", `${ws(id)}/members`),
   addMember: (id: string, email: string) =>
-    call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email }),
+    call<{ user: User; link: Link }>("POST", `${ws(id)}/members`, { email } satisfies MemberAdd),
   setAdmin: (id: string, userId: string, isAdmin: boolean) =>
-    call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin }),
+    call<Member>("PATCH", `${ws(id)}/members/${encodeURIComponent(userId)}`, { isAdmin } satisfies MemberEdit),
   removeMember: (id: string, userId: string) => call<void>("DELETE", `${ws(id)}/members/${encodeURIComponent(userId)}`),
   pendingAdds: (id: string) => call<PendingAdd[]>("GET", `${ws(id)}/pending-adds`),
   cancelPendingAdd: (id: string, userId: string) =>
     call<void>("DELETE", `${ws(id)}/pending-adds/${encodeURIComponent(userId)}`),
   resetLink: (id: string, userId: string) => call<Link>("POST", `${ws(id)}/members/${encodeURIComponent(userId)}/reset-link`),
   addMemberByGitHub: (id: string, login: string) =>
-    call<{ user: User }>("POST", `${ws(id)}/members/github`, { login }),
+    call<{ user: User }>("POST", `${ws(id)}/members/github`, { login } satisfies MemberAddByGitHub),
   githubApp: () => call<{ app: GitHubApp | null }>("GET", "/api/github/app").then((r) => r.app),
   githubChecklist: () => call<GitHubChecklist>("GET", "/api/github/app/checklist"),
   /** What Cronk keeps of the App's installations, or with `refresh` what GitHub says now. */
   githubInstallations: (refresh = false) =>
     call<GitHubInstallation[]>("GET", `/api/github/installations${refresh ? "?refresh=true" : ""}`),
   startGitHubApp: (githubOrganization?: string) =>
-    call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization }),
-  lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token }),
-  useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password }),
+    call<{ url: string; manifest: Record<string, unknown> }>("POST", "/api/github/app/manifest", { githubOrganization } satisfies ManifestRequest),
+  lookUpLink: (token: string) => call<LinkDetails>("POST", "/api/links/lookup", { token } satisfies LinkLookup),
+  useLink: (token: string, password: string) => call<{ user: User }>("POST", "/api/links/use", { token, password } satisfies LinkUse),
   projects: (workspaceId: string) =>
     call<ProjectSummary[]>("GET", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`),
-  createProject: (workspaceId: string, input: { name: string; key: string }) =>
+  createProject: (workspaceId: string, input: ProjectCreate) =>
     call<Project>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/projects`, input),
   project: (id: string) => call<Project>("GET", `/api/projects/${encodeURIComponent(id)}`),
   editProject: (id: string, edit: ProjectEdit) =>
@@ -893,12 +903,12 @@ export const api = {
     call<{ tickets: number }>("POST", `/api/projects/${encodeURIComponent(id)}/access/preview`, access),
   repositories: (projectId: string) => call<Repository[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/repositories`),
   addRepository: (projectId: string, id: number) =>
-    call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id }),
+    call<Repository>("POST", `/api/projects/${encodeURIComponent(projectId)}/repositories`, { id } satisfies RepositoryAdd),
   removeRepository: (projectId: string, id: number) =>
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/repositories/${id}`),
-  addStatus: (projectId: string, input: { name: string; kind: StatusKind; position?: number }) =>
+  addStatus: (projectId: string, input: StatusAdd) =>
     call<Project>("POST", `/api/projects/${encodeURIComponent(projectId)}/statuses`, input),
-  editStatus: (projectId: string, statusId: string, input: { name?: string; kind?: StatusKind; position?: number }) =>
+  editStatus: (projectId: string, statusId: string, input: StatusEdit) =>
     call<Project>(
       "PATCH",
       `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`,
@@ -906,7 +916,7 @@ export const api = {
     ),
   removeStatus: (projectId: string, statusId: string) =>
     call<Project>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`),
-  putStep: (projectId: string, statusId: string, step: Step) =>
+  putStep: (projectId: string, statusId: string, step: StepPut) =>
     call<Project>(
       "PUT",
       `/api/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}/step`,
@@ -939,27 +949,27 @@ export const api = {
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
-  createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name }),
-  renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name }),
-  setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId }),
+  createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name } satisfies AgentCreate),
+  renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name } satisfies AgentEdit),
+  setAgentRunner: (id: string, runnerId: string | null) => call<Agent>("PATCH", agent(id), { runnerId } satisfies AgentEdit),
   runners: () => call<Runner[]>("GET", "/api/runners"),
-  createRunner: (input: { name: string; kind: string; apiKey?: string }) => call<Runner>("POST", "/api/runners", input),
-  setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit }),
-  setBudgetPerRun: (id: string, budgetPerRun: Cost | null) => call<Runner>("PATCH", runner(id), { budgetPerRun }),
+  createRunner: (input: RunnerCreate) => call<Runner>("POST", "/api/runners", input),
+  setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit } satisfies RunnerEdit),
+  setBudgetPerRun: (id: string, budgetPerRun: Exclude<RunnerEdit["budgetPerRun"], undefined>) => call<Runner>("PATCH", runner(id), { budgetPerRun } satisfies RunnerEdit),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
-  saveWebhookSecret: (id: string, secret: string) => call<Runner>("PUT", `${runner(id)}/webhook-secret`, { secret }),
+  saveWebhookSecret: (id: string, secret: string) => call<Runner>("PUT", `${runner(id)}/webhook-secret`, { secret } satisfies WebhookSecret),
   forgetWebhookSecret: (id: string) => call<Runner>("DELETE", `${runner(id)}/webhook-secret`),
-  saveTrigger: (runnerId: string, input: { model: string; projectId: string | null; triggerId: string; token?: string }) =>
+  saveTrigger: (runnerId: string, input: TriggerSave) =>
     call<Runner>("POST", `${runner(runnerId)}/triggers`, input),
   pasteTriggerToken: (runnerId: string, triggerId: string, token: string) =>
-    call<Runner>("PUT", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}/token`, { token }),
-  startRunnerSetup: (runnerId: string, input: { projectId: string; agentId?: string }) =>
+    call<Runner>("PUT", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}/token`, { token } satisfies TriggerToken),
+  startRunnerSetup: (runnerId: string, input: SetupStart) =>
     call<StartedSetup>("POST", `${runner(runnerId)}/setups`, input),
   removeTrigger: (runnerId: string, triggerId: string) =>
     call<Runner>("DELETE", `${runner(runnerId)}/triggers/${encodeURIComponent(triggerId)}`),
   removeAgent: (id: string) => call<void>("DELETE", agent(id)),
   tokens: (agentId: string) => call<AgentToken[]>("GET", `${agent(agentId)}/tokens`),
-  issueToken: (agentId: string, input: { name: string; access: TokenAccess }) =>
+  issueToken: (agentId: string, input: TokenIssue) =>
     call<{ token: AgentToken; secret: string }>("POST", `${agent(agentId)}/tokens`, input),
   revokeToken: (agentId: string, tokenId: string) =>
     call<void>("DELETE", `${agent(agentId)}/tokens/${encodeURIComponent(tokenId)}`),
@@ -984,19 +994,19 @@ export const api = {
     ),
   deleteTranscript: (id: string) => call<void>("DELETE", `/api/transcripts/${encodeURIComponent(id)}`),
   redactTranscript: (id: string, text: string) =>
-    call<Transcript>("POST", `/api/transcripts/${encodeURIComponent(id)}/redactions`, { text }),
+    call<Transcript>("POST", `/api/transcripts/${encodeURIComponent(id)}/redactions`, { text } satisfies RedactionCreate),
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
   approveConnect: (requestId: string, agentId: string) =>
-    call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId }),
+    call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId } satisfies RequestApproval),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   completion: (ticketId: string) =>
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),
   pullRequests: (ticketId: string) =>
     call<PullRequest[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`),
   linkPullRequest: (ticketId: string, pullRequest: string) =>
-    call<PullRequest>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`, { pullRequest }),
+    call<PullRequest>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests`, { pullRequest } satisfies PullRequestLink),
   unlinkPullRequest: (ticketId: string, pullRequestId: number) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests/${pullRequestId}`),
   linkedDocuments: (ticketId: string) =>

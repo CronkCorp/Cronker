@@ -10,7 +10,7 @@ import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
 import { transcriptHook } from "../transcripts/hook.js";
-import { findRunner, noSuchProject, noSuchRunner, replaceProjectTriggers, type Trigger } from "./runners.js";
+import { findRunner, noSuchProject, noSuchRunner, replaceProjectTriggers, TriggerId, type Trigger } from "./runners.js";
 import { modelIdOf, settingsOf } from "../workspaces/workspaces.js";
 
 /**
@@ -94,11 +94,18 @@ const branchSlug = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "
  * per model label the Project's board uses, issues the Transcript hook token of the chosen Agent, and returns the
  * command to paste into Claude Code.
  */
+/** The start-a-Runner-setup route's body. */
+export const SetupStart = Type.Object({
+  projectId: Type.String({ format: "uuid" }),
+  agentId: Type.Optional(Type.String({ format: "uuid" })),
+});
+export type SetupStart = Static<typeof SetupStart>;
+
 export async function startSetup(
   context: Context,
   userId: string,
   runnerId: string,
-  input: { projectId: string; agentId?: string },
+  input: SetupStart,
 ): Promise<StartedSetup> {
   const { db, clock, config } = context;
   const runner = await findRunner(context, userId, runnerId);
@@ -430,10 +437,22 @@ ${severalRepositories ? `\nTell the User this too: ${severalRepositoriesWarning(
  * Runner, waiting for its token; the Project's earlier triggers on the Runner go, those for all Projects stay. Marks
  * the setup used, so its command and instructions stop working.
  */
+/** The report-a-setup's-routines route's body: the trigger id of the routine made for each model label. */
+export const SetupReport = Type.Object({
+  triggers: Type.Array(
+    Type.Object({
+      label: Type.String({ minLength: 1, maxLength: 50, pattern: "\\S", description: "The model label, as the plan names it." }),
+      triggerId: TriggerId,
+    }),
+    { maxItems: 50 },
+  ),
+});
+export type SetupReport = Static<typeof SetupReport>;
+
 export async function reportSetup(
   context: Context,
   setupToken: string,
-  input: { triggers: { label: string; triggerId: string }[] },
+  input: SetupReport,
 ): Promise<{ triggers: Trigger[] }> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {

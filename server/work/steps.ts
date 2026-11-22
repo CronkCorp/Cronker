@@ -39,6 +39,43 @@ export const StepKind = Type.Union([Type.Literal("ordinary"), Type.Literal("merg
 });
 export type StepKind = Static<typeof StepKind>;
 
+/** How many Outcomes a Step has. */
+export const outcomeCount = { minItems: 2, maxItems: 20 };
+
+/**
+ * The set-a-Step route's body: a Step as a User or Agent gives it, its kind, round limit and Label rule left out for
+ * their defaults.
+ */
+export const StepPut = Type.Object({
+  /** Ordinary unless given. */
+  kind: Type.Optional(StepKind),
+  brief: Type.String({ minLength: 1, maxLength: 50_000, pattern: "\\S", description: "Markdown." }),
+  model: Type.String({
+    minLength: 1,
+    maxLength: 50,
+    pattern: "^\\S+$",
+    description: "The label of the model the Step wants, such as `haiku`, `sonnet` or `opus`.",
+  }),
+  roundLimit: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      maximum: 100,
+      default: defaultRoundLimit,
+      description: "How many rounds an Outcome that counts as one may send the Ticket on before it goes to *needs you*.",
+    }),
+  ),
+  labelRule: Type.Optional(
+    Type.Union([LabelRule, Type.Null()], {
+      default: null,
+      description:
+        "Which Tickets the Step lets through; none by default, letting every Ticket through. A Ticket that doesn't pass " +
+        "gets no Run and moves on by the default Outcome.",
+    }),
+  ),
+  outcomes: Type.Array(Outcome, outcomeCount),
+});
+export type StepPut = Static<typeof StepPut>;
+
 /** The agent work a Status asks for: its kind, a Brief, the model it wants, a round limit, a Label rule and its Outcomes. */
 export const Step = Type.Object({
   kind: StepKind,

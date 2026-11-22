@@ -9,10 +9,9 @@ import { requireMember } from "../workspaces/members.js";
 import { defaultSteps } from "./default-steps.js";
 import { defaultRoundLimit, Step, stepsOf, writeStep } from "./steps.js";
 
-/** What a Status means, whatever its name. Every Project keeps at least one Status of each kind. */
-export const statusKinds = ["backlog", "active", "review", "done", "canceled"] as const;
-export type StatusKind = (typeof statusKinds)[number];
-export const StatusKind = Type.Union(statusKinds.map((kind) => Type.Literal(kind)));
+import { StatusKind, statusKinds } from "./status-kinds.js";
+
+export { StatusKind, statusKinds };
 
 export const Status = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -163,7 +162,7 @@ export async function findProject(
 export async function createProject(
   { db, clock, live }: Context,
   workspaceId: string,
-  input: { name: string; key: string },
+  input: ProjectCreate,
 ): Promise<Project> {
   const name = input.name.trim();
   const key = input.key.toUpperCase();
@@ -225,15 +224,44 @@ export async function createProject(
   });
 }
 
-/** The settings a User changes on a Project. */
-export interface ProjectEdit {
-  newTicketsDelegated?: boolean;
-  autonomousDelegationDefault?: boolean;
-  pullRequestAutomation?: boolean;
-  /** Only an Admin of the Project's Workspace may give this, whatever its value. */
-  agentsMayMerge?: boolean;
-  conciseReports?: boolean;
-}
+/** The create-a-Project route's body. */
+export const ProjectCreate = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 200, pattern: "\\S", description: "The Project's name." }),
+  key: Type.String({
+    pattern: "^[A-Za-z][A-Za-z0-9]{1,9}$",
+    description: "2 to 10 letters and digits, starting with a letter; kept in capitals.",
+  }),
+});
+export type ProjectCreate = Static<typeof ProjectCreate>;
+
+/** The settings a User changes on a Project: the edit route's body. */
+export const ProjectEdit = Type.Object({
+  newTicketsDelegated: Type.Optional(
+    Type.Boolean({ description: "Whether new Tickets start delegated to their creator's first Agent." }),
+  ),
+  autonomousDelegationDefault: Type.Optional(
+    Type.Boolean({
+      description:
+        "Whether a Ticket takes Autonomous Delegation when first delegated, unless a User set it on the Ticket already.",
+    }),
+  ),
+  pullRequestAutomation: Type.Optional(
+    Type.Boolean({
+      description: "Whether a merged Pull Request completes the Tickets it links in this Project; off, merges only update its state.",
+    }),
+  ),
+  agentsMayMerge: Type.Optional(
+    Type.Boolean({
+      description:
+        "Whether a Merge Step lets agents merge the Pull Requests of Tickets with Autonomous Delegation. Only an Admin " +
+        "may give it, whatever its value.",
+    }),
+  ),
+  conciseReports: Type.Optional(
+    Type.Boolean({ description: "Whether the Briefs of Runs in this Project ask them to keep their Reports concise." }),
+  ),
+});
+export type ProjectEdit = Static<typeof ProjectEdit>;
 
 /** Changes a Project's settings, as a User. */
 export async function editProject(
