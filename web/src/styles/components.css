@@ -1118,7 +1118,8 @@ textarea.markdown-source {
   opacity: 0.75;
 }
 
-/* Rich editor: the toolbar and mode switch over the text, which reads as a Document reads (15px at 1.65, 720px). */
+/* Rich editor: the toolbar and mode switch over the text, which reads as a Document reads (15px at 1.65). The text
+   fills the frame, so a line wraps at the frame's edge and never short of it (CRONK-60). */
 .rich-editor-frame {
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
@@ -1215,7 +1216,7 @@ textarea.markdown-source {
 }
 .rich-editor-text {
   position: relative;
-  max-width: 720px;
+  min-width: 0;
   min-height: 320px;
   padding: var(--space-4) var(--space-5);
   outline: none;
@@ -1223,6 +1224,7 @@ textarea.markdown-source {
   font-size: 15px;
   line-height: 1.65;
   word-wrap: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
   white-space: break-spaces;
   font-variant-ligatures: none;
