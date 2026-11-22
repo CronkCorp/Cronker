@@ -37,7 +37,7 @@ import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
 import { MentionedIn } from "./mentioned-in.js";
-import { priorityLabel, QueueChip } from "./projects.js";
+import { labelsOf, priorityLabel, QueueChip } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
@@ -319,7 +319,7 @@ export function TicketScreen({
           )}
         </div>
         <aside className="side side-fits-window" aria-label="Details" ref={fitWindow}>
-          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf(projectTickets, ticket)} onSave={save}>
+          <Fields ticket={ticket} project={project} members={members} agents={agents} user={user} labels={labelsOf([ticket, ...projectTickets])} onSave={save}>
             {ticket.verification && (
               <Verification
               ticket={ticket}
@@ -386,11 +386,6 @@ export function TicketScreen({
     </div>
   );
   return <ProjectAccessProvider access={project.access}>{page}</ProjectAccessProvider>;
-}
-
-/** Every Label used on the Project's Tickets, offered when picking Labels. */
-function labelsOf(tickets: TicketSummary[], ticket: Ticket): string[] {
-  return [...new Set([...ticket.labels, ...tickets.flatMap((t) => t.labels)])].sort((a, b) => a.localeCompare(b));
 }
 
 function TextFields({ ticket, onSave, onDone }: { ticket: Ticket; onSave: (edit: TicketEdit) => Promise<void>; onDone: () => void }) {
