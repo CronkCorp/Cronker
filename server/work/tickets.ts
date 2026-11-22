@@ -452,8 +452,10 @@ export async function createTicket(
     let discovery: { runId: string | null; sourceTicketId: string | null } | null = null;
     let parent: TicketRow | undefined;
     if (input.parentId !== undefined) {
-      // Held, for an Agent, so a User settling its waiting Discovered Ticket meanwhile settles the new Sub-Ticket too.
-      parent = await findTicketRow(tx, creator, input.parentId, { lock: creator.kind === "agent" });
+      // Held, so a User settling an Agent's waiting Discovered Ticket meanwhile settles the new Sub-Ticket too, and
+      // so the parent is taken before its Delegate below: the order removing an Agent takes them in, which would
+      // otherwise deadlock with it.
+      parent = await findTicketRow(tx, creator, input.parentId, { lock: true });
       if (!parent) throw unknownTicket();
       if (parent.projectId !== project.id) {
         throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
