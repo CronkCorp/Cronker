@@ -384,7 +384,7 @@ export function TicketScreen({
             )}
           </Fields>
           <RunCard ticket={ticket} runs={runs} agents={agents} step={status?.step ? { name: status.name, model: status.step.model } : null} onRetried={() => apply(api.retry(ticket.id))} />
-          <PullRequestRows pullRequests={pullRequests} />
+          <PullRequestRows pullRequests={pullRequests} linking={canWrite ? { ticketId: ticket.id, onChanged: loadPullRequests } : undefined} />
           <Relations
             ticket={ticket}
             relations={relations}

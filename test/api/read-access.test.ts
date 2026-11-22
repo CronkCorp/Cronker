@@ -163,6 +163,9 @@ function writes(setting: Setting): [string, string, unknown?][] {
     ["DELETE", `/api/tickets/${ticket.id}/artifacts/${artifact.id}`],
     // Attachments
     ["DELETE", `/api/attachments/${attachment.id}`],
+    // Pull Requests linked by hand
+    ["POST", `/api/tickets/${ticket.id}/pull-requests`, { pullRequest: "cronkcorp/cronker#1" }],
+    ["DELETE", `/api/tickets/${ticket.id}/pull-requests/1`],
     // Repositories
     ["POST", `/api/projects/${project.id}/repositories`, { id: 1 }],
     ["DELETE", `/api/projects/${project.id}/repositories/1`],

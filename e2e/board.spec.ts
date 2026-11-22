@@ -206,3 +206,63 @@ test("a card picked up by its title or key drags without selecting text, while a
   await card("Triage").locator(".card-title").click();
   await expect(page.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
 });
+
+test("a card drags from anywhere on it: its link's own box, its Labels, its avatars and the empty space beside its Blocked chip", { tag: "@every-browser" }, async ({
+  page,
+  cronk,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+  const blocker = await call("POST", `/api/projects/${project.id}/tickets`, { title: "First" });
+  await call("PATCH", `/api/tickets/${blocker.id}`, { statusId: status("Ready") });
+  const shipIt = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
+  await call("PATCH", `/api/tickets/${shipIt.id}`, { labels: ["bug", "web"], assigneeId: (await call("GET", "/api/me")).user.id });
+  await call("POST", `/api/tickets/${shipIt.id}/relations`, { kind: "blockedBy", ticketId: blocker.id });
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  const lane = (name: string) => board.getByRole("region", { name, exact: true });
+  const link = (name: string) => lane(name).getByRole("link", { name: /CRONK-2 Ship it/ });
+  const card = (name: string) => lane(name).locator(".card").filter({ hasText: "Ship it" });
+  await expect(link("Backlog")).toBeVisible();
+  const selected = () => page.evaluate(() => window.getSelection()?.toString() ?? "");
+
+  /** Presses at a point of the card, moves to the middle of a column and lets go there. */
+  const dragFrom = async (x: number, y: number, column: string) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    const to = (await lane(column).boundingBox())!;
+    await page.mouse.move(to.x + to.width / 2, to.y + 200, { steps: 8 });
+    await page.mouse.up();
+    await expect(link(column), `the card dropped on ${column} is there`).toBeVisible();
+    await expect.poll(async () => (await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status(column));
+    expect(await selected(), "no text is selected by the drag").toBe("");
+  };
+
+  // The link's own box, at its top right, where there is no text: its padding, beside the key.
+  const ownBox = (await link("Backlog").boundingBox())!;
+  await dragFrom(ownBox.x + ownBox.width - 6, ownBox.y + 4, "Triage");
+
+  // A Label in the card's meta row.
+  const label = (await card("Triage").locator(".card-meta .chip").first().boundingBox())!;
+  await dragFrom(label.x + label.width / 2, label.y + label.height / 2, "Ready");
+
+  // The Assignee's avatar at the meta row's right end.
+  const avatar = (await card("Ready").locator(".card-meta .people").boundingBox())!;
+  await dragFrom(avatar.x + avatar.width / 2, avatar.y + avatar.height / 2, "Investigate");
+
+  // The card's own empty space, right of its Blocked chip and outside its link.
+  const box = (await card("Investigate").boundingBox())!;
+  const chip = (await card("Investigate").locator(".chip-blocked").boundingBox())!;
+  await dragFrom(box.x + box.width - 10, chip.y + chip.height / 2, "Backlog");
+
+  // A plain click on the link, away from its text, still opens the Ticket.
+  const again = (await link("Backlog").boundingBox())!;
+  await page.mouse.click(again.x + again.width - 6, again.y + 4);
+  await expect(page.getByRole("heading", { name: "CRONK-2 Ship it" })).toBeVisible();
+});
