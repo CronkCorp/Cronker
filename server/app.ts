@@ -33,6 +33,7 @@ import { transcriptRoutes } from "./transcripts/routes.js";
 import { ticketRoutes } from "./work/ticket-routes.js";
 import { accessRoutes } from "./work/access.js";
 import { workRoutes } from "./work/routes.js";
+import { webhookRoutes } from "./webhooks/routes.js";
 import { workspaceRoutes } from "./workspaces/routes.js";
 
 export interface AppOptions {
@@ -138,6 +139,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(searchRoutes(context));
   await app.register(runRoutes(context));
   await app.register(inboxRoutes(context));
+  await app.register(webhookRoutes(context));
   await app.register(agentRoutes(context));
   await app.register(mcpRoutes(context, app));
   await app.register(oauthRoutes(context));

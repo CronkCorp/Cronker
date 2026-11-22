@@ -1774,6 +1774,44 @@
   flex-wrap: wrap;
 }
 
+/* Webhooks (Account settings): each webhook a bordered block with its last deliveries under it. */
+.webhook {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+  background: var(--surface);
+}
+
+.webhook-head {
+  margin-bottom: var(--space-2);
+}
+
+.webhook-url {
+  overflow-wrap: anywhere;
+}
+
+.webhook .actions .check {
+  margin: 0;
+}
+
+.webhook-deliveries {
+  margin-top: var(--space-2);
+  width: 100%;
+}
+
+.delivery-delivered {
+  color: var(--ok);
+}
+
+.delivery-failed {
+  color: var(--danger);
+}
+
+.delivery-pending {
+  color: var(--muted);
+}
+
 /* An Artifact's Comments, under the Artifact, as Comments show on a Ticket's timeline. */
 .artifact-comments {
   display: grid;
