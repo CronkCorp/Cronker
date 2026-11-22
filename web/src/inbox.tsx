@@ -18,7 +18,8 @@ import {
 import { field, useSubmit } from "./forms.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 import type { RichEditorHandle } from "./ui/rich-editor.js";
-import { usePlace } from "./frame.js";
+import { usePlace, useProjects } from "./frame.js";
+import { ProjectAccessProvider, ReadOnlyNote, useCanWrite } from "./write-access.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { PullRequestRows } from "./pull-requests.js";
@@ -187,6 +188,10 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
       })()
     : live;
   const current = selectedLive ?? resolved ?? null;
+  // With Read in the item's Project, the User changes nothing there: its answer box and actions are left out.
+  const projects = useProjects(workspace.id);
+  const access = current && projects ? (projects.find((p) => p.id === current.ticket.projectId)?.access ?? "read") : null;
+  const canWrite = access === "write";
   const arrived = useArrivals(liveKeys, inbox !== null);
 
   const select = useCallback((key: string | null, open = false) => {
@@ -223,9 +228,9 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
     const key = event.key.toLowerCase();
     if (key === "j") move(1);
     else if (key === "k") move(-1);
-    else if (key === "a" && current?.kind === "question" && !resolved) answerBox.current?.textbox()?.focus();
-    else if (key === "c" && current?.kind === "unverified" && !resolved) acceptRef.current?.();
-    else if (key === "r" && current?.kind === "unverified" && !resolved) setReopening(true);
+    else if (key === "a" && canWrite && current?.kind === "question" && !resolved) answerBox.current?.textbox()?.focus();
+    else if (key === "c" && canWrite && current?.kind === "unverified" && !resolved) acceptRef.current?.();
+    else if (key === "r" && canWrite && current?.kind === "unverified" && !resolved) setReopening(true);
     else return;
     event.preventDefault();
   };
@@ -284,19 +289,21 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
                 <Button variant="ghost" className="inbox-back" onClick={() => setDetailOpen(false)}>
                   ← Inbox
                 </Button>
-                {current && (
-                  <Detail
-                    key={keyOf(current)}
-                    item={current}
-                    workspace={workspace}
-                    user={user}
-                    resolved={resolved !== null}
-                    answerBox={answerBox}
-                    acceptRef={acceptRef}
-                    reopening={reopening}
-                    onReopening={setReopening}
-                    onActed={() => actedOn(keyOf(current))}
-                  />
+                {current && access && (
+                  <ProjectAccessProvider access={access}>
+                    <Detail
+                      key={keyOf(current)}
+                      item={current}
+                      workspace={workspace}
+                      user={user}
+                      resolved={resolved !== null}
+                      answerBox={answerBox}
+                      acceptRef={acceptRef}
+                      reopening={reopening}
+                      onReopening={setReopening}
+                      onActed={() => actedOn(keyOf(current))}
+                    />
+                  </ProjectAccessProvider>
                 )}
               </section>
             </div>
@@ -357,7 +364,8 @@ function Detail({
   const { busy, error, run } = useAction(onActed);
   const ticket = item.ticket;
   const disabled = busy || resolved;
-  acceptRef.current = item.kind === "unverified" ? () => run(() => api.acceptTicket(ticket.id)) : null;
+  const canWrite = useCanWrite();
+  acceptRef.current = canWrite && item.kind === "unverified" ? () => run(() => api.acceptTicket(ticket.id)) : null;
   return (
     <div className="detail">
       <p className="detail-head">
@@ -372,7 +380,8 @@ function Detail({
         </Banner>
       )}
       <ItemBody item={item} workspace={workspace} user={user} disabled={disabled} run={run} answerBox={answerBox} />
-      {item.kind === "unverified" && (
+      <ReadOnlyNote access={canWrite ? "write" : "read"} />
+      {item.kind === "unverified" && canWrite && (
         <>
           <Actions>
             <Button variant="primary" disabled={disabled} onClick={() => acceptRef.current?.()}>
@@ -471,6 +480,7 @@ function Answer({
   answerBox: RefObject<RichEditorHandle | null>;
 }) {
   const [body, setBody] = useState("");
+  if (!useCanWrite()) return null;
   return (
     <form
       className="comment-form"
@@ -609,6 +619,7 @@ function RunGoneWrong({
   run: (action: () => Promise<unknown>) => void;
 }) {
   const [found, setFound] = useState<Run | null>(null);
+  const canWrite = useCanWrite();
   useEffect(() => {
     api.runs(item.ticket.id).then((runs) => setFound(runs.find((r) => r.id === item.run.id) ?? null), () => {});
   }, [item.ticket.id, item.run.id]);
@@ -631,11 +642,13 @@ function RunGoneWrong({
           )}
         </p>
       )}
-      <Actions>
-        <Button variant="primary" disabled={disabled} onClick={() => run(() => api.retry(item.ticket.id))} aria-label={`Retry ${item.ticket.key}`}>
-          Retry
-        </Button>
-      </Actions>
+      {canWrite && (
+        <Actions>
+          <Button variant="primary" disabled={disabled} onClick={() => run(() => api.retry(item.ticket.id))} aria-label={`Retry ${item.ticket.key}`}>
+            Retry
+          </Button>
+        </Actions>
+      )}
     </>
   );
 }
@@ -659,6 +672,7 @@ function Discovered({
   const [agents, setAgents] = useState<Agent[]>([]);
   const [moving, setMoving] = useState(false);
   const project = useProject(item.ticket.projectId);
+  const canWrite = useCanWrite();
   useEffect(() => {
     api.agents(workspace.id).then(setAgents, () => setAgents([]));
   }, [workspace.id]);
@@ -682,31 +696,33 @@ function Discovered({
           <Markdown text={item.ticket.description} mentions={[]} />
         </div>
       )}
-      <Actions>
-        {own.length > 1 && (
-          <select aria-label="Agent to delegate to" value={delegate?.id} onChange={(e) => setChosen(e.target.value)} className="inline-select">
-            {own.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <Button
-          variant="primary"
-          disabled={disabled || !delegate}
-          title={delegate ? undefined : "You have no Agent in this Workspace to delegate to"}
-          onClick={() => delegate && run(() => api.editTicket(item.ticket.id, { delegateId: delegate.id }))}
-        >
-          Delegate{delegate && own.length === 1 ? ` to ${delegate.name}` : ""}
-        </Button>
-        <Button variant="ghost" disabled={disabled} onClick={() => setMoving(true)}>
-          Move…
-        </Button>
-        <Button variant="ghost" disabled={disabled} onClick={() => run(() => api.dismiss(item.ticket.id))} aria-label={`Dismiss ${item.ticket.key}`}>
-          Dismiss
-        </Button>
-      </Actions>
+      {canWrite && (
+        <Actions>
+          {own.length > 1 && (
+            <select aria-label="Agent to delegate to" value={delegate?.id} onChange={(e) => setChosen(e.target.value)} className="inline-select">
+              {own.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <Button
+            variant="primary"
+            disabled={disabled || !delegate}
+            title={delegate ? undefined : "You have no Agent in this Workspace to delegate to"}
+            onClick={() => delegate && run(() => api.editTicket(item.ticket.id, { delegateId: delegate.id }))}
+          >
+            Delegate{delegate && own.length === 1 ? ` to ${delegate.name}` : ""}
+          </Button>
+          <Button variant="ghost" disabled={disabled} onClick={() => setMoving(true)}>
+            Move…
+          </Button>
+          <Button variant="ghost" disabled={disabled} onClick={() => run(() => api.dismiss(item.ticket.id))} aria-label={`Dismiss ${item.ticket.key}`}>
+            Dismiss
+          </Button>
+        </Actions>
+      )}
       <Dialog open={moving} onOpenChange={setMoving} title={`Move ${item.ticket.key}`} description="To another Status of its Project.">
         <form
           onSubmit={(event) => {
