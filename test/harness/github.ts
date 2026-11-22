@@ -88,6 +88,21 @@ export interface StandInIssue {
   createdAt: Date;
   /** Whether it is a Pull Request, which GitHub's issues list includes. */
   pullRequest: boolean;
+  /** Who opened it; null for an account GitHub has since deleted. `octocat` by default. */
+  author: GitHubAccount | null;
+  assignees: GitHubAccount[];
+  /** Its Comments, in the order they were written. */
+  comments: StandInIssueComment[];
+  /** Whether GitHub answers 404 for its Comments, as for an issue it no longer shows the App. */
+  commentsRefused: boolean;
+}
+
+/** A Comment on an issue. */
+export interface StandInIssueComment {
+  /** Who wrote it; null for an account GitHub has since deleted. */
+  author: GitHubAccount | null;
+  body: string;
+  createdAt: Date;
 }
 
 /** A merge GitHub made at the App's request. */
@@ -245,6 +260,9 @@ function page<T>(url: URL, items: T[]): { items: T[]; link?: string } {
   return { items: slice, link: `<${next}>; rel="next"` };
 }
 
+/** An account as GitHub names it in an issue or a Comment; `null` for one it has since deleted. */
+const accountJson = (account: GitHubAccount | null) => (account ? { id: account.id, login: account.login, type: "User" } : null);
+
 const allows = (repository: StandInRepository, method: MergeMethod) => repository.mergeMethods?.[method] ?? true;
 
 async function readBody(request: IncomingMessage): Promise<string> {
@@ -266,6 +284,8 @@ function redirect(response: ServerResponse, location: string) {
 export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   const keys = await appKeys();
   let nextId = 1000;
+  /** Who opens an issue when a test names nobody: an account no User links. */
+  const octocat: GitHubAccount = { id: 1, login: "octocat", emails: [] };
   const manifestCodes = new Map<string, StandInApp>();
   const oauthCodes = new Map<string, { app: StandInApp; account: GitHubAccount; redirectUri: string }>();
   const accessTokens = new Map<string, GitHubAccount>();
@@ -337,6 +357,10 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         labels: [],
         createdAt: clock.now(),
         pullRequest: false,
+        author: octocat,
+        assignees: [],
+        comments: [],
+        commentsRefused: false,
         ...fields,
       };
       github.issues.push(issue);
@@ -634,6 +658,32 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       });
     }
 
+    // API: an issue's Comments, oldest first, with a token of an installation that covers its repository and may read issues.
+    const issueComments = /^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/.exec(path);
+    if (request.method === "GET" && issueComments) {
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find(
+        (r) => r.fullName.toLowerCase() === decodeURIComponent(issueComments[1]!).toLowerCase(),
+      );
+      const issue = repository && github.issues.find((i) => i.repository === repository && i.number === Number(issueComments[2]));
+      if (!repository || !issue || issue.commentsRefused) return json(response, 404, { message: "Not Found" });
+      const access = installation.permissions.issues;
+      if (access !== "read" && access !== "write") return json(response, 403, { message: "Resource not accessible by integration" });
+      const { items, link } = page(url, issue.comments);
+      return json(
+        response,
+        200,
+        items.map((c) => ({
+          body: c.body,
+          created_at: c.createdAt.toISOString().replace(/\.\d{3}Z$/, "Z"),
+          user: accountJson(c.author),
+        })),
+        link ? { link } : {},
+      );
+    }
+
     // API: a repository's issues, Pull Requests among them, with a token of an installation that covers it and may read issues.
     const issues = /^\/repos\/([^/]+\/[^/]+)\/issues$/.exec(path);
     if (request.method === "GET" && issues) {
@@ -663,6 +713,8 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
           labels: i.labels.map((name) => ({ name, color: "ededed" })),
           html_url: `${github.url}/${repository.fullName}/${i.pullRequest ? "pull" : "issues"}/${i.number}`,
           created_at: i.createdAt.toISOString().replace(/\.\d{3}Z$/, "Z"),
+          user: accountJson(i.author),
+          assignees: i.assignees.map(accountJson),
           ...(i.pullRequest ? { pull_request: { url: `${github.apiUrl}/repos/${repository.fullName}/pulls/${i.number}` } } : {}),
         })),
         link ? { link } : {},

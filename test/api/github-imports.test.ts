@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { addMember, createGitHubApp, linkGitHub, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -59,6 +59,20 @@ async function ticketsOf(cookie: string, projectId: string) {
   return response.json();
 }
 
+async function commentsOf(cookie: string, ticketId: string) {
+  const response = await cronk.request("GET", `/api/tickets/${ticketId}/comments`, { cookie });
+  expect(response.status).toBe(200);
+  return response.json();
+}
+
+/** A member of the Workspace who has linked a GitHub account, and the account. */
+async function memberWithGitHub(cookie: string, workspaceId: string, email: string, login: string) {
+  const member = await addMember(cronk, cookie, workspaceId, email);
+  const account = cronk.github.account(login);
+  await linkGitHub(cronk, member.cookie, account);
+  return { ...member, account };
+}
+
 async function timelineOf(cookie: string, ticketId: string) {
   const response = await cronk.request("GET", `/api/tickets/${ticketId}/timeline`, { cookie });
   expect(response.status).toBe(200);
@@ -106,7 +120,7 @@ describe("importing a Repository's GitHub issues", () => {
         actor: expect.objectContaining({ kind: "user", id: user.id }),
         at: created.toISOString(),
         from: null,
-        to: { source: "github", url: `${cronk.github.url}/cronkcorp/cronker/issues/1` },
+        to: { source: "github", url: `${cronk.github.url}/cronkcorp/cronker/issues/1`, author: { login: "octocat" } },
       }),
     ]);
   });
@@ -247,5 +261,177 @@ describe("importing a Repository's GitHub issues", () => {
     cronk.github.unavailable = false;
 
     expect(await runImportsToEnd(cookie, project.id, repository.id)).toMatchObject({ state: "done", imported: 1 });
+  });
+});
+
+describe("importing an issue's Comments and people", () => {
+  test("each Comment comes in as a Comment, in order, at GitHub's time", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const stranger = cronk.github.account("stranger");
+    const times = [new Date("2024-03-02T09:00:00Z"), new Date("2024-03-02T10:00:00Z"), new Date("2024-03-03T08:30:00Z")];
+    cronk.github.issue(repository, {
+      title: "Open bug",
+      createdAt: new Date("2024-03-01T10:00:00Z"),
+      comments: times.map((createdAt, n) => ({ author: stranger, body: `Comment ${n + 1}`, createdAt })),
+    });
+    cronk.github.issue(repository, { title: "Quiet", createdAt: new Date("2024-03-04T10:00:00Z") });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byTitle = Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+    const comments = await commentsOf(cookie, byTitle["Open bug"].id);
+    expect(comments.map((c: { body: string; createdAt: string }) => [c.body, c.createdAt])).toEqual(
+      times.map((at, n) => [`Comment ${n + 1}`, at.toISOString()]),
+    );
+    expect(comments.every((c: { sentBack: boolean; replyToId: string | null }) => !c.sentBack && c.replyToId === null)).toBe(true);
+    expect(await commentsOf(cookie, byTitle["Quiet"].id)).toEqual([]);
+  });
+
+  test("an issue with more Comments than one page brings them all", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, {
+      comments: Array.from({ length: 130 }, (_, n) => ({ author: null, body: `Comment ${n + 1}`, createdAt: new Date(Date.UTC(2024, 0, 1, 0, n)) })),
+    });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const [ticket] = await ticketsOf(cookie, project.id);
+    const comments = await commentsOf(cookie, ticket.id);
+    expect(comments).toHaveLength(130);
+    expect([comments[0].body, comments[129].body]).toEqual(["Comment 1", "Comment 130"]);
+  });
+
+  test("authors are matched to Users by linked GitHub account; others show as their login on GitHub", async () => {
+    const { workspace, cookie, user, repository, project } = await projectListingRepository();
+    const grace = await memberWithGitHub(cookie, workspace.id, "grace@example.com", "grace");
+    const stranger = cronk.github.account("stranger");
+    const at = new Date("2024-03-02T09:00:00Z");
+    cronk.github.issue(repository, {
+      title: "By Grace",
+      author: grace.account,
+      comments: [
+        { author: stranger, body: "Me too", createdAt: at },
+        { author: grace.account, body: "Thanks", createdAt: new Date("2024-03-02T10:00:00Z") },
+        { author: null, body: "Gone", createdAt: new Date("2024-03-02T11:00:00Z") },
+      ],
+    });
+    cronk.github.issue(repository, { title: "By a stranger", author: stranger });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byTitle = Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+    expect(byTitle["By Grace"].createdBy).toBe(grace.user.id);
+    expect(byTitle["By a stranger"].createdBy).toBe(user.id);
+
+    const [graces] = await timelineOf(cookie, byTitle["By Grace"].id);
+    expect(graces).toMatchObject({ actor: { kind: "user", id: user.id }, to: { author: { id: grace.user.id, name: "grace@example.com" } } });
+    const [strangers] = await timelineOf(cookie, byTitle["By a stranger"].id);
+    expect(strangers).toMatchObject({ actor: { kind: "user", id: user.id }, to: { author: { login: "stranger" } } });
+
+    const comments = await commentsOf(cookie, byTitle["By Grace"].id);
+    expect(comments.map((c: { actor: unknown }) => c.actor)).toEqual([
+      { kind: "github", login: "stranger", name: "@stranger on GitHub" },
+      expect.objectContaining({ kind: "user", id: grace.user.id }),
+      { kind: "github", login: "ghost", name: "@ghost on GitHub" },
+    ]);
+  });
+
+  test("a GitHub account whose User isn't a member of the Workspace counts as having no User", async () => {
+    const { workspace, cookie, user, repository, project } = await projectListingRepository();
+    const bea = await memberWithGitHub(cookie, workspace.id, "bea@example.com", "bea");
+    const removed = await cronk.request("DELETE", `/api/workspaces/${workspace.id}/members/${bea.user.id}`, { cookie });
+    expect(removed.status, await removed.clone().text()).toBeLessThan(300);
+    cronk.github.issue(repository, {
+      author: bea.account,
+      assignees: [bea.account],
+      comments: [{ author: bea.account, body: "Hi", createdAt: new Date("2024-03-02T09:00:00Z") }],
+    });
+
+    await startImport(cookie, project.id, repository.id);
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    const [ticket] = await ticketsOf(cookie, project.id);
+    expect(ticket).toMatchObject({ createdBy: user.id, assigneeId: null });
+    const [comment] = await commentsOf(cookie, ticket.id);
+    expect(comment.actor).toEqual({ kind: "github", login: "bea", name: "@bea on GitHub" });
+    expect(ended.unmatchedAuthors).toEqual(["bea"]);
+  });
+
+  test("the first assignee with a User becomes the Assignee; assignees with none are dropped and no User is created", async () => {
+    const { workspace, cookie, user, repository, project } = await projectListingRepository();
+    const grace = await memberWithGitHub(cookie, workspace.id, "grace@example.com", "grace");
+    const hal = await memberWithGitHub(cookie, workspace.id, "hal@example.com", "hal");
+    const stranger = cronk.github.account("stranger");
+    const membersBefore = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    cronk.github.issue(repository, { title: "Shared", assignees: [stranger, grace.account, hal.account] });
+    cronk.github.issue(repository, { title: "Stranger's", assignees: [stranger] });
+
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    const tickets = await ticketsOf(cookie, project.id);
+    const byTitle = Object.fromEntries(tickets.map((t: { title: string }) => [t.title, t]));
+    expect(byTitle["Shared"]).toMatchObject({ assigneeId: grace.user.id, delegateId: null });
+    expect(byTitle["Stranger's"]).toMatchObject({ assigneeId: null });
+    const timeline = await timelineOf(cookie, byTitle["Shared"].id);
+    expect(timeline.map((c: { field: string }) => c.field)).toEqual(["created", "assignee"]);
+    expect(timeline[1]).toMatchObject({ actor: { kind: "user", id: user.id }, from: null, to: { id: grace.user.id } });
+    const membersAfter = await (await cronk.request("GET", `/api/workspaces/${workspace.id}/members`, { cookie })).json();
+    expect(membersAfter).toEqual(membersBefore);
+  });
+
+  test("the summary lists the authors with no User, once each, alphabetical, across pages and runs", async () => {
+    const { workspace, cookie, repository, project } = await projectListingRepository();
+    const grace = await memberWithGitHub(cookie, workspace.id, "grace@example.com", "grace");
+    const zed = cronk.github.account("zed");
+    const amy = cronk.github.account("amy");
+    const assigned = cronk.github.account("assigned");
+    for (let n = 1; n <= 101; n++) {
+      cronk.github.issue(repository, {
+        author: n === 101 ? amy : grace.account,
+        assignees: [assigned],
+        createdAt: new Date(Date.UTC(2024, 0, 1, 0, n)),
+        comments: n === 1 ? [{ author: zed, body: "First", createdAt: new Date(Date.UTC(2024, 0, 2)) }] : [],
+      });
+    }
+
+    await startImport(cookie, project.id, repository.id);
+    await cronk.runImports();
+    expect(await latestImport(cookie, project.id, repository.id)).toMatchObject({ state: "running", unmatchedAuthors: ["zed"] });
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "done", imported: 101, unmatchedAuthors: ["amy", "zed"] });
+  });
+
+  test("importing again adds no Comments to Tickets imported before", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    const issue = cronk.github.issue(repository, { comments: [{ author: null, body: "First", createdAt: new Date("2024-03-02T09:00:00Z") }] });
+    await startImport(cookie, project.id, repository.id);
+    await runImportsToEnd(cookie, project.id, repository.id);
+
+    issue.comments.push({ author: null, body: "Second", createdAt: new Date("2024-03-03T09:00:00Z") });
+    await startImport(cookie, project.id, repository.id);
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ imported: 0, skipped: 1 });
+    const [ticket] = await ticketsOf(cookie, project.id);
+    expect((await commentsOf(cookie, ticket.id)).map((c: { body: string }) => c.body)).toEqual(["First"]);
+  });
+
+  test("an import GitHub stops letting read an issue's Comments fails, keeping nothing of that page", async () => {
+    const { cookie, repository, project } = await projectListingRepository();
+    cronk.github.issue(repository, { title: "Readable" });
+    cronk.github.issue(repository, { title: "Hidden", commentsRefused: true });
+    await startImport(cookie, project.id, repository.id);
+
+    const ended = await runImportsToEnd(cookie, project.id, repository.id);
+
+    expect(ended).toMatchObject({ state: "failed", imported: 0, error: expect.stringMatching(/Comments of cronkcorp\/cronker#2/) });
+    expect(await ticketsOf(cookie, project.id)).toEqual([]);
   });
 });

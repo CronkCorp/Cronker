@@ -80,6 +80,8 @@ export interface GitHubImport {
   imported: number;
   skipped: number;
   error: string | null;
+  /** The GitHub logins of the issue and Comment authors no User of the Workspace has linked, alphabetical. */
+  unmatchedAuthors: string[];
   startedBy: string;
   startedAt: string;
   finishedAt: string | null;

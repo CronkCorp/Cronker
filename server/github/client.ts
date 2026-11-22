@@ -298,6 +298,23 @@ export interface IssueOnGitHub {
   labels: (string | { name?: string | null })[];
   created_at: string;
   pull_request?: unknown;
+  /** Who opened it; null for an account GitHub has since deleted. */
+  user?: AccountOnGitHub | null;
+  assignees?: AccountOnGitHub[] | null;
+}
+
+/** A GitHub account as an issue or a Comment names it. */
+export interface AccountOnGitHub {
+  id: number;
+  login: string;
+}
+
+/** A Comment on an issue, as GitHub lists it. */
+export interface IssueCommentOnGitHub {
+  body: string | null;
+  created_at: string;
+  /** Who wrote it; null for an account GitHub has since deleted. */
+  user?: AccountOnGitHub | null;
 }
 
 /**
@@ -322,4 +339,24 @@ export async function issuesPage(
   const issues = await jsonOf<IssueOnGitHub[]>(response, "The issues list");
   if (!Array.isArray(issues)) throw unavailable("The issues list answered something other than a list");
   return { kind: "page", issues, more: /rel="next"/.test(response.headers.get("link") ?? "") };
+}
+
+/**
+ * A page of an issue's Comments, oldest first, 100 at a time. A refusal answers as `issuesPage`'s does.
+ */
+export async function issueCommentsPage(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  number: number,
+  page: number,
+): Promise<{ kind: "page"; comments: IssueCommentOnGitHub[]; more: boolean } | { kind: "refused"; status: number }> {
+  const url = under(github.apiUrl, `/repos/${fullName.split("/").map(encodeURIComponent).join("/")}/issues/${number}/comments`);
+  url.searchParams.set("per_page", "100");
+  url.searchParams.set("page", String(page));
+  const response = await call(url, { headers: { authorization: `Bearer ${token}` } });
+  if (response.status === 403 || response.status === 404 || response.status === 410) return { kind: "refused", status: response.status };
+  const comments = await jsonOf<IssueCommentOnGitHub[]>(response, "An issue's Comments");
+  if (!Array.isArray(comments)) throw unavailable("An issue's Comments answered something other than a list");
+  return { kind: "page", comments, more: /rel="next"/.test(response.headers.get("link") ?? "") };
 }
