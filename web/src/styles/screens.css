@@ -365,6 +365,21 @@
   color: var(--muted);
   cursor: pointer;
 }
+/* A copy of a parent's card in another column, holding its Sub-Tickets there: dashed and muted, since the parent
+   isn't in this column; it doesn't drag, so it points rather than grabs. */
+.card-copy {
+  border-style: dashed;
+  background: transparent;
+  cursor: pointer;
+}
+.card-copy .card-title {
+  color: var(--muted);
+}
+.card-copy-status {
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 12px;
+}
 .sub-ticket-list {
   display: grid;
   gap: var(--space-1);

@@ -270,7 +270,7 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   await expect(page.getByRole("heading", { name: "CRONK-2 Ship it" })).toBeVisible();
 });
 
-test("Group Sub-Tickets folds them into their parent's card with a count, unfolds them there, and is remembered", async ({
+test("Group Sub-Tickets folds them under their parent in their own column with a count, unfolds them there, and is remembered", async ({
   page,
   cronk,
 }) => {
@@ -302,30 +302,53 @@ test("Group Sub-Tickets folds them into their parent's card with a count, unfold
 
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
-  // Folded, whatever their Status: only the parent keeps a card, counting its direct Sub-Tickets and the finished ones.
+  // Folded in their own column: the parent's card counts its direct Sub-Tickets there and the finished ones.
   await expect(backlog.getByRole("link")).toHaveCount(1);
   await expect(backlog.locator(".column-count")).toHaveText("1");
-  await expect(lane("Done").getByRole("button", { name: "Done, 0 Tickets" })).toBeVisible();
-  const count = backlog.getByRole("button", { name: "1 / 3 Sub-Tickets" });
+  const count = backlog.getByRole("button", { name: "0 / 2 Sub-Tickets" });
   await expect(count).toHaveAttribute("aria-expanded", "false");
 
   await count.click();
   await expect(count).toHaveAttribute("aria-expanded", "true");
   const list = backlog.getByRole("list", { name: "Sub-Tickets" }).first();
-  for (const name of ["CRONK-2 Columns", "CRONK-3 Cards", "CRONK-4 Drag and drop", "CRONK-5 Card heights"]) {
+  for (const name of ["CRONK-3 Cards", "CRONK-4 Drag and drop", "CRONK-5 Card heights"]) {
     await expect(list.getByRole("link", { name })).toBeVisible();
   }
+  await expect(list.getByRole("link", { name: "CRONK-2 Columns" })).toHaveCount(0);
+
+  // A Sub-Ticket in another column than its parent stays in its own, folded into a copy of the parent's card there.
+  const done = lane("Done");
+  await done.getByRole("button", { name: "Done, 1 Ticket" }).click();
+  await expect(done.getByRole("link")).toHaveCount(1);
+  const copy = done.getByRole("link", { name: /^CRONK-1 Board view.*In Backlog/ });
+  await expect(copy).toBeVisible();
+  await expect(copy.locator("xpath=..")).not.toHaveAttribute("draggable", "true");
+  await done.getByRole("button", { name: "1 / 1 Sub-Ticket" }).click();
+  await expect(done.getByRole("list", { name: "Sub-Tickets" }).getByRole("link", { name: "CRONK-2 Columns" })).toBeVisible();
+
   await list.getByRole("link", { name: "CRONK-3 Cards" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Cards");
 
-  // Remembered on this browser, and the count follows live updates.
+  // Remembered on this browser, and the folding follows live updates: Cards moves to Done, under the copy there,
+  // and its own Sub-Ticket, left in Backlog, folds into a copy of Cards' card in Backlog.
   await page.goBack();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await call("PATCH", `/api/tickets/${cards.id}`, { statusId: status("Done") });
-  await expect(backlog.getByRole("button", { name: "2 / 3 Sub-Tickets" })).toBeVisible();
+  await expect(lane("Done").getByRole("button", { name: "Done, 1 Ticket" })).toBeVisible();
+  await expect(backlog.getByRole("button", { name: "0 / 1 Sub-Ticket" })).toHaveCount(2);
+  await expect(backlog.getByRole("link", { name: /^CRONK-3 Cards.*In Done/ })).toBeVisible();
   await page.reload();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(backlog.getByRole("link")).toHaveCount(2);
+  await lane("Done").getByRole("button", { name: "Done, 1 Ticket" }).click();
+  await expect(lane("Done").getByRole("button", { name: "2 / 2 Sub-Tickets" })).toBeVisible();
+
+  // Moved into its parent's column, a Sub-Ticket folds into the parent's own card, and the copy goes.
+  await call("PATCH", `/api/tickets/${columns.id}`, { statusId: status("Backlog") });
+  await call("PATCH", `/api/tickets/${cards.id}`, { statusId: status("Backlog") });
   await expect(backlog.getByRole("link")).toHaveCount(1);
+  await expect(backlog.getByRole("button", { name: "0 / 3 Sub-Tickets" })).toBeVisible();
+  await expect(lane("Done").getByRole("button", { name: "Done, 0 Tickets" })).toBeVisible();
 
   // Off again: the board is as before.
   await toggle.click();
