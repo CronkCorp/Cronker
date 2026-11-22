@@ -33,7 +33,7 @@ import { RepositoriesSettings } from "./repositories.js";
 import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Actor, Avatar } from "./ui/actor.js";
-import { Actions, Button, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
+import { Actions, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
   ContextMenu,
@@ -571,8 +571,9 @@ function CardMenu({
 
 /**
  * A Ticket on the board: key and Priority, title, Labels, Run state and avatars, all one link, then its Blocked chip,
- * which holds links of its own and so sits beside the card's link rather than in it. Right-clicking it, long-pressing
- * it or ContextMenu / Shift+F10 on its focused link opens its CardMenu.
+ * which holds links of its own and so sits beside the card's link rather than in it. Pressing anywhere on it and
+ * moving drags it, the link included, and its text is never selected; a click on the link still opens the Ticket.
+ * Right-clicking it, long-pressing it or ContextMenu / Shift+F10 on its focused link opens its CardMenu.
  */
 function Card({
   ticket,
@@ -598,11 +599,15 @@ function Card({
         className={`card${arrived ? " arrived" : ""}`}
         draggable
         onDragStart={(event: DragEvent<HTMLDivElement>) => {
+          // A drag picked up on the card's link starts on the link, a link's own drag: show the whole card under the
+          // pointer rather than the browser's picture of a link, held where it was pressed.
+          const card = event.currentTarget.getBoundingClientRect();
+          event.dataTransfer.setDragImage(event.currentTarget, event.clientX - card.left, event.clientY - card.top);
           event.dataTransfer.setData(ticketDrag, ticket.id);
           event.dataTransfer.effectAllowed = "move";
         }}
       >
-        <Link to={to.ticket(ticket)} className="card-link" draggable={false}>
+        <Link to={to.ticket(ticket)} className="card-link">
           <span className="ticket-key card-key">{ticket.key}</span> <span className="card-title">{ticket.title}</span>
           <span className="card-priority">
             <PriorityTag priority={ticket.priority} />
@@ -1120,7 +1125,10 @@ function KindSelect(props: ComponentProps<"select">) {
   );
 }
 
-/** The Workspace / Project scope switch of a knowledge page's head. */
+/**
+ * The Workspace / Project scope dropdown of a knowledge page's head. Its button shows the current scope; its menu lists
+ * the Workspace, then the Projects by key, the current one checked. Choosing one goes to that scope's page, as a link would.
+ */
 export function ScopeSwitch({
   workspace,
   project,
@@ -1134,18 +1142,46 @@ export function ScopeSwitch({
   useEffect(() => {
     api.projects(workspace.id).then(setProjects, () => {});
   }, [workspace.id]);
+  const current = project?.key ?? "";
+  const byKey = [...projects].sort((a, b) => a.key.localeCompare(b.key));
   return (
-    <Segmented
+    <Menu
       label="Scope"
-      items={[
-        { label: "Workspace", to: addresses.knowledge(workspace, null, kind), current: project === null },
-        ...projects.map((p) => ({
-          label: <span className="mono">{p.key}</span>,
-          to: addresses.knowledge(workspace, p.key, kind),
-          current: p.id === project?.id,
-        })),
-      ]}
-    />
+      align="start"
+      trigger={
+        <button
+          type="button"
+          className={`${buttonClass("secondary")} scope-switch`}
+          aria-label={`Scope: ${project ? `${project.key} ${project.name}` : "Workspace"}`}
+        >
+          <span className="scope-switch-name">
+            {project ? (
+              <>
+                <span className="mono">{project.key}</span> {project.name}
+              </>
+            ) : (
+              "Workspace"
+            )}
+          </span>
+          <span className="scope-switch-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+      }
+    >
+      <MenuRadioGroup
+        label="Scope"
+        value={current}
+        onChange={(key) => key !== current && navigate(addresses.knowledge(workspace, key || null, kind))}
+      >
+        <MenuRadioItem value="">Workspace</MenuRadioItem>
+        {byKey.map((p) => (
+          <MenuRadioItem key={p.id} value={p.key}>
+            <span className="mono">{p.key}</span> {p.name}
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
+    </Menu>
   );
 }
 

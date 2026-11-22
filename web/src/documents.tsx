@@ -89,7 +89,7 @@ export function DocumentBody({
   );
 }
 
-/** A page tree's Documents, nested, under a page head with the scope switch and New Document. */
+/** A page tree's Documents, nested, under a page head with the scope dropdown and New Document. */
 function PageTree({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
   const to = useAddresses();
   const tree: Tree = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };

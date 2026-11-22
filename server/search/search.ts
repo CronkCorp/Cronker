@@ -1,6 +1,8 @@
 import { Type, type Static } from "typebox";
 import type { Db } from "../db.js";
 import { slugColumn } from "../http/readable.js";
+import { inReach, type Viewer } from "../identity/viewers.js";
+import { transcriptReadable } from "../transcripts/transcripts.js";
 
 /**
  * Search over a Workspace's Tickets, knowledge, Artifacts (by title and description) and Transcripts with Postgres
@@ -44,11 +46,20 @@ export type SearchResult = Static<typeof SearchResult>;
 const start = "\u0001";
 const stop = "\u0002";
 
-const hits = `
+/**
+ * Every match of each kind that the Viewer can read, its reach bound to `$9`: filtered within each kind, before the
+ * per-kind cap, so results the Viewer can't read never crowd out ones they can.
+ */
+function hits(viewer: Viewer): { sql: string; value: string | string[] } {
+  const reach = (table: string) =>
+    inReach(viewer, { project: `${table}.project_id`, workspace: `${table}.workspace_id` }, "$9").sql;
+  // The Transcript's condition binds a value the seam's conditions read too, so all kinds share one.
+  const transcript = transcriptReadable(viewer, "transcripts", "$9");
+  return { sql: `
   select 'ticket' as kind, tickets.id, tickets.title, tickets.project_id, projects.key || '-' || tickets.number as ticket_key,
     null as slug, null::integer as number, tickets.description as body, ts_rank(tickets.search, query) as rank
   from tickets join projects on projects.id = tickets.project_id, q
-  where tickets.workspace_id = $1 and tickets.search @@ query
+  where tickets.workspace_id = $1 and tickets.search @@ query and ${reach("tickets")}
   union all
   select case when documents.ticket_id is null then 'document' else 'report' end, documents.id, versions.title,
     documents.project_id, projects.key || '-' || tickets.number,
@@ -58,30 +69,30 @@ const hits = `
     left join tickets on tickets.id = documents.ticket_id
     left join projects on projects.id = tickets.project_id,
     q
-  where documents.workspace_id = $1 and versions.search @@ query
+  where documents.workspace_id = $1 and versions.search @@ query and ${reach("documents")}
   union all
   select 'term', terms.id, versions.name, terms.project_id, null, null, null,
     versions.definition || case when cardinality(versions.avoid) = 0 then ''
       else ' Avoid: ' || array_to_string(versions.avoid, ', ') end,
     ts_rank(versions.search, query)
   from terms join term_versions versions on versions.term_id = terms.id and versions.number = terms.version, q
-  where terms.workspace_id = $1 and versions.search @@ query
+  where terms.workspace_id = $1 and versions.search @@ query and ${reach("terms")}
   union all
   select 'decision', decisions.id, versions.title, decisions.project_id, null, null, decisions.number, versions.body,
     ts_rank(versions.search, query)
   from decisions
     join decision_versions versions on versions.decision_id = decisions.id and versions.number = decisions.version, q
-  where decisions.workspace_id = $1 and versions.search @@ query
+  where decisions.workspace_id = $1 and versions.search @@ query and ${reach("decisions")}
   union all
   select 'artifact', artifacts.id, versions.title, artifacts.project_id, null,
     ${slugColumn("artifact", "artifacts.id", "versions.title")}, null, versions.description,
     ts_rank(versions.search, query)
   from artifacts
     join artifact_versions versions on versions.artifact_id = artifacts.id and versions.number = artifacts.version, q
-  where artifacts.workspace_id = $1 and versions.search @@ query
+  where artifacts.workspace_id = $1 and versions.search @@ query and ${reach("artifacts")}
   union all
   -- A Transcript matches by an entry whose text the whole search matches, and shows the one that matched best. A Run's
-  -- is kept with the Run's Ticket and Project; an Agent's own, of no Run, with the Workspace.
+  -- is kept with the Run's Ticket and Project; an Agent's own, of no Run, with the Workspace, read as its Tickets allow.
   select 'transcript', best.transcript_id,
     case when runs.id is null then 'Transcript of a ' || agents.name || ' session'
       else 'Transcript of the ' || runs.status_name || ' Run' end,
@@ -92,24 +103,29 @@ const hits = `
         entries.text, ts_rank(entries.search, query) as rank
       from transcript_entries entries join transcripts on transcripts.id = entries.transcript_id, q
       where transcripts.workspace_id = $1 and transcripts.deleted_at is null and entries.search @@ query
+        and ${transcript.sql}
       order by entries.transcript_id, rank desc, entries.position
     ) best
     join agents on agents.id = best.agent_id
     left join runs on runs.id = best.run_id
     left join tickets on tickets.id = runs.ticket_id
-    left join projects on projects.id = tickets.project_id`;
+    left join projects on projects.id = tickets.project_id`,
+    value: transcript.value,
+  };
+}
 
 /** How many results of each kind a search gives at most: its best. */
 export const perKind = 20;
 
 /**
- * The Workspace's Tickets, knowledge, Artifacts and Transcripts matching the query, best first with Transcripts last, at most
- * `perKind` of each kind, each with a snippet.
+ * The Workspace's Tickets, knowledge, Artifacts and Transcripts matching the query that the Viewer can read, best first
+ * with Transcripts last, at most `perKind` of each kind, each with a snippet.
  */
-export async function search(db: Db, workspaceId: string, input: { q: string; project: string | null; kinds: SearchKind[] }): Promise<SearchResult[]> {
+export async function search(db: Db, viewer: Viewer, workspaceId: string, input: { q: string; project: string | null; kinds: SearchKind[] }): Promise<SearchResult[]> {
+  const readable = hits(viewer);
   const { rows } = await db.query<Omit<SearchResult, "snippet"> & { headline: string }>(
     `with q as (select websearch_to_tsquery('english', $2) as query),
-     hits as (${hits})
+     hits as (${readable.sql})
      select kind, id, title, project_id as "projectId", ticket_key as "ticketKey", slug, number,
        -- Where the text beneath the title matched, the snippet shows that; where only the title did, the title.
        case when strpos(in_body, $8) > 0 then in_body
@@ -124,7 +140,8 @@ export async function search(db: Db, workspaceId: string, input: { q: string; pr
      where place <= $7
      -- Transcripts come after every other kind, however well they match.
      order by kind = 'transcript', rank desc, title, id`,
-    [workspaceId, input.q, `StartSel=${start}, StopSel=${stop}`, start + stop, input.kinds, input.project, perKind, start],
+    [workspaceId, input.q, `StartSel=${start}, StopSel=${stop}`, start + stop, input.kinds, input.project, perKind, start,
+      readable.value],
   );
   return rows.map(({ headline, ...row }) => ({ ...row, snippet: parts(headline) }));
 }
