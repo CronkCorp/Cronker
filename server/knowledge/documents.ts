@@ -12,6 +12,7 @@ import { Actor, actorColumn } from "../work/actors.js";
 import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
+import { findSection, pathOf, replaceSection, sectionsOf, sectionText, type Section } from "./sections.js";
 import { outdatedVersion } from "./versions.js";
 
 /**
@@ -334,6 +335,31 @@ async function lockDocument(tx: Tx, viewer: Viewer, documentId: string, { tree =
   return (await tx.query<Placed>(`${select} for update`, [documentId, view.value])).rows[0];
 }
 
+/**
+ * Saves the Document's next Version by the Actor, with the content made from its current Version, which the save
+ * must be based on: one based on an outdated Version is refused with the current Version.
+ */
+async function saveNextVersion(
+  tx: Tx,
+  document: Placed,
+  actor: Caller,
+  baseVersion: number | undefined,
+  now: Date,
+  content: (current: VersionWithBody) => { title: string; body: string },
+): Promise<void> {
+  if (baseVersion === undefined) {
+    throw new ApiError(400, "base_version_needed", "A save names the Version it's based on, as `baseVersion`.", {
+      rule: "A save names the Version it's based on, so it never overwrites a change its Actor hasn't seen.",
+      advice: `Read the Document and save again with \`baseVersion\` set to its current Version's number.`,
+    });
+  }
+  const current = (await versionOf(tx, document.id, document.version))!;
+  if (baseVersion !== current.number) throw outdatedVersion("Document", current, baseVersion);
+  const number = current.number + 1;
+  await insertVersion(tx, document, number, content(current), actor, now);
+  await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
+}
+
 export interface DocumentEdit {
   /** The number of the Version the save is based on; needed for a new title or body. */
   baseVersion?: number;
@@ -361,24 +387,71 @@ export async function editDocument(
     const document = await lockDocument(tx, actor, documentId, { tree: moving });
     if (!document) throw documentNotFound();
     if (edit.title !== undefined || edit.body !== undefined) {
-      if (edit.baseVersion === undefined) {
-        throw new ApiError(400, "base_version_needed", "A save names the Version it's based on, as `baseVersion`.", {
-          rule: "A save names the Version it's based on, so it never overwrites a change its Actor hasn't seen.",
-          advice: `Read the Document and save again with \`baseVersion\` set to its current Version's number.`,
-        });
-      }
-      const current = (await versionOf(tx, document.id, document.version))!;
-      if (edit.baseVersion !== current.number) {
-        throw outdatedVersion("Document", current, edit.baseVersion);
-      }
-      const number = current.number + 1;
-      const content = { title: edit.title ?? current.title, body: edit.body ?? current.body };
-      await insertVersion(tx, document, number, content, actor, clock.now());
-      await tx.query("update documents set version = $2 where id = $1", [document.id, number]);
+      await saveNextVersion(tx, document, actor, edit.baseVersion, clock.now(), (current) => ({
+        title: edit.title ?? current.title,
+        body: edit.body ?? current.body,
+      }));
     }
     if (moving) await moveDocument(tx, document, edit);
     documentChanged(live, tx, document);
     return (await findDocument(tx, actor, document.id))!;
+  });
+}
+
+export const DocumentSection = Type.Object({
+  documentId: Type.String({ format: "uuid" }),
+  path: Type.String({ description: "Its heading's path: the texts of the headings it sits under and its own, joined by `/`." }),
+  level: Type.Integer({ minimum: 1, maximum: 6, description: "Its heading's level: 1 for `#`." }),
+  body: Type.String({
+    description: "Markdown: its heading and everything up to the next heading of the same or a higher level.",
+  }),
+  version: Type.Object(Version.properties, { description: "The Document's current Version, which a replace names as its base." }),
+});
+export type DocumentSection = Static<typeof DocumentSection>;
+
+function presentSection(document: Document, markdown: string, section: Section): DocumentSection {
+  return {
+    documentId: document.id,
+    path: pathOf(section),
+    level: section.level,
+    body: sectionText(markdown, section),
+    version: document.version,
+  };
+}
+
+/**
+ * One Section of a Document at its current Version, named by its heading's text or by a path joining headings with
+ * `/`; refused when several Sections match or none does.
+ */
+export async function readSection(db: Db, viewer: Viewer, documentId: string, name: string): Promise<DocumentSection> {
+  const document = await findDocument(db, viewer, documentId);
+  if (!document) throw documentNotFound();
+  return presentSection(document, document.body, findSection(document.body, name));
+}
+
+/**
+ * Replaces one Section of a Document, making its next Version by the Actor based on the given one, as a whole save
+ * does. The new body keeps the Section's heading level; the rest of the Document stays as it was.
+ */
+export async function replaceDocumentSection(
+  { db, clock, live }: Context,
+  actor: Caller,
+  documentId: string,
+  input: { section: string; baseVersion: number; body: string },
+): Promise<DocumentSection> {
+  return transaction(db, async (tx) => {
+    const document = await lockDocument(tx, actor, documentId);
+    if (!document) throw documentNotFound();
+    let start = 0;
+    await saveNextVersion(tx, document, actor, input.baseVersion, clock.now(), (current) => {
+      const section = findSection(current.body, input.section);
+      start = section.start;
+      return { title: current.title, body: replaceSection(current.body, section, input.body) };
+    });
+    documentChanged(live, tx, document);
+    const saved = (await findDocument(tx, actor, document.id))!;
+    const replaced = sectionsOf(saved.body).find((section) => section.start === start)!;
+    return presentSection(saved, saved.body, replaced);
   });
 }
 

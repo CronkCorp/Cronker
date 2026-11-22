@@ -107,8 +107,10 @@ describe("MCP with an Agent token", () => {
       "read_decision",
       "read_document",
       "read_glossary",
+      "read_section",
       "read_term",
       "read_ticket",
+      "replace_section",
       "save_artifact",
       "search",
       "unlink_artifact",
@@ -678,6 +680,46 @@ describe("MCP with an Agent token", () => {
     ]);
     const read = await (await cronk.request("GET", `/api/documents/${setup.json.id}`, { cookie })).json();
     expect(read.title).toBe("Setting up");
+  });
+
+  test("an Agent reads and replaces one Section of a Document", async () => {
+    const { agent, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const setup = await call(client, "create_document", {
+      project: "CRONK",
+      title: "Setup",
+      body: "# Setup\n\n## Install\n\n### Linux\n\napt install cronk\n\n## Uninstall\n\n### Linux\n\napt remove cronk\n",
+    });
+
+    const read = await call(client, "read_section", { document: setup.json.slug, section: "Install/Linux" });
+    expect(read).toEqual({
+      isError: false,
+      json: expect.objectContaining({ path: "Setup/Install/Linux", body: "### Linux\n\napt install cronk" }),
+    });
+    const replaced = await call(client, "replace_section", {
+      document: setup.json.id,
+      section: "Install/Linux",
+      baseVersion: read.json.version.number,
+      body: "### Linux\n\nsnap install cronk",
+    });
+    expect(replaced.json).toEqual(
+      expect.objectContaining({
+        body: "### Linux\n\nsnap install cronk",
+        version: expect.objectContaining({ number: 2, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
+      }),
+    );
+    const ambiguous = await call(client, "read_section", { document: setup.json.id, section: "Linux" });
+    expect(ambiguous).toEqual({
+      isError: true,
+      json: expect.objectContaining({ code: "section_ambiguous", candidates: ["Setup/Install/Linux", "Setup/Uninstall/Linux"] }),
+    });
+    const outdated = await call(client, "replace_section", {
+      document: setup.json.id,
+      section: "Uninstall",
+      baseVersion: 1,
+      body: "## Uninstall\n\nGone.",
+    });
+    expect(outdated.json).toEqual(expect.objectContaining({ code: "outdated_version", current: expect.objectContaining({ number: 2 }) }));
   });
 
   test("an Agent creates, edits and reads Terms of a Project and the Workspace, and reads a Project's glossary", async () => {

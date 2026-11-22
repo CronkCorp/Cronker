@@ -26,13 +26,17 @@ export function exportRoutes(context: Context): FastifyPluginAsyncTypebox {
             description:
               "The files to commit into a Repository: `GLOSSARY.md`, then `docs/adr/NNNN-<slug>.md` for each Decision " +
               "by number. A Project's `GLOSSARY.md` holds its glossary, its own Terms over the Workspace's, " +
-              "alphabetical; its Decisions are its own. The Workspace's export holds its own Terms and Decisions. " +
+              "alphabetical; its Decisions are its own. The Workspace's export holds its own Terms and Decisions, never a " +
+              "Project's, so it holds nothing of a private Project. " +
               "Cronk never commits them itself.",
             params,
             response: { 200: Export, 401: ErrorBody, 404: ErrorBody },
           },
         },
-        async (request) => exportOf(db, await place.find(request, await requireCaller(context, request))),
+        async (request) => {
+          const caller = await requireCaller(context, request);
+          return exportOf(db, caller, await place.find(request, caller));
+        },
       );
 
       app.get(
@@ -50,8 +54,9 @@ export function exportRoutes(context: Context): FastifyPluginAsyncTypebox {
           },
         },
         async (request, reply) => {
-          const found = await place.find(request, await requireCaller(context, request));
-          const { files } = await exportOf(db, found);
+          const caller = await requireCaller(context, request);
+          const found = await place.find(request, caller);
+          const { files } = await exportOf(db, caller, found);
           return reply
             .type("application/zip")
             .header("content-disposition", disposition(`${hyphenate(found.label) || "export"}-knowledge.zip`))

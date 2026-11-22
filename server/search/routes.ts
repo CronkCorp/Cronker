@@ -20,7 +20,7 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Search the Workspace",
           description:
             `Tickets, knowledge and Transcripts of the Workspace matching \`q\`, best first with Transcripts last, ` +
-            `at most ${perKind} of each kind. A Transcript matches by an entry whose text has the whole search. ` +
+            `at most ${perKind} of each kind, leaving out whatever the caller can't read. A Transcript matches by an entry whose text has the whole search. ` +
             "Words match by their stem in English " +
             "(\"merging\" finds \"merged\"), written in web-search syntax.",
           params: Type.Object({ workspaceId: Type.String() }),
@@ -54,7 +54,7 @@ export function searchRoutes(context: Context): FastifyPluginAsyncTypebox {
           if (!found || found.workspaceId !== workspace.id) throw projectNotFound();
           project = found.id;
         }
-        return search(db, workspace.id, {
+        return search(db, caller, workspace.id, {
           q,
           project,
           kinds: kinds === undefined ? [...searchKinds] : (kinds.split(",") as SearchKind[]),

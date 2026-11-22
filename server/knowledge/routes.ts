@@ -10,10 +10,13 @@ import {
   deleteDocument,
   Document,
   documentNotFound,
+  DocumentSection,
   DocumentSummary,
   editDocument,
   findDocument,
+  readSection,
   readVersion,
+  replaceDocumentSection,
   treeOf,
   Version,
   versionsOf,
@@ -36,6 +39,29 @@ const Position = Type.Integer({
   description: "A place among its siblings, counting from 0; last when left out or past the end.",
 });
 
+const SectionName = Type.String({
+  minLength: 1,
+  maxLength: 1000,
+  description: "Its heading's text, or a path joining headings with `/`, such as `Install/Linux`.",
+});
+/** A Section refused as missing or ambiguous names the Document's headings or the candidates, as paths. */
+const SectionRefusal = Type.Object({
+  error: Type.Object({
+    ...OutdatedVersionBody("Document", VersionWithBody).properties.error.properties,
+    candidates: Type.Optional(
+      Type.Array(Type.String(), { description: "For `section_ambiguous`: the matching Sections, as paths." }),
+    ),
+    headings: Type.Optional(
+      Type.Array(Type.String(), { description: "For `section_not_found`: the Document's headings, as paths." }),
+    ),
+  }),
+});
+const sectionRules =
+  "A Section is a heading of any level with everything up to the next heading of the same or a higher level, its " +
+  "subsections included; a line that looks like a heading inside a code block, quote or list isn't one. It is named " +
+  "by its heading's text, or by a path joining headings with `/`, such as `Install/Linux`, compared exactly. A name " +
+  "matching several Sections is refused with `section_ambiguous`, naming them as paths in `candidates`; one matching " +
+  "none with `section_not_found`, listing the Document's headings as paths in `headings`.";
 
 export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
   const { db } = context;
@@ -131,6 +157,58 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => editDocument(context, await requireCaller(context, request), request.params.documentId, request.body),
+    );
+
+    app.get(
+      "/api/documents/:documentId/sections",
+      {
+        schema: {
+          tags,
+          summary: "One Section of a Document",
+          description: `The Section at the Document's current Version, whose number a replace names as its base. ${sectionRules}`,
+          params: DocumentParams,
+          querystring: Type.Object({ section: SectionName }),
+          response: { 200: DocumentSection, 400: ErrorBody, 401: ErrorBody, 404: SectionRefusal, 409: SectionRefusal },
+        },
+      },
+      async (request) =>
+        readSection(db, await requireCaller(context, request), request.params.documentId, request.query.section),
+    );
+
+    app.put(
+      "/api/documents/:documentId/sections",
+      {
+        schema: {
+          tags,
+          summary: "Replace one Section of a Document",
+          description:
+            "Replaces the Section with `body`, saving the Document as its next Version by the caller, as a whole save " +
+            "does; the rest of the Document stays as it was. It names the Version it's based on as `baseVersion`: one " +
+            "based on an outdated Version is refused with `outdated_version`, carrying the current Version as " +
+            "`current`. The new body starts with a heading of the Section's own level, whose text may change, and " +
+            "holds no other heading of that level or a higher one, or it is refused with `section_heading_level`. " +
+            `Answers the Section as replaced. ${sectionRules}`,
+          params: DocumentParams,
+          body: Type.Object({
+            section: SectionName,
+            baseVersion: Type.Integer({ minimum: 1, description: "The Version the replace is based on." }),
+            body: Type.String({
+              maxLength: 500_000,
+              description: "Markdown: the Section's heading, of its own level, and everything under it.",
+            }),
+          }),
+          response: {
+            200: DocumentSection,
+            400: ErrorBody,
+            401: ErrorBody,
+            403: ErrorBody,
+            404: SectionRefusal,
+            409: SectionRefusal,
+          },
+        },
+      },
+      async (request) =>
+        replaceDocumentSection(context, await requireCaller(context, request), request.params.documentId, request.body),
     );
 
     app.delete(

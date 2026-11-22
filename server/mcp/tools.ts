@@ -162,9 +162,9 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Search",
       description:
         "Finds Tickets, Documents, Reports, Terms, Decisions, Artifacts (by title and description) and Transcripts of " +
-        "your Workspace, best first with Transcripts last, each with its kind, id, title, Project, Ticket key (a " +
-        "Ticket's own, or the Ticket a Report is on or a Transcript's Run was on) and a snippet whose matching words " +
-        "are marked. Words match by their stem in English (`merging` finds `merged`); write `\"a phrase\"` for words " +
+        "your Workspace that you can read, best first with Transcripts last, each with its kind, id, title, Project, " +
+        "Ticket key (a Ticket's own, or the Ticket a Report is on or a Transcript's Run was on) and a snippet whose " +
+        "matching words are marked. Words match by their stem in English (`merging` finds `merged`); write `\"a phrase\"` for words " +
         "in order, `or` between alternatives and `-word` to leave out what has it. Search before filing a Ticket or " +
         "writing knowledge, to build on what's there; read a result with its own tool (Transcripts have none yet).",
       inputSchema: {
@@ -528,6 +528,49 @@ export function buildMcpServer(api: Api): McpServer {
       },
     },
     ({ document, parent, ...edit }) => answer(() => send("PATCH", documentPath(document), { ...edit, parentId: parent })),
+  );
+
+  const sectionArgument = z
+    .string()
+    .min(1)
+    .describe("Its heading's text, or a path joining headings with `/`, such as `Install/Linux`, where two headings read alike.");
+  const sectionRules =
+    "A Section is a heading of any level with everything up to the next heading of the same or a higher level, its " +
+    "subsections included. A name matching several Sections is refused with `section_ambiguous`, naming them as " +
+    "paths in `candidates`; one matching none with `section_not_found`, listing the Document's headings in `headings`.";
+
+  server.registerTool(
+    "read_section",
+    {
+      title: "Read one Section of a Document",
+      description:
+        "One Section of a Document as Markdown, its heading included, at the Document's current Version, whose number " +
+        `a replace names as its \`baseVersion\`: a long Document needn't be read in full. ${sectionRules}`,
+      inputSchema: { document: documentArgument, section: sectionArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ document, section }) =>
+      answer(() => get(`${documentPath(document)}/sections?section=${encodeURIComponent(section)}`)),
+  );
+
+  server.registerTool(
+    "replace_section",
+    {
+      title: "Replace one Section of a Document",
+      description:
+        "Replaces one Section of a Document with `body`, saving the Document as its next Version by your Agent; the " +
+        "rest stays as it was. The new body starts with a heading of the Section's own level, whose text may change, " +
+        "and holds no other heading of that level or a higher one (`section_heading_level`). Give the number of the " +
+        "Version you read as `baseVersion`: a replace based on an outdated Version is refused with `outdated_version`, " +
+        `carrying the current Version as \`current\`. ${sectionRules}`,
+      inputSchema: {
+        document: documentArgument,
+        section: sectionArgument,
+        baseVersion: z.number().int().min(1).describe("The number of the Version your replace is based on."),
+        body: z.string().describe("The Section's new Markdown: its heading, of the same level, and everything under it."),
+      },
+    },
+    ({ document, ...replace }) => answer(() => send("PUT", `${documentPath(document)}/sections`, replace)),
   );
 
   const termArgument = z
