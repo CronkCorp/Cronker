@@ -105,7 +105,7 @@ A User's list of everything waiting on them: Questions, *needs you* Outcomes, fa
 _Avoid_: Notifications, review queue, to-do
 
 **Webhook**:
-A User's own channel for their Inbox in one Workspace: a name, a URL and the Inbox kinds it gets (by default Questions, *needs you* and Runs gone wrong). Cronk sends it a JSON delivery per item, signed with the webhook's secret as Standard Webhooks lays out. Only its User sees or changes it; Agents never do. Removing the User from the Workspace removes their webhooks there.
+A User's own channel for their Inbox in one Workspace: a name, a URL and the Inbox kinds it gets (by default Questions, *needs you* and Runs gone wrong). Cronk sends it one JSON delivery per item in its User's own Inbox, never with the Ticket's description or Comments, signed with the webhook's secret as Standard Webhooks lays out. Only its User sees or changes it; Agents never do. Removing the User from the Workspace removes their webhooks there.
 _Avoid_: Notification, subscription, hook, integration
 
 **Brief**:

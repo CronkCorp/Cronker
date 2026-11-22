@@ -21,6 +21,7 @@ import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
+import { InboxNotifier } from "./webhooks/notifier.js";
 import { deliverWebhooks } from "./webhooks/webhooks.js";
 
 export interface CronkOptions {
@@ -52,7 +53,7 @@ export interface Cronk {
   checkQueue(): Promise<void>;
   /** Reads the next page of issues of each running import of a Repository's GitHub issues. */
   runImports(): Promise<void>;
-  /** Sends the webhook deliveries that are due. */
+  /** Sends the webhook deliveries that are due, once the Inbox items queued so far have their deliveries. */
   deliverWebhooks(): Promise<void>;
   close(): Promise<void>;
 }
@@ -92,6 +93,8 @@ export async function createCronk({
     log = app.log;
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
+    const notifier = new InboxNotifier(context, (error) => app.log.error(error));
+    await notifier.start();
     return {
       app,
       async listen() {
@@ -105,9 +108,13 @@ export async function createCronk({
       checkMergeability: () => checkMergeability(context),
       checkQueue: () => queuePass(context),
       runImports: () => runImports(context),
-      deliverWebhooks: () => deliverWebhooks(context),
+      async deliverWebhooks() {
+        await notifier.idle();
+        await deliverWebhooks(context);
+      },
       async close() {
         await app.close();
+        await notifier.stop();
         await endPool(db);
       },
     };
