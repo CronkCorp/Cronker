@@ -1456,6 +1456,11 @@ function explanations(changes: Change[], project: Project): Map<string, Change[]
 function describedWithReason(change: Change, related: Change[]): ReactNode {
   const moved = related.find((c) => c.field === "status");
   if (change.field === "merged") {
+    // A merge of one of several Pull Requests a Ticket has in the Merge Queue leaves it waiting for the others.
+    if (!moved) {
+      const { pullRequest } = change.to as Merged;
+      return `merged ${pullRequestName(pullRequest)} ${pullRequest.title}, waiting in the Merge Queue for its other Pull Requests`;
+    }
     const verification = related.find((c) => c.field === "verification")?.to;
     return (
       <>

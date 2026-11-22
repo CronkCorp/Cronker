@@ -248,7 +248,7 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
     'waiting', tickets.discovery_waits) end as discovered`;
 
 /**
- * SQL for the Ticket `alias`'s first entry in the Merge Queue, with its place among the entries whose Pull Requests
+ * SQL for the Ticket `alias`'s first entry in the Merge Queue, the one Cronk is merging if any, with its place among the entries whose Pull Requests
  * share its Repository and base branch, in the order they joined.
  */
 const queueColumn = (alias: string) => `(select json_build_object('pullRequestId', entry.pull_request_id, 'state', entry.state,
@@ -256,7 +256,7 @@ const queueColumn = (alias: string) => `(select json_build_object('pullRequestId
       where ahead_pr.repository_id = queued_pr.repository_id
         and coalesce(ahead_pr.base_branch, '') = coalesce(queued_pr.base_branch, '') and ahead.seq <= entry.seq))
   from merge_queue entry join pull_requests queued_pr on queued_pr.id = entry.pull_request_id
-  where entry.ticket_id = ${alias}.id order by entry.seq limit 1)`;
+  where entry.ticket_id = ${alias}.id order by entry.state = 'merging' desc, entry.seq limit 1)`;
 
 /** SQL ordering a Status's Tickets: those in the Merge Queue first, by their place in it. */
 const queueOrder = (alias: string) => `(${queueColumn(alias)} ->> 'position')::int nulls last`;
