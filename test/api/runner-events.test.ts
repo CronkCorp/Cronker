@@ -41,7 +41,7 @@ async function adaWithDelegatedTicket() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   return { workspace, ada, ticket, runner, asAgent: { headers: { authorization: `Bearer ${secret}` } }, status };

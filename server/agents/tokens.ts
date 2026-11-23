@@ -11,13 +11,16 @@ import type { Workspace } from "../workspaces/workspaces.js";
 import type { Agent } from "./agents.js";
 
 /**
- * Agent tokens: a full token acts as its Agent, a read-only one may only read. The
+ * Agent tokens, by Token access: Read may only read, Write acts as its Agent under the Agent rules, and Full acts
+ * with its Owner's rights within the same Access, but for the human-only acts (`identity/acts.ts`). The
  * secret is shown once, when issued; Cronk keeps only its hash. Revoking a token,
  * removing its Agent or its Owner leaving the Workspace refuses it from the next request.
  */
 
-export const TokenAccess = Type.Union([Type.Literal("full"), Type.Literal("read")], {
-  description: "`full` acts as the Agent; `read` may only read.",
+export const TokenAccess = Type.Union([Type.Literal("read"), Type.Literal("write"), Type.Literal("full")], {
+  description:
+    "`read` may only read; `write` acts as the Agent under the Agent rules; `full` acts as the Agent with its Owner's " +
+    "rights, within the same Access, except for the acts that stay human-only.",
 });
 export type TokenAccess = Static<typeof TokenAccess>;
 
@@ -122,7 +125,7 @@ export async function authenticateAgent(context: Context, request: FastifyReques
   if (agent.access === "read" && !safeMethods.has(request.method)) {
     throw new ApiError(403, "read_only_token", `This token of ${agent.name} is read-only.`, {
       rule: "A read-only token may only read.",
-      advice: `Read instead, or ask ${ownerName(agent)}, ${agent.name}'s Owner, for a full token.`,
+      advice: `Read instead, or ask ${ownerName(agent)}, ${agent.name}'s Owner, for a Write or Full token.`,
     });
   }
   return agent;

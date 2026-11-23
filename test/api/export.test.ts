@@ -197,7 +197,7 @@ describe("Exporting knowledge", () => {
     expect((await call("GET", `/api/projects/${project.id}/export`, {})).status).toBe(401);
 
     const agent = await ok("POST", `/api/workspaces/${other.id}/agents`, { cookie: await signIn(cronk) }, { name: "outsider" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, { cookie: await signIn(cronk) }, { name: "t", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, { cookie: await signIn(cronk) }, { name: "t", access: "write" });
     const outsider = { headers: { authorization: `Bearer ${secret}` } };
     expect((await call("GET", `/api/projects/${project.id}/export`, outsider)).status).toBe(404);
     expect((await call("GET", `/api/workspaces/${workspace.id}/export`, outsider)).status).toBe(404);

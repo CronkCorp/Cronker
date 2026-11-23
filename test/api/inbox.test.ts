@@ -150,7 +150,7 @@ describe("the latest Report on a Ticket to review or verify", () => {
     const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
     const agent = await call("POST", `/api/workspaces/${workspaceId}/agents`, { name: "claude-max" });
     await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
-    const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
     const headers = { authorization: `Bearer ${secret}` };
     const report = async (ticketId: string, title: string) =>
       expect((await cronk.request("POST", `/api/tickets/${ticketId}/reports`, { headers, body: { title, body: "…" } })).status).toBe(201);
@@ -272,7 +272,7 @@ describe("an archived Project's Tickets", () => {
     const runner = await request("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
     const agent = await request("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
     await request("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: runner.id });
-    const { secret } = await request("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await request("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
     const asAgent = { headers: { authorization: `Bearer ${secret}` } };
 
     const review = await createTicket(ada.cookie, project.id, "Check by hand");

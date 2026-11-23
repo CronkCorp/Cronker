@@ -77,7 +77,7 @@ async function implementing({ withBase = true } = {}) {
   const runner = await ok("POST", "/api/runners", cookie, { name: "Fake", kind: "fake" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, cookie, { name: "claude-max" });
   await ok("PATCH", `/api/agents/${agent.id}`, cookie, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, cookie, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, cookie, { name: "cloud", access: "write" });
   const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, cookie, { title: "Make it so" });
   await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, { delegateId: agent.id, labels: ["no-review"], statusId: status("Implement") });
   const pr = { id: 501, number: 7, title: "CRONK-1: make it so", branch: "b", sha: "c1" };

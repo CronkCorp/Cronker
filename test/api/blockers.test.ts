@@ -97,7 +97,7 @@ describe("the Tickets list's blockers", () => {
     const runner = await ok("POST", "/api/runners", as, { name: "Fake", kind: "fake" });
     const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, as, { name: "claude-max" });
     const agent = await ok("PATCH", `/api/agents/${created.id}`, as, { runnerId: runner.id });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "cloud", access: "write" });
     const blocker = await ticket("Sign in");
     const board = await ticket("Board");
     await blocks(blocker, board);

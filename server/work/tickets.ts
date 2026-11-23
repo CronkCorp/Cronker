@@ -7,6 +7,7 @@ import { slugColumn } from "../http/readable.js";
 import { literals } from "../literals.js";
 import { accessOf, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
+import { actsAsOwner } from "../identity/acts.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { lockTickets, writeTicket } from "./ticket-writes.js";
@@ -640,7 +641,7 @@ export async function createTicket(
 
 /**
  * Whether the Agent would have Write in the Ticket's Project when running on it: the least of the Project's Agent
- * Access and its Owner's Access, as a Run's token has full access.
+ * Access and its Owner's Access, as a Run's token is Write.
  */
 async function agentWrites(
   tx: Tx,
@@ -652,7 +653,7 @@ async function agentWrites(
     id: agent.id,
     workspace: { id: place.workspaceId },
     owner: { id: agent.ownerId },
-    access: "full",
+    access: "write",
   };
   return (await accessOf(tx, viewer, place)) === "write";
 }
@@ -844,7 +845,10 @@ export async function editTicketIn(
     if (!ticket) throw ticketNotFound();
     await requireWrite(tx, editor, ticket);
     let actor: ChangeActor = editor.id;
-    if (editor.kind === "agent") {
+    if (editor.kind === "agent" && isFullMove(editor, edit)) {
+      // A Full token moves the Ticket as its Owner would, outside any Run: the Change names the Agent and no Run.
+      actor = { kind: "agent", id: editor.id, runId: null };
+    } else if (editor.kind === "agent") {
       // The Agent that filed a Discovered Ticket edits it, outside any Run, until a User takes it up.
       const filed = holdsDiscoveredTicket(editor, ticket);
       checkAgentFields(editor, edit, filed);
@@ -856,7 +860,7 @@ export async function editTicketIn(
     }
     /** Whether an Agent made the edit: its Ticket keeps its own Delegation under a new parent, and no Run is stopped. */
     const byAgent = editor.kind === "agent";
-    // Only Users get this far with fields that name a User.
+    // Only Users get this far with fields that name a User; a Full Agent's move names none.
     const userId = editor.id;
     const next = { ...ticket };
     // `next` holds the Ticket as the edit leaves it; the write records a Change for each field that differs.
@@ -1023,12 +1027,12 @@ export async function editTicketIn(
     if ((autonomousChanged || delegationPassedDown) && next.autonomousDelegation !== null) {
       await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
     }
-    // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins.
-    // Only Users get here with either change: Agents set neither a Status nor a Delegate.
+    // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins. So does an
+    // Agent with a Full token moving it; other Agents set neither a Status nor a Delegate.
     const entered = next.statusId !== ticket.statusId;
     const delegateChanged = next.delegateId !== ticket.delegateId;
     if (entered || delegateChanged) {
-      const who = await nameOfUser(tx, userId);
+      const who = editor.kind === "agent" ? editor.name : await nameOfUser(tx, userId);
       const moved = changes.find((c) => c.field === "status")?.to as { name: string } | undefined;
       const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
       const reason = moved
@@ -1279,6 +1283,12 @@ export async function linkingActor(
     `${agent.name} has no running Run on ${ticket.key}, and didn't file it as a Discovered Ticket.`,
     refusal,
   );
+}
+
+/** Whether the edit is an Agent with a Full token moving the Ticket, the Status alone in its edit. */
+function isFullMove(agent: AgentCaller, edit: TicketEdit): boolean {
+  if (!actsAsOwner(agent) || edit.statusId === undefined) return false;
+  return (Object.keys(edit) as (keyof TicketEdit)[]).every((field) => field === "statusId" || edit[field] === undefined);
 }
 
 /** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */

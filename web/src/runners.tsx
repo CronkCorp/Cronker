@@ -570,7 +570,7 @@ function TranscriptHookSetup({ hook, agents }: { hook: TranscriptHook; agents: A
 function HookToken({ agent, variable }: { agent: Agent; variable: string }) {
   const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
   const make = useSubmit(async () => {
-    setIssued(await api.issueToken(agent.id, { name: "Transcript hook", access: "full" }));
+    setIssued(await api.issueToken(agent.id, { name: "Transcript hook", access: "write" }));
   });
   return (
     <form onSubmit={make.onSubmit} className="runner-hook-token" aria-label={`Transcript hook token for ${agent.name}`}>

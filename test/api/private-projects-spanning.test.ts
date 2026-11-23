@@ -36,7 +36,7 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
 
 async function agentOf(as: As, workspaceId: string, name: string) {
   const agent = await ok("POST", `/api/workspaces/${workspaceId}/agents`, as, { name });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "laptop", access: "write" });
   return { ...agent, secret: secret as string, as: { headers: { authorization: `Bearer ${secret}` } } };
 }
 

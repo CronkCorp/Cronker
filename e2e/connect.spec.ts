@@ -48,6 +48,11 @@ test("a User connects a claude.ai connector as one of their Agents on the consen
   await expect(page.getByRole("heading", { name: "Connect Claude to Cronk" })).toBeVisible();
   await expect(page.getByText("you go back to claude.ai")).toBeVisible();
   await page.getByRole("radio", { name: /claude-max/ }).check();
+  // Write is the default; picking Full warns what it allows.
+  await expect(page.getByRole("radio", { name: /^Write/ })).toBeChecked();
+  await expect(page.getByRole("note", { name: "Full token" })).toHaveCount(0);
+  await page.getByRole("radio", { name: /^Full/ }).check();
+  await expect(page.getByRole("note", { name: "Full token" })).toBeVisible();
   await page.getByRole("button", { name: "Connect", exact: true }).click();
 
   await expect(page.getByText("Back at claude.ai")).toBeVisible();
@@ -60,5 +65,7 @@ test("a User connects a claude.ai connector as one of their Agents on the consen
   });
   const { access_token } = await traded.json();
   const asAgent = await cronk.request("GET", "/api/agent", { headers: { authorization: `Bearer ${access_token}` } });
-  expect((await asAgent.json()).agent).toEqual(expect.objectContaining({ name: "claude-max" }));
+  const me = await asAgent.json();
+  expect(me.agent).toEqual(expect.objectContaining({ name: "claude-max" }));
+  expect(me.access).toBe("full");
 });

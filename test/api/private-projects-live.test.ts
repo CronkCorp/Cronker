@@ -130,7 +130,7 @@ describe("a Workspace's event stream with a private Project", () => {
     const { workspace, ada, grace, linus, secret, streamOf } = await withSecret();
     await ok("POST", `/api/projects/${secret.id}/tickets`, ada, { title: "Hidden plans" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret: token } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "hook", access: "full" });
+    const { secret: token } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "hook", access: "write" });
     const [adas, graces, linuses] = [await streamOf(ada.cookie), await streamOf(grace.cookie), await streamOf(linus.cookie)];
 
     const response = await fetch(`${cronk.url}/api/transcripts/sessions/laptop-1`, {

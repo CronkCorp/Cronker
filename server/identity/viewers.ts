@@ -9,7 +9,7 @@ import { ApiError } from "../http/errors.js";
  */
 export type Viewer =
   | { kind: "user"; id: string }
-  | { kind: "agent"; id: string; workspace: { id: string }; owner: { id: string }; access: "full" | "read" };
+  | { kind: "agent"; id: string; workspace: { id: string }; owner: { id: string }; access: "read" | "write" | "full" };
 
 export const userViewer = (userId: string): Viewer => ({ kind: "user", id: userId });
 
@@ -85,7 +85,8 @@ export function accessIn(viewer: Viewer, place: Place, param: string): { sql: st
   const agentAccess = `case when ${place.project} is null
       then (select access_workspaces.agent_access from workspaces access_workspaces where access_workspaces.id = ${place.workspace})
       else (select access_projects.agent_access from projects access_projects where access_projects.id = ${place.project}) end`;
-  const token = viewer.access === "full" ? "'write'" : "'read'";
+  // Full doesn't raise Access: it only changes which acts an Agent may take with Write.
+  const token = viewer.access === "read" ? "'read'" : "'write'";
   return {
     sql: `(case when ${place.workspace} is distinct from ${workspace} then 'none'
       else (${levels})[least(${rank(userAccess(owner, place))}, ${rank(agentAccess)}, ${rank(token)})] end)`,

@@ -31,7 +31,7 @@ const files = [{ path: "index.html", contentBase64: Buffer.from("<!doctype html>
 
 /**
  * Ada's Workspace with a Project CRONK holding a Ticket CRONK-1 and an Artifact, an Artifact of the Workspace's own,
- * and a full token of her Agent `claude-max`.
+ * and a Write token of her Agent `claude-max`.
  */
 async function ticketWithArtifacts() {
   const { workspace, user } = await setUp(cronk);
@@ -41,7 +41,7 @@ async function ticketWithArtifacts() {
   const board = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, { title: "Board prototype", files });
   const tokens = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, { title: "Colour tokens", files });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, user, ada, project, ticket, board, tokens, agent, asAgent };
 }
@@ -278,7 +278,7 @@ describe("Linked Artifacts", () => {
     test("outside a Run, an Agent may not link or unlink on a Ticket it didn't file, one a User has taken up, or with an Artifact of another Project", async () => {
       const { workspace, ada, ticket, found, board, agent, asAgent } = await discovered();
       const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
-      const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "full" });
+      const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "write" });
       const asOther = { headers: { authorization: `Bearer ${secret}` } };
       await ok("POST", `/api/tickets/${found.id}/artifacts`, asAgent, { artifactId: board.id });
 

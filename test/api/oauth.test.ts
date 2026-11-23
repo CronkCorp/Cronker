@@ -116,12 +116,12 @@ async function adaWithAgent() {
   return { workspace, cookie, agent };
 }
 
-/** The whole flow: register, ask, approve as the Agent, trade the code in. */
-async function connectAs(cookie: string, agentId: string) {
+/** The whole flow: register, ask, approve as the Agent, with Write unless `access` picks Full, trade the code in. */
+async function connectAs(cookie: string, agentId: string, access?: "write" | "full") {
   const { client_id } = await register();
   const { verifier, challenge } = pkce();
   const requestId = await requestConnection(client_id, challenge);
-  const approved = await cronk.request("POST", `/api/oauth/requests/${requestId}/approve`, { cookie, body: { agentId } });
+  const approved = await cronk.request("POST", `/api/oauth/requests/${requestId}/approve`, { cookie, body: { agentId, access } });
   expect(approved.status).toBe(200);
   const code = new URL((await approved.json()).redirectTo).searchParams.get("code")!;
   const response = await token({ grant_type: "authorization_code", client_id, code, code_verifier: verifier, redirect_uri: callback });
@@ -165,11 +165,23 @@ describe("the token", () => {
     expect((await token({ grant_type: "refresh_token", client_id, refresh_token: next.refresh_token })).status).toBe(200);
   });
 
+  test("is Full only when the Owner picks Full at approval, and keeps its level when refreshed", async () => {
+    const { cookie, agent } = await adaWithAgent();
+    const { client_id, access_token, refresh_token } = await connectAs(cookie, agent.id, "full");
+    const asAgent = (token: string) => ({ headers: { authorization: `Bearer ${token}` } });
+    expect((await (await cronk.request("GET", "/api/agent", asAgent(access_token))).json()).access).toBe("full");
+
+    const renewed = await (await token({ grant_type: "refresh_token", client_id, refresh_token })).json();
+    expect((await (await cronk.request("GET", "/api/agent", asAgent(renewed.access_token))).json()).access).toBe("full");
+    const listed = await (await cronk.request("GET", `/api/agents/${agent.id}/tokens`, { cookie })).json();
+    expect(listed.map((t: { access: string }) => t.access)).toEqual(["full"]);
+  });
+
   test("is listed with the Agent's tokens, and revoking it disconnects the client", async () => {
     const { workspace, cookie, agent } = await adaWithAgent();
     const { client_id, access_token, refresh_token } = await connectAs(cookie, agent.id);
     const [listed] = await (await cronk.request("GET", `/api/agents/${agent.id}/tokens`, { cookie })).json();
-    expect(listed).toEqual(expect.objectContaining({ name: "Claude", access: "full" }));
+    expect(listed).toEqual(expect.objectContaining({ name: "Claude", access: "write" }));
 
     await cronk.request("DELETE", `/api/agents/${agent.id}/tokens/${listed.id}`, { cookie });
 

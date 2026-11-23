@@ -161,18 +161,31 @@ export async function lookUpRequest(context: Context, user: User, requestId: str
 
 /** Approves a request as one of the User's own Agents: the browser goes back to the client with a one-time code. */
 /** The approve route's body: the Agent of one's own the client acts as. */
-export const RequestApproval = Type.Object({ agentId: Type.String() });
+export const RequestApproval = Type.Object({
+  agentId: Type.String(),
+  access: Type.Optional(
+    Type.Union([Type.Literal("write"), Type.Literal("full")], {
+      description: "The connection's Token access: `write` (the default) or `full`, picked by hand.",
+    }),
+  ),
+});
 export type RequestApproval = Static<typeof RequestApproval>;
 
-export async function approveRequest(context: Context, user: User, requestId: string, agentId: string): Promise<string> {
+export async function approveRequest(
+  context: Context,
+  user: User,
+  requestId: string,
+  agentId: string,
+  access: "write" | "full" = "write",
+): Promise<string> {
   const request = await pendingRequest(context, requestId);
   const agent = await requireOwnAgent(context, user.id, agentId);
   const code = issueSecret("oauth_code");
   const now = context.clock.now();
   const { rowCount } = await context.db.query(
-    `update oauth_requests set agent_id = $2, code_hash = $3, expires_at = $4
+    `update oauth_requests set agent_id = $2, code_hash = $3, expires_at = $4, access = $5
      where id = $1 and code_hash is null and used_at is null`,
-    [request.id, agent.id, hashSecret(code), later(context.clock.now(), requestLifetimeMs)],
+    [request.id, agent.id, hashSecret(code), later(context.clock.now(), requestLifetimeMs), access],
   );
   if (rowCount === 0) throw new ApiError(404, "not_found", "That request to connect was already answered.");
   return backToClient(context, request.redirectUri, { code, state: request.state ?? undefined });
@@ -242,13 +255,15 @@ async function tradeCode(context: Context, clientId: string, params: TokenParams
     agentId: string;
     clientId: string;
     clientName: string | null;
+    access: "write" | "full";
   }>(
     `update oauth_requests set used_at = $2
      from oauth_clients
      where oauth_clients.id = oauth_requests.client_id and oauth_requests.code_hash = $1
        and oauth_requests.used_at is null and oauth_requests.expires_at > $2
      returning oauth_requests.redirect_uri as "redirectUri", oauth_requests.code_challenge as challenge,
-       oauth_requests.agent_id as "agentId", oauth_requests.client_id as "clientId", oauth_clients.name as "clientName"`,
+       oauth_requests.agent_id as "agentId", oauth_requests.client_id as "clientId", oauth_clients.name as "clientName",
+       oauth_requests.access`,
     [hashSecret(code), now],
   );
   const grant = rows[0];
@@ -262,8 +277,8 @@ async function tradeCode(context: Context, clientId: string, params: TokenParams
   const refreshToken = issueSecret("oauth_refresh");
   const { rowCount } = await db.query(
     `insert into agent_tokens (agent_id, name, access, token_hash, created_at, oauth_client_id, expires_at, refresh_hash)
-     select $1, $2, 'full', $3, $4, $5, $6, $7 where ${agentInUse("$1")}`,
-    [grant.agentId, grant.clientName ?? "OAuth client", hashSecret(access), now, clientId, expiry(now), hashSecret(refreshToken)],
+     select $1, $2, $8, $3, $4, $5, $6, $7 where ${agentInUse("$1")}`,
+    [grant.agentId, grant.clientName ?? "OAuth client", hashSecret(access), now, clientId, expiry(now), hashSecret(refreshToken), grant.access],
   );
   if (rowCount === 0) throw invalidGrant("The Agent picked was removed, or its Owner left its Workspace.");
   return tokenResponse(access, refreshToken);

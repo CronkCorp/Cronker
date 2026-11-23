@@ -566,7 +566,7 @@ describe("The producing Step", () => {
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
     const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
     await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
-    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
     const implement = project.statuses.find((s: { name: string }) => s.name === "Implement").id;
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Quick finish" });
     // The Implement Run starts at 09:00, opens its Pull Request at 09:01 and finishes at 09:02.
@@ -1039,7 +1039,7 @@ describe("Failures sending work back", () => {
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
     const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
     await ok("PATCH", `/api/agents/${agent.id}`, cookie, { runnerId: runner.id });
-    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Make it so" });
     await ok("PATCH", `/api/tickets/${ticket.id}`, cookie, {
       delegateId: agent.id,
@@ -1765,7 +1765,7 @@ describe("Pull Requests linked by hand", () => {
     await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, unnamed));
     expect((await link(cookie, ticket.id, "cronkcorp/cronker#7")).status).toBe(201);
     const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
-    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "write" });
     const headers = { authorization: `Bearer ${secret}` };
 
     const read = await cronk.request("GET", `/api/tickets/${ticket.id}/pull-requests`, { headers });

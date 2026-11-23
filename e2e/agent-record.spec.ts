@@ -11,7 +11,7 @@ test("an Agent's page shows its Record: a Run, a Comment and a saved Version, an
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   const asAgent = async (method: string, path: string, body?: unknown) =>
     (await cronk.request(method, path, { headers: { authorization: `Bearer ${secret}` }, body })).json();
   await call("PATCH", `/api/tickets/${ticket.id}`, {

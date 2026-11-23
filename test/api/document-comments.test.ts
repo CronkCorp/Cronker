@@ -54,7 +54,7 @@ async function documentsAndTickets() {
   const plan = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan", body: "One." });
   const guide = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Style guide", body: "Two." });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const readOnly = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "viewer", access: "read" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   const asReadOnly = { headers: { authorization: `Bearer ${readOnly.secret}` } };

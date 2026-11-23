@@ -27,12 +27,12 @@ async function ok(method: string, path: string, as: Request, body?: unknown) {
   return response.json;
 }
 
-/** A member's Agent `name` in the Workspace, using a fake Runner of theirs, with a full token. */
+/** A member's Agent `name` in the Workspace, using a fake Runner of theirs, with a Write token. */
 async function agentOf(as: Request, workspaceId: string, name: string) {
   const runner = await ok("POST", "/api/runners", as, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspaceId}/agents`, as, { name });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, as, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "cloud", access: "write" });
   return { ...agent, as: { headers: { authorization: `Bearer ${secret}` } } };
 }
 

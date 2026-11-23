@@ -40,7 +40,7 @@ test("a Run's Transcript opens from the timeline, follows new uploads, expands a
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "Transcript hook", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "Transcript hook", access: "write" });
   await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id });
   await call("PATCH", `/api/tickets/${ticket.id}`, {
     statusId: project.statuses.find((s: { name: string }) => s.name === "Triage").id,

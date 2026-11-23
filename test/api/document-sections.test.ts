@@ -64,7 +64,7 @@ async function workspaceWithGuide() {
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const full = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const full = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const read = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
   const asAgent = { headers: { authorization: `Bearer ${full.secret}` } };
   const asReader = { headers: { authorization: `Bearer ${read.secret}` } };

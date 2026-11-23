@@ -156,7 +156,7 @@ describe("a User's webhooks", () => {
     const { ada, hooks, workspace } = await adasWorkspace();
     const { id } = await ok("POST", hooks, ada, { name: "Ada's", url: "https://ntfy.sh/a" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
     const asAgent = { headers: { authorization: `Bearer ${secret}` } };
     for (const [method, path, body] of [
       ["GET", hooks],
@@ -501,7 +501,7 @@ describe("Inbox items", () => {
     const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
     await ok("PATCH", `/api/agents/${agent.id}`, ada, { runnerId: runner.id });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
     const asAgent = { headers: { authorization: `Bearer ${secret}` } };
     const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
     const ticket = async (title: string, fields: Record<string, unknown> = {}) => {

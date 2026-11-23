@@ -7,6 +7,7 @@ import { isUuid } from "../http/ids.js";
 import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
+import { requireHumanAct } from "../identity/acts.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { clearDecisionNotices, creatingRun, noticeKnowledge } from "../inbox/knowledge-notices.js";
 import { title } from "../work/fields.js";
@@ -172,6 +173,7 @@ type StatusWithReplacement = Pick<Content, "status" | "supersededById">;
 /** Refuses an Agent changing a Decision's status or what supersedes it, which only a User does. */
 function requireStatusRight(actor: Caller, from: StatusWithReplacement, to: StatusWithReplacement): void {
   if (actor.kind !== "agent" || (from.status === to.status && from.supersededById === to.supersededById)) return;
+  requireHumanAct(actor, "change a Decision's status");
   throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User changes a Decision's status.`, {
     rule: "Agents propose Decisions and edit their text; only a User changes a Decision's status.",
     advice: `Leave the status as it is, and argue for the change in the Decision's text, or ask ${ownerName(actor)}, ${actor.name}'s Owner, to change it.`,

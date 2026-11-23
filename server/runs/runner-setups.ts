@@ -179,7 +179,7 @@ export async function startSetup(
     );
     // The environment's own Transcript hook token, revoked on its own on the Agent's page; only the instructions hand it
     // over. It expires with the setup unless the setup is used.
-    const hook = await issueToken(tx, clock, agent, { name: `Transcript hook · ${project.name}`, access: "full", expiresAt });
+    const hook = await issueToken(tx, clock, agent, { name: `Transcript hook · ${project.name}`, access: "write", expiresAt });
     await tx.query(
       `insert into runner_setups (user_id, runner_id, project_id, agent_id, token_hash, hook_token_id, hook_token_sealed, plan,
          expires_at, created_at)

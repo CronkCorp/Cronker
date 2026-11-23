@@ -22,7 +22,7 @@ const modelIds = (workspaceId: string) => `/api/workspaces/${workspaceId}/model-
 /** An Agent of the signed-in User in the Workspace, as the headers of a request with a full-access token of its. */
 async function agentOf(cookie: string, workspaceId: string) {
   const agent = await (await cronk.request("POST", `/api/workspaces/${workspaceId}/agents`, { cookie, body: { name: "claude-max" } })).json();
-  const token = await (await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access: "full" } })).json();
+  const token = await (await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access: "write" } })).json();
   return { headers: { authorization: `Bearer ${token.secret}` } };
 }
 

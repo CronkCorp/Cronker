@@ -43,7 +43,7 @@ const base64 = (text: string) => Buffer.from(text).toString("base64");
 /**
  * Ada, the Admin, with a Project CRONK, open or private, listing Grace with Read; Linus, a member it doesn't list.
  * CRONK-1 has a Comment, an Attachment, a Relation to CRONK-2 and links a Document; CRONK holds a Document, Term,
- * Decision and Artifact. Grace has an Agent with a full token.
+ * Decision and Artifact. Grace has an Agent with a Write token.
  */
 async function projectWithReader(visibility: "open" | "private") {
   cronk = await startCronk();
@@ -71,7 +71,7 @@ async function projectWithReader(visibility: "open" | "private") {
     users: [{ userId: grace.user.id, level: "read" }],
   });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: grace.cookie }, { name: "grace-claude" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, { cookie: grace.cookie }, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, { cookie: grace.cookie }, { name: "laptop", access: "write" });
   return {
     workspace,
     ada,

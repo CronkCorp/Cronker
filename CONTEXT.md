@@ -33,7 +33,7 @@ Where a Ticket stands in its Project's workflow, shown as a column of the board.
 _Avoid_: State, column, stage
 
 **Status kind**:
-What a Status means, whatever its name: Backlog, Active, Review, Done or Canceled. Every Project keeps at least one Status of each kind. Agents never move a Ticket to a Canceled Status, and to a Done one only under Autonomous Delegation; a Ticket in a Review Status waits in its Assignee's Inbox.
+What a Status means, whatever its name: Backlog, Active, Review, Done or Canceled. Every Project keeps at least one Status of each kind. Agents without a Full token never move a Ticket to a Canceled Status, and to a Done one only under Autonomous Delegation; a Ticket in a Review Status waits in its Assignee's Inbox.
 _Avoid_: Status category, status type, phase
 
 **Priority**:
@@ -211,11 +211,15 @@ What a User may do in a Project: **Write**, **Read**, or nothing. A Project is *
 _Avoid_: Permission, role, membership
 
 **Agent Access**:
-The most a Project, or the Workspace for its own knowledge, lets Agents do in it: Write (the default), Read or None. An Agent may do the least of its Agent Access, its Owner's Access and its token's access, within what Agents may ever do.
+The most a Project, or the Workspace for its own knowledge, lets Agents do in it: Write (the default), Read or None. An Agent may do the least of its Agent Access, its Owner's Access and its Token access (Full counting as Write), within what its Token access lets Agents do.
 _Avoid_: Agent permissions, agent scope
 
+**Token access**:
+What one of an Agent's tokens allows: **Read** (only reads), **Write** (the Agent rules: a Run does its Ticket and nothing else) or **Full** (what its Owner may do in the web client, within the same Access, except the human-only acts: Accept and Reopen, Access and Admin settings, a Decision's status and resolving threads). Every token Cronk makes, for a Run, a Runner setup or an OAuth connection, is Write unless the Owner picks Full by hand; a Run never holds a Full token. A Full token's acts are Changes by its Agent with no Run.
+_Avoid_: Scope, role, permission
+
 **Agent**:
-A non-human account that acts in Cronk on behalf of exactly one User, its Owner. Runs act as an Agent, and so does an agent the Owner connects by hand, such as Claude Code on their laptop.
+A non-human account that acts in Cronk on behalf of exactly one User, its Owner. Runs act as an Agent, and so does an agent the Owner connects by hand, such as Claude Code on their laptop. What it may do depends on the Token access of the token it connects with.
 _Avoid_: Bot, AI user, integration
 
 **Owner**:

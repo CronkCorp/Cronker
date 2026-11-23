@@ -68,7 +68,7 @@ describe("Repositories on a Project", () => {
     const { workspace, cookie, project, cronker, website } = await projectWithApp();
     await post(cookie, `/api/projects/${project.id}/repositories`, { id: cronker.id });
     const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
-    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "write" });
     const headers = { authorization: `Bearer ${secret}` };
 
     const added = await cronk.request("POST", `/api/projects/${project.id}/repositories`, { headers, body: { id: website.id } });

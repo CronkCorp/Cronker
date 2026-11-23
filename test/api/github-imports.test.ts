@@ -200,7 +200,7 @@ describe("importing a Repository's GitHub issues", () => {
     const { workspace, cookie, repository, project } = await projectListingRepository();
     const member = await addMember(cronk, cookie, workspace.id, "grace@example.com");
     const agent = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
-    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+    const { secret } = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "write" });
 
     const byMember = await cronk.request("POST", importPath(project.id, repository.id), { cookie: member.cookie });
     const byAgent = await cronk.request("POST", importPath(project.id, repository.id), { headers: { authorization: `Bearer ${secret}` } });

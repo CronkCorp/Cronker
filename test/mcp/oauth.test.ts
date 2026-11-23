@@ -159,6 +159,6 @@ describe("MCP with OAuth", () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name)).toContain("read_ticket");
     const tokens = await (await cronk.request("GET", `/api/agents/${agent.id}/tokens`, { cookie })).json();
-    expect(tokens).toEqual([expect.objectContaining({ name: "Claude", access: "full" })]);
+    expect(tokens).toEqual([expect.objectContaining({ name: "Claude", access: "write" })]);
   });
 });

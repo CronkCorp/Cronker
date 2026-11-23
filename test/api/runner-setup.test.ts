@@ -194,7 +194,7 @@ describe("a Runner setup is refused", () => {
 
   test("for an Agent's token", async () => {
     const { ada, project, runner, agent } = await adaWithProject();
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
 
     expect(await refusal({ headers: { authorization: `Bearer ${secret}` } }, runner.id, { projectId: project.id })).toEqual(
       expect.objectContaining({ status: 403 }),
@@ -290,7 +290,7 @@ describe("the served instructions", () => {
     }
     const hookToken = hookTokenIn(text);
     const tokens = await ok("GET", `/api/agents/${agent.id}/tokens`, ada);
-    expect(tokens.map((t: { name: string }) => t.name)).toEqual(["Transcript hook · Cronker"]);
+    expect(tokens.map((t: { name: string; access: string }) => [t.name, t.access])).toEqual([["Transcript hook · Cronker", "write"]]);
     const asHook = await call("GET", `/api/projects/${project.id}`, { headers: { authorization: `Bearer ${hookToken}` } });
     expect(asHook.status).toBe(200);
   });
@@ -467,7 +467,7 @@ describe("reporting back", () => {
 
   test("is refused to an Agent's token", async () => {
     const { ada, project, runner, agent } = await adaWithProject();
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
     const { report } = await started(ada, runner.id, project.id);
 
     const refused = await report(allLabels({ haiku: "trig_h", sonnet: "trig_s", opus: "trig_o" }), {

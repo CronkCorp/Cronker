@@ -30,7 +30,7 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
   return response.json;
 }
 
-async function tokenOf(as: As, workspaceId: string, name: string, access: "full" | "read") {
+async function tokenOf(as: As, workspaceId: string, name: string, access: "write" | "read") {
   const agent = await ok("POST", `/api/workspaces/${workspaceId}/agents`, as, { name });
   const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "laptop", access });
   return { agent, as: { headers: { authorization: `Bearer ${secret}` } } };
@@ -52,8 +52,8 @@ async function workspaceWithProject() {
   const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Access", definition: "Read or Write." });
   const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Seam first", body: "Why." });
   const handbook = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Handbook" });
-  const adasAgent = await tokenOf(ada, workspace.id, "ada-claude", "full");
-  const gracesAgent = await tokenOf({ cookie: grace.cookie }, workspace.id, "grace-claude", "full");
+  const adasAgent = await tokenOf(ada, workspace.id, "ada-claude", "write");
+  const gracesAgent = await tokenOf({ cookie: grace.cookie }, workspace.id, "grace-claude", "write");
   const gracesReader = await tokenOf({ cookie: grace.cookie }, workspace.id, "grace-reader", "read");
   return {
     workspace,

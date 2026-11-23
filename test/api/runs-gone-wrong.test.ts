@@ -32,7 +32,7 @@ const minutes = (n: number) => n * 60 * 1000;
 
 /**
  * Ada with a Project on the default board, a Ticket in Backlog, and her Agent `claude-max`
- * using her fake Runner, with a full token.
+ * using her fake Runner, with a Write token.
  */
 async function adaWithAgent() {
   const { workspace, user } = await setUp(cronk);
@@ -42,7 +42,7 @@ async function adaWithAgent() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   const inbox = (as: Request = ada) => ok("GET", `/api/workspaces/${workspace.id}/inbox`, as);
   return { workspace, user, ada, project, ticket, runner, agent, asAgent: { headers: { authorization: `Bearer ${secret}` } }, status, inbox };

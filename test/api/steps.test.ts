@@ -285,7 +285,7 @@ describe("attaching, editing and removing a Step", () => {
 
 describe("Agents and Steps", () => {
   /** An Agent of the User whose cookie is given, with a token of that access. */
-  async function agentOf(workspaceId: string, cookie: string, name: string, access: "full" | "read" = "full") {
+  async function agentOf(workspaceId: string, cookie: string, name: string, access: "read" | "write" | "full" = "write") {
     const agent = await (await cronk.request("POST", `/api/workspaces/${workspaceId}/agents`, { cookie, body: { name } })).json();
     const token = await (
       await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access } })
