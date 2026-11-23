@@ -190,12 +190,20 @@ test("a card picked up by its title or key drags without selecting text, while a
   await page.mouse.move(to.x + to.width / 2, to.y + 160, { steps: 8 });
   await page.mouse.up();
   await expect(card("Triage")).toBeVisible();
+  await expect.poll(async () => (await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status("Triage"));
   expect(await selected(), "no text is selected by the drag").toBe("");
 
   // A middle-click on the title opens the Ticket in a new tab and leaves the board where it is (Ctrl/Cmd+click selects
-  // the card instead, see board-selection.spec.ts).
+  // the card instead, see board-selection.spec.ts). Retried: on a loaded CI runner a middle-click straight after the
+  // native drag (or while the board refetches its Tickets) is now and then swallowed, and no tab opens (CRONK-106).
   if (browserName === "chromium") {
-    const [opened] = await Promise.all([page.context().waitForEvent("page"), card("Triage").locator(".card-title").click({ button: "middle" })]);
+    let opened!: Page;
+    await expect(async () => {
+      [opened] = await Promise.all([
+        page.context().waitForEvent("page", { timeout: 3_000 }),
+        card("Triage").locator(".card-title").click({ button: "middle", timeout: 3_000 }),
+      ]);
+    }).toPass({ timeout: 20_000 });
     await opened.waitForLoadState();
     await expect(opened.getByRole("heading", { name: "CRONK-1 Ship it" })).toBeVisible();
     await opened.close();
