@@ -103,7 +103,7 @@ import type { RunnerCreate, RunnerEdit, TriggerSave, TriggerToken, WebhookSecret
 import type { RedactionCreate } from "../../server/transcripts/transcripts.js";
 import type { ProjectCreate, ProjectEdit } from "../../server/work/projects.js";
 import type { StatusAdd, StatusEdit } from "../../server/work/statuses.js";
-import type { Release, ReleaseCreate, ReleaseEdit, TicketRelease } from "../../server/work/releases.js";
+import type { OpenReleaseTicket, Release, ReleaseCreate, ReleaseEdit, ReleasePublish, TicketRelease } from "../../server/work/releases.js";
 import type { StepPut } from "../../server/work/steps.js";
 import type { Webhook, WebhookCreate, WebhookDelivery, WebhookEdit, WebhookKind } from "../../server/webhooks/webhooks.js";
 
@@ -125,7 +125,7 @@ export type { Artifact, ArtifactComparison, ArtifactFile, ArtifactSummary, Artif
 export type { Check, Completion, MovedOnDependent, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
 export type { ConnectRequest, Inbox, InboxItem, SearchKind, SearchResult };
 export type { Webhook, WebhookDelivery, WebhookKind };
-export type { Release, TicketRelease };
+export type { OpenReleaseTicket, Release, TicketRelease };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
 export type ChangeActor = ActorOrCronk;
@@ -324,6 +324,12 @@ export const api = {
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}`),
   cutRelease: (projectId: string, releaseId: string) =>
     call<Release>("POST", `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/cut`),
+  releaseRelease: (projectId: string, releaseId: string, input: ReleasePublish) =>
+    call<Release>(
+      "POST",
+      `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/release`,
+      input,
+    ),
   createTicket: (projectId: string, input: TicketCreate) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),

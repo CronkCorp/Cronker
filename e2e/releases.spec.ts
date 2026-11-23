@@ -103,3 +103,57 @@ test("Cut creates the release branches and shows each Repository's commit", asyn
   await expect(release.getByRole("button", { name: "More of v0.3.0" })).toHaveCount(0);
   expect(cronk.github.refsCreated.map((r) => r.repository)).toEqual(["cronkcorp/cronker", "cronkcorp/website"]);
 });
+
+/**
+ * Releasing a Release (CRONK-118): the dialog takes Upgrade notes, lists the open Tickets on the first try and offers
+ * Release anyway, then the released Release shows each Repository's GitHub Release.
+ */
+test("Release lists open Tickets, goes ahead when confirmed and links each GitHub Release", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker", "website"]);
+  const asAda = (method: string, path: string, body?: unknown) =>
+    cronk.request(method, path, { cookie, body }).then(async (response) => {
+      expect(response.ok, await response.clone().text()).toBe(true);
+      return response.json();
+    });
+  const project = await asAda("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  for (const repository of installation.repositories) {
+    await asAda("POST", `/api/projects/${project.id}/repositories`, { id: repository.id });
+  }
+  const created = await asAda("POST", `/api/projects/${project.id}/releases`, { name: "v0.3.0" });
+  await asAda("POST", `/api/projects/${project.id}/tickets`, { title: "Still going", release: "v0.3.0" });
+  await asAda("POST", `/api/projects/${project.id}/releases/${created.id}/cut`, {});
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("button", { name: "More of this Project" }).click();
+  await page.getByRole("menuitem", { name: "Releases" }).click();
+  const release = page.getByRole("region", { name: "Release v0.3.0" });
+  await release.getByRole("button", { name: "Release…" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("cronkcorp/cronker, cronkcorp/website");
+  await dialog.getByLabel("Upgrade notes").fill("Run the migration first.");
+  await dialog.getByRole("button", { name: "Release", exact: true }).click();
+
+  const open = dialog.getByRole("list", { name: "Open Tickets of v0.3.0" });
+  await expect(open).toContainText("CRONK-1 Still going (Backlog)");
+  expect(cronk.github.releasesCreated).toEqual([]);
+  await dialog.getByRole("button", { name: "Release anyway" }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(release).toContainText("Released");
+  await expect(release.getByText(/Released by /)).toBeVisible();
+  for (const repository of ["cronkcorp/cronker", "cronkcorp/website"]) {
+    const link = release.getByRole("link", { name: "GitHub Release v0.3.0" }).and(
+      page.locator(`a[href="https://github.com/${repository}/releases/tag/v0.3.0"]`),
+    );
+    await expect(link).toBeVisible();
+  }
+  await expect(release.getByRole("button", { name: "Release…" })).toHaveCount(0);
+  expect(cronk.github.releasesCreated.map((r) => r.body)).toEqual([
+    "## Upgrade notes\n\nRun the migration first.\n\n## Tickets\n\n- CRONK-1: Still going\n",
+    "## Upgrade notes\n\nRun the migration first.\n\n## Tickets\n\n- CRONK-1: Still going\n",
+  ]);
+});

@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useAddresses } from "./addresses.js";
-import { api, type Project, type Release, type WorkspaceSummary } from "./api.js";
+import { api, ApiError, type OpenReleaseTicket, type Project, type Release, type WorkspaceSummary } from "./api.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { keys } from "./live-queries.js";
 import { ProjectMenu } from "./projects.js";
 import { Link } from "./router.js";
-import { Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
+import { Button, EmptyState, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, StatusDot, type Tone } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { ReadOnlyNote } from "./write-access.js";
@@ -22,8 +22,9 @@ export function ReleaseState({ state }: { state: Release["state"] }) {
 
 /**
  * A Project's Releases, newest first: each with its state, release branch, how many of its Tickets are open and done,
- * and its Tickets; a cut one with who cut it, when, and each Repository's cut commit. With Write, New Release, and
- * Cut…, Rename… and Delete… on a planned one.
+ * and its Tickets; a cut one with who cut it, when, and each Repository's cut commit; a released one with who released
+ * it, when, and each Repository's tag and GitHub Release. With Write, New Release, Cut…, Rename… and Delete… on a
+ * planned one, and Release… on a cut one.
  */
 export function ProjectReleases({
   workspace,
@@ -75,6 +76,7 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [cutting, setCutting] = useState(false);
+  const [releasing, setReleasing] = useState(false);
   const statusOf = (statusId: string) => project.statuses.find((s) => s.id === statusId);
   const editable = canWrite && release.state === "planned";
   return (
@@ -91,6 +93,11 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
             Cut…
           </Button>
         )}
+        {canWrite && release.state === "cut" && (
+          <Button size="small" onClick={() => setReleasing(true)}>
+            Release…
+          </Button>
+        )}
         {editable && (
           <Menu label={`More of ${release.name}`}>
             <MenuItem onSelect={() => setRenaming(true)}>Rename…</MenuItem>
@@ -102,14 +109,27 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
         <div className="release-cut small">
           <p className="muted">
             Cut{release.cutBy && <> by {release.cutBy.name}</>} <RelativeTime at={release.cutAt} />
+            {release.releasedAt && (
+              <>
+                {" · "}Released{release.releasedBy && <> by {release.releasedBy.name}</>} <RelativeTime at={release.releasedAt} />
+              </>
+            )}
           </p>
           <ul className="release-commits" aria-label={`Commits ${release.name} was cut at`}>
-            {release.repositories.map(({ repository, commit }) => (
+            {release.repositories.map(({ repository, commit, tag, releaseUrl }) => (
               <li key={repository.id}>
                 <span className="mono">{repository.fullName}</span>{" "}
                 <span className="mono muted" title={commit}>
                   {commit.slice(0, 7)}
                 </span>
+                {releaseUrl && (
+                  <>
+                    {" "}
+                    <ExternalLink url={releaseUrl}>
+                      GitHub Release <span className="mono">{tag}</span>
+                    </ExternalLink>
+                  </>
+                )}
               </li>
             ))}
           </ul>
@@ -134,6 +154,7 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
       )}
       <RenameRelease project={project} release={release} open={renaming} onOpenChange={setRenaming} />
       <CutRelease project={project} release={release} open={cutting} onOpenChange={setCutting} />
+      {releasing && <PublishRelease project={project} release={release} onClose={() => setReleasing(false)} />}
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -268,5 +289,88 @@ function CutRelease({
         </>
       )}
     </ConfirmDialog>
+  );
+}
+
+/**
+ * Releases a cut Release: takes the Upgrade notes its GitHub Releases' notes start with. A refusal for open Tickets
+ * lists them and offers Release anyway, which resends with `confirm`; any other refusal shows in the dialog.
+ */
+function PublishRelease({ project, release, onClose }: { project: Project; release: Release; onClose: () => void }) {
+  const [upgradeNotes, setUpgradeNotes] = useState("");
+  const [openTickets, setOpenTickets] = useState<OpenReleaseTicket[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const publish = async (confirm: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.releaseRelease(project.id, release.id, { upgradeNotes, confirm });
+      onClose();
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "release_has_open_tickets" && Array.isArray(e.body.openTickets)) {
+        setOpenTickets(e.body.openTickets as OpenReleaseTicket[]);
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  const repositories = release.repositories.map((r) => r.repository.fullName);
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title={`Release ${release.name}?`}
+      description={
+        <>
+          Cronk tags the head of <span className="mono">{release.branch}</span> <span className="mono">{release.name}</span> and
+          creates a GitHub Release in {repositories.join(", ") || "each Repository it was cut in"}, with notes listing its
+          Tickets. Its Tickets can't be changed afterwards.
+        </>
+      }
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void publish(openTickets !== null);
+        }}
+      >
+        <Field label="Upgrade notes" hint="Markdown, shown before the Tickets in the notes. Leave it blank to have none.">
+          <textarea
+            name="upgradeNotes"
+            rows={5}
+            maxLength={20000}
+            value={upgradeNotes}
+            onChange={(event) => setUpgradeNotes(event.currentTarget.value)}
+            autoFocus
+          />
+        </Field>
+        {openTickets && (
+          <div className="release-open" role="alert">
+            <p>
+              {openTickets.length === 1 ? "1 Ticket is" : `${openTickets.length} Tickets are`} still open:
+            </p>
+            <ul aria-label={`Open Tickets of ${release.name}`}>
+              {openTickets.map((ticket) => (
+                <li key={ticket.key}>
+                  <Key>{ticket.key}</Key> {ticket.title} <span className="muted">({ticket.status})</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <FormError error={error} />
+        <DialogActions>
+          <DialogClose asChild>
+            <Button>Cancel</Button>
+          </DialogClose>
+          <Button type="submit" variant={openTickets ? "danger" : "primary"} disabled={busy}>
+            {openTickets ? "Release anyway" : "Release"}
+          </Button>
+        </DialogActions>
+      </form>
+    </Dialog>
   );
 }

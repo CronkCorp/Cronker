@@ -296,15 +296,30 @@ export async function updateBranchOnGitHub(
 }
 
 /** The commit a branch of a repository, by `owner/name`, points at; nothing if it has no such branch. */
-export async function branchHead({ github }: Config, token: string, fullName: string, branch: string): Promise<string | undefined> {
-  const ref = branch.split("/").map(encodeURIComponent).join("/");
-  const response = await call(under(github.apiUrl, `${repoPath(fullName)}/git/ref/heads/${ref}`), {
+export async function branchHead(config: Config, token: string, fullName: string, branch: string): Promise<string | undefined> {
+  return refTarget(config, token, fullName, "heads", branch);
+}
+
+/** What a tag of a repository, by `owner/name`, points at; nothing if it has no such tag. */
+export async function tagTarget(config: Config, token: string, fullName: string, tag: string): Promise<string | undefined> {
+  return refTarget(config, token, fullName, "tags", tag);
+}
+
+async function refTarget(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  kind: "heads" | "tags",
+  name: string,
+): Promise<string | undefined> {
+  const ref = name.split("/").map(encodeURIComponent).join("/");
+  const response = await call(under(github.apiUrl, `${repoPath(fullName)}/git/ref/${kind}/${ref}`), {
     headers: { authorization: `Bearer ${token}` },
   });
   if (response.status === 404) return undefined;
-  const body = await jsonOf<{ ref?: unknown; object?: { sha?: unknown } }>(response, "The branch");
+  const body = await jsonOf<{ ref?: unknown; object?: { sha?: unknown } }>(response, kind === "heads" ? "The branch" : "The tag");
   // GitHub answers a prefix of several refs with a list, so only an exact match counts.
-  if (Array.isArray(body) || body.ref !== `refs/heads/${branch}` || typeof body.object?.sha !== "string") return undefined;
+  if (Array.isArray(body) || body.ref !== `refs/${kind}/${name}` || typeof body.object?.sha !== "string") return undefined;
   return body.object.sha;
 }
 
@@ -330,6 +345,31 @@ export async function createRef(
   }
   await jsonOf<unknown>(response, "The ref creation");
   return { created: true };
+}
+
+/**
+ * Creates a GitHub Release of a repository, by `owner/name`, for an existing tag, with its name and Markdown notes:
+ * its address on GitHub. GitHub's refusal, such as a Release that already exists for the tag (422), comes back with
+ * its message.
+ */
+export async function createGitHubRelease(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  release: { tag: string; name: string; body: string },
+): Promise<{ created: true; url: string } | { created: false; status: number; message: string }> {
+  const response = await call(under(github.apiUrl, `${repoPath(fullName)}/releases`), {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ tag_name: release.tag, name: release.name, body: release.body }),
+  });
+  if (response.status === 409 || response.status === 422) {
+    const body = (await response.json().catch(() => ({}))) as { message?: unknown };
+    return { created: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
+  }
+  const body = await jsonOf<{ html_url?: unknown }>(response, "The release creation");
+  if (typeof body.html_url !== "string") throw unavailable("GitHub answered the release creation without its address.");
+  return { created: true, url: body.html_url };
 }
 
 /** One attempt at one of the App's webhook deliveries, as GitHub's delivery log lists it. */
