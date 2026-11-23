@@ -191,6 +191,26 @@ describe("Pull Requests linking to Tickets", () => {
     expect(await pullRequestsOf(third.id, cookie)).toEqual([]);
   });
 
+  test("the board lists each Ticket's Pull Requests by Repository and number, for its card's menu", async () => {
+    const { cookie, app, installation, project, cronker, website } = await projectWithRepository();
+    await post(cookie, `/api/projects/${project.id}/repositories`, { id: website.id });
+    const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Ship it" });
+    const other = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Unlinked" });
+
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, website, { id: 601, number: 3, title: "CRONK-1", branch: "feat/cronk-1-site" }));
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 502, number: 9, title: "CRONK-1", branch: "feat/cronk-1-b", draft: true }));
+    await deliver(app, "pull_request", pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "CRONK-1", branch: "feat/cronk-1-a" }));
+
+    const board = await (await cronk.request("GET", `/api/projects/${project.id}/tickets`, { cookie })).json();
+    const of = (id: string) => board.find((t: { id: string }) => t.id === id).pullRequests;
+    expect(of(ticket.id)).toEqual([
+      { repository: "cronkcorp/cronker", number: 7, url: "https://github.com/cronkcorp/cronker/pull/7", state: "open", branch: "feat/cronk-1-a" },
+      { repository: "cronkcorp/cronker", number: 9, url: "https://github.com/cronkcorp/cronker/pull/9", state: "draft", branch: "feat/cronk-1-b" },
+      { repository: "cronkcorp/website", number: 3, url: "https://github.com/cronkcorp/website/pull/3", state: "open", branch: "feat/cronk-1-site" },
+    ]);
+    expect(of(other.id)).toEqual([]);
+  });
+
   test("a key named in both title and branch, in any case, links its Ticket once", async () => {
     const { cookie, app, installation, project, cronker } = await projectWithRepository();
     const ticket = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Named twice" });
@@ -1555,8 +1575,10 @@ describe("Send-back Comments written before they were marked", () => {
     // reading a Ticket needs the columns of Runs' costs; finding a Project or a Ticket needs Access; reading a User needs display
     // names; creating a Ticket needs the Mention index, Embeds and Term Mentions among it; finding a Project needs Concise Reports;
     // any Access needs archived Projects; reading a Ticket needs conflict markers, and its place in the Merge Queue with
-    // its Pull Request's base branch and the conflict that last set it aside.
+    // its Pull Request's base branch and the conflict that last set it aside, and its latest Run's Transcript.
     await cronk.applyAhead("0033_merge_step.sql");
+    await cronk.applyAhead("0033_transcripts.sql");
+    await cronk.applyAhead("0037_transcript_deletions.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
     await cronk.applyAhead("0049_run_costs.sql");
     await cronk.applyAhead("0051_access.sql");

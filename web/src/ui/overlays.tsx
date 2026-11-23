@@ -243,6 +243,31 @@ export function MenuLink({ to, children, current }: { to: string; children: Reac
   );
 }
 
+/** A page outside Cronk a Menu leads to, such as a Pull Request on GitHub: a link that opens in a new tab. */
+export function MenuExternalLink({ href, children }: { href: string; children: ReactNode }) {
+  const { Item } = useContext(MenuPartsContext);
+  return (
+    <Item className="menu-item" asChild>
+      <a href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    </Item>
+  );
+}
+
+/** An item copying text, such as a Ticket's key, to the clipboard; without one (an insecure context) it does nothing. */
+export function MenuCopyItem({ text, children }: { text: string; children: ReactNode }) {
+  return (
+    <MenuItem
+      onSelect={() => {
+        navigator.clipboard?.writeText(text).catch(() => {});
+      }}
+    >
+      {children}
+    </MenuItem>
+  );
+}
+
 export function MenuLabel({ children }: { children: ReactNode }) {
   const { Label } = useContext(MenuPartsContext);
   return <Label className="menu-label">{children}</Label>;

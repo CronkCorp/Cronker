@@ -50,6 +50,8 @@ import {
   HoverPopover,
   Menu,
   MenuCheckboxItem,
+  MenuCopyItem,
+  MenuExternalLink,
   MenuItem,
   MenuLink,
   MenuRadioGroup,
@@ -681,14 +683,17 @@ function useEdgeScroll() {
 /**
  * A card's context menu: Move to its Project's Statuses, Delegate to the User's own Agents or Undelegate, and, while
  * it is delegated, Autonomous Delegation. Each saves at once through `onEdit`, as a drop does; Cronk keeps the rules.
- * On a card of a selection of several, it offers only Move to, for the whole selection, through `onMoveSelection`.
+ * Under them, the Ticket's links and copies (CardLinks), the only items with Read. On a card of a selection of
+ * several, it offers only Move to, for the whole selection, through `onMoveSelection`.
  */
 function CardMenu({
   ticket,
   project,
   own,
   selection,
+  canWrite,
   onEdit,
+  onRetry,
   onMoveSelection,
 }: {
   ticket: TicketSummary;
@@ -697,9 +702,13 @@ function CardMenu({
   own: Agent[];
   /** How many Tickets are selected, this one among them; 0 when it isn't selected. */
   selection: number;
+  /** Whether the User has Write in the Project; with Read, only the links and copies are offered. */
+  canWrite: boolean;
   onEdit: (edit: TicketEdit) => void;
+  onRetry: () => void;
   onMoveSelection: (statusId: string) => void;
 }) {
+  if (!canWrite) return <CardLinks ticket={ticket} canRetry={false} onRetry={onRetry} />;
   if (selection > 1) {
     return (
       <MenuSub label={`Move ${ticketCount(selection)} to`}>
@@ -747,6 +756,55 @@ function CardMenu({
           Autonomous Delegation
         </MenuCheckboxItem>
       )}
+      <MenuSeparator />
+      <CardLinks ticket={ticket} canRetry={canRetry(ticket, own)} onRetry={onRetry} />
+    </>
+  );
+}
+
+/**
+ * Whether the User may Retry the Ticket's latest Run from its card, as on the Ticket: it failed, was lost or couldn't
+ * start, the Ticket is still in its Status and is delegated to one of the User's own Agents.
+ */
+function canRetry(ticket: TicketSummary, own: Agent[]): boolean {
+  const run = ticket.lastRun;
+  return (
+    run !== null &&
+    (run.state === "failed" || run.state === "lost" || run.state === "refused") &&
+    run.statusId === ticket.statusId &&
+    own.some((agent) => agent.id === ticket.delegateId)
+  );
+}
+
+/**
+ * A card menu's links and copies, each only when it applies: its Pull Requests on GitHub (several behind one item),
+ * its latest Run's session and Transcript, Retry for a Run gone wrong, the Ticket in a new tab, and copies of its
+ * address, key and, with one Pull Request, its branch. External links open in a new tab.
+ */
+function CardLinks({ ticket, canRetry, onRetry }: { ticket: TicketSummary; canRetry: boolean; onRetry: () => void }) {
+  const to = useAddresses();
+  const run = ticket.lastRun;
+  const [only] = ticket.pullRequests.length === 1 ? ticket.pullRequests : [];
+  const address = to.ticket(ticket);
+  return (
+    <>
+      {only && <MenuExternalLink href={only.url}>Open Pull Request</MenuExternalLink>}
+      {ticket.pullRequests.length > 1 && (
+        <MenuSub label="Open Pull Request">
+          {ticket.pullRequests.map((pr) => (
+            <MenuExternalLink key={pr.url} href={pr.url}>
+              {pr.repository}#{pr.number} <span className="muted">{pr.state}</span>
+            </MenuExternalLink>
+          ))}
+        </MenuSub>
+      )}
+      {run?.sessionUrl && <MenuExternalLink href={run.sessionUrl}>Open session</MenuExternalLink>}
+      {run?.transcriptSlug && <MenuLink to={to.transcript({ slug: run.transcriptSlug })}>Open Transcript</MenuLink>}
+      {canRetry && <MenuItem onSelect={onRetry}>Retry</MenuItem>}
+      <MenuExternalLink href={address}>Open in new tab</MenuExternalLink>
+      <MenuCopyItem text={new URL(address, window.location.origin).href}>Copy link</MenuCopyItem>
+      <MenuCopyItem text={ticket.key}>Copy key</MenuCopyItem>
+      {only && <MenuCopyItem text={only.branch}>Copy branch name</MenuCopyItem>}
     </>
   );
 }
@@ -770,6 +828,7 @@ function Card({
   folded,
   selection,
   onEdit,
+  onRetry,
   onSelect,
   onMoveSelection,
 }: {
@@ -784,11 +843,12 @@ function Card({
   /** How many Tickets are selected, this one among them; 0 when it isn't selected. */
   selection: number;
   onEdit: (edit: TicketEdit) => void;
+  onRetry: () => void;
   onSelect: (range: boolean) => void;
   onMoveSelection: (statusId: string) => void;
 }) {
   const to = useAddresses();
-  // With Read, a card neither drags, selects nor opens a context menu of changes: it is only a link to its Ticket.
+  // With Read, a card neither drags nor selects, and its context menu has only its links and copies.
   const canWrite = project.access === "write";
   const selected = selection > 0;
   const card = (
@@ -845,12 +905,20 @@ function Card({
       <SubTickets ticket={ticket} statusId={ticket.statusId} project={project} folded={folded} />
     </div>
   );
-  if (!canWrite) return card;
   return (
     <ContextMenu
       label={`${ticket.key} ${ticket.title}`}
       content={
-        <CardMenu ticket={ticket} project={project} own={own} selection={selection} onEdit={onEdit} onMoveSelection={onMoveSelection} />
+        <CardMenu
+          ticket={ticket}
+          project={project}
+          own={own}
+          selection={selection}
+          canWrite={canWrite}
+          onEdit={onEdit}
+          onRetry={onRetry}
+          onMoveSelection={onMoveSelection}
+        />
       }
     >
       {card}
@@ -1065,6 +1133,18 @@ function Board({
     onChanged(edited);
   };
 
+  /** A card menu's Retry, as on the Ticket; a refusal says why above the board. */
+  const retry = async (ticketId: string) => {
+    setError(null);
+    setRefusals(null);
+    try {
+      await api.retry(ticketId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+    onChanged(undefined);
+  };
+
   /**
    * Moves every selected Ticket to the Status, one at a time, each saved as if moved alone, so each is its own Change
    * and starts Runs as usual. A refused one doesn't stop the rest; the refusals are listed above the board, and those
@@ -1210,6 +1290,7 @@ function Board({
                       folded={folded ?? noneFolded}
                       selection={selected.has(ticket.id) ? selected.size : 0}
                       onEdit={(change) => void edit(ticket.id, change)}
+                      onRetry={() => void retry(ticket.id)}
                       onSelect={(range) => select(ticket, range)}
                       onMoveSelection={(statusId) => void moveSelection(statusId)}
                     />

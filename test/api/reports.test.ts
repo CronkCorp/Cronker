@@ -52,11 +52,14 @@ async function runningRun(options: StartCronkOptions = {}) {
   // Runner's setup; reading a Ticket or a Runner needs the columns of Runs' costs; finding a Project or a Ticket
   // needs Access; any User read needs display names; writing a Ticket's description or a Comment needs the Mention index,
   // Embeds, Decision Mentions and Term Mentions among it; finding a Project and starting a Run need Concise Reports; any
-  // Access needs archived Projects; reading a Ticket needs Pull Requests' conflict markers.
+  // Access needs archived Projects; reading a Ticket needs Pull Requests' conflict markers and its latest Run's
+  // Transcript.
   if (options.migrateBefore !== undefined) {
     await cronk.applyAhead("0022_repositories.sql");
     await cronk.applyAhead("0026_decisions.sql");
     await cronk.applyAhead("0033_merge_step.sql");
+    await cronk.applyAhead("0033_transcripts.sql");
+    await cronk.applyAhead("0037_transcript_deletions.sql");
     await cronk.applyAhead("0043_managed_agents_runner.sql");
     await cronk.applyAhead("0044_workspace_slugs.sql");
     await cronk.applyAhead("0047_managed_agents_webhooks.sql");

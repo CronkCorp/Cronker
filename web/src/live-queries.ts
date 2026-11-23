@@ -84,10 +84,11 @@ export function invalidations(event: StreamEvent): QueryKey[] {
       return "ticketId" in event
         ? [keys.attachments(event.ticketId), keys.comments(event.ticketId), keys.reports(event.ticketId)]
         : [keys.documentAttachments(event.documentId)];
+    // The Project's Tickets list their Pull Requests and their latest Run's Transcript, for the card's menu.
     case "pull_requests.changed":
-      return [keys.pullRequests(event.ticketId)];
+      return [keys.pullRequests(event.ticketId), keys.projectTickets(event.projectId)];
     case "transcripts.changed":
-      return [keys.transcripts(event.ticketId), keys.agentRecords];
+      return [keys.transcripts(event.ticketId), keys.projectTickets(event.projectId), keys.agentRecords];
     // Saving any of these makes a Version, which may be an Agent's.
     case "document.changed":
       return [keys.everythingOf("document", event.documentId), keys.agentRecords];

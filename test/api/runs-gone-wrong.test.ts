@@ -169,7 +169,7 @@ describe("Retry", () => {
       expect.objectContaining({ step: { statusId: status("Triage"), name: "Triage" }, model: "haiku", state: "running" }),
     );
     expect(retried.json).toEqual(
-      expect.objectContaining({ id: ticket.id, lastRun: { id: fresh.id, state: "running" }, waiting: null }),
+      expect.objectContaining({ id: ticket.id, lastRun: expect.objectContaining({ id: fresh.id, state: "running" }), waiting: null }),
     );
     expect(await states(ticket.id, ada)).toEqual([
       ["Triage", "failed"],
@@ -188,7 +188,7 @@ describe("Retry", () => {
 
     const retried = await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
 
-    expect(retried).toEqual(expect.objectContaining({ lastRun: { id: run.id, state: "failed" }, waiting: "runnerSlot" }));
+    expect(retried).toEqual(expect.objectContaining({ lastRun: expect.objectContaining({ id: run.id, state: "failed" }), waiting: "runnerSlot" }));
     expect(await inbox()).toEqual({ count: 0, items: [] });
 
     const [otherRun] = await runsOf(other.id, ada);
