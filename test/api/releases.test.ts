@@ -608,3 +608,106 @@ describe("releasing a Release", () => {
     }
   });
 });
+
+describe("managing Releases through MCP", () => {
+  test("an Agent with Write lists, creates, renames and deletes planned Releases, by name", async () => {
+    const { workspace, ada, project, first } = await withProject();
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const client = await connect(secret);
+
+    const made = await tool(client, "create_release", { project: "cronk", name: " v0.3.0 " });
+    expect(made.isError).toBe(false);
+    expect(made.json).toEqual(expect.objectContaining({ name: "v0.3.0", state: "planned", branch: "release/v0.3.0" }));
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { release: "v0.3.0" });
+
+    const listed = await tool(client, "list_releases", { project: "CRONK" });
+    expect(listed.json).toEqual([
+      expect.objectContaining({ id: made.json.id, name: "v0.3.0", state: "planned", branch: "release/v0.3.0", openCount: 1 }),
+    ]);
+
+    const renamed = await tool(client, "rename_release", { project: "CRONK", release: "V0.3.0", name: "v0.3.1" });
+    expect(renamed.json).toEqual(expect.objectContaining({ id: made.json.id, name: "v0.3.1", branch: "release/v0.3.1" }));
+    expect((await tool(client, "read_ticket", { ticket: "CRONK-1" })).json.ticket.release).toEqual({
+      id: made.json.id,
+      name: "v0.3.1",
+      state: "planned",
+      branch: "release/v0.3.1",
+    });
+
+    const deleted = await tool(client, "delete_release", { project: "CRONK", release: "v0.3.1" });
+    expect(deleted).toEqual({ isError: false, json: { deleted: "v0.3.1" } });
+    expect((await tool(client, "list_releases", { project: "CRONK" })).json).toEqual([]);
+    expect((await ok("GET", `/api/tickets/${first.id}`, ada)).release).toBeNull();
+  });
+
+  test("refusals match the API's: a taken or invalid name, an unknown Release, and Read or a read-only token", async () => {
+    const { workspace, ada, grace, project } = await withProject();
+    await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.4.0" });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const client = await connect(secret);
+
+    for (const [name, args, code] of [
+      ["create_release", { project: "CRONK", name: "v0.3.0" }, "release_name_taken"],
+      ["create_release", { project: "CRONK", name: "soon" }, "invalid_release_name"],
+      ["rename_release", { project: "CRONK", release: "v0.4.0", name: "v0.3.0" }, "release_name_taken"],
+      ["rename_release", { project: "CRONK", release: "v0.4.0", name: "next" }, "invalid_release_name"],
+      ["rename_release", { project: "CRONK", release: "v9.9.9", name: "v1.0.0" }, "unknown_release"],
+      ["delete_release", { project: "CRONK", release: "v9.9.9" }, "unknown_release"],
+    ] as const) {
+      const refused = await tool(client, name, args);
+      expect(refused, `${name} ${JSON.stringify(args)}`).toEqual({ isError: true, json: expect.objectContaining({ code }) });
+    }
+    const taken = await tool(client, "create_release", { project: "CRONK", name: "v0.3.0" });
+    expect(taken.json.message).toBe("This Project already has a Release called v0.3.0.");
+    const unknown = await tool(client, "delete_release", { project: "CRONK", release: "v9.9.9" });
+    expect(unknown.json.advice).toBe("Use one of its Releases: v0.3.0, v0.4.0.");
+
+    // Grace's Agent, whose Owner has Read, and a read-only token of Ada's Agent read but don't write.
+    const gracesAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, grace, { name: "grace-claude" });
+    const { secret: graceSecret } = await ok("POST", `/api/agents/${gracesAgent.id}/tokens`, grace, { name: "laptop", access: "full" });
+    const { secret: readOnly } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "reader", access: "read" });
+    for (const [token, code] of [
+      [graceSecret, "read_access"],
+      [readOnly, "read_only_token"],
+    ] as const) {
+      const reader = await connect(token);
+      expect((await tool(reader, "list_releases", { project: "CRONK" })).json).toHaveLength(2);
+      for (const [name, args] of [
+        ["create_release", { project: "CRONK", name: "v0.5.0" }],
+        ["rename_release", { project: "CRONK", release: "v0.3.0", name: "v0.3.1" }],
+        ["delete_release", { project: "CRONK", release: "v0.3.0" }],
+      ] as const) {
+        const refused = await tool(reader, name, args);
+        expect(refused, `${code} ${name}`).toEqual({ isError: true, json: expect.objectContaining({ code }) });
+      }
+    }
+    expect((await ok("GET", `/api/projects/${project.id}/releases`, ada)).map((r: { name: string }) => r.name)).toEqual([
+      "v0.3.0",
+      "v0.4.0",
+    ]);
+  });
+
+  test("a cut Release is neither renamed nor deleted, and no tool cuts or releases one", async () => {
+    const { workspace, ada, project } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    expect((await cut(project.id, release.id, ada)).status).toBe(200);
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const client = await connect(secret);
+
+    expect((await tool(client, "list_releases", { project: "CRONK" })).json[0].state).toBe("cut");
+    for (const [name, args] of [
+      ["rename_release", { project: "CRONK", release: "v0.3.0", name: "v0.3.1" }],
+      ["delete_release", { project: "CRONK", release: "v0.3.0" }],
+    ] as const) {
+      const refused = await tool(client, name, args);
+      expect(refused, name).toEqual({ isError: true, json: expect.objectContaining({ code: "release_not_planned" }) });
+    }
+
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).filter((n) => /cut|publish/.test(n) || /^release/.test(n))).toEqual([]);
+  });
+});
