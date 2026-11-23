@@ -70,7 +70,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Tickets"],
           summary: "The Project's Tickets",
           description: "In board order of their Statuses; within one, Tickets in the Merge Queue first by their place in it, then " +
-            "running, unblocked and blocked ones, then by key; narrowed by whichever filters are given.",
+            "those with a running Run, then the rest, blocked or not, each by key; narrowed by whichever filters are given.",
           params: Type.Object({ projectId: Type.String() }),
           querystring: Type.Object({
             statusId: Type.Optional(Type.String()),

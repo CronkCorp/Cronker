@@ -278,6 +278,29 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   await expect(page.getByRole("heading", { name: "CRONK-2 Ship it" })).toBeVisible();
 });
 
+test("a blocked Ticket sits among the rest of its column and List Status by number, keeping its Blocked chip", async ({
+  page,
+  cronk,
+}) => {
+  const { call, project, status, open } = await crowdedBoard(page, cronk);
+  const blocker = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Blocker" }); // CRONK-1
+  const plainA = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Plain A" }); // CRONK-2
+  const blocked = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Blocked" }); // CRONK-3
+  const plainB = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Plain B" }); // CRONK-4
+  for (const t of [plainA, blocked, plainB]) await call("PATCH", `/api/tickets/${t.id}`, { statusId: status("Ready") });
+  await call("POST", `/api/tickets/${blocked.id}/relations`, { kind: "blockedBy", ticketId: blocker.id });
+
+  const { lane } = await open();
+  const ready = lane("Ready");
+  await expect(ready.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Plain A/, /CRONK-3 Blocked/, /CRONK-4 Plain B/]);
+  await expect(ready.locator(".card").filter({ hasText: "Blocked" }).getByRole("button", { name: /^Blocked by 1/ })).toBeVisible();
+
+  await page.getByRole("navigation", { name: "Project views" }).getByRole("link", { name: "List" }).click();
+  const list = page.getByRole("region", { name: "List" });
+  await expect(list.getByRole("link", { name: /CRONK-[234] / })).toHaveText([/CRONK-2 Plain A/, /CRONK-3 Blocked/, /CRONK-4 Plain B/]);
+  await expect(list.getByRole("button", { name: /^Blocked by 1/ })).toBeVisible();
+});
+
 test("Group Sub-Tickets folds them under their parent in their own column with a count, unfolds them there, and is remembered", async ({
   page,
   cronk,

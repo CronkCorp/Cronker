@@ -263,12 +263,11 @@ const blockersColumns = (alias: string, reach: Reach) =>
    (select count(*)::int from ${unfinishedBlockers(alias)} and not ${reach("blockers")}) as "blockedByHidden"`;
 
 /**
- * SQL ranking the Ticket `alias` within its Status: 0 while a Run on it is running, 1 while an unfinished Ticket
- * blocks it, 2 otherwise. Running is tested first, so a Ticket both running and blocked ranks as running.
+ * SQL ranking the Ticket `alias` within its Status: 0 while a Run on it is running, 1 otherwise. Being blocked
+ * doesn't change its rank, so blocked Tickets sit among the rest by number.
  */
-const runningFirstThenBlocked = (alias: string) =>
-  `case when exists (select 1 from runs where runs.ticket_id = ${alias}.id and runs.state = 'running') then 0
-     when exists (select 1 from ${unfinishedBlockers(alias)}) then 1 else 2 end`;
+const runningFirst = (alias: string) =>
+  `case when exists (select 1 from runs where runs.ticket_id = ${alias}.id and runs.state = 'running') then 0 else 1 end`;
 
 /**
  * The columns of a Ticket as the Viewer sees it, for queries joining `tickets` to `projects`, with the value to bind
@@ -744,7 +743,7 @@ export async function listTickets(
      from tickets join projects on projects.id = tickets.project_id
      join statuses on statuses.id = tickets.status_id
      where ${where.join(" and ")}
-     order by statuses.position, ${queueOrder("tickets")}, ${runningFirstThenBlocked("tickets")}, tickets.number`,
+     order by statuses.position, ${queueOrder("tickets")}, ${runningFirst("tickets")}, tickets.number`,
     params,
   );
   return rows.map(ticketSummary);
