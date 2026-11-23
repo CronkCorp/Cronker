@@ -43,7 +43,7 @@ const base64 = (text: string) => Buffer.from(text).toString("base64");
 /**
  * Ada, the Admin, with a Project CRONK, open or private, listing Grace with Read; Linus, a member it doesn't list.
  * CRONK-1 has a Comment, an Attachment, a Relation to CRONK-2 and links a Document; CRONK holds a Document, Term,
- * Decision and Artifact. Grace has an Agent with a full token.
+ * Decision and Artifact. Grace has an Agent with a Write token.
  */
 async function projectWithReader(visibility: "open" | "private") {
   cronk = await startCronk();
@@ -71,7 +71,7 @@ async function projectWithReader(visibility: "open" | "private") {
     users: [{ userId: grace.user.id, level: "read" }],
   });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: grace.cookie }, { name: "grace-claude" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, { cookie: grace.cookie }, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, { cookie: grace.cookie }, { name: "laptop", access: "write" });
   return {
     workspace,
     ada,
@@ -213,8 +213,8 @@ describe.each(["open", "private"] as const)("a User with Read in a%s Project", (
     for (const as of [setting.grace.as, setting.gracesAgent]) {
       for (const [method, path, body] of writes(setting)) {
         const response = await call(method, path, as, body);
-        // An Agent meets the rules for Agents first wherever only a User may act; neither changes anything.
-        if (as === setting.gracesAgent && /^agent_/.test(response.json?.error?.code ?? "")) continue;
+        // An Agent meets the rules for Agents first wherever only a User, or a Full token, may act; neither changes anything.
+        if (as === setting.gracesAgent && /^(agent_|full_token_needed$)/.test(response.json?.error?.code ?? "")) continue;
         expect(response, `${method} ${path}`).toEqual({
           status: 403,
           json: {

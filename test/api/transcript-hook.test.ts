@@ -60,7 +60,7 @@ async function adaWithRunningRun() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const hookToken = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "Transcript hook", access: "full" });
+  const hookToken = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "Transcript hook", access: "write" });
   const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: triage });
@@ -155,7 +155,7 @@ describe("the Transcript hook on Stop", () => {
 describe("when the upload fails", () => {
   test("revoking the Transcript hook token refuses its uploads alone; the hook says why on stderr and exits 0", async () => {
     const { ada, agent, run, hookToken, sessionEnv } = await adaWithRunningRun();
-    const laptop = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const laptop = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
     await ok("DELETE", `/api/agents/${agent.id}/tokens/${hookToken.token.id}`, ada);
     const { Stop } = await hookCommands(ada);
     const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);

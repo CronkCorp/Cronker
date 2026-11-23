@@ -57,7 +57,7 @@ async function artifactsAndTickets() {
   const board = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, { title: "Board prototype", files });
   const tokens = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, { title: "Colour tokens", files });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const readOnly = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "viewer", access: "read" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   const asReadOnly = { headers: { authorization: `Bearer ${readOnly.secret}` } };

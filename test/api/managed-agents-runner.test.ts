@@ -162,7 +162,7 @@ describe("starting a Run", () => {
     expect(JSON.stringify(session.body)).not.toContain(tokenInVault(vault!.id));
   });
 
-  test("the vault's token acts as the Run's Agent, and the Brief carries no token", async () => {
+  test("the vault's token acts as the Run's Agent with Write, and the Brief carries no token", async () => {
     const { ada, startRun } = await adaWithManagedAgentsRunner();
 
     const { run, session } = await startRun();
@@ -170,6 +170,8 @@ describe("starting a Run", () => {
     const token = tokenInVault((session.body.vault_ids as string[])[0]!);
     const asAgent = { headers: { authorization: `Bearer ${token}` } };
     expect((await ok("GET", `/api/runs/${run.id}`, asAgent)).id).toBe(run.id);
+    // A Run never holds a Full token.
+    expect((await ok("GET", "/api/agent", asAgent)).access).toBe("write");
     const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
     expect(brief.text).not.toContain(token);
   });

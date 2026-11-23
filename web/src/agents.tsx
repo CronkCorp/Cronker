@@ -6,6 +6,7 @@ import {
   nameOf,
   type Agent,
   type AgentToken,
+  type TokenAccess,
   type Runner,
   type TicketSummary,
   type Transcript,
@@ -13,6 +14,7 @@ import {
   type WorkspaceSummary,
 } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { FullTokenWarning } from "./full-token-warning.js";
 import { usePlace } from "./frame.js";
 import { Link, navigate } from "./router.js";
 import { Avatar } from "./ui/actor.js";
@@ -353,6 +355,9 @@ function AgentTranscripts({ agent }: { agent: Agent }) {
   );
 }
 
+/** How a token's level reads in the web client. */
+const tokenLevels: Record<TokenAccess, string> = { read: "Read", write: "Write", full: "Full" };
+
 /** An Agent's tokens in one line, with Manage tokens opening the dialog that issues and revokes them. */
 function AgentTokens({ agent }: { agent: Agent }) {
   const [tokens, setTokens] = useState<AgentToken[] | null>(null);
@@ -405,10 +410,11 @@ function ManageTokens({
 }) {
   const [issued, setIssued] = useState<{ token: AgentToken; secret: string } | null>(null);
   const [revokingToken, setRevokingToken] = useState<AgentToken | null>(null);
+  const [access, setAccess] = useState<TokenAccess>("write");
   const issue = useSubmit(async (form, element) => {
-    const access = field(form, "access") === "read" ? "read" : "full";
     setIssued(await api.issueToken(agent.id, { name: field(form, "name"), access }));
     element.reset();
+    setAccess("write");
     onChanged();
   });
   const mcpUrl = `${window.location.origin}/mcp`;
@@ -433,7 +439,7 @@ function ManageTokens({
             {tokens.map((token) => (
               <tr key={token.id}>
                 <td>{token.name}</td>
-                <td className="muted small">{token.access === "read" ? "Read-only" : "Full"}</td>
+                <td className="muted small">{tokenLevels[token.access]}</td>
                 <td className="muted small">
                   <RelativeTime at={token.createdAt} />
                 </td>
@@ -455,15 +461,17 @@ function ManageTokens({
             <input name="name" required autoComplete="off" placeholder="laptop" />
           </Field>
           <Field label="Access">
-            <select name="access" defaultValue="full">
-              <option value="full">Full: read and comment</option>
-              <option value="read">Read-only</option>
+            <select name="access" value={access} onChange={(event) => setAccess(event.target.value as TokenAccess)}>
+              <option value="read">Read: only reads</option>
+              <option value="write">Write: works under the Agent rules</option>
+              <option value="full">Full: acts as you</option>
             </select>
           </Field>
           <Button type="submit" variant="primary" disabled={issue.busy}>
             Issue token
           </Button>
         </div>
+        {access === "full" && <FullTokenWarning />}
         <FormError error={issue.error} />
       </form>
       <DialogActions>

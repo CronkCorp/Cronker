@@ -107,7 +107,7 @@ test("a card dragged onto another column moves its Ticket there, onto its own co
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   await call("PATCH", `/api/tickets/${shipped.id}`, { delegateId: agent.id, autonomousDelegation: true, statusId: status("Code review") });
   const [run] = await call("GET", `/api/tickets/${shipped.id}/runs`);
   const finished = await cronk.request("POST", `/api/runs/${run.id}/finish`, {
@@ -683,7 +683,7 @@ test("a queued head conflicting with its base branch shows Resolving conflict, t
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const created = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   const agent = await call("PATCH", `/api/agents/${created.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   const deliver = async (event: string, payload: Record<string, unknown>) => {
     const delivered = await cronk.github.deliver(app, event, {
       installation: { id: installation.id },
@@ -746,7 +746,7 @@ test("a Ticket of a cut Release merging after the Cut shows Backporting in Merge
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const created = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   const agent = await call("PATCH", `/api/agents/${created.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   const deliver = async (event: string, payload: Record<string, unknown>) => {
     const delivered = await cronk.github.deliver(app, event, {
       installation: { id: installation.id },

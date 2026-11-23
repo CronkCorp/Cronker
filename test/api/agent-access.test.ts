@@ -38,7 +38,7 @@ async function agentOf(as: As, workspaceId: string, name: string) {
   const runner = await ok("POST", "/api/runners", as, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspaceId}/agents`, as, { name });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, as, { runnerId: runner.id });
-  const full = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "cloud", access: "full" });
+  const full = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "cloud", access: "write" });
   const read = await ok("POST", `/api/agents/${agent.id}/tokens`, as, { name: "reader", access: "read" });
   const bearer = (secret: string) => ({ headers: { authorization: `Bearer ${secret}` } });
   return { ...agent, secret: full.secret as string, as: bearer(full.secret), reader: bearer(read.secret) };

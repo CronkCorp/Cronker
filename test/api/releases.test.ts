@@ -60,7 +60,7 @@ async function runningRun(setup: Awaited<ReturnType<typeof withProject>>) {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   await ok("PATCH", `/api/tickets/${first.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
   const [run] = await ok("GET", `/api/tickets/${first.id}/runs`, ada);
   return { agent, run, secret, asAgent: { headers: { authorization: `Bearer ${secret}` } } };
@@ -162,7 +162,7 @@ describe("a Project's Releases", () => {
     const { workspace, ada, grace, project, first } = await withProject();
     const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, grace, { name: "grace-claude" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, grace, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, grace, { name: "laptop", access: "write" });
     const gracesAgent = { headers: { authorization: `Bearer ${secret}` } };
 
     for (const as of [grace, gracesAgent]) {
@@ -353,7 +353,7 @@ describe("cutting a Release", () => {
     const { workspace, ada, grace, project } = await withRepositories();
     const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
 
     const byGrace = await cut(project.id, release.id, grace);
     expect([byGrace.status, byGrace.json.error.code]).toEqual([403, "read_access"]);
@@ -542,7 +542,7 @@ describe("releasing a Release", () => {
     const { workspace, ada, grace, project, release } = await withCutRelease();
     const planned = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.4.0" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
 
     const byGrace = await publish(project.id, release.id, grace, { confirm: true });
     expect([byGrace.status, byGrace.json.error.code]).toEqual([403, "read_access"]);
@@ -613,7 +613,7 @@ describe("managing Releases through MCP", () => {
   test("an Agent with Write lists, creates, renames and deletes planned Releases, by name", async () => {
     const { workspace, ada, project, first } = await withProject();
     const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "write" });
     const client = await connect(secret);
 
     const made = await tool(client, "create_release", { project: "cronk", name: " v0.3.0 " });
@@ -646,7 +646,7 @@ describe("managing Releases through MCP", () => {
     await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
     await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.4.0" });
     const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "write" });
     const client = await connect(secret);
 
     for (const [name, args, code] of [
@@ -667,7 +667,7 @@ describe("managing Releases through MCP", () => {
 
     // Grace's Agent, whose Owner has Read, and a read-only token of Ada's Agent read but don't write.
     const gracesAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, grace, { name: "grace-claude" });
-    const { secret: graceSecret } = await ok("POST", `/api/agents/${gracesAgent.id}/tokens`, grace, { name: "laptop", access: "full" });
+    const { secret: graceSecret } = await ok("POST", `/api/agents/${gracesAgent.id}/tokens`, grace, { name: "laptop", access: "write" });
     const { secret: readOnly } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "reader", access: "read" });
     for (const [token, code] of [
       [graceSecret, "read_access"],
@@ -695,7 +695,7 @@ describe("managing Releases through MCP", () => {
     const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
     expect((await cut(project.id, release.id, ada)).status).toBe(200);
     const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "write" });
     const client = await connect(secret);
 
     expect((await tool(client, "list_releases", { project: "CRONK" })).json[0].state).toBe("cut");

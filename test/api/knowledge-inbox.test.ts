@@ -43,7 +43,7 @@ async function withAgent() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
@@ -55,7 +55,7 @@ async function withAgent() {
     const runner = await ok("POST", "/api/runners", as, { name: "Bea's", kind: "fake" });
     const made = await ok("POST", `/api/workspaces/${workspace.id}/agents`, as, { name: "bea-bot" });
     const own = await ok("PATCH", `/api/agents/${made.id}`, as, { runnerId: runner.id });
-    const token = await ok("POST", `/api/agents/${own.id}/tokens`, as, { name: "cloud", access: "full" });
+    const token = await ok("POST", `/api/agents/${own.id}/tokens`, as, { name: "cloud", access: "write" });
     return { agent: own, asAgent: { headers: { authorization: `Bearer ${token.secret}` } } };
   };
   return { workspace, ada, bea: { cookie: bea.cookie, id: bea.user.id as string }, project, agent, asAgent, status, knowledge, beasAgent };

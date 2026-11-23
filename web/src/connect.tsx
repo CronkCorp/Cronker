@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, ApiError, type ConnectRequest } from "./api.js";
 import { field, useSubmit } from "./forms.js";
+import { FullTokenWarning } from "./full-token-warning.js";
 import { Centered } from "./frame.js";
 import { Actions, Button, FormError } from "./ui/controls.js";
 
@@ -37,8 +38,9 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
     setLeaving(true);
     window.location.assign(url);
   };
+  const [access, setAccess] = useState<"write" | "full">("write");
   const approve = useSubmit(async (form) => {
-    leave((await api.approveConnect(requestId, field(form, "agentId"))).redirectTo);
+    leave((await api.approveConnect(requestId, field(form, "agentId"), access)).redirectTo);
   });
   const deny = useSubmit(async () => {
     leave((await api.denyConnect(requestId)).redirectTo);
@@ -75,6 +77,22 @@ export function ConnectScreen({ requestId }: { requestId: string }) {
               </label>
             ))}
           </fieldset>
+          <fieldset className="consent-agents">
+            <legend className="field-label">Access</legend>
+            <label className="check">
+              <input type="radio" name="access" value="write" checked={access === "write"} onChange={() => setAccess("write")} />
+              <span>
+                Write <span className="muted">works under the Agent rules</span>
+              </span>
+            </label>
+            <label className="check">
+              <input type="radio" name="access" value="full" checked={access === "full"} onChange={() => setAccess("full")} />
+              <span>
+                Full <span className="muted">acts as you</span>
+              </span>
+            </label>
+          </fieldset>
+          {access === "full" && <FullTokenWarning />}
         </form>
       )}
       {/* Its button sits in the action row beside Connect, which belongs to the form above. */}

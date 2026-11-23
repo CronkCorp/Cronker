@@ -19,5 +19,20 @@ export const agentRights =
   "by any Ticket of the Workspace, delegated or running included, link Documents and Artifacts to it and unlink " +
   "them, such as the spec Document it was filed from, and split it into Sub-Tickets, which are Discovered Tickets " +
   "of the same Agent and are settled along with it, so a planned piece of work is filed as one parent Ticket with " +
-  "its slices under it. A read-only token may only read. Anything else is refused with the rule and what to do " +
-  "instead.";
+  "its slices under it. These are the rules for a Write token; a Read token may only read. A Full token, which " +
+  "its Owner picks by hand and a Run never holds, may also move any Ticket it has Write on to any Status with " +
+  "`move_ticket`, as its Owner's move: entering a Status with a Step starts its Run, and leaving a running one stops " +
+  "it, each a Change by the Agent with no Run. Accept and Reopen, Access and Admin settings, a Decision's status " +
+  "and resolving threads stay human-only, even for a Full token (`human_only`); a Write token attempting a Full act " +
+  "gets `full_token_needed`. Anything else is refused with the rule and what to do instead.";
+
+/** What a token of the level given may do, for the MCP server's instructions: the rules above, then its own level. */
+export function tokenRights(access: "read" | "write" | "full"): string {
+  const level =
+    access === "read"
+      ? "Your token is Read: you may only read."
+      : access === "write"
+        ? "Your token is Write: you act under the Agent rules above."
+        : "Your token is Full: you may also take the Full acts above, within the same Access.";
+  return `${agentRights} ${level}`;
+}

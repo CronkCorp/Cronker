@@ -46,7 +46,7 @@ async function adaWithSubscriptionRunner() {
   });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   const inbox = () => ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
   return { workspace, user, ada, project, ticket, runner, agent, agentToken: secret as string, status, inbox };

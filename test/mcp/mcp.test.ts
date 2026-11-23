@@ -26,7 +26,7 @@ async function post(cookie: string, path: string, body: unknown) {
 }
 
 /** Ada's Workspace with a Ticket CRONK-1 that has a Comment, and a token of her Agent. */
-async function workspaceWithTicket(access: "full" | "read" = "full") {
+async function workspaceWithTicket(access: "read" | "write" | "full" = "write") {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
@@ -129,6 +129,37 @@ describe("MCP with an Agent token", () => {
       "unlink_document",
       "write_report",
     ]);
+  });
+
+  test("only a Full token lists move_ticket, and its instructions name the token's level", async () => {
+    const { cookie, agent } = await workspaceWithTicket("write");
+    const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
+    const read = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "read", access: "read" });
+    const names = async (secret: string) => (await (await connect(secret)).listTools()).tools.map((tool) => tool.name);
+    const write = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "write", access: "write" });
+
+    expect(await names(full.secret)).toContain("move_ticket");
+    expect(await names(write.secret)).not.toContain("move_ticket");
+    expect(await names(read.secret)).not.toContain("move_ticket");
+    expect((await connect(full.secret)).getInstructions()).toContain("Your token is Full");
+    expect((await connect(write.secret)).getInstructions()).toContain("Your token is Write");
+  });
+
+  test("a Full token moves a Ticket by its Status's name; a Write token can't", async () => {
+    const { cookie, agent, ticket } = await workspaceWithTicket("write");
+    const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
+    const client = await connect(full.secret);
+
+    const moved = await call(client, "move_ticket", { ticket: "CRONK-1", status: "canceled" });
+    expect(moved.isError).toBe(false);
+    const after = await (await cronk.request("GET", `/api/tickets/${ticket.id}`, { cookie })).json();
+    expect(moved.json.statusId).toBe(after.statusId);
+    const unknown = await call(client, "move_ticket", { ticket: "CRONK-1", status: "Nowhere" });
+    expect(unknown).toMatchObject({ isError: true, json: { code: "unknown_status" } });
+
+    const write = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "write", access: "write" });
+    const tools = await (await connect(write.secret)).callTool({ name: "move_ticket", arguments: { ticket: "CRONK-1", status: "Backlog" } });
+    expect(tools.isError).toBe(true);
   });
 
   test("an Agent reads a Ticket by key with its Comments and Relations", async () => {
@@ -1045,7 +1076,7 @@ describe("MCP with an Agent token", () => {
 
     // Another Agent, with no Run in the Project, is refused.
     const laptop = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "laptop-claude" });
-    const { secret: laptopSecret } = await post(cookie, `/api/agents/${laptop.id}/tokens`, { name: "laptop", access: "full" });
+    const { secret: laptopSecret } = await post(cookie, `/api/agents/${laptop.id}/tokens`, { name: "laptop", access: "write" });
     const noRun = await call(await connect(laptopSecret), "set_parent", { ticket: "CRONK-2", parent: "CRONK-3" });
     expect(noRun).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run", rule: expect.any(String) }) });
   });
@@ -1410,7 +1441,7 @@ describe("MCP with an Agent token", () => {
 
     const grace = await addMember(cronk, cookie, workspace.id, "grace@example.com");
     const agent = await post(grace.cookie, `/api/workspaces/${workspace.id}/agents`, { name: "grace-claude" });
-    const { secret } = await post(grace.cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "full" });
+    const { secret } = await post(grace.cookie, `/api/agents/${agent.id}/tokens`, { name: "laptop", access: "write" });
     const notAdmin = await call(await connect(secret), "create_project", { name: "Docs", key: "DOCS" });
     expect(notAdmin).toEqual({
       isError: true,

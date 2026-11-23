@@ -93,7 +93,7 @@ describe("delegating a Ticket", () => {
 
   test("an Agent never changes Delegation", async () => {
     const { cookie, ticket, agent } = await adaWithTicket();
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, cookie, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, cookie, { name: "cloud", access: "write" });
 
     const response = await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
       headers: { authorization: `Bearer ${secret}` },

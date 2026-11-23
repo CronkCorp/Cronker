@@ -53,7 +53,7 @@ async function withProject() {
   const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Ship it" });
   const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const claude = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, ada, grace, project, ticket, document, claude };
 }

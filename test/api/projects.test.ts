@@ -76,7 +76,7 @@ describe("creating a Project", () => {
 });
 
 describe("an Agent creating a Project", () => {
-  async function tokenOf(workspaceId: string, cookie: string, name: string, access: "full" | "read" = "full") {
+  async function tokenOf(workspaceId: string, cookie: string, name: string, access: "read" | "write" | "full" = "write") {
     const agent = await (await cronk.request("POST", `/api/workspaces/${workspaceId}/agents`, { cookie, body: { name } })).json();
     const token = await (
       await cronk.request("POST", `/api/agents/${agent.id}/tokens`, { cookie, body: { name: "laptop", access } })

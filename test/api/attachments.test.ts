@@ -51,14 +51,14 @@ const download = (id: string, as: As) =>
 
 const log = { name: "build.log", type: "text/plain", bytes: "npm test\n42 passed\n" };
 
-/** Ada's Workspace with a Project CRONK, a Ticket CRONK-1 and a full token of her Agent `claude-max`. */
+/** Ada's Workspace with a Project CRONK, a Ticket CRONK-1 and a Write token of her Agent `claude-max`. */
 async function workspaceWithTicket() {
   const { workspace, user } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
   const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, user, ada, project, ticket, agent, asAgent };
 }
@@ -201,7 +201,7 @@ describe("access follows what it's attached to", () => {
     const other = await ok("POST", "/api/workspaces", ada, { name: "Other" });
     const grace = await addMember(cronk, ada.cookie, other.id, "grace@example.com");
     const theirs = await ok("POST", `/api/workspaces/${other.id}/agents`, grace, { name: "grace-bot" });
-    const { secret } = await ok("POST", `/api/agents/${theirs.id}/tokens`, grace, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${theirs.id}/tokens`, grace, { name: "laptop", access: "write" });
     const graceBot = { headers: { authorization: `Bearer ${secret}` } };
 
     for (const outsider of [grace, graceBot]) {

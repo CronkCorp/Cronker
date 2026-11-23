@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 /** Ada's Workspace with a Project, a Ticket with a Comment, and Ada's Agent with a token of the given access. */
-async function agentWithTicket(access: "full" | "read" = "full") {
+async function agentWithTicket(access: "read" | "write" | "full" = "write") {
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
   const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
@@ -161,7 +161,7 @@ describe("what an Agent may change", () => {
       ["POST", `/api/workspaces/${workspace.id}/members`, { email: "eve@example.com" }],
       ["POST", `/api/workspaces/${workspace.id}/agents`, { name: "mine" }],
       ["DELETE", `/api/agents/${agent.id}`],
-      ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "full" }],
+      ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "write" }],
     ];
     for (const [method, path, body] of attempts) {
       const response = await cronk.request(method, path, { headers, body });
@@ -206,7 +206,7 @@ describe("what an Agent may change", () => {
     const { workspace, cookie, ticket } = await agentWithTicket();
     const bea = await addMember(cronk, cookie, workspace.id, "bea@example.com");
     const agent = await post(bea.cookie, `/api/workspaces/${workspace.id}/agents`, { name: "bea-bot" });
-    const { secret } = await post(bea.cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+    const { secret } = await post(bea.cookie, `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
 
     const response = await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
       headers: { authorization: `Bearer ${secret}` },

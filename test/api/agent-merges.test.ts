@@ -45,7 +45,7 @@ async function mergeRunning({ agentsMayMerge = true, autonomous = true } = {}) {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
 
   await createGitHubApp(cronk, ada.cookie);

@@ -16,7 +16,7 @@ async function createAgent(cookie: string, workspaceId: string, name: string) {
   return (await response.json()) as { id: string; name: string };
 }
 
-async function issueToken(cookie: string, agentId: string, access: "full" | "read" = "full", name = "laptop") {
+async function issueToken(cookie: string, agentId: string, access: "read" | "write" | "full" = "write", name = "laptop") {
   const response = await cronk.request("POST", `/api/agents/${agentId}/tokens`, { cookie, body: { name, access } });
   expect(response.status).toBe(201);
   return (await response.json()) as { token: { id: string }; secret: string };
@@ -146,7 +146,7 @@ describe("Agent tokens", () => {
     const cookie = await signIn(cronk);
     const agent = await createAgent(cookie, workspace.id, "claude-max");
     const { token, secret } = await issueToken(cookie, agent.id);
-    const other = await issueToken(cookie, agent.id, "full", "cloud");
+    const other = await issueToken(cookie, agent.id, "write", "cloud");
 
     const revoked = await cronk.request("DELETE", `/api/agents/${agent.id}/tokens/${token.id}`, { cookie });
     expect(revoked.status).toBe(204);
@@ -207,7 +207,7 @@ describe("Agent tokens", () => {
 
     const paths = [
       ["GET", `/api/agents/${agent.id}/tokens`, undefined],
-      ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "full" }],
+      ["POST", `/api/agents/${agent.id}/tokens`, { name: "mine", access: "write" }],
       ["DELETE", `/api/agents/${agent.id}/tokens/${token.id}`, undefined],
     ] as const;
     for (const [method, path, body] of paths) {

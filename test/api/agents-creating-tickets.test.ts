@@ -49,7 +49,7 @@ async function runningRun() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
   const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
@@ -262,7 +262,7 @@ describe("the filing Agent and its Discovered Ticket", () => {
       expect(refused.json.error.code).toBe("agent_field_not_allowed");
     }
     const moved = await call("PATCH", `/api/tickets/${found.id}`, asAgent, { statusId: status("Ready") });
-    expect(moved.json.error.code).toBe("agent_sets_no_status");
+    expect(moved.json.error.code).toBe("full_token_needed");
   });
 
   test("adds blocks from it to Tickets of its Workspace, each Change naming the Agent", async () => {
@@ -339,7 +339,7 @@ describe("the filing Agent and its Discovered Ticket", () => {
   test("doesn't make a Ticket it didn't file, or another Agent's waiting one, blocked by its own", async () => {
     const { workspace, ada, project, ticket, found, asAgent } = await discovered();
     const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
-    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "write" });
     const theirs = await ok("POST", `/api/projects/${project.id}/tickets`, { headers: { authorization: `Bearer ${secret}` } }, { title: "Theirs" });
 
     // Its own Ticket blocking another stays allowed, as before; but neither Ticket is held here.
@@ -352,7 +352,7 @@ describe("the filing Agent and its Discovered Ticket", () => {
   test("another Agent doesn't edit it", async () => {
     const { workspace, ada, found } = await discovered();
     const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
-    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "write" });
 
     const refused = await call("PATCH", `/api/tickets/${found.id}`, { headers: { authorization: `Bearer ${secret}` } }, { priority: "low" });
 
@@ -432,7 +432,7 @@ describe("Sub-Tickets of a waiting Discovered Ticket, outside a Run", () => {
   test("are refused under a Ticket the Agent didn't file, one a User settled, or another Agent's, with the rule", async () => {
     const { workspace, ada, project, other, found, asAgent } = await discovered();
     const otherAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
-    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${otherAgent.id}/tokens`, ada, { name: "t", access: "write" });
     const asOther = { headers: { authorization: `Bearer ${secret}` } };
     const refusedUnder = async (parentId: string, as = asAgent) => {
       const refused = await call("POST", `/api/projects/${project.id}/tickets`, as, { title: "Nope", parentId });

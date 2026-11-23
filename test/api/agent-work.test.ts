@@ -40,7 +40,7 @@ async function runningRun() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
   const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
@@ -116,7 +116,7 @@ describe("what an Agent may not edit", () => {
   test("an Agent connected by hand, with no Run, reads and comments but doesn't edit", async () => {
     const { workspace, ada, other } = await runningRun();
     const laptop = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "laptop-claude" });
-    const { secret } = await ok("POST", `/api/agents/${laptop.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${laptop.id}/tokens`, ada, { name: "laptop", access: "write" });
     const byHand = { headers: { authorization: `Bearer ${secret}` } };
 
     expect((await call("GET", `/api/tickets/${other.id}`, byHand)).status).toBe(200);
@@ -288,7 +288,7 @@ describe("a Run's last call", () => {
   test("calls naming other Tickets, and calls by Users or other Agents, record nothing", async () => {
     const { workspace, ada, ticket, other, run, asAgent } = await runningRun();
     const bot = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other-bot" });
-    const { secret } = await ok("POST", `/api/agents/${bot.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${bot.id}/tokens`, ada, { name: "cloud", access: "write" });
     cronk.clock.advance(60_000);
 
     await ok("GET", `/api/tickets/${other.id}`, asAgent);

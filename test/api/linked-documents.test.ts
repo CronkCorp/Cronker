@@ -29,7 +29,7 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
 
 /**
  * Ada's Workspace with a Project CRONK holding a Ticket CRONK-1 and a Document, a Document in the Workspace's own
- * page tree, and a full token of her Agent `claude-max`.
+ * page tree, and a Write token of her Agent `claude-max`.
  */
 async function ticketWithDocuments() {
   const { workspace, user } = await setUp(cronk);
@@ -39,7 +39,7 @@ async function ticketWithDocuments() {
   const design = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Sign-in design" });
   const style = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Style guide" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, user, ada, project, ticket, design, style, agent, asAgent };
 }
@@ -255,7 +255,7 @@ describe("Linked Documents", () => {
       const ready = project.statuses.find((s: { name: string }) => s.name === "Ready").id;
       await ok("PATCH", `/api/tickets/${moved.id}`, ada, { statusId: ready });
       const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other" });
-      const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "full" });
+      const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "write" });
       const asOther = { headers: { authorization: `Bearer ${secret}` } };
       await ok("POST", `/api/tickets/${found.id}/documents`, asAgent, { documentId: design.id });
 

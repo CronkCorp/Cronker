@@ -1,6 +1,6 @@
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import { agentOfToken, offersBearer } from "../agents/tokens.js";
+import { agentOfToken, offersBearer, type TokenAccess } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError, sendError } from "../http/errors.js";
 import { mcpPath, protectedResourcePath } from "./paths.js";
@@ -17,6 +17,7 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
     const bodyLimit = Math.ceil(context.config.attachments.limitBytes / 3) * 4 + 1024 * 1024;
     app.post(mcpPath, { schema: { hide: true }, bodyLimit }, async (request, reply) => {
       const authorization = request.headers.authorization;
+      let level: TokenAccess;
       try {
         if (!offersBearer(authorization)) {
           throw new ApiError(401, "invalid_token", "Cronk's MCP server needs an Agent token.", {
@@ -24,7 +25,7 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
             advice: "Ask a User to issue a token for one of their Agents, and send it as a bearer token.",
           });
         }
-        await agentOfToken(context, authorization);
+        level = (await agentOfToken(context, authorization)).access;
       } catch (error) {
         if (!(error instanceof ApiError) || error.statusCode !== 401) throw error;
         const metadata = `${context.config.publicUrl.origin}${protectedResourcePath}`;
@@ -43,7 +44,7 @@ export function mcpRoutes(context: Context, api: FastifyInstance): FastifyPlugin
         });
         return { status: response.statusCode, json: response.body ? response.json() : null };
       };
-      const server = buildMcpServer(asAgent);
+      const server = buildMcpServer(asAgent, level);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       reply.raw.on("close", () => {
         void transport.close();

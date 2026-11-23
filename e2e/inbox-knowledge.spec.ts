@@ -13,7 +13,7 @@ test("New knowledge an Agent created waits in the Inbox, shown inline, until acc
     (await cronk.request(method, path, headers ? { headers, body } : { cookie, body })).json();
   const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
   const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   const asAgent = { authorization: `Bearer ${secret}` };
   await call("POST", `/api/projects/${project.id}/decisions`, { title: "Use Postgres", body: "It **keeps** everything." }, asAgent);
   cronk.clock.advance(1000);

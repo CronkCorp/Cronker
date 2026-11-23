@@ -84,7 +84,7 @@ const toolResult = (id: string, content: unknown, second = 0) => ({
   message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content }] },
 });
 
-/** Ada with her Agent `claude-max` on her fake Runner, with a full token. */
+/** Ada with her Agent `claude-max` on her fake Runner, with a Write token. */
 async function adaWithAgent() {
   const { workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
@@ -93,7 +93,7 @@ async function adaWithAgent() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { token, secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "Transcript hook", access: "full" });
+  const { token, secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "Transcript hook", access: "write" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   return { workspace, ada, project, ticket, agent, token, asAgent: { headers: { authorization: `Bearer ${secret}` } }, status };
 }
@@ -471,7 +471,7 @@ describe("a Run's Transcript", () => {
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
     const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "laptop" });
-    const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "t", access: "write" });
 
     const transcript = await uploaded("session_1", [userSays("Hello.", 1)], { headers: { authorization: `Bearer ${secret}` } });
 
@@ -507,6 +507,8 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0075_releases.sql");
     // And its Backport.
     await cronk.applyAhead("0078_backports.sql");
+    // And a Write token.
+    await cronk.applyAhead("0079_token_levels.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

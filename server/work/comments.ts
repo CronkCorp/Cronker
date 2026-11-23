@@ -6,6 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
+import { requireHumanAct } from "../identity/acts.js";
 import { answerQuestion } from "../runs/questions.js";
 import { insertComment } from "./comment-writes.js";
 import { Actor, ActorOrCronk, actorColumn, actorOrCronkColumn } from "./actors.js";
@@ -428,6 +429,7 @@ export async function resolveDocumentThread(
     await requireWrite(tx, actor, document);
     if (actor.kind === "agent") {
       const verb = resolved ? "resolve" : "unresolve";
+      requireHumanAct(actor, `${verb} a thread`);
       throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can ${verb} a thread.`, {
         rule: "Only a User resolves or unresolves a thread on a Document, once its review is dealt with; Agents read threads.",
         advice: `Reply in the thread to say what you did; ask ${ownerName(actor)}, ${actor.name}'s Owner, to ${verb} it.`,

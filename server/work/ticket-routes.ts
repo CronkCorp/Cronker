@@ -5,6 +5,7 @@ import { authenticateAgent } from "../agents/tokens.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
+import { requireHuman, requireOwnerAct } from "../identity/acts.js";
 import { Change, changesOf } from "./changes.js";
 import { joinQueue, leaveQueue } from "../pipeline/merge-queue.js";
 import { addComment, Comment, CommentCreate, commentsOn } from "./comments.js";
@@ -139,8 +140,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Changes whichever fields are given; `null` clears a field. Labels that differ only in case are kept once, " +
             "as first written. An Assignee must be a member of the Ticket's Workspace. A delegated Ticket entering a Status " +
             "with a Step, or delegated where it is, gets a Run. An Agent may set or clear the parent of any Ticket of a " +
-            "Project it has a running Run in, alone in its edit, and otherwise gets `no_running_run`. Agents never set a Status (`agent_sets_no_status`): " +
-            "their Runs move Tickets with `finish`. An Agent's save answers with `avoidedWords`: the words the " +
+            "Project it has a running Run in, alone in its edit, and otherwise gets `no_running_run`. Agents without a Full token never set a Status: " +
+            "their Runs move Tickets with `finish`; an Agent with a Write token is refused with `full_token_needed`. An Agent with a Full token moves any Ticket it has Write on, alone in its edit, as its Owner's move: entering a Status with a Step starts its Run and leaving a running one stops it, each a Change by the Agent with no Run. An Agent's save answers with `avoidedWords`: the words the " +
             "Project's glossary avoids that the title and description it gives use.",
           params: Type.Object({ ticketId: Type.String() }),
           body: TicketEdit,
@@ -150,11 +151,11 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const agent = await authenticateAgent(context, request);
         if (agent && request.body.statusId !== undefined) {
-          throw new ApiError(403, "agent_sets_no_status", `${agent.name} is an Agent, and Agents never set a Status.`, {
-            rule: "An Agent never sets a Status: a Run moves its Ticket only by finishing with one of its Outcomes.",
-            advice:
-              "End your Run with `finish`, giving your Run id and one of the Outcomes your Brief offers; " +
-              "the Outcome moves the Ticket.",
+          requireOwnerAct(agent, {
+            act: "moving a Ticket",
+            rule:
+              "An Agent with a Write token never sets a Status: a Run moves its Ticket only by finishing with one of its " +
+              "Outcomes, so end your Run with `finish`.",
           });
         }
         const caller = agent ?? (await requireCaller(context, request));
@@ -234,14 +235,14 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Tickets"],
           summary: "Accept an Unverified Ticket",
           description:
-            "Marks a Ticket a Run completed as Verified, leaving it in its Done Status. Only Users Accept; " +
+            "Marks a Ticket a Run completed as Verified, leaving it in its Done Status. Only Users Accept; an Agent with a Full token gets `human_only`; " +
             "a Ticket that isn't Unverified is refused with `not_unverified`.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const user = await requireHuman(context, request, "Accept a Ticket");
         return acceptTicket(context, user, request.params.ticketId);
       },
     );
@@ -259,7 +260,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "the User may read, saying whether it was sent back. Those named in `sendBack` are sent back to their " +
             "Project's first Backlog Status, as the User's Change, stopping any running Run; they stay blocked by it. " +
             "A `sendBack` naming a Ticket the preview doesn't list is refused with `not_in_preview`, and one in a Project " +
-            "where the User lacks Write with `read_access`, before anything changes. Only Users Reopen; a Ticket that " +
+            "where the User lacks Write with `read_access`, before anything changes. Only Users Reopen (`human_only` for a Full token); a Ticket that " +
             "isn't Unverified is refused with `not_unverified`.",
           params: Type.Object({ ticketId: Type.String() }),
           body: TicketReopen,
@@ -267,7 +268,7 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const user = await requireHuman(context, request, "Reopen a Ticket");
         return reopenTicket(context, user, request.params.ticketId, request.body.comment, request.body.sendBack);
       },
     );

@@ -33,14 +33,14 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
   return response.json;
 }
 
-/** Ada's Workspace with a Project CRONK, and a full token of her Agent `claude-max`. */
+/** Ada's Workspace with a Project CRONK, and a Write token of her Agent `claude-max`. */
 async function workspaceWithProject(options: Parameters<typeof startCronk>[0] = {}) {
   cronk = await startCronk(options);
   const { workspace, user } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, user, ada, project, agent, asAgent };
 }
@@ -306,7 +306,7 @@ describe("Artifacts", () => {
     });
     const other = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
     const stranger = await ok("POST", `/api/workspaces/${other.id}/agents`, ada, { name: "stranger" });
-    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${stranger.id}/tokens`, ada, { name: "laptop", access: "write" });
     const asStranger = { headers: { authorization: `Bearer ${secret}` } };
     const readOnly = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "reader", access: "read" });
     const asReader = { headers: { authorization: `Bearer ${readOnly.secret}` } };

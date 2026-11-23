@@ -2,7 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { Type, type Static, type TObject } from "typebox";
 import { z } from "zod";
-import { agentRights } from "../agents/rights.js";
+import { tokenRights } from "../agents/rights.js";
+import type { TokenAccess } from "../agents/tokens.js";
 import type { Guidance } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { ArtifactCreate, ArtifactSave } from "../artifacts/artifacts.js";
@@ -72,7 +73,8 @@ const access =
   "Ticket and saving knowledge included, is refused with `read_access`. Only Admins change Access, and a Ticket is " +
   "delegated only to an Agent with Write in its Project.";
 
-export function buildMcpServer(api: Api): McpServer {
+/** The MCP server for a token of the level given: Full-only tools are listed only for a Full token. */
+export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
   const avoidedWordsNote =
     " The answer's `avoidedWords` lists each word the glossary avoids that your text uses, with the Term to use " +
     "instead, ignoring code, block quotes and link targets: the save goes through anyway, so fix the wording in a " +
@@ -110,7 +112,7 @@ export function buildMcpServer(api: Api): McpServer {
         "Workspace's), recorded choices as numbered Decisions of each Project and of the Workspace, and live pages such " +
         "as HTML prototypes as Artifacts, shown sandboxed; " +
         "`export_knowledge` gives both as `GLOSSARY.md` and `docs/adr/` files to commit into your branch. You act as " +
-        `one Agent. ${agentRights} ${access}`,
+        `one Agent. ${tokenRights(level)} ${access}`,
     },
   );
 
@@ -1426,6 +1428,30 @@ export function buildMcpServer(api: Api): McpServer {
     ({ run, pullRequest }) =>
       answer(() => send("POST", `/api/runs/${encodeURIComponent(run)}/merge`, { pullRequestId: pullRequest })),
   );
+
+  if (level === "full") {
+    server.registerTool(
+      "move_ticket",
+      {
+        title: "Move a Ticket to a Status",
+        description:
+          "With a Full token: moves any Ticket you have Write on to a Status of its Project's board, Canceled and Done " +
+          "included, as your Owner's move. Entering a Status with a Step starts the delegated Ticket's Run, and leaving a " +
+          "running Status stops its Run; the Change names you with no Run. Refused for a Ticket a Run completed that is " +
+          "still Unverified (`ticket_unverified`): Accept and Reopen stay with Users.",
+        inputSchema: {
+          ticket: ticketArgument,
+          status: z.string().min(1).describe("A Status of the Ticket's Project: its name, ignoring case, or its id."),
+        },
+      },
+      ({ ticket, status }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          const project = await get<Project>(`/api/projects/${found.projectId}`);
+          return send("PATCH", `/api/tickets/${found.id}`, { statusId: statusIdOf(project, status) });
+        }),
+    );
+  }
 
   return server;
 }

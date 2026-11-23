@@ -424,8 +424,8 @@ export const api = {
   retry: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/retry`),
   dismiss: (ticketId: string) => call<Ticket>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/dismiss`),
   connectRequest: (requestId: string) => call<ConnectRequest>("GET", connect(requestId)),
-  approveConnect: (requestId: string, agentId: string) =>
-    call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId } satisfies RequestApproval),
+  approveConnect: (requestId: string, agentId: string, access: "write" | "full" = "write") =>
+    call<{ redirectTo: string }>("POST", `${connect(requestId)}/approve`, { agentId, access } satisfies RequestApproval),
   denyConnect: (requestId: string) => call<{ redirectTo: string }>("POST", `${connect(requestId)}/deny`),
   completion: (ticketId: string) =>
     call<Completion | null>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/completion`),

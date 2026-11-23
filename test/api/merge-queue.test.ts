@@ -865,7 +865,7 @@ describe("deliveries for a queued Pull Request", () => {
 
 describe("Autonomous Delegation joins the queue", () => {
   /**
-   * `queueSetting` with agents may merge on and Ada's Agent claude-max on her fake Runner, with a full token.
+   * `queueSetting` with agents may merge on and Ada's Agent claude-max on her fake Runner, with a Write token.
    * `approved()` takes a Ticket `inReview` makes, delegates it with Autonomous Delegation into Code review, and has its
    * Code review Run approve it, moving it into Merge.
    */
@@ -876,7 +876,7 @@ describe("Autonomous Delegation joins the queue", () => {
     const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
     const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
     const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
     const asAgent = { headers: { authorization: `Bearer ${secret}` } };
     const approved = async () => {
       const made = await inReview();
@@ -1009,7 +1009,7 @@ describe("a head conflicting with its base branch", () => {
     const tickets = [await produced(), await produced(), await produced(), await produced()];
     tickets[0]!.onGitHub.conflicts = [tickets[1]!.onGitHub];
     for (const { ticket } of tickets) await merge(ticket.id);
-    const { secret } = await ok("POST", `/api/agents/${agentOf().id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agentOf().id}/tokens`, ada, { name: "cloud", access: "write" });
     const asAgent = { headers: { authorization: `Bearer ${secret}` } };
     const running = async (ticketId: string) =>
       ((await ok("GET", `/api/tickets/${ticketId}/runs`, ada)) as { id: string; state: string; step: { name: string } }[]).find(
@@ -1211,7 +1211,7 @@ describe("a head conflicting with its base branch", () => {
     const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
     const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
     const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
     const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
     await deliver(cronker, "pull_request", {
       action: "opened",

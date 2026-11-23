@@ -28,7 +28,7 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
   return response.json;
 }
 
-/** Ada's Workspace (`adas-workspace`) with a Project RP, its Ticket RP-1, and a full token of her Agent `claude-max`. */
+/** Ada's Workspace (`adas-workspace`) with a Project RP, its Ticket RP-1, and a Write token of her Agent `claude-max`. */
 async function workspaceWithTicket() {
   cronk = await startCronk();
   const { workspace } = await setUp(cronk);
@@ -36,7 +36,7 @@ async function workspaceWithTicket() {
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Roadmap", key: "RP" });
   const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Readable addresses" });
   const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "write" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   return { workspace, ada, project, ticket, agent, asAgent };
 }

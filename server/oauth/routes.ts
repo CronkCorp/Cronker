@@ -135,7 +135,7 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Connecting"],
           summary: "Connect the OAuth client as one of one's own Agents",
           description:
-            "The client gets a one-time code to trade for tokens acting as the Agent, until the Agent is removed or the token is revoked from the Agent's tokens. Refused with `not_owner` for someone else's Agent.",
+            "The client gets a one-time code to trade for tokens acting as the Agent, with Write unless `access` picks Full, until the Agent is removed or the token is revoked from the Agent's tokens. Refused with `not_owner` for someone else's Agent.",
           params: RequestParams,
           body: RequestApproval,
           response: { 200: Redirect, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
@@ -143,7 +143,7 @@ export function oauthRoutes(context: Context): FastifyPluginAsyncTypebox {
       },
       async (request) => {
         const user = await requireUser(context, request);
-        return { redirectTo: await approveRequest(context, user, request.params.requestId, request.body.agentId) };
+        return { redirectTo: await approveRequest(context, user, request.params.requestId, request.body.agentId, request.body.access) };
       },
     );
 

@@ -19,7 +19,7 @@ async function inboxOfThree(page: Page, cronk: StartedCronk) {
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   const finish = async (ticketId: string, body: object) => {
     const runs = await call("GET", `/api/tickets/${ticketId}/runs`);
     const running = runs.find((r: { state: string }) => r.state === "running");

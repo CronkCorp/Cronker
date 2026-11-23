@@ -29,7 +29,7 @@ async function ok(method: string, path: string, as: Request, body?: unknown) {
 
 /**
  * Ada with a Project on the default board, a Ticket in Backlog, and her Agent `claude-max`
- * using her fake Runner, with a full token.
+ * using her fake Runner, with a Write token.
  */
 async function adaWithAgent() {
   const { workspace, user } = await setUp(cronk);
@@ -39,7 +39,7 @@ async function adaWithAgent() {
   const runner = await ok("POST", "/api/runners", ada, { name: "Fake", kind: "fake" });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+  const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
   return { workspace, user, ada, project, ticket, runner, agent, asAgent: { headers: { authorization: `Bearer ${secret}` } }, status };
 }
@@ -298,7 +298,7 @@ describe("what finish refuses", () => {
   test("another Agent's Run, and Users, who don't finish Runs", async () => {
     const { workspace, ada, run, ticket, status } = await runningRun();
     const other = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "other-bot" });
-    const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${other.id}/tokens`, ada, { name: "cloud", access: "write" });
 
     const byOther = await call("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` } }, {
       outcome: "ready",
@@ -316,7 +316,7 @@ describe("what finish refuses", () => {
     const { ada, run } = await runningRun();
     const elsewhere = await ok("POST", "/api/workspaces", ada, { name: "Elsewhere" });
     const agent = await ok("POST", `/api/workspaces/${elsewhere.id}/agents`, ada, { name: "far-bot" });
-    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
     const far = { headers: { authorization: `Bearer ${secret}` } };
 
     expect((await call("POST", `/api/runs/${run.id}/finish`, far, { outcome: "ready" })).status).toBe(404);
@@ -347,10 +347,10 @@ describe("Agents and Statuses", () => {
 
     expect(response.status).toBe(403);
     expect(response.json.error).toEqual({
-      code: "agent_sets_no_status",
+      code: "full_token_needed",
       message: expect.any(String),
-      rule: "An Agent never sets a Status: a Run moves its Ticket only by finishing with one of its Outcomes.",
-      advice: expect.stringContaining("`finish`"),
+      rule: expect.stringContaining("a Run moves its Ticket only by finishing with one of its Outcomes"),
+      advice: expect.stringContaining("Full token"),
     });
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
   });

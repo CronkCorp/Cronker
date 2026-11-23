@@ -132,7 +132,7 @@ test("a Comment on a Report shows on its Ticket's timeline, marked with the Repo
   const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
   const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
   await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
-  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "write" });
   const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
   await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
   const report = await call(

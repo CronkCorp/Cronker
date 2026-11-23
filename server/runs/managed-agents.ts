@@ -213,12 +213,12 @@ const heldColumns = `run_id as "runId", api_key_sealed as "apiKeySealed", token_
 export function managedAgentsRunner(context: Context, reports: RunReports): Runner {
   const { db, clock } = context;
 
-  /** Mints a fresh full token of the Run's Agent, recorded against the Run so it is revoked when the Run ends. */
+  /** Mints a fresh Write token of the Run's Agent, recorded against the Run so it is revoked when the Run ends. */
   async function mintToken(run: RunToStart, apiKeySealed: string): Promise<string> {
     const secret = issueSecret("agent");
     await transaction(db, async (tx) => {
       const { rows } = await tx.query<{ id: string }>(
-        `insert into agent_tokens (agent_id, name, access, token_hash, created_at) values ($1, $2, 'full', $3, $4) returning id`,
+        `insert into agent_tokens (agent_id, name, access, token_hash, created_at) values ($1, $2, 'write', $3, $4) returning id`,
         [run.agent.id, `Run on ${run.ticket.key}`, hashSecret(secret), clock.now()],
       );
       await tx.query("insert into managed_agent_runs (run_id, api_key_sealed, token_id) values ($1, $2, $3)", [
