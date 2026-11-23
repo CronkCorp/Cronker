@@ -93,7 +93,7 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor, or Cronk itself, writes on a Ticket, an Artifact or a Document (a Report included), possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline; a Comment on a Document shows only with the Document. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it. A merge conflict sends nothing back and writes none: it only marks the Pull Request.
+A Markdown message an Actor, or Cronk itself, writes on a Ticket, an Artifact or a Document (a Report included), possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline; a Comment on a Document shows only with the Document. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it. A merge conflict sends nothing back and writes none: it only marks the Pull Request. A Comment on a Document may **quote** a passage of its current Version, recorded with that Version's number, which anchors its thread there; Cronk places the thread where the quote first appears in each later Version, and once it no longer appears the thread is **outdated**. A Comment without a quote is on the whole Document, and a reply is on its thread's passage.
 _Avoid_: Note, message, post
 
 **Change**:

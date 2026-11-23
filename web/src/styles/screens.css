@@ -1858,3 +1858,38 @@
   padding: 0;
   list-style: none;
 }
+
+/* A thread on a passage of a Document: its quote over its first Comment. */
+.thread-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.comment-quote {
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.comment-quote-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-style: italic;
+}
+/* Threads placed in a Document's text, after the block holding their passage. */
+.passage-threads {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  list-style: none;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  font-size: 14px;
+}

@@ -62,7 +62,7 @@ import type { EntryPage, TicketTranscript, Transcript, TranscriptEntry } from ".
 import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work/access.js";
 import type { Actor, ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
-import type { Comment, CommentCreate } from "../../server/work/comments.js";
+import type { Comment, CommentCreate, DocumentCommentCreate } from "../../server/work/comments.js";
 import type { ArtifactMention, DecisionMention, Mention, TermMention, TicketMention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
 import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
@@ -323,7 +323,7 @@ export const api = {
     call<Comment>("POST", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`, input),
   documentComments: (documentId: string) =>
     call<Comment[]>("GET", `/api/documents/${encodeURIComponent(documentId)}/comments`),
-  commentOnDocument: (documentId: string, input: { body: string; replyToId?: string }) =>
+  commentOnDocument: (documentId: string, input: DocumentCommentCreate) =>
     call<Comment>("POST", `/api/documents/${encodeURIComponent(documentId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
