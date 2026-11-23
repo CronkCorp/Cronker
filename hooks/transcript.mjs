@@ -2,9 +2,9 @@
 //
 // Claude Code runs it as a hook, with the hook's input as JSON on stdin:
 // - on `Stop` it uploads the session's whole transcript, the JSONL file as it is, which also tells Cronk the
-//   session's Run is alive;
-// - on `PostToolUse` it only tells Cronk the session's Run is alive, at most once every 5 minutes, so a long
-//   turn that calls nothing in Cronk doesn't become lost.
+//   session ended its turn: a Run whose session then calls nothing for a few minutes fails;
+// - on `PostToolUse` it only tells Cronk the session's Run is alive, on the first tool call after a `Stop` and then
+//   at most once every 5 minutes, so a long turn that calls nothing in Cronk doesn't become lost.
 // It reads Cronk's address from CRONK_URL and an Agent token from CRONK_TOKEN. In Claude Code on the web it names
 // the session as Cronk knows it (CLAUDE_CODE_REMOTE_SESSION_ID's `cse_…` becomes `session_…`); elsewhere by
 // Claude Code's own session id.
@@ -12,7 +12,7 @@
 // It never fails the agent's turn: whatever goes wrong is written to stderr, and it exits 0.
 // Plain Node.js 18+, no dependencies.
 
-import { mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,8 +48,9 @@ async function main() {
     body: transcript,
     signal: AbortSignal.timeout(uploadTimeoutMs),
   });
-  // An upload tells Cronk the Run is alive too.
-  await noteAlive(sessionId);
+  // The upload tells Cronk the session ended its turn: the first tool call of a next turn, such as one woken by
+  // activity on its pull request, says at once that it is working again, or Cronk fails the Run.
+  await forgetAlive(sessionId);
 }
 
 /** The session as Cronk knows it: the claude.ai session a Run's Runner returned, or Claude Code's own id. */
@@ -94,6 +95,10 @@ async function noteAlive(sessionId) {
   await writeFile(file, "");
   const now = new Date();
   await utimes(file, now, now);
+}
+
+async function forgetAlive(sessionId) {
+  await rm(aliveFile(sessionId), { force: true });
 }
 
 async function readStdin() {

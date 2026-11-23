@@ -922,6 +922,7 @@ export async function retryRun(context: Context, userId: string, ticketId: strin
  * to the Runner's next waiting Ticket, and its Runner is asked to stop it, where it can.
  */
 export async function checkForLostRuns(context: Context): Promise<void> {
+  await checkForStoppedSessions(context);
   const silent = `runs.state = 'running' and workspaces.id = runs.workspace_id
     and coalesce(runs.last_call_at, runs.started_at) <= $1::timestamptz - make_interval(mins => workspaces.lost_run_minutes)`;
   const now = context.clock.now();
@@ -951,6 +952,49 @@ export async function checkForLostRuns(context: Context): Promise<void> {
   }
 }
 
+/**
+ * How long after a subscription Run's session ends its turn without `finish` (the Transcript hook's upload on `Stop`)
+ * Cronk waits for a call naming the Run before failing it: longer than a session woken, such as by activity on its
+ * pull request, takes to call again.
+ */
+export const stoppedSessionGraceMinutes = 5;
+
+/**
+ * Fails every running Run whose session uploaded its transcript on `Stop` and made no call naming the Run or its
+ * Ticket for `stoppedSessionGraceMinutes`, each in a transaction of its own, as a Managed Agents session going idle
+ * without `finish` fails its Run. Runs of Runners that fetch Transcripts themselves are left alone: the hook isn't
+ * theirs. Its Runner is asked to stop the session, so a Retry doesn't run beside it.
+ */
+async function checkForStoppedSessions(context: Context): Promise<void> {
+  const ownTranscripts = Object.entries(context.runners)
+    .filter(([, runner]) => runner.followTranscript)
+    .map(([kind]) => kind);
+  const stopped = `runs.state = 'running' and runs.stopped_at <= $1::timestamptz - make_interval(mins => $2)
+    and not exists (select 1 from runners where runners.id = runs.runner_id and runners.kind = any($3::text[]))`;
+  const now = context.clock.now();
+  const { rows: candidates } = await context.db.query<{ id: string }>(
+    `select runs.id from runs where ${stopped}`,
+    [now, stoppedSessionGraceMinutes, ownTranscripts],
+  );
+  for (const { id } of candidates) {
+    await transaction(context.db, async (tx) => {
+      await freeSlot(context, tx, id);
+      // Checked again under the lock: a call may have named the Run meanwhile, clearing `stopped_at`.
+      const { rows } = await tx.query<EndedRun & { projectId: string }>(
+        `update runs set state = 'failed', ended_at = $1, stopped_at = null,
+           end_reason = $5
+         from tickets where runs.id = $4 and tickets.id = runs.ticket_id and ${stopped}
+         returning ${endedRunColumns}, tickets.project_id as "projectId"`,
+        [now, stoppedSessionGraceMinutes, ownTranscripts, id, "The session ended its turn without calling `finish`."],
+      );
+      for (const run of rows) {
+        context.live.publish(tx, run.workspaceId, { type: "ticket.changed", projectId: run.projectId, ticketId: run.ticketId });
+        tellRunner(context, tx, run, "stop");
+      }
+    });
+  }
+}
+
 /** What a request names: a Run, a Ticket by id, a Ticket by its key, or the session a Run's Runner returned. */
 export interface NamedInCall {
   runId?: string;
@@ -961,9 +1005,15 @@ export interface NamedInCall {
 
 /**
  * Records that the Agent called Cronk naming one of its running Runs or that Run's Ticket, whether the
- * call was allowed or not: a Run long without such a call is lost.
+ * call was allowed or not: a Run long without such a call is lost. A `stopped` call, the Transcript hook's upload on
+ * `Stop`, also marks the Run's session as having ended its turn; any other call clears that.
  */
-export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
+export async function noteRunCall(
+  { db, clock }: Context,
+  agent: AgentCaller,
+  named: NamedInCall,
+  { stopped = false }: { stopped?: boolean } = {},
+): Promise<void> {
   const { runId, ticketId, ticketKey, sessionId } = named;
   const ticket = ticketId && isUuid(ticketId)
     ? ticketId
@@ -973,9 +1023,9 @@ export async function noteRunCall({ db, clock }: Context, agent: AgentCaller, na
   const run = runId && isUuid(runId) ? runId : undefined;
   if (!ticket && !run && !sessionId) return;
   await db.query(
-    `update runs set last_call_at = $3
+    `update runs set last_call_at = $3, stopped_at = case when $6::boolean then $3::timestamptz end
      where agent_id = $1 and state = 'running' and (id = $2 or ticket_id = $4 or session_id = $5)`,
-    [agent.id, run ?? null, clock.now(), ticket ?? null, sessionId ?? null],
+    [agent.id, run ?? null, clock.now(), ticket ?? null, sessionId ?? null, stopped],
   );
 }
 

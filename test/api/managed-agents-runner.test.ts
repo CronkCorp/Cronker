@@ -276,6 +276,22 @@ describe("ending a Run", () => {
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("lost");
     expect(cronk.managedAgents.session(session.id)).toEqual(expect.objectContaining({ status: "idle", archived: true }));
   });
+  test("an upload naming its session doesn't fail the Run when nothing calls after it: only the Runner's poll ends it", async () => {
+    const { ada, startRun } = await adaWithManagedAgentsRunner();
+    const { run, session } = await startRun();
+    const asAgent = { headers: { authorization: `Bearer ${tokenInVault((session.body.vault_ids as string[])[0]!)}` } };
+
+    const response = await fetch(`${cronk.url}/api/transcripts/sessions/${encodeURIComponent(session.id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-ndjson", ...asAgent.headers },
+      body: JSON.stringify({ type: "user", uuid: "u-1", timestamp: "2026-01-01T09:00:01.000Z", message: { role: "user", content: "Hi." } }) + "\n",
+    });
+    expect(response.status).toBeLessThan(300);
+    cronk.clock.advance(10 * 60_000);
+    await cronk.checkForLostRuns();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
 });
 
 describe("polling sessions with running Runs", () => {

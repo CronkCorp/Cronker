@@ -201,13 +201,17 @@ describe("when the upload fails", () => {
 
 describe("keeping the Run alive", () => {
   test("each upload counts as a call naming its Run, so a Run whose session is working never becomes lost", async () => {
-    const { ada, run, sessionEnv } = await adaWithRunningRun();
+    const { ada, run, hookToken, sessionEnv } = await adaWithRunningRun();
     const { Stop } = await hookCommands(ada);
     const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);
-        const state = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).state;
+    const state = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).state;
+    const asAgent = { headers: { authorization: `Bearer ${hookToken.secret}` } };
 
     cronk.clock.advance(minutes(20));
     expect((await runHook(Stop!, stopInput(path), sessionEnv)).stderr).toBe("");
+    // The session goes on with its next turn, calling at once and then working for long without a call.
+    cronk.clock.advance(minutes(1));
+    await ok("GET", `/api/runs/${run.id}`, asAgent);
     cronk.clock.advance(minutes(29));
     await cronk.checkForLostRuns();
     expect(await state()).toBe("running");
@@ -251,6 +255,85 @@ describe("keeping the Run alive", () => {
     expect(await runHook(PostToolUse!, toolUsed, sessionEnv)).toEqual({ code: 0, stdout: "", stderr: "" });
     expect(await lastCall()).toBe("2026-01-01T09:49:00.000Z");
     cronk.clock.advance(minutes(29));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+  });
+});
+
+describe("a session that ends its turn without finish", () => {
+  test("fails its Run 5 minutes after the upload on Stop when nothing calls meanwhile, and the Run waits in the Inbox with Retry", async () => {
+    const { workspace, ada, ticket, run, hookToken, sessionEnv } = await adaWithRunningRun();
+    const { Stop } = await hookCommands(ada);
+    const path = await transcriptFile([userSays("Triage CRONK-1.", 1), assistantSays("Waiting for CI.", 2)]);
+    const asAgent = { headers: { authorization: `Bearer ${hookToken.secret}` } };
+
+    cronk.clock.advance(minutes(10));
+    expect((await runHook(Stop!, stopInput(path), sessionEnv)).stderr).toBe("");
+    cronk.clock.advance(minutes(4));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+
+    cronk.clock.advance(minutes(1));
+    await cronk.checkForLostRuns();
+    const failed = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(failed).toMatchObject({ state: "failed", endReason: "The session ended its turn without calling `finish`." });
+    expect(failed.transcriptId).not.toBeNull();
+    // Its session is stopped, so a Retry doesn't run beside it.
+    expect(cronk.runner.stops.map((stop) => stop.runId)).toEqual([run.id]);
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items).toEqual([expect.objectContaining({ kind: "run", run: expect.objectContaining({ id: run.id, state: "failed" }) })]);
+
+    // A late finish is refused, as for any failed Run; Retry starts a fresh one.
+    const late = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
+    expect(late.status).toBe(409);
+    expect(late.json.error.code).toBe("run_not_running");
+    await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);
+    const runs = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["failed", "running"]);
+  });
+
+  test("keeps its Run running when the session calls again within the 5 minutes, as one woken by its pull request does", async () => {
+    const { ada, run, hookToken, sessionEnv } = await adaWithRunningRun();
+    const { Stop, PostToolUse } = await hookCommands(ada);
+    const path = await transcriptFile([userSays("Triage CRONK-1.", 1)]);
+    const asAgent = { headers: { authorization: `Bearer ${hookToken.secret}` } };
+    const state = async () => (await ok("GET", `/api/runs/${run.id}`, ada)).state;
+    const toolUsed = {
+      session_id: "4f8e1c2a-local",
+      transcript_path: path,
+      cwd: "/home/user/Cronker",
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      tool_input: { command: "gh run view" },
+      tool_response: { stdout: "" },
+    };
+
+    // Woken, the session's first tool call tells Cronk it is alive, however recently the hook last did.
+    expect((await runHook(PostToolUse!, toolUsed, sessionEnv)).stderr).toBe("");
+    expect((await runHook(Stop!, stopInput(path), sessionEnv)).stderr).toBe("");
+    cronk.clock.advance(minutes(3));
+    expect((await runHook(PostToolUse!, toolUsed, sessionEnv)).stderr).toBe("");
+    cronk.clock.advance(minutes(10));
+    await cronk.checkForLostRuns();
+    expect(await state()).toBe("running");
+
+    // Or it calls Cronk naming its Run, as an MCP call does.
+    expect((await runHook(Stop!, stopInput(path), sessionEnv)).stderr).toBe("");
+    cronk.clock.advance(minutes(4));
+    await ok("GET", `/api/runs/${run.id}`, asAgent);
+    cronk.clock.advance(minutes(10));
+    await cronk.checkForLostRuns();
+    expect(await state()).toBe("running");
+    expect(cronk.runner.stops).toEqual([]);
+  });
+
+  test("leaves Runs alone when the session is one of no Run, such as Claude Code connected by hand", async () => {
+    const { ada, run, sessionEnv } = await adaWithRunningRun();
+    const { Stop } = await hookCommands(ada);
+    const path = await transcriptFile([userSays("What's on CRONK-1?", 1)]);
+
+    expect((await runHook(Stop!, stopInput(path), { ...sessionEnv, CLAUDE_CODE_REMOTE_SESSION_ID: "cse_laptop" })).stderr).toBe("");
+    cronk.clock.advance(minutes(10));
     await cronk.checkForLostRuns();
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
   });
