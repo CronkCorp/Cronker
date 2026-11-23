@@ -484,9 +484,13 @@ function Fields({
   };
   const offeredAgents = delegate && !own.some((a) => a.id === delegate.id) ? [...own, delegate] : own;
   const readOnly = !useCanWrite();
-  // The Release picker offers the Project's planned Releases, loaded when the Ticket is; the same events refresh them.
+  // The Release picker offers the Project's planned Releases, and cut ones too for a completed Ticket, which is then
+  // backported if need be; loaded when the Ticket is, the same events refresh them.
   const releasesQuery = useQuery({ queryKey: keys.releases(project.id), queryFn: () => api.releases(project.id) });
-  const planned = (releasesQuery.data ?? []).filter((r) => r.state === "planned" || r.id === ticket.release?.id);
+  const completed = status?.kind === "done";
+  const planned = (releasesQuery.data ?? []).filter(
+    (r) => r.state === "planned" || (completed && r.state === "cut") || r.id === ticket.release?.id,
+  );
   return (
     <section aria-label="Fields" className="panel side-section fields">
       <FieldPicker

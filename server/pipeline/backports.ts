@@ -5,6 +5,9 @@ import { insertComment } from "../work/comment-writes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import type { Outcome, Step } from "../work/steps.js";
 import { moveByCronk } from "./cronk-moves.js";
+import { compareCommits } from "../github/client.js";
+import { installationCovering, tokenFor } from "../github/installations.js";
+import { ApiError } from "../http/errors.js";
 
 /**
  * Pipeline: Backports (the Releases spec). A Ticket tagged with a cut Release whose Pull Request merges into another
@@ -17,7 +20,9 @@ import { moveByCronk } from "./cronk-moves.js";
  * having merged on GitHub outside the queue, the Ticket goes to its first Review Status for a User to press Merge.
  *
  * A Ticket of a cut Release completes only once it has a merged Pull Request on its release branch and one on another
- * branch, whichever merges last. Leaving the Merge Status, as completing it, sending it back or a User's move do, drops
+ * branch, whichever merges last. A User tagging a completed Ticket with a cut Release likewise moves it into its Merge
+ * Status to backport its merge, when GitHub says that merge isn't in the release branch's cut commit
+ * (`backportOnTagging`), as queued by that User. Leaving the Merge Status, as completing it, sending it back or a User's move do, drops
  * the Backport's record, as it does queue entries (`ticket-writes.ts`).
  */
 
@@ -102,8 +107,8 @@ export async function releaseMerge(tx: Tx, ticketId: string, pullRequestId: numb
 
 /**
  * Records that the Ticket waits in its Merge Status `statusId` for a Backport of the merged Pull Request, queued by
- * whoever queued that one, if anyone did, taking it out of the queue. Call it in the transaction that locked the
- * Ticket, before it moves into the Merge Status.
+ * whoever queued that one, if anyone did, taking it out of the queue, or by `queuedBy` when given. Call it in the
+ * transaction that locked the Ticket, once it is in the Merge Status or just before it moves there by Cronk.
  */
 export async function awaitBackport(
   tx: Tx,
@@ -112,12 +117,14 @@ export async function awaitBackport(
   statusId: string,
   pullRequestId: number,
   now: Date,
+  queuedBy?: { userId: string },
 ): Promise<void> {
-  const { rows } = await tx.query<{ userId: string | null; agentId: string | null }>(
+  const { rows: queued } = await tx.query<{ userId: string | null; agentId: string | null }>(
     `delete from merge_queue where ticket_id = $1 and pull_request_id = $2
      returning queued_by_user_id as "userId", queued_by_agent_id as "agentId"`,
     [ticket.id, pullRequestId],
   );
+  const rows = queuedBy ? [{ userId: queuedBy.userId, agentId: null }] : queued;
   await tx.query(
     `insert into ticket_backports (ticket_id, workspace_id, release_id, status_id, pull_request_id, queued_by_user_id,
        queued_by_agent_id, state, created_at)
@@ -127,6 +134,82 @@ export async function awaitBackport(
        queued_by_agent_id = excluded.queued_by_agent_id, state = 'backporting', created_at = excluded.created_at`,
     [ticket.id, ticket.workspaceId, releaseId, statusId, pullRequestId, rows[0]?.userId ?? null, rows[0]?.agentId ?? null, now],
   );
+}
+
+/** The merge a completed Ticket just tagged with a cut Release needs backported, and the Merge Status it waits in. */
+export interface TaggedBackport {
+  release: { id: string; name: string; branch: string };
+  pullRequestId: number;
+  mergeCommit: string;
+  mergeStatus: { id: string; name: string };
+}
+
+/**
+ * Whether a completed Ticket tagged with the cut Release needs a Backport: its merged Pull Request on another branch
+ * than the release branch, in a Repository the Release was cut in, whose merge commit GitHub's compare says isn't in
+ * the release branch's cut commit. Null, for a tag only, when the Project's Pull Request automation is off, it has no
+ * Merge Status, the Ticket already merged onto the release branch, or has no such merge, or every merge is in the Cut.
+ * Asks GitHub as the App, in the transaction that locked the Ticket; GitHub failing refuses the tag, so the User tries
+ * again rather than the backport being skipped.
+ */
+export async function backportOnTagging(
+  context: Context,
+  tx: Tx,
+  ticket: { id: string; key: string; projectId: string },
+  releaseId: string,
+): Promise<TaggedBackport | null> {
+  const { rows: releases } = await tx.query<{ name: string; automation: boolean }>(
+    `select releases.name, projects.pull_request_automation as automation from releases
+     join projects on projects.id = releases.project_id where releases.id = $1 and releases.state = 'cut'`,
+    [releaseId],
+  );
+  const release = releases[0];
+  if (!release?.automation) return null;
+  const mergeStatus = (await statusesOf(tx, ticket.projectId)).find((s) => s.step?.kind === "merge");
+  if (!mergeStatus) return null;
+  const branch = `release/${release.name}`;
+  const { rows: merges } = await tx.query<{
+    id: string;
+    repositoryId: string;
+    fullName: string;
+    sha: string | null;
+    cutSha: string | null;
+    onReleaseBranch: boolean;
+  }>(
+    `select pull_requests.id::text, pull_requests.repository_id::text as "repositoryId",
+       pull_requests.repository_full_name as "fullName",
+       coalesce(pull_requests.merge_commit_sha, pull_requests.answered_merge_sha) as sha,
+       release_repositories.cut_sha as "cutSha", pull_requests.base_branch = $3 as "onReleaseBranch"
+     from pull_request_links join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+     left join release_repositories on release_repositories.release_id = $2
+       and release_repositories.repository_id = pull_requests.repository_id
+     where pull_request_links.ticket_id = $1 and pull_requests.state = 'merged'
+     order by pull_requests.updated_at desc, pull_requests.id desc`,
+    [ticket.id, releaseId, branch],
+  );
+  // Already merged onto the release branch: the change is in the Release.
+  if (merges.some((m) => m.onReleaseBranch)) return null;
+  for (const merge of merges) {
+    if (!merge.sha || !merge.cutSha) continue;
+    const repositoryId = Number(merge.repositoryId);
+    const installationId = await installationCovering(context, repositoryId);
+    if (installationId === undefined) {
+      throw new ApiError(409, "repository_not_installed", `The GitHub App can't reach ${merge.fullName}, so Cronk can't tell whether ${ticket.key}'s merge is in ${branch}.`, {
+        rule: "Tagging a completed Ticket with a cut Release asks GitHub whether its merge is already in the release branch.",
+        advice: `Install the GitHub App on ${merge.fullName}, then tag ${ticket.key} again.`,
+      });
+    }
+    const token = await tokenFor(context, installationId);
+    const compared = await compareCommits(context.config, token, merge.fullName, merge.sha, merge.cutSha);
+    // Only `identical` or `ahead` put the merge in the cut commit's history; GitHub not knowing a commit doesn't.
+    if (compared === "identical" || compared === "ahead") continue;
+    return {
+      release: { id: releaseId, name: release.name, branch },
+      pullRequestId: Number(merge.id),
+      mergeCommit: merge.sha, mergeStatus: { id: mergeStatus.id, name: mergeStatus.name },
+    };
+  }
+  return null;
 }
 
 /**

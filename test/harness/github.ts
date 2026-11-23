@@ -54,6 +54,11 @@ export interface StandInRepository {
   branches?: Map<string, string>;
   /** Its tags by name, each with the commit it points at; none until a test sets them or the App creates one. */
   tags?: Map<string, string>;
+  /**
+   * The commits each commit, by sha, has in its history, for GitHub's compare; a commit not listed has only itself, so
+   * two different commits compare as `diverged` unless a test says one comes before the other.
+   */
+  ancestors?: Map<string, Set<string>>;
 }
 
 /** A GitHub Release GitHub created at the App's request. */
@@ -776,6 +781,21 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         allow_rebase_merge: allows(repository, "rebase"),
         default_branch: defaultBranchOf(repository),
       });
+    }
+
+    // API: how two commits stand to each other, with a token of an installation that covers the repository.
+    const compare = /^\/repos\/([^/]+\/[^/]+)\/compare\/([^/]+)\.\.\.([^/]+)$/.exec(path);
+    if (request.method === "GET" && compare) {
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(compare[1]!).toLowerCase());
+      if (!repository) return json(response, 404, { message: "Not Found" });
+      const base = decodeURIComponent(compare[2]!);
+      const head = decodeURIComponent(compare[3]!);
+      const before = (later: string, earlier: string) => repository.ancestors?.get(later)?.has(earlier) ?? false;
+      const status = base === head ? "identical" : before(head, base) ? "ahead" : before(base, head) ? "behind" : "diverged";
+      return json(response, 200, { status, base_commit: { sha: base } });
     }
 
     // API: one branch's or tag's ref, creating a ref, and creating a GitHub Release, with a token of an installation
