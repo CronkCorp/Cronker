@@ -46,7 +46,7 @@ const DocumentRead = Type.Object({
   ...Document.properties,
   comments: Type.Array(Comment, { description: "Its Comments, oldest first; a reply names the Comment it answers." }),
 });
-import { knowledgePlaces } from "./places.js";
+import { knowledgePlaces, placeOfComment } from "./places.js";
 import { OutdatedVersionBody } from "./versions.js";
 import { DocumentLink, linkDocument, LinkedDocument, unlinkDocument } from "./linked-documents.js";
 import { LinkedDocumentWithThreads, linkedDocumentsWithThreads } from "./ticket-threads.js";
@@ -208,15 +208,18 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Users and Agents with a full token may comment on a Document they can change, as on a Ticket, a Report " +
             "included. Its readers see it live; nobody is notified of it. A `quote` anchors its thread to a passage of " +
             "the current Version, refused with `quote_not_found` when the passage isn't in it; its reads then give " +
-            "the passage's `anchor`, `outdated` once the passage is edited away.",
+            "the passage's `anchor`, `outdated` once the passage is edited away. An Agent's Comment answers with " +
+            "`avoidedWords`: the words the Document's glossary avoids that its body uses.",
           params: DocumentParams,
           body: DocumentCommentCreate,
-          response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          response: { 201: withAvoidedWords(Comment), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
         const caller = await requireCaller(context, request);
-        return reply.code(201).send(await addDocumentComment(context, caller, request.params.documentId, request.body));
+        const comment = await addDocumentComment(context, caller, request.params.documentId, request.body);
+        const place = await placeOfComment(db, comment);
+        return reply.code(201).send(await warnAgent(db, caller, place, { markdown: [request.body.body] }, comment));
       },
     );
 

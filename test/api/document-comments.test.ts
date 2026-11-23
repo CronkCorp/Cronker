@@ -98,12 +98,15 @@ describe("Comments on a Document", () => {
     expect(reply).toEqual(
       expect.objectContaining({ replyToId: posted.json.id, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
     );
-    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([posted.json, reply]);
+    // An Agent's Comment answers with the avoided words it uses, which its reads leave out.
+    const { avoidedWords, ...replied } = reply;
+    expect(avoidedWords).toEqual([]);
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([posted.json, replied]);
     // A slug names the Document as its id does.
-    expect(await ok("GET", `/api/documents/${plan.slug}/comments`, ada)).toEqual([posted.json, reply]);
+    expect(await ok("GET", `/api/documents/${plan.slug}/comments`, ada)).toEqual([posted.json, replied]);
     // The Document's read carries its threads; its PATCH and its list don't.
     const read = await ok("GET", `/api/documents/${plan.id}`, ada);
-    expect(read.comments).toEqual([posted.json, reply]);
+    expect(read.comments).toEqual([posted.json, replied]);
     const saved = await ok("PATCH", `/api/documents/${plan.id}`, ada, { baseVersion: 1, title: "The plan" });
     expect(saved).not.toHaveProperty("comments");
     expect((await ok("GET", `/api/documents/${plan.id}/comments`, ada))[0].document.title).toBe("The plan");
@@ -381,8 +384,11 @@ describe("Comments on a passage of a Document", () => {
     // Without a quote, a Comment is on the whole Document; a reply is on its thread's passage.
     expect(whole).toEqual(expect.objectContaining({ quote: null, quoteVersion: null, anchor: null }));
     expect(reply).toEqual(expect.objectContaining({ quote: null, anchor: null }));
-    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([byAda.json, byAgent.json, whole, reply]);
-    expect((await ok("GET", `/api/documents/${plan.id}`, ada)).comments).toEqual([byAda.json, byAgent.json, whole, reply]);
+    const { avoidedWords: _, ...quoted } = byAgent.json;
+    const { avoidedWords: __, ...replied } = reply;
+    const threads = [byAda.json, quoted, whole, replied];
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual(threads);
+    expect((await ok("GET", `/api/documents/${plan.id}`, ada)).comments).toEqual(threads);
   });
 
   test("a quote that isn't in the current Version is refused, for Users and Agents alike", async () => {
