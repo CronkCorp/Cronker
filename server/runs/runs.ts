@@ -7,7 +7,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn } from "../http/readable.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
-import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { lockTickets, writeTicket } from "../work/ticket-writes.js";
 import { statusesOf, type Status } from "../work/projects.js";
 import { mayHaveStep, type LabelRule, type Step } from "../work/steps.js";
@@ -901,14 +901,14 @@ export function briefBackport(backport: Backport): BriefBackport {
 /**
  * Starts a fresh Run of the same Step on a Ticket whose latest Run failed, was lost or couldn't
  * start, while the Ticket is still delegated and in that Run's Status. Only the Delegate's Owner
- * retries, since the Run spends their credentials. Like any Ticket needing a Run, it waits while its
+ * retries, or an Agent of theirs with a Full token, since the Run spends their credentials. Like any Ticket needing a Run, it waits while its
  * Runner is full or it is blocked. Returns the Ticket, with its new latest Run or what it waits for.
  */
-export async function retryRun(context: Context, userId: string, ticketId: string): Promise<Ticket> {
+export async function retryRun(context: Context, caller: Caller, ticketId: string): Promise<Ticket> {
   return transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    await requireWrite(tx, userViewer(userId), ticket);
+    await requireWrite(tx, caller, ticket);
     const { rows } = await tx.query<{ state: RunState; statusId: string | null }>(
       `select state, status_id as "statusId" from runs where ticket_id = $1 order by seq desc limit 1`,
       [ticket.id],
@@ -935,6 +935,8 @@ export async function retryRun(context: Context, userId: string, ticketId: strin
       [ticket.delegateId],
     );
     const owner = owners[0]!;
+    // An Agent with a Full token retries as its Owner would, so only when its Owner owns the Delegate.
+    const userId = caller.kind === "user" ? caller.id : caller.owner.id;
     if (owner.ownerId !== userId) {
       throw new ApiError(
         403,
@@ -944,7 +946,7 @@ export async function retryRun(context: Context, userId: string, ticketId: strin
     }
     await startRunIfNeeded(context, tx, ticket.id, context.clock.now());
     context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
-    return (await findTicket(tx, userViewer(userId), ticket.id))!;
+    return (await findTicket(tx, caller, ticket.id))!;
   });
 }
 

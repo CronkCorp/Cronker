@@ -997,6 +997,89 @@ describe("Autonomous Delegation joins the queue", () => {
   });
 });
 
+describe("an Agent with a Full token", () => {
+  /** `queueSetting` with Ada's Agent claude-max holding a Write and a Full token. */
+  async function fullSetting() {
+    const setting = await queueSetting();
+    const { workspace, ada } = setting;
+    const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const bearer = async (access: string) => {
+      const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: access, access });
+      return { headers: { authorization: `Bearer ${secret}` } };
+    };
+    return { ...setting, agent, asWrite: await bearer("write"), asFull: await bearer("full") };
+  }
+
+  test("queues a Ticket as its Agent, and Cronk's merge completes it as Unverified, agents may merge being off", async () => {
+    const { ada, inReview, merge, read, status, agent, asFull, workspace, user } = await fullSetting();
+    const { ticket } = await inReview();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { assigneeId: user.id });
+
+    const queued = await merge(ticket.id, asFull);
+
+    expect(queued.status, JSON.stringify(queued.json)).toBe(200);
+    expect(queued.json).toMatchObject({ statusId: status("Merge"), queue: { position: 1, state: "queued" } });
+    const joined = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(joined.slice(-2).map(({ actor, field, runId }: Record<string, unknown>) => [actor, field, runId])).toEqual([
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "queueJoined", null],
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "status", null],
+    ]);
+
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => m.number)).toEqual([101]);
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Done"), verification: "unverified", queue: null });
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.slice(-3).map(({ actor, field, runId }: Record<string, unknown>) => [actor, field, runId])).toEqual([
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "merged", null],
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "status", null],
+      [expect.objectContaining({ kind: "agent", id: agent.id }), "verification", null],
+    ]);
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(items.filter((i: { kind: string }) => i.kind === "unverified")).toHaveLength(1);
+  });
+
+  test("its entry stays queued when agents may merge is turned off", async () => {
+    const { ada, project, inReview, merge, read, status, asFull } = await fullSetting();
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: true });
+    const { ticket } = await inReview();
+    await merge(ticket.id, asFull);
+
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { agentsMayMerge: false });
+
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1, state: "queued" } });
+    await cronk.checkQueue();
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Done"), verification: "unverified" });
+  });
+
+  test("removes a Ticket from the queue, as its Agent's move", async () => {
+    const { ada, inReview, merge, status, agent, asFull } = await fullSetting();
+    const { ticket } = await inReview();
+    await merge(ticket.id);
+
+    const removed = await call("POST", `/api/tickets/${ticket.id}/queue/remove`, asFull);
+
+    expect(removed.status, JSON.stringify(removed.json)).toBe(200);
+    expect(removed.json).toMatchObject({ statusId: status("In Review"), queue: null });
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    expect(timeline.slice(-1)).toEqual([
+      expect.objectContaining({ actor: expect.objectContaining({ kind: "agent", id: agent.id }), field: "status", runId: null }),
+    ]);
+  });
+
+  test("a Write token is refused both with full_token_needed, and nothing changes", async () => {
+    const { inReview, merge, read, status, asWrite } = await fullSetting();
+    const { ticket } = await inReview();
+
+    const queued = await merge(ticket.id, asWrite);
+    expect([queued.status, queued.json.error.code]).toEqual([403, "full_token_needed"]);
+    await merge(ticket.id);
+    const removed = await call("POST", `/api/tickets/${ticket.id}/queue/remove`, asWrite);
+    expect([removed.status, removed.json.error.code]).toEqual([403, "full_token_needed"]);
+    expect(await read(ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1 } });
+  });
+});
+
 describe("a head conflicting with its base branch", () => {
   /**
    * Four Tickets Implement produced for claude-max, each queued by Ada in turn: CRONK-1's #101 merging makes CRONK-2's
