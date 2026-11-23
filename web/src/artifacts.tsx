@@ -24,7 +24,7 @@ import {
 import { Diff } from "./ui/diff.js";
 import { Chip, type Tone } from "./ui/labels.js";
 import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.js";
-import { CommentsPanel } from "./comments-panel.js";
+import { CommentsPanel, useComments } from "./comments-panel.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
 /** Where a Project's or the Workspace's Artifacts are listed. */
@@ -242,7 +242,7 @@ export function ArtifactScreen({
       {!gone && (
         // The Workspace's own Artifacts are for every User to change; a Project's, with Write in it.
         <ProjectAccessProvider access={project?.access ?? "write"}>
-          <CommentsPanel workspace={workspace} target={{ kind: "artifact", id: artifact.id }} user={user} />
+          <ArtifactComments workspace={workspace} artifactId={artifact.id} user={user} />
         </ProjectAccessProvider>
       )}
       <ConfirmDialog
@@ -292,4 +292,10 @@ function FileCompared({ file, from, to }: { file: ComparedFile; from: number; to
   if (file.lines.length === 0) return <p className="muted small">Empty file.</p>;
   if (file.lines.every((line) => line.change === "same")) return <p className="muted small">Only its line endings changed.</p>;
   return <Diff from={`Version ${from}`} to={`Version ${to}`} lines={file.lines} label={`${file.path} compared`} />;
+}
+
+/** The Artifact's Comments panel, with the Comments it keeps up to date. */
+function ArtifactComments({ workspace, artifactId, user }: { workspace: Workspace; artifactId: string; user: User }) {
+  const target = { kind: "artifact", id: artifactId } as const;
+  return <CommentsPanel target={target} user={user} comments={useComments(workspace, target)} />;
 }

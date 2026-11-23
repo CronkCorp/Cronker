@@ -119,6 +119,9 @@ describe("what an Agent may change", () => {
       questionId: null,
       sentBack: false,
       resolved: null,
+      quote: null,
+      quoteVersion: null,
+      anchor: null,
       attachments: [],
       avoidedWords: [],
     });

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import { attachmentUrl, isAttachmentUrl, type ArtifactMention, type DecisionMention, type Mention, type TermMention, type TicketMention } from "./api.js";
 import { Embed } from "./embed.js";
@@ -49,7 +49,7 @@ function markEmbeds(embeds: ArtifactMention[]) {
 type KeyMention = TicketMention | DecisionMention | TermMention;
 
 /** The page a Mention leads to: its Ticket's, its Decision's or its Term's glossary entry. */
-function mentionedPage(to: Addresses, mention: KeyMention): string {
+export function mentionedPage(to: Addresses, mention: KeyMention): string {
   if (mention.kind === "ticket") return to.ticket(mention);
   if (mention.kind === "decision") return to.decision({ id: mention.decisionId, projectId: mention.projectId, number: mention.number });
   return to.term({ id: mention.termId, projectId: mention.projectId, name: mention.name });
@@ -103,6 +103,50 @@ function linkMentions(mentions: KeyMention[], to: Addresses) {
   };
 }
 
+/** A minimal view of the rendered tree's nodes, enough to place slots after its blocks. */
+interface HtmlNode {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HtmlNode[];
+  position?: { start: { offset?: number } };
+}
+
+/**
+ * Something shown after the block of the text holding `offset`, in the text's own flow: what is placed by where it
+ * is in the Markdown, such as a Comment's thread on a passage.
+ */
+export interface Slot {
+  offset: number;
+  content: ReactNode;
+}
+
+/**
+ * Puts an empty `div` for each slot, numbered, after the top-level block its offset falls in: the last that starts at
+ * or before it. Without raw HTML, no other `div` names a slot.
+ */
+function placeSlots(offsets: number[]) {
+  return () => (tree: HtmlNode) => {
+    if (offsets.length === 0 || !tree.children) return;
+    const blocks = tree.children.filter((node) => node.type === "element" && node.position?.start.offset !== undefined);
+    if (blocks.length === 0) return;
+    const after = new Map<HtmlNode, number[]>();
+    offsets.forEach((offset, index) => {
+      const block = blocks.findLast((node) => node.position!.start.offset! <= offset) ?? blocks[0]!;
+      after.set(block, [...(after.get(block) ?? []), index]);
+    });
+    tree.children = tree.children.flatMap((node) => [
+      node,
+      ...(after.get(node) ?? []).map((index) => ({
+        type: "element",
+        tagName: "div",
+        properties: { dataSlot: String(index) },
+        children: [],
+      })),
+    ]);
+  };
+}
+
 /** Resolves `attachment:<id>` to where the Attachment downloads from; other URLs as react-markdown allows them. */
 function urlTransform(url: string): string {
   const attachment = /^attachment:([0-9a-f-]{36})$/i.exec(url.trim());
@@ -126,10 +170,13 @@ const links: Components = {
 
 /**
  * Markdown as written by Users, without raw HTML, with Ticket and Decision keys and Term names as links, the Artifacts it embeds
- * shown in place and `attachment:` references resolved.
+ * shown in place and `attachment:` references resolved; each slot follows the block its offset falls in.
  */
-export function Markdown({ text, mentions }: { text: string; mentions: Mention[] }) {
+export function Markdown({ text, mentions, slots = [] }: { text: string; mentions: Mention[]; slots?: Slot[] }) {
   const to = useAddresses();
+  // Read as the text renders, so the components below stay the same while the slots' content changes.
+  const placed = useRef(slots);
+  placed.current = slots;
   const keys = mentions.filter((m): m is KeyMention => m.kind !== "artifact");
   const embeds = mentions.filter((m): m is ArtifactMention => m.kind === "artifact");
   const components = useMemo<Components>(
@@ -140,6 +187,10 @@ export function Markdown({ text, mentions }: { text: string; mentions: Mention[]
         const embed = typeof index === "string" ? embeds[Number(index)] : undefined;
         return embed ? <Embed mention={embed} /> : <p>{children}</p>;
       },
+      div: ({ node, children }) => {
+        const index = node?.properties?.dataSlot;
+        return typeof index === "string" ? <>{placed.current[Number(index)]?.content}</> : <div>{children}</div>;
+      },
     }),
     // The Embeds as the API gives them; a new array of the same ones keeps each Embed, and its height, in place.
     [JSON.stringify(embeds)],
@@ -148,6 +199,7 @@ export function Markdown({ text, mentions }: { text: string; mentions: Mention[]
     <div className="markdown">
       <ReactMarkdown
         remarkPlugins={[markEmbeds(embeds), linkMentions(keys, to)]}
+        rehypePlugins={[placeSlots(slots.map((slot) => slot.offset))]}
         components={components}
         urlTransform={urlTransform}
       >

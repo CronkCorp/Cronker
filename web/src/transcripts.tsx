@@ -1,11 +1,12 @@
 import { useAddresses } from "./addresses.js";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Project, type Run, type Ticket, type Transcript, type TranscriptEntry, type Workspace } from "./api.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown } from "./markdown.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
+import { useSelectionIn } from "./ui/selection.js";
 import {
   Button,
   DeletedElsewhere,
@@ -291,34 +292,6 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
 
 /** The shortest text a Redaction takes, as Cronk refuses anything shorter. */
 const redactionMinLength = 4;
-
-/**
- * The text selected within the element, trimmed, with where it ends on screen for the Redact button; null while
- * nothing there is selected.
- */
-function useSelectionIn(within: RefObject<HTMLElement | null>): { text: string; bottom: number; left: number } | null {
-  const [selected, setSelected] = useState<{ text: string; bottom: number; left: number } | null>(null);
-  useEffect(() => {
-    const read = () => {
-      const current = window.getSelection();
-      const element = within.current;
-      if (!current || current.isCollapsed || current.rangeCount === 0 || !element) return setSelected(null);
-      const range = current.getRangeAt(0);
-      if (!element.contains(range.commonAncestorContainer)) return setSelected(null);
-      const text = current.toString().trim();
-      if (!text) return setSelected(null);
-      const rect = range.getBoundingClientRect();
-      setSelected({ text, bottom: rect.bottom, left: rect.left });
-    };
-    document.addEventListener("selectionchange", read);
-    window.addEventListener("scroll", read, true);
-    return () => {
-      document.removeEventListener("selectionchange", read);
-      window.removeEventListener("scroll", read, true);
-    };
-  }, [within]);
-  return selected;
-}
 
 /** An entry, followed by the mark of the gap after it when that is where a Transcript past 50 MB was cut. */
 function TranscriptItem({

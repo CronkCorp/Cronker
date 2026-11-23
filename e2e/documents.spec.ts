@@ -118,3 +118,48 @@ test("a resolved thread hides with its replies, shows on request, unresolves, an
   await expect(comments.getByText("Typo in the second line.")).toBeHidden();
   await expect(comments.getByRole("button", { name: "Show resolved (1)" })).toBeVisible();
 });
+
+test("selecting a passage comments on it, shown after its paragraph, and at the top once the passage is edited away", async ({ page, cronk }) => {
+  const { document } = await openDocument(page, cronk, "Runs start on delegation.\n\nA Merge Step merges the Pull Request.");
+  const cookie = await signIn(cronk);
+  const body = page.getByRole("article", { name: "How Runs start" });
+
+  // Selecting text within the first paragraph offers Comment under it.
+  await body.getByText("Runs start on delegation.").evaluate((paragraph) => {
+    const text = paragraph.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, "Runs start".length);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+  });
+  await page.getByRole("button", { name: "Comment on the selected passage" }).click();
+  const dialog = page.getByRole("dialog", { name: "Comment on a passage" });
+  await expect(dialog.getByLabel("Quoted passage")).toHaveText("Runs start");
+  await page.keyboard.type("Only on delegation?");
+  await dialog.getByRole("button", { name: /^Comment/ }).click();
+  await expect(dialog).toBeHidden();
+
+  // The thread sits after its paragraph, before the next one, not in the Comments panel.
+  const thread = body.getByRole("list", { name: "Comments on this passage" });
+  await expect(thread).toContainText("Only on delegation?");
+  const [threadTop, nextTop] = await Promise.all([
+    thread.evaluate((element) => element.getBoundingClientRect().top),
+    body.getByText("A Merge Step merges").evaluate((element) => element.getBoundingClientRect().top),
+  ]);
+  expect(threadTop).toBeLessThan(nextTop);
+  const comments = page.getByRole("region", { name: "Comments" });
+  await expect(comments.getByText("No Comments yet.")).toHaveCount(0);
+  await expect(comments.getByText("Only on delegation?")).toHaveCount(0);
+
+  // Once an edit takes the passage away, the thread shows at the top of the Comments panel with its quote and Version.
+  await cronk.request("PATCH", `/api/documents/${document.id}`, {
+    cookie,
+    body: { baseVersion: 1, body: "Delegation starts a Run.\n\nA Merge Step merges the Pull Request." },
+  });
+  await expect(thread).toBeHidden();
+  const outdated = comments.getByLabel("Quoted passage");
+  await expect(outdated).toContainText("Runs start");
+  await expect(outdated).toContainText("Written on Version 1");
+  await expect(comments.getByText("Only on delegation?")).toBeVisible();
+});

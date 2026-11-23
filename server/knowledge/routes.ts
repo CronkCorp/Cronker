@@ -31,8 +31,8 @@ import {
 import {
   addDocumentComment,
   Comment,
-  CommentCreate,
   commentsOnDocument,
+  DocumentCommentCreate,
   resolveDocumentThread,
 } from "../work/comments.js";
 
@@ -205,9 +205,11 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Comment on a Document, or reply to one of its Comments",
           description:
             "Users and Agents with a full token may comment on a Document they can change, as on a Ticket, a Report " +
-            "included. Its readers see it live; nobody is notified of it.",
+            "included. Its readers see it live; nobody is notified of it. A `quote` anchors its thread to a passage of " +
+            "the current Version, refused with `quote_not_found` when the passage isn't in it; its reads then give " +
+            "the passage's `anchor`, `outdated` once the passage is edited away.",
           params: DocumentParams,
-          body: CommentCreate,
+          body: DocumentCommentCreate,
           response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

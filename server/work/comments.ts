@@ -61,6 +61,24 @@ export const GitHubAuthor = Type.Object(
 );
 export type GitHubAuthor = Static<typeof GitHubAuthor>;
 
+/** Where a quoted thread sits in its Document's current Version. */
+export const CommentAnchor = Type.Object(
+  {
+    offset: Type.Integer({
+      minimum: 0,
+      description:
+        "Where the quote first appears in the current Version's Markdown, in UTF-16 code units, after normalising its " +
+        "line endings to `\\n`.",
+    }),
+  },
+  { description: "Where the quote sits in the current Version." },
+);
+
+/** Text with its line endings, `\r\n` and `\r`, made `\n`: how quotes are matched. */
+export function normaliseLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 export const Comment = Type.Object({
   id: Type.String({ format: "uuid" }),
   ticketId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
@@ -97,10 +115,23 @@ export const Comment = Type.Object({
       "When and by whom the thread this Comment starts on a Document was resolved; null for an open thread, a reply, or " +
       "a Comment on a Ticket or an Artifact.",
   }),
+  quote: Type.Union([Type.String(), Type.Null()], {
+    description:
+      "The passage of its Document the Comment's thread is on, as Markdown of the Version it was written on; null for a " +
+      "Comment on the whole Document, a reply, or a Comment on a Ticket or an Artifact.",
+  }),
+  quoteVersion: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()], {
+    description: "The number of the Version its `quote` was taken from; null without a quote.",
+  }),
+  anchor: Type.Union([CommentAnchor, Type.Literal("outdated"), Type.Null()], {
+    description:
+      "Where the quote sits in the Document's current Markdown: the offset of its first appearance, or `outdated` once " +
+      "it no longer appears; null without a quote.",
+  }),
 });
 export type Comment = Static<typeof Comment>;
 
-type Row = Omit<Comment, "createdAt" | "mentions" | "attachments" | "resolved"> & {
+type Row = Omit<Comment, "createdAt" | "mentions" | "attachments" | "resolved" | "anchor"> & {
   createdAt: Date;
   resolvedAt: Date | null;
   resolvedBy: Actor | null;
@@ -116,7 +147,7 @@ const columns = `comments.id, comments.ticket_id as "ticketId", comments.artifac
   case when comments.github_author_login is not null then json_build_object('kind', 'github',
     'login', comments.github_author_login, 'name', '@' || comments.github_author_login || ' on GitHub')
     else ${actorOrCronkColumn("users", "agents")} end as actor, comments.created_at as "createdAt", questions.id as "questionId",
-  comments.sent_back as "sentBack",
+  comments.sent_back as "sentBack", comments.quote, comments.quote_version as "quoteVersion",
   comments.resolved_at as "resolvedAt",
   case when resolvers.id is null then null else ${actorColumn("resolvers")} end as "resolvedBy"`;
 
@@ -169,17 +200,28 @@ async function documentRowsOf(db: Db | Tx, documentId: string, commentId?: strin
   return rows;
 }
 
-/** Comments as the API shows them, finding the Ticket keys of all their bodies, and their Attachments, at once. */
-async function present(db: Db | Tx, viewer: Viewer, rows: Row[]): Promise<Comment[]> {
+/**
+ * Comments as the API shows them, finding the Ticket keys of all their bodies, and their Attachments, at once. A
+ * quoted Comment is placed in `body`, its Document's current Markdown; Comments on Tickets and Artifacts quote nothing.
+ */
+async function present(db: Db | Tx, viewer: Viewer, rows: Row[], body?: string): Promise<Comment[]> {
   const mentions = await mentionsOf(db, viewer, "comment", rows.map((row) => row.id));
   const attachments = await attachmentsOnComments(db, rows.map((row) => row.id));
+  const current = body === undefined ? undefined : normaliseLineEndings(body);
   return rows.map(({ resolvedAt, resolvedBy, ...row }) => ({
     ...row,
     createdAt: row.createdAt.toISOString(),
     mentions: mentions.get(row.id)!,
     attachments: attachments.get(row.id)!,
     resolved: resolvedAt && resolvedBy ? { at: resolvedAt.toISOString(), by: resolvedBy } : null,
+    anchor: row.quote === null || current === undefined ? null : anchorIn(current, row.quote),
   }));
+}
+
+/** Where the quote first appears in the normalised Markdown, or `outdated` when it no longer does. */
+function anchorIn(markdown: string, quote: string): Comment["anchor"] {
+  const offset = markdown.indexOf(quote);
+  return offset === -1 ? "outdated" : { offset };
 }
 
 export async function commentsOn(db: Db, viewer: Viewer, ticketId: string): Promise<Comment[]> {
@@ -194,6 +236,22 @@ export const CommentCreate = Type.Object({
   replyToId: Type.Optional(Type.String({ description: "The id of the Comment on this Ticket, Artifact or Document being replied to." })),
 });
 export type CommentCreate = Static<typeof CommentCreate>;
+
+/** The Document comment route's body: a Comment, on the whole Document or a passage it quotes, or a reply to one. */
+export const DocumentCommentCreate = Type.Object({
+  ...CommentCreate.properties,
+  quote: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 100_000,
+      description:
+        "A passage of the Document's current Version the Comment is on, as its Markdown, matched exactly after " +
+        "normalising line endings. Left out, the Comment is on the whole Document. A reply takes none: it is on " +
+        "its thread's passage.",
+    }),
+  ),
+});
+export type DocumentCommentCreate = Static<typeof DocumentCommentCreate>;
 
 export async function addComment(
   context: Context,
@@ -279,7 +337,7 @@ export async function commentsOnDocument(
   const document = await findDocument(db, viewer, documentId);
   if (!document) throw documentNotFound();
   const rows = await documentRowsOf(db, document.id);
-  return present(db, viewer, includeResolved ? rows : withoutResolvedThreads(rows));
+  return present(db, viewer, includeResolved ? rows : withoutResolvedThreads(rows), document.body);
 }
 
 /** The Comments whose thread is open: each reply, however deep, goes with the first Comment of its thread. */
@@ -362,7 +420,7 @@ export async function resolveDocumentThread(
         commentId,
       });
     }
-    const [updated] = await present(tx, actor, await documentRowsOf(tx, document.id, commentId));
+    const [updated] = await present(tx, actor, await documentRowsOf(tx, document.id, commentId), document.body);
     return updated!;
   });
 }
@@ -379,7 +437,7 @@ export async function addDocumentComment(
   context: Context,
   actor: Caller,
   documentId: string,
-  input: { body: string; replyToId?: string },
+  input: DocumentCommentCreate,
 ): Promise<Comment> {
   return transaction(context.db, async (tx) => {
     const document = await findDocument(tx, actor, documentId);
@@ -394,8 +452,35 @@ export async function addDocumentComment(
         : { rowCount: 0 };
       if (rowCount === 0) throw unknownReplyTarget("Document");
     }
-    const commentId = await insertDocumentComment(context, tx, document, actor, input.body, input.replyToId ?? null);
-    const [comment] = await present(tx, actor, await documentRowsOf(tx, document.id, commentId));
+    const quote = input.quote === undefined ? null : quoteIn(document, input.quote, input.replyToId !== undefined);
+    const commentId = await insertDocumentComment(context, tx, document, actor, input.body, input.replyToId ?? null, quote);
+    const [comment] = await present(tx, actor, await documentRowsOf(tx, document.id, commentId), document.body);
     return comment!;
   });
+}
+
+/**
+ * The quote as it is recorded, with the Version it is taken from: refused on a reply, which is on its thread's
+ * passage, and unless it appears in the Document's current Version. An edit racing the Comment only makes its thread
+ * outdated on the next read.
+ */
+function quoteIn(
+  document: { body: string; version: { number: number } },
+  quote: string,
+  reply: boolean,
+): { quote: string; version: number } {
+  if (reply) {
+    throw new ApiError(400, "quote_on_reply", "A reply takes no quote.", {
+      rule: "A thread's first Comment anchors it to its passage; its replies are on the same passage.",
+      advice: "Reply without `quote`, or comment on the passage without `replyToId` to start a thread of its own.",
+    });
+  }
+  const normalised = normaliseLineEndings(quote);
+  if (!normaliseLineEndings(document.body).includes(normalised)) {
+    throw new ApiError(400, "quote_not_found", "The quote isn't in the Document's current Version.", {
+      rule: "A Comment quotes a passage of its Document's current Version exactly, as its Markdown.",
+      advice: "Read the Document again and quote its Markdown as it is now, or comment on the whole Document without `quote`.",
+    });
+  }
+  return { quote: normalised, version: document.version.number };
 }

@@ -93,6 +93,9 @@ describe("Comments on an Artifact", () => {
         questionId: null,
         sentBack: false,
         resolved: null,
+        quote: null,
+        quoteVersion: null,
+        anchor: null,
       },
     });
     expect(reply).toEqual(

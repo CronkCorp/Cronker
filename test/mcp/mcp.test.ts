@@ -142,6 +142,23 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
+  test("an Agent reads a Ticket with the Terms and Decisions it and its Comments mention", async () => {
+    const { cookie, workspace, ticket, secret } = await workspaceWithTicket();
+    await post(cookie, `/api/workspaces/${workspace.id}/terms`, { name: "Lane", definition: "A column.", avoid: ["Swimlane"] });
+    await post(cookie, `/api/projects/${ticket.projectId}/decisions`, { title: "One Lane", body: "Because." });
+    await cronk.jobsSettled();
+    await post(cookie, `/api/tickets/${ticket.id}/comments`, { body: "Each Lane, by CRONK-D1." });
+    const client = await connect(secret);
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.ticket.knowledge).toEqual({
+      terms: [expect.objectContaining({ name: "Lane", definition: "A column.", avoid: ["Swimlane"], scope: "workspace" })],
+      decisions: [expect.objectContaining({ key: "CRONK-D1", title: "One Lane", status: "proposed", scope: "project" })],
+    });
+    expect(json.ticket.knowledge.decisions[0]).not.toHaveProperty("body");
+  });
+
   test("an Agent reads a Ticket with its Pull Requests, their state and checks", async () => {
     const { cookie, ticket, secret } = await workspaceWithTicket();
     await createGitHubApp(cronk, cookie);
@@ -301,6 +318,27 @@ describe("MCP with an Agent token", () => {
     expect((await call(client, "read_document", { document: plan.id })).json.comments).toEqual([open]);
     expect((await call(client, "read_document", { document: plan.id, resolved: true })).json.comments).toEqual([resolved, open]);
     expect(resolved.resolved).toEqual(expect.objectContaining({ by: expect.objectContaining({ kind: "user" }) }));
+  });
+
+  test("an Agent quotes a passage of a Document, and read_document places the thread", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const plan = await (
+      await cronk.request("POST", `/api/projects/${ticket.projectId}/documents`, {
+        cookie,
+        body: { title: "Plan", body: "Step one.\n\nStep two." },
+      })
+    ).json();
+
+    const quoted = await call(client, "comment", { document: plan.id, body: "Needed?", quote: "Step two." });
+    const missing = await call(client, "comment", { document: plan.id, body: "Here?", quote: "Step three." });
+    const onTicket = await call(client, "comment", { ticket: "CRONK-1", body: "Here?", quote: "Step two." });
+
+    expect(quoted.json).toEqual(expect.objectContaining({ quote: "Step two.", quoteVersion: 1, anchor: { offset: 11 } }));
+    expect(missing).toEqual({ isError: true, json: expect.objectContaining({ code: "quote_not_found" }) });
+    expect(onTicket).toEqual({ isError: true, json: expect.objectContaining({ code: "quote_outside_document" }) });
+    const read = await call(client, "read_document", { document: plan.id });
+    expect(read.json.comments).toEqual([quoted.json]);
   });
 
   test("an Agent comments on an Artifact, sees the Comments with read_artifact and on the linking Ticket with read_ticket", async () => {

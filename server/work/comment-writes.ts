@@ -72,7 +72,10 @@ export async function insertArtifactComment(
   return commentId;
 }
 
-/** Writes a Comment on the Document, a Report included, as the Actor, telling its readers, and returns its id. */
+/**
+ * Writes a Comment on the Document, a Report included, as the Actor, on its whole or on the passage it quotes from the
+ * Version given, telling its readers, and returns its id.
+ */
 export async function insertDocumentComment(
   context: Context,
   tx: Tx,
@@ -80,10 +83,12 @@ export async function insertDocumentComment(
   actor: { kind: "user" | "agent"; id: string },
   body: string,
   replyToId: string | null,
+  quote: { quote: string; version: number } | null = null,
 ): Promise<string> {
   const { rows } = await tx.query<{ id: string }>(
-    `insert into comments (workspace_id, document_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    `insert into comments (workspace_id, document_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at,
+       quote, quote_version)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
     [
       document.workspaceId,
       document.id,
@@ -92,6 +97,8 @@ export async function insertDocumentComment(
       actor.kind === "agent" ? actor.id : null,
       body,
       context.clock.now(),
+      quote?.quote ?? null,
+      quote?.version ?? null,
     ],
   );
   const commentId = rows[0]!.id;
