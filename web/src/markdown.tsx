@@ -49,7 +49,7 @@ function markEmbeds(embeds: ArtifactMention[]) {
 type KeyMention = TicketMention | DecisionMention | TermMention;
 
 /** The page a Mention leads to: its Ticket's, its Decision's or its Term's glossary entry. */
-function mentionedPage(to: Addresses, mention: KeyMention): string {
+export function mentionedPage(to: Addresses, mention: KeyMention): string {
   if (mention.kind === "ticket") return to.ticket(mention);
   if (mention.kind === "decision") return to.decision({ id: mention.decisionId, projectId: mention.projectId, number: mention.number });
   return to.term({ id: mention.termId, projectId: mention.projectId, name: mention.name });

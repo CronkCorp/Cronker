@@ -20,6 +20,7 @@ import { EditorState, TextSelection, type Command, type Plugin, type Transaction
 import { addColumnAfter, addRowAfter, deleteColumn, deleteRow, goToNextCell, isInTable, tableEditing } from "prosemirror-tables";
 import { markdownParser, markdownSerializer } from "./markdown.js";
 import { embedAddress } from "./embed-address.js";
+import { mentionsPlugin, type MentionAddress } from "./mentions.js";
 import { embedNode, openMarkdown, type MarkdownDocument } from "./round-trip.js";
 import { schema } from "./schema.js";
 
@@ -36,6 +37,8 @@ export interface Draft {
 export interface EditorHooks {
   /** Asks for a link's address, as Mod-K does. */
   editLink?: () => void;
+  /** Where a Mention's link leads; given, the editor links the Mentions it is told the draft holds (`./mentions.ts`). */
+  mentionAddress?: MentionAddress;
 }
 
 /** Loads Markdown for editing. */
@@ -463,5 +466,6 @@ export function editorPlugins(hooks: EditorHooks = {}): Plugin[] {
     tableEditing(),
     gapCursor(),
     dropCursor({ class: "rich-editor-drop" }),
+    ...(hooks.mentionAddress ? [mentionsPlugin(hooks.mentionAddress)] : []),
   ];
 }
