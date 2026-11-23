@@ -206,7 +206,7 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags,
           summary: "Delete a Term",
-          description: "Deletes the Term with all its Versions. Only a User may; Agents are refused with `agent_not_allowed`.",
+          description: "Deletes the Term with all its Versions. Only a User, or an Agent with a Full token, may; an Agent with a Write token is refused with `full_token_needed`.",
           params: TermParams,
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },

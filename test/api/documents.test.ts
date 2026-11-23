@@ -323,7 +323,7 @@ describe("refusals", () => {
         `/api/documents/${document.id}`,
         undefined,
         403,
-        expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Document") }),
+        expect.objectContaining({ code: "full_token_needed", rule: expect.stringContaining("doesn't delete a Document") }),
       ],
       ["a read-only token", reader, "POST", `/api/projects/${project.id}/documents`, { title: "Mine" }, 403, readOnly],
       ["a read-only token", reader, "PATCH", `/api/documents/${document.id}`, { baseVersion: 1, body: "Mine." }, 403, readOnly],

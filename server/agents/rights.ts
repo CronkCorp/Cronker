@@ -4,8 +4,7 @@
  */
 export const agentRights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
-  "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
-  "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only " +
+  "attaching files to Documents and to their own Comments, create and save Terms, create and save Artifacts, and propose Decisions and edit their text (only " +
   "Users change a Decision's status). An Agent whose Owner is an Admin may also create Projects, and with Write in " +
   "a Project change its board, a Step's content only when its Owner is an Admin. With Write in a Project an Agent may also create, rename " +
   "and delete its planned Releases (only Users cut and release them). During its running Run on a Ticket " +
@@ -22,7 +21,8 @@ export const agentRights =
   "its slices under it. These are the rules for a Write token; a Read token may only read. A Full token, which " +
   "its Owner picks by hand and a Run never holds, may also move any Ticket it has Write on to any Status with " +
   "`move_ticket`, as its Owner's move: entering a Status with a Step starts its Run, and leaving a running one stops " +
-  "it, each a Change by the Agent with no Run. Accept and Reopen, Access and Admin settings, a Decision's status " +
+  "it, each a Change by the Agent with no Run, and delete Documents, Terms, Artifacts and Artifact Versions with " +
+  "`delete_document`, `delete_term` and `delete_artifact`. Accept and Reopen, Access and Admin settings, a Decision's status " +
   "and resolving threads stay human-only, even for a Full token (`human_only`); a Write token attempting a Full act " +
   "gets `full_token_needed`. Anything else is refused with the rule and what to do instead.";
 

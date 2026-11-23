@@ -311,7 +311,7 @@ describe("refusals", () => {
         refusals.push([who, as, method, path, body, 404]);
       }
     }
-    const agentDelete = expect.objectContaining({ code: "agent_not_allowed", rule: expect.stringContaining("Only a User deletes a Term") });
+    const agentDelete = expect.objectContaining({ code: "full_token_needed", rule: expect.stringContaining("doesn't delete a Term") });
     refusals.push(
       ["an Agent", asAgent, "DELETE", `/api/terms/${term.id}`, undefined, 403, agentDelete],
       ["an Agent", asAgent, "DELETE", `/api/terms/${workspaceTerm.id}`, undefined, 403, agentDelete],

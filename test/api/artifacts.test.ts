@@ -499,7 +499,7 @@ describe("Artifacts", () => {
 
     expect(byAgent.status).toBe(403);
     expect(byAgent.json.error).toEqual(
-      expect.objectContaining({ code: "agent_not_allowed", rule: expect.any(String), advice: expect.any(String) }),
+      expect.objectContaining({ code: "full_token_needed", rule: expect.any(String), advice: expect.any(String) }),
     );
     expect((await ok("GET", `/api/artifacts/${artifact.id}`, ada)).version.number).toBe(2);
     expect((await open(saved.url)).status).toBe(200);
@@ -636,7 +636,7 @@ describe("Deleting one Artifact Version", () => {
 
     expect(byAgent.status).toBe(403);
     expect(byAgent.json.error).toEqual(
-      expect.objectContaining({ code: "agent_not_allowed", rule: expect.any(String), advice: expect.any(String) }),
+      expect.objectContaining({ code: "full_token_needed", rule: expect.any(String), advice: expect.any(String) }),
     );
     await stream.expectQuiet();
     stream.close();

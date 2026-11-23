@@ -167,3 +167,120 @@ describe("human-only acts", () => {
     expect([accept.status, accept.json.error.code]).toEqual([403, "agent_not_allowed"]);
   });
 });
+
+describe("a Full token deleting knowledge", () => {
+  const file = (path: string, text: string) => ({ path, contentBase64: Buffer.from(text).toString("base64") });
+  const codeOf = (response: { status: number; json: { error: { code: string } } }) => [response.status, response.json.error.code];
+
+  /** A Document, a Term and an Artifact with two Versions, in Ada's Project. */
+  async function knowledge(as: Request, projectId: string) {
+    const document = await ok("POST", `/api/projects/${projectId}/documents`, as, { title: "Plan", body: "One." });
+    const term = await ok("POST", `/api/projects/${projectId}/terms`, as, { name: "Ticket", definition: "Work." });
+    const artifact = await ok("POST", `/api/projects/${projectId}/artifacts`, as, {
+      title: "Prototype",
+      files: [file("index.html", "<p>1</p>")],
+    });
+    await ok("PATCH", `/api/artifacts/${artifact.id}`, as, { baseVersion: 1, files: [file("index.html", "<p>2</p>")] });
+    return { document, term, artifact };
+  }
+
+  test("deletes a Document, a Term, an Artifact Version and an Artifact", async () => {
+    const { ada, project, asFull } = await adaWithAgent();
+    const { document, term, artifact } = await knowledge(ada, project.id);
+
+    await ok("DELETE", `/api/documents/${document.id}`, asFull);
+    await ok("DELETE", `/api/terms/${term.id}`, asFull);
+    await ok("DELETE", `/api/artifacts/${artifact.id}/versions/2`, asFull);
+    expect((await ok("GET", `/api/artifacts/${artifact.id}`, ada)).version.number).toBe(1);
+    await ok("DELETE", `/api/artifacts/${artifact.id}`, asFull);
+
+    expect((await call("GET", `/api/documents/${document.id}`, ada)).status).toBe(404);
+    expect((await call("GET", `/api/terms/${term.id}`, ada)).status).toBe(404);
+    expect((await call("GET", `/api/artifacts/${artifact.id}`, ada)).status).toBe(404);
+  });
+
+  test("a Write token is refused each with full_token_needed, deleting nothing", async () => {
+    const { ada, project, asWrite } = await adaWithAgent();
+    const { document, term, artifact } = await knowledge(ada, project.id);
+
+    for (const path of [
+      `/api/documents/${document.id}`,
+      `/api/terms/${term.id}`,
+      `/api/artifacts/${artifact.id}/versions/2`,
+      `/api/artifacts/${artifact.id}`,
+    ]) {
+      expect(codeOf(await call("DELETE", path, asWrite)), path).toEqual([403, "full_token_needed"]);
+    }
+    await ok("GET", `/api/documents/${document.id}`, ada);
+    await ok("GET", `/api/terms/${term.id}`, ada);
+    expect((await ok("GET", `/api/artifacts/${artifact.id}`, ada)).version.number).toBe(2);
+  });
+
+  test("is bounded by the Project's Agent Access and its Owner's Access", async () => {
+    const { workspace, ada, project, asFull } = await adaWithAgent();
+    const { document, term, artifact } = await knowledge(ada, project.id);
+    const paths = [`/api/documents/${document.id}`, `/api/terms/${term.id}`, `/api/artifacts/${artifact.id}/versions/2`, `/api/artifacts/${artifact.id}`];
+    await ok("PUT", `/api/projects/${project.id}/access`, ada, { visibility: "open", users: [], agentAccess: "read" });
+
+    for (const path of paths) expect(codeOf(await call("DELETE", path, asFull)), path).toEqual([403, "read_access"]);
+
+    await ok("PUT", `/api/projects/${project.id}/access`, ada, { visibility: "open", users: [], agentAccess: "write" });
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    await cronk.stage(
+      "insert into project_members (project_id, workspace_id, user_id, level, created_at) values ($1, $2, $3, 'read', now())",
+      [project.id, workspace.id, bea.user.id],
+    );
+    const beasAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: bea.cookie }, { name: "bea-claude" });
+    const beasToken = await ok("POST", `/api/agents/${beasAgent.id}/tokens`, { cookie: bea.cookie }, { name: "laptop", access: "full" });
+    for (const path of paths) expect(codeOf(await call("DELETE", path, bearer(beasToken.secret))), path).toEqual([403, "read_access"]);
+    await ok("GET", `/api/documents/${document.id}`, ada);
+    await ok("GET", `/api/terms/${term.id}`, ada);
+    expect((await ok("GET", `/api/artifacts/${artifact.id}`, ada)).version.number).toBe(2);
+  });
+});
+
+describe("a Full token and its Transcripts", () => {
+  async function upload(sessionId: string, text: string, as: Request) {
+    const line = { type: "user", sessionId: "local-id", uuid: "u-1", timestamp: "2026-01-01T00:00:01Z", message: { role: "user", content: text } };
+    const response = await fetch(`${cronk.url}/api/transcripts/sessions/${sessionId}`, {
+      method: "PUT",
+      headers: { "content-type": "application/x-ndjson", ...as.headers },
+      body: JSON.stringify(line) + "\n",
+    });
+    expect(response.status).toBeLessThan(300);
+    return response.json();
+  }
+
+  test("redacts and deletes one, each recorded with the Agent, and no Run, as who did it", async () => {
+    const { ada, ticket, agent, asFull, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+    const transcript = await upload("session_1", "The key is sk-secret-1234.", asFull);
+
+    const redacted = await ok("POST", `/api/transcripts/${transcript.id}/redactions`, asFull, { text: "sk-secret-1234" });
+    expect(redacted.redactions).toEqual([{ id: expect.any(String), addedBy: { id: agent.id, name: "claude-max" }, addedAt: expect.any(String) }]);
+
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, asFull);
+
+    expect(await runsOf(ticket.id, ada)).toMatchObject([{ id: run.id, transcriptId: null, transcriptDeleted: true }]);
+    const [deleted] = (await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada)).slice(-1);
+    expect(deleted).toMatchObject({
+      field: "transcriptDeleted",
+      from: { runId: run.id, step: "Triage" },
+      actor: { kind: "agent", name: "claude-max" },
+      runId: null,
+    });
+  });
+
+  test("a Write token is refused redacting and deleting with full_token_needed", async () => {
+    const { ada, asWrite } = await adaWithAgent();
+    const transcript = await upload("laptop-1", "The key is sk-secret-1234.", asWrite);
+
+    const redacting = await call("POST", `/api/transcripts/${transcript.id}/redactions`, asWrite, { text: "sk-secret-1234" });
+    expect([redacting.status, redacting.json.error.code]).toEqual([403, "full_token_needed"]);
+    const deleting = await call("DELETE", `/api/transcripts/${transcript.id}`, asWrite);
+    expect([deleting.status, deleting.json.error.code]).toEqual([403, "full_token_needed"]);
+    expect((await ok("GET", `/api/transcripts/${transcript.id}`, ada)).redactions).toEqual([]);
+  });
+});

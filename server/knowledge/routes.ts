@@ -312,7 +312,7 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags,
           summary: "Delete a Document",
           description:
-            "Deletes the Document with all its Versions. Only a User may; Agents are refused with `agent_not_allowed`. " +
+            "Deletes the Document with all its Versions. Only a User, or an Agent with a Full token, may; an Agent with a Write token is refused with `full_token_needed`. " +
             "Refused with `document_has_children` while Documents sit under it: move or delete them first.",
           params: DocumentParams,
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },

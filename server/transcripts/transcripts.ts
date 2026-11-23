@@ -4,12 +4,13 @@ import { transaction, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
-import { ownerName, type AgentCaller } from "../agents/tokens.js";
+import type { AgentCaller } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
+import { requireOwnerAct } from "../identity/acts.js";
 import { inReach, inView, type Viewer } from "../identity/viewers.js";
 import { megabyte } from "../config.js";
 import { userName } from "../identity/user.js";
-import { recordChanges } from "../work/changes.js";
+import { recordChanges, type ChangeActor } from "../work/changes.js";
 import { findTicketRow, keysWritten, mentionsInEach, ticketNotFound } from "../work/tickets.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { scrubText, scrubValue } from "./scrubbing.js";
@@ -97,7 +98,7 @@ export const Transcript = Type.Object({
     }),
     {
       description:
-        "The Redactions Users added, oldest first: who added each and when, never the string redacted, which Cronk " +
+        "The Redactions added, oldest first: who added each, a User or an Agent with a Full token, and when, never the string redacted, which Cronk " +
         "keeps only to apply again to every later upload or fetch of the session.",
     },
   ),
@@ -156,10 +157,14 @@ const columns = `transcripts.id, ${slugColumn("transcript", "transcripts.id", "a
     'entries', transcripts.gap_entries, 'bytes', transcripts.gap_bytes) end as gap,
   transcripts.uploaded_at as "uploadedAt",
   coalesce((select json_agg(json_build_object('id', transcript_redactions.id,
-      'addedBy', json_build_object('id', redacting_users.id, 'name', ${userName("redacting_users")}),
+      'addedBy', case when redacting_users.id is not null
+        then json_build_object('id', redacting_users.id, 'name', ${userName("redacting_users")})
+        else json_build_object('id', redacting_agents.id, 'name', redacting_agents.name) end,
       'addedAt', to_char(transcript_redactions.added_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
       order by transcript_redactions.added_at, transcript_redactions.id)
-    from transcript_redactions join users redacting_users on redacting_users.id = transcript_redactions.added_by
+    from transcript_redactions
+    left join users redacting_users on redacting_users.id = transcript_redactions.added_by
+    left join agents redacting_agents on redacting_agents.id = transcript_redactions.added_by_agent
     where transcript_redactions.transcript_id = transcripts.id), '[]') as redactions`;
 const present = ({ uploadedAt, ...row }: Row): Transcript => ({ ...row, uploadedAt: uploadedAt.toISOString() });
 
@@ -729,22 +734,20 @@ export async function entriesOf(
 }
 
 /**
- * Deletes a Transcript's entries, for when the scrubbing missed a secret; only a User may. Its row stays behind,
+ * Deletes a Transcript's entries, for when the scrubbing missed a secret; only a User, or an Agent with a Full token, may. Its row stays behind,
  * marked deleted, so its Run says it was deleted and a later upload of its session is refused.
  */
 export async function deleteTranscript(context: Context, actor: Caller, transcriptId: string): Promise<void> {
   const transcript = await findTranscript(context, actor, transcriptId);
-  if (actor.kind === "agent") {
-    throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Transcript.`, {
-      rule: "Only a User deletes a Transcript, so an agent can't remove the record of what it did.",
-      advice: `Leave the Transcript as it is; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
-    });
-  }
+  requireOwnerAct(actor, {
+    act: "deleting a Transcript",
+    rule: "An Agent with a Write token doesn't delete a Transcript, so delegated work can't remove the record of what it did.",
+  });
   await transaction(context.db, async (tx) => {
     const { rows } = await tx.query<{ workspaceId: string }>(
-      `update transcripts set deleted_at = $2, deleted_by = $3 where id = $1 and deleted_at is null
+      `update transcripts set deleted_at = $2, deleted_by = $3, deleted_by_agent = $4 where id = $1 and deleted_at is null
        returning workspace_id as "workspaceId"`,
-      [transcript.id, context.clock.now(), actor.id],
+      [transcript.id, context.clock.now(), ...actorColumns(actor)],
     );
     // Another User deleted it first.
     if (!rows[0]) throw transcriptNotFound();
@@ -757,7 +760,7 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
     };
     if (transcript.runId) {
       const ticket = await runTicketChanged(context, tx, transcript.runId);
-      await recordTranscriptDeleted(context, tx, ticket, actor.id, { ...deleted, step: ticket.step });
+      await recordTranscriptDeleted(context, tx, ticket, changeActor(actor), { ...deleted, step: ticket.step });
     }
     await transcriptChanged(context, tx, rows[0].workspaceId, transcript);
     // A session outside a Run drops out of the Tickets it named, each recording that it was deleted.
@@ -768,7 +771,7 @@ export async function deleteTranscript(context: Context, actor: Caller, transcri
       [transcript.id],
     );
     for (const ticket of unlinked.rows) {
-      await recordTranscriptDeleted(context, tx, ticket, actor.id, deleted);
+      await recordTranscriptDeleted(context, tx, ticket, changeActor(actor), deleted);
       context.live.publish(tx, ticket.workspaceId, { type: "transcripts.changed", projectId: ticket.projectId, ticketId: ticket.id });
     }
   });
@@ -786,19 +789,17 @@ export type RedactionCreate = Static<typeof RedactionCreate>;
 const redactBatch = 500;
 
 /**
- * Adds a Redaction, for when the scrubbing missed a secret; only a User who can read the Transcript may. Every
+ * Adds a Redaction, for when the scrubbing missed a secret; only a User who can read the Transcript, or an Agent with a Full token that can, may. Every
  * appearance of the string in its messages, tool inputs and tool results becomes `[redacted]`, its search words with
  * them, in one transaction; the string is kept only so every later upload or fetch of the session is redacted too.
  * Redacting a string already redacted adds nothing.
  */
 export async function redactTranscript(context: Context, actor: Caller, transcriptId: string, text: string): Promise<Transcript> {
   const transcript = await findTranscript(context, actor, transcriptId);
-  if (actor.kind === "agent") {
-    throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can redact a Transcript.`, {
-      rule: "Only a User redacts a Transcript, so an agent can't rewrite the record of what it did.",
-      advice: `Leave the Transcript as it is; ask ${ownerName(actor)}, ${actor.name}'s Owner, if something in it should be redacted.`,
-    });
-  }
+  requireOwnerAct(actor, {
+    act: "redacting a Transcript",
+    rule: "An Agent with a Write token doesn't redact a Transcript, so delegated work can't rewrite the record of what it did.",
+  });
   if ([...text].length < redactionMinLength) {
     throw new ApiError(400, "redaction_too_short", `A Redaction takes at least ${redactionMinLength} characters.`, {
       rule: `A string shorter than ${redactionMinLength} characters would redact ordinary words across the Transcript, so it is refused.`,
@@ -811,12 +812,10 @@ export async function redactTranscript(context: Context, actor: Caller, transcri
     if (held.rowCount === 0) throw transcriptNotFound();
     const known = await tx.query("select 1 from transcript_redactions where transcript_id = $1 and text = $2", [transcript.id, text]);
     if (known.rowCount === 0) {
-      await tx.query("insert into transcript_redactions (transcript_id, text, added_by, added_at) values ($1, $2, $3, $4)", [
-        transcript.id,
-        text,
-        actor.id,
-        context.clock.now(),
-      ]);
+      await tx.query(
+        "insert into transcript_redactions (transcript_id, text, added_by, added_by_agent, added_at) values ($1, $2, $3, $4, $5)",
+        [transcript.id, text, ...actorColumns(actor), context.clock.now()],
+      );
     }
     await redactEntries(tx, transcript.id, text);
     const redactedTranscript = present((await transcriptRow(tx, "transcripts.id = $1", [transcript.id]))!);
@@ -870,15 +869,22 @@ interface TranscriptDeleted {
   agent: { id: string; name: string };
 }
 
-/** Records on a Ticket that a User deleted a Transcript of its Run, or one that named it. */
+/** The `[user, agent]` columns recording who did something: one is the caller's id, the other null. */
+const actorColumns = (actor: Caller): [string | null, string | null] =>
+  actor.kind === "agent" ? [null, actor.id] : [actor.id, null];
+
+/** The Change's Actor for the caller: a User by id, or an Agent with a Full token, with no Run. */
+const changeActor = (actor: Caller): ChangeActor => (actor.kind === "agent" ? { kind: "agent", id: actor.id, runId: null } : actor.id);
+
+/** Records on a Ticket that a User, or an Agent with a Full token, deleted a Transcript of its Run, or one that named it. */
 async function recordTranscriptDeleted(
   context: Context,
   tx: Tx,
   ticket: { id: string; workspaceId: string },
-  userId: string,
+  by: ChangeActor,
   deleted: TranscriptDeleted,
 ): Promise<void> {
-  await recordChanges(tx, ticket, userId, context.clock.now(), [{ field: "transcriptDeleted", from: deleted, to: null }]);
+  await recordChanges(tx, ticket, by, context.clock.now(), [{ field: "transcriptDeleted", from: deleted, to: null }]);
 }
 
 interface RunTicket {

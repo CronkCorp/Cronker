@@ -4,7 +4,7 @@ import { afterCommit, transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
-import { ownerName } from "../agents/tokens.js";
+import { requireOwnerAct } from "../identity/acts.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
@@ -378,19 +378,17 @@ export async function glossaryOf(db: Db, project: Glossary & { projectId: string
   return rows.map(present);
 }
 
-/** Deletes a Term with all its Versions; only a User may. */
+/** Deletes a Term with all its Versions; only a User, or an Agent with a Full token, may. */
 export async function deleteTerm(context: Context, actor: Caller, termId: string): Promise<void> {
   const { db, live } = context;
   await transaction(db, async (tx) => {
     const term = await lockTerm(tx, actor, termId);
     if (!term) throw termNotFound();
     await requireWrite(tx, actor, term);
-    if (actor.kind === "agent") {
-      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Term.`, {
-        rule: "Only a User deletes a Term, so an agent can't remove knowledge.",
-        advice: `Leave the Term as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
-      });
-    }
+    requireOwnerAct(actor, {
+      act: "deleting a Term",
+      rule: "An Agent with a Write token doesn't delete a Term, so delegated work can't remove knowledge; leave it, or edit it.",
+    });
     await tx.query("delete from mentions where source_term_id = $1 or target_term_id = $1", [term.id]);
     await tx.query("delete from terms where id = $1", [term.id]);
     termChanged(live, tx, term);

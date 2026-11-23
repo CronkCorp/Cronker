@@ -5,7 +5,7 @@ import { afterCommit, transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { slugColumn, slugDescription } from "../http/readable.js";
-import { ownerName } from "../agents/tokens.js";
+import { requireOwnerAct } from "../identity/acts.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
@@ -548,7 +548,7 @@ export async function compareVersions(
 }
 
 /**
- * Deletes a Document with all its Versions, Attachments and Comments; only a User may. Refused while it has children: they are
+ * Deletes a Document with all its Versions, Attachments and Comments; only a User, or an Agent with a Full token, may. Refused while it has children: they are
  * moved or deleted first. Its siblings after it close the gap, and it drops out of the Tickets linking it.
  */
 export async function deleteDocument(context: Context, actor: Caller, documentId: string): Promise<void> {
@@ -557,12 +557,10 @@ export async function deleteDocument(context: Context, actor: Caller, documentId
     const document = await lockDocument(tx, actor, documentId, { tree: true });
     if (!document) throw documentNotFound();
     await requireWrite(tx, actor, document);
-    if (actor.kind === "agent") {
-      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Document.`, {
-        rule: "Only a User deletes a Document, so an agent can't remove knowledge.",
-        advice: `Leave the Document as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
-      });
-    }
+    requireOwnerAct(actor, {
+      act: "deleting a Document",
+      rule: "An Agent with a Write token doesn't delete a Document, so delegated work can't remove knowledge; leave it, or edit it.",
+    });
     const children = await childCount(tx, document);
     if (children > 0) {
       throw new ApiError(
