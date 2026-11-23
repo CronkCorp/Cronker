@@ -36,8 +36,9 @@ const implement = `Implement this Ticket's work.
 - Make the change on a branch named \`<type>/<KEY>-<slug>\`, with tests: \`<type>\` is \`feat\`, \`fix\`, \`docs\`, \`chore\` or \`refactor\`, \`<KEY>\` the Ticket's key and \`<slug>\` a few words of its title, such as \`fix/CRONK-12-lost-runs\`. Open a pull request whose title starts with the key.
 - If the Ticket already has an open Pull Request, push to its branch instead of opening another.
 - Leave a Comment on the Ticket linking the pull request and saying anything a reviewer should know.
+- Don't wait for its checks: Cronk watches them, a failing check sends the Ticket back here, and the Merge Queue merges only once they are green. When the Ticket comes back for a failing check, read the failing job's log, fix it and push again.
 
-Finish with **done** once the pull request is open and its checks pass. Finish with **needs you** and a Question when you can't go on without a User.`;
+Finish with **done** once the pull request is open with your change pushed. Finish with **needs you** and a Question when you can't go on without a User.`;
 
 const codeReview = `Review the pull request this Ticket's implementation opened.
 
