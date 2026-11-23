@@ -209,7 +209,7 @@ describe("dismissing a Question", () => {
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
   });
 
-  test("only Users of its Workspace dismiss a Question", async () => {
+  test("only Users of its Workspace, or Agents with a Full token, dismiss a Question", async () => {
     const setup = await investigating();
     const { workspace, ada, asAgent } = setup;
     const item = await ask(setup, "Blue or green?");
@@ -218,7 +218,7 @@ describe("dismissing a Question", () => {
 
     const byAgent = await call("POST", `/api/questions/${item.question.id}/dismiss`, asAgent);
     expect(byAgent.status).toBe(403);
-    expect(byAgent.json.error.code).toBe("agent_not_allowed");
+    expect(byAgent.json.error.code).toBe("full_token_needed");
     const byOutsider = await call("POST", `/api/questions/${item.question.id}/dismiss`, { cookie: bea.cookie });
     expect(byOutsider.status).toBe(404);
     expect((await call("POST", "/api/questions/not-an-id/dismiss", ada)).status).toBe(404);

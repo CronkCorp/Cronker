@@ -5,7 +5,7 @@ import { authenticateAgent } from "../agents/tokens.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
-import { requireHuman, requireOwnerAct } from "../identity/acts.js";
+import { requireHuman, requireOwnerAct, requireOwnerCaller } from "../identity/acts.js";
 import { Change, changesOf } from "./changes.js";
 import { joinQueue, leaveQueue } from "../pipeline/merge-queue.js";
 import { addComment, Comment, CommentCreate, commentsOn } from "./comments.js";
@@ -197,14 +197,19 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             "once it is clean and green, as this User's merge, completing the Ticket as Verified. Needs Write; refused, " +
             "naming the rule, unless the Ticket is in a Review Status (`not_in_review`), its Project has Pull Request " +
             "automation on (`pull_request_automation_off`) and a Merge Status (`no_merge_status`), and it has an open " +
-            "linked Pull Request (`no_open_pull_request`). Only Users merge this way.",
+            "linked Pull Request (`no_open_pull_request`). Only Users and Agents with a Full token merge this way: a " +
+            "Full Agent's merge is recorded as its Agent's and completes the Ticket as Unverified, whether or not the " +
+            "Project lets agents merge; an Agent with a Write token gets `full_token_needed`.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        return joinQueue(context, { kind: "user", ...user }, request.params.ticketId);
+        const caller = await requireOwnerCaller(context, request, {
+          act: "queueing a merge",
+          rule: "Merge queues a Ticket as a User's act; a Run's merge goes through its Merge Step.",
+        });
+        return joinQueue(context, caller, request.params.ticketId);
       },
     );
 
@@ -217,14 +222,18 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Sends a Ticket in the Merge Queue back to its Project's first Review Status, as the User's move, taking its " +
             "Pull Request out of the queue. Needs Write; refused for a Ticket not in the queue (`not_queued`) or while " +
-            "Cronk is merging it (`merging`).",
+            "Cronk is merging it (`merging`). Users and Agents with a Full token remove; an Agent with a Write " +
+            "token gets `full_token_needed`.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        return leaveQueue(context, { kind: "user", ...user }, request.params.ticketId);
+        const caller = await requireOwnerCaller(context, request, {
+          act: "removing a Ticket from the Merge Queue",
+          rule: "Remove from queue moves the Ticket back to Review as a User's act.",
+        });
+        return leaveQueue(context, caller, request.params.ticketId);
       },
     );
 

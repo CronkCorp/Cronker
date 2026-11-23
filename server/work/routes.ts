@@ -5,6 +5,7 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
+import { requireOwnerCaller } from "../identity/acts.js";
 import { findWorkspace, type Workspace } from "../workspaces/workspaces.js";
 import {
   createProject,
@@ -214,8 +215,8 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Cut a Release",
           description:
             "Creates `release/<name>` at the default branch's head in each Repository the Project lists, as the GitHub " +
-            "App, and makes the Release cut, recording each Repository's commit and who cut it. Only a User with Write " +
-            "cuts, and only a planned Release (`release_not_planned`). Every Repository is checked first: a Project " +
+            "App, and makes the Release cut, recording each Repository's commit and who cut it. Only a User with Write, " +
+            "or an Agent with a Full token and Write, cuts (`full_token_needed` for a Write token), and only a planned Release (`release_not_planned`). Every Repository is checked first: a Project " +
             "listing none (`no_repositories`), a Repository the App can't reach (`repository_not_installed`) or a " +
             "release branch that already exists in any of them (`release_branch_exists`) refuses the whole Cut before " +
             "anything is created.",
@@ -224,9 +225,12 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const caller = await requireOwnerCaller(context, request, {
+          act: "cutting a Release",
+          rule: "Cutting a Release creates its release branches on GitHub, as a User's act.",
+        });
         const { projectId, releaseId } = request.params;
-        return cutRelease(context, user, projectId, releaseId);
+        return cutRelease(context, caller, projectId, releaseId);
       },
     );
 
@@ -241,7 +245,7 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
             "cut in, as the GitHub App, with notes of an Upgrade notes part (`upgradeNotes`, left out when blank) then " +
             "its Tickets by key and title, and makes the Release released, recording each tag and GitHub Release and " +
             "who released it. A released Release keeps its Tickets: tagging and untagging them is refused. Only a User " +
-            "with Write releases, and only a cut Release (`release_not_cut`). While any of its Tickets is open, it is " +
+            "with Write, or an Agent with a Full token and Write, releases (`full_token_needed` for a Write token), and only a cut Release (`release_not_cut`). While any of its Tickets is open, it is " +
             "refused with `release_has_open_tickets`, listing them as `openTickets`, unless `confirm` is true. Every " +
             "Repository is checked first: a missing release branch (`release_branch_missing`), an existing tag " +
             "(`release_tag_exists`) or a Repository the App can't reach (`repository_not_installed`) refuses the whole " +
@@ -264,9 +268,12 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
+        const caller = await requireOwnerCaller(context, request, {
+          act: "releasing a Release",
+          rule: "Releasing tags and publishes a Release on GitHub, as a User's act.",
+        });
         const { projectId, releaseId } = request.params;
-        return publishRelease(context, user, projectId, releaseId, request.body);
+        return publishRelease(context, caller, projectId, releaseId, request.body);
       },
     );
 

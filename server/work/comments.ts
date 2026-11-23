@@ -6,7 +6,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
-import { requireHumanAct } from "../identity/acts.js";
+import { actsAsOwner, requireHumanAct } from "../identity/acts.js";
 import { answerQuestion } from "../runs/questions.js";
 import { insertComment } from "./comment-writes.js";
 import { Actor, ActorOrCronk, actorColumn, actorOrCronkColumn } from "./actors.js";
@@ -274,8 +274,10 @@ export async function addComment(
       if (rowCount === 0) throw unknownReplyTarget("Ticket");
     }
     const commentId = await insertComment(context, tx, ticket, actor, input.body, input.replyToId ?? null);
-    if (actor.kind === "user" && input.replyToId !== undefined) {
-      await answerQuestion(context, tx, ticket, actor.id, input.replyToId, commentId);
+    // A User's reply answers a Question, and so does an Agent's with a Full token; any other Agent's is just a Comment.
+    if (actsAsOwner(actor) && input.replyToId !== undefined) {
+      const answerer = actor.kind === "user" ? actor.id : { kind: "agent" as const, id: actor.id, runId: null };
+      await answerQuestion(context, tx, ticket, answerer, input.replyToId, commentId);
     }
     const [comment] = await present(tx, actor, await rowsOf(tx, actor, ticket.id, commentId));
     return comment!;
