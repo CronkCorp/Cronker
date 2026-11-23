@@ -16,6 +16,8 @@ services:
       # Attachments are files in this directory, so a backup is the database plus this volume.
       CRONK_ATTACHMENTS_DIR: /app/data/attachments
       CRONK_ATTACHMENT_LIMIT_MB: ${CRONK_ATTACHMENT_LIMIT_MB:-25}
+      # `true` lets webhooks reach private addresses, such as a receiver on your LAN.
+      CRONK_WEBHOOKS_ALLOW_PRIVATE: ${CRONK_WEBHOOKS_ALLOW_PRIVATE:-false}
     volumes:
       - attachments:/app/data/attachments
     depends_on:
