@@ -14,6 +14,7 @@ import { TermCreate, TermEdit } from "../knowledge/terms.js";
 import { DocumentCommentCreate } from "../work/comments.js";
 import { AgentTicketEdit, TicketCreate, type TicketSummary } from "../work/tickets.js";
 import { ProjectCreate, type Project, type ProjectSummary } from "../work/projects.js";
+import { ReleaseCreate, ReleaseEdit, type Release } from "../work/releases.js";
 import { StatusAdd, StatusEdit } from "../work/statuses.js";
 import { Outcome, outcomeCount, StepPut } from "../work/steps.js";
 import { RunFinish } from "../runs/runs.js";
@@ -1304,6 +1305,84 @@ export function buildMcpServer(api: Api): McpServer {
       answer(async () => {
         const board = await boardOf(project);
         return send("DELETE", `/api/projects/${board.id}/statuses/${statusIdOf(board, status)}/step`);
+      }),
+  );
+
+  /** The Project's Release with that name, ignoring case and a leading `v`'s absence; refused naming its Releases. */
+  async function releaseOf(projectId: string, key: string, name: string): Promise<Release> {
+    const releases = await get<Release[]>(`/api/projects/${projectId}/releases`);
+    const wanted = name.trim().toLowerCase();
+    const found = releases.find((r) => r.name.toLowerCase() === wanted);
+    if (found) return found;
+    throw new Refused({
+      code: "unknown_release",
+      message: `${key} has no Release called ${name.trim()}.`,
+      rule: "A Release is named as its Project lists it, ignoring case.",
+      advice: `Use one of its Releases: ${releases.map((r) => r.name).join(", ") || "(none yet)"}.`,
+    });
+  }
+
+  const releaseArgument = z.string().min(1).describe("A Release of the Project by its name, such as `v0.3.0`, ignoring case.");
+  const releaseRule =
+    "Needs Write in the Project: the least of its Agent Access, your Owner's Access and your token's access. Only a " +
+    "planned Release is renamed or deleted (`release_not_planned`); cutting and releasing one stay with Users.";
+
+  server.registerTool(
+    "list_releases",
+    {
+      title: "List a Project's Releases",
+      description:
+        "A Project's Releases, oldest first: each with its name, state (`planned`, `cut` or `released`), release " +
+        "branch, counts of open and done Tickets and its Tickets by key. Tag a Ticket with a planned one through " +
+        "`file_ticket`, `edit_ticket` or `create_sub_ticket`, and find its Tickets with `list_tickets`.",
+      inputSchema: { project: projectArgument },
+      annotations: { readOnlyHint: true },
+    },
+    ({ project }) => answer(async () => get(`/api/projects/${(await projectByKey(project)).id}/releases`)),
+  );
+
+  server.registerTool(
+    "create_release",
+    {
+      title: "Create a planned Release",
+      description:
+        "Creates a planned Release in a Project, named by a semantic version such as `v0.3.0` (`invalid_release_name`), " +
+        `unique in the Project ignoring case (\`release_name_taken\`). ${releaseRule}`,
+      inputSchema: { project: projectArgument, ...bodyFields(ReleaseCreate) },
+    },
+    ({ project, name }) =>
+      answer(async () => send("POST", `/api/projects/${(await projectByKey(project)).id}/releases`, { name })),
+  );
+
+  server.registerTool(
+    "rename_release",
+    {
+      title: "Rename a planned Release",
+      description:
+        "Renames a planned Release; its Tickets stay tagged with it. The new name is a semantic version " +
+        `(\`invalid_release_name\`), unique in the Project ignoring case (\`release_name_taken\`). ${releaseRule}`,
+      inputSchema: { project: projectArgument, release: releaseArgument, ...bodyFields(ReleaseEdit) },
+    },
+    ({ project, release, name }) =>
+      answer(async () => {
+        const { id, key } = await projectByKey(project);
+        return send("PATCH", `/api/projects/${id}/releases/${(await releaseOf(id, key, release)).id}`, { name });
+      }),
+  );
+
+  server.registerTool(
+    "delete_release",
+    {
+      title: "Delete a planned Release",
+      description: `Deletes a planned Release, untagging its Tickets, each recording the Change. ${releaseRule}`,
+      inputSchema: { project: projectArgument, release: releaseArgument },
+    },
+    ({ project, release }) =>
+      answer(async () => {
+        const { id, key } = await projectByKey(project);
+        const found = await releaseOf(id, key, release);
+        await send("DELETE", `/api/projects/${id}/releases/${found.id}`);
+        return { deleted: found.name };
       }),
   );
 

@@ -35,6 +35,10 @@ A skill that asks for a parent and children files a ticket set: the parent with 
 
 To put existing Tickets under a parent, or take them out from under one, use `set_parent` during a Run in their Project. The Tickets keep their own Assignee and Delegation.
 
+## Releases
+
+To see a Project's Releases, use `list_releases`; to plan one, `create_release`, and `rename_release` or `delete_release` while it is planned. Tag Tickets with the `release` field of `file_ticket`, `edit_ticket` and `create_sub_ticket`. Cutting and releasing stay with Users.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.**
