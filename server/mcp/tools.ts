@@ -15,7 +15,7 @@ import { TermCreate, TermEdit } from "../knowledge/terms.js";
 import { DocumentCommentCreate } from "../work/comments.js";
 import { AgentTicketEdit, TicketCreate, TicketEdit, type TicketSummary } from "../work/tickets.js";
 import { ProjectCreate, type Project, type ProjectSummary } from "../work/projects.js";
-import { ReleaseCreate, ReleaseEdit, type Release } from "../work/releases.js";
+import { ReleaseCreate, ReleaseEdit, ReleasePublish, type Release } from "../work/releases.js";
 import { StatusAdd, StatusEdit } from "../work/statuses.js";
 import { Outcome, outcomeCount, StepPut } from "../work/steps.js";
 import { RunFinish } from "../runs/runs.js";
@@ -1393,7 +1393,8 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
   const releaseArgument = z.string().min(1).describe("A Release of the Project by its name, such as `v0.3.0`, ignoring case.");
   const releaseRule =
     "Needs Write in the Project: the least of its Agent Access, your Owner's Access and your token's access. Only a " +
-    "planned Release is renamed or deleted (`release_not_planned`); cutting and releasing one stay with Users.";
+    "planned Release is renamed or deleted (`release_not_planned`); cutting and releasing one stay with Users and Full " +
+    "tokens.";
 
   server.registerTool(
     "list_releases",
@@ -1579,6 +1580,114 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           await send("DELETE", `/api/tickets/${found.id}/relations/${encodeURIComponent(relation)}`);
           return { removed: relation };
         }),
+    );
+
+    server.registerTool(
+      "queue_merge",
+      {
+        title: "Merge a Ticket through the Merge Queue",
+        description:
+          "With a Full token: queues each of a Ticket's open linked Pull Requests in the Merge Queue and moves the " +
+          "Ticket into its Project's Merge Status, as Merge does for a User. Cronk merges each queue's head once it is " +
+          "clean and green, as your merge, completing the Ticket as Unverified for its Assignee: Verification stays " +
+          "with Users. Needs Write; refused, naming the rule, unless the Ticket is in a Review Status " +
+          "(`not_in_review`), its Project has Pull Request automation on (`pull_request_automation_off`) and a Merge " +
+          "Status (`no_merge_status`), and it has an open linked Pull Request (`no_open_pull_request`).",
+        inputSchema: { ticket: ticketArgument },
+      },
+      ({ ticket }) =>
+        answer(async () => send("POST", `/api/tickets/${(await ticketByKeyOrId(ticket)).id}/merge`)),
+    );
+
+    server.registerTool(
+      "remove_from_queue",
+      {
+        title: "Remove a Ticket from the Merge Queue",
+        description:
+          "With a Full token: takes a Ticket's Pull Requests out of the Merge Queue and moves it back to its Project's " +
+          "first Review Status, as your move. Refused for a Ticket not in the queue (`not_queued`) or while Cronk is " +
+          "merging it (`merging`).",
+        inputSchema: { ticket: ticketArgument },
+      },
+      ({ ticket }) =>
+        answer(async () => send("POST", `/api/tickets/${(await ticketByKeyOrId(ticket)).id}/queue/remove`)),
+    );
+
+    server.registerTool(
+      "cut_release",
+      {
+        title: "Cut a Release",
+        description:
+          "With a Full token: cuts a planned Release, creating `release/<name>` at the default branch's head in each " +
+          "Repository its Project lists, as the GitHub App, and records you as who cut it. Needs Write in the Project. " +
+          "Refused for a Release that isn't planned (`release_not_planned`), a Project listing no Repositories " +
+          "(`no_repositories`), a Repository the App can't reach (`repository_not_installed`) or a release branch " +
+          "that already exists (`release_branch_exists`), before anything is created.",
+        inputSchema: { project: projectArgument, release: releaseArgument },
+      },
+      ({ project, release }) =>
+        answer(async () => {
+          const { id, key } = await projectByKey(project);
+          return send("POST", `/api/projects/${id}/releases/${(await releaseOf(id, key, release)).id}/cut`);
+        }),
+    );
+
+    server.registerTool(
+      "publish_release",
+      {
+        title: "Release a cut Release",
+        description:
+          "With a Full token: releases a cut Release, tagging each release branch's head `<name>` and creating a " +
+          "GitHub Release in each Repository it was cut in, with notes of the Upgrade notes given then its Tickets, " +
+          "and records you as who released it. Needs Write in the Project. Refused for a Release that isn't cut " +
+          "(`release_not_cut`); while any of its Tickets is open, refused with `release_has_open_tickets` listing " +
+          "them, unless `confirm` is true. A missing release branch (`release_branch_missing`), an existing tag " +
+          "(`release_tag_exists`) or a Repository the App can't reach (`repository_not_installed`) refuses it before " +
+          "anything is created.",
+        inputSchema: { project: projectArgument, release: releaseArgument, ...bodyFields(ReleasePublish) },
+      },
+      ({ project, release, upgradeNotes, confirm }) =>
+        answer(async () => {
+          const { id, key } = await projectByKey(project);
+          const found = await releaseOf(id, key, release);
+          return send("POST", `/api/projects/${id}/releases/${found.id}/release`, { upgradeNotes, confirm });
+        }),
+    );
+
+    server.registerTool(
+      "answer_question",
+      {
+        title: "Answer a Run's Question",
+        description:
+          "With a Full token: answers a Question a Run asked on a Ticket, by replying to the Comment that asks it, as " +
+          "its Assignee would. If the Ticket still waits where the Question's Outcome moved it, it moves back to the " +
+          "Status of the Step that asked, as your move, and a new Run starts that reads the answer. A reply to a " +
+          "Comment that asks no open Question is just a Comment." + avoidedWordsNote,
+        inputSchema: {
+          ticket: ticketArgument,
+          comment: z.string().min(1).describe("The id of the Comment asking the Question, as `read_ticket` shows it."),
+          body: z.string().min(1).max(100000).describe("Your answer, in Markdown."),
+        },
+      },
+      ({ ticket, comment, body }) =>
+        answer(async () =>
+          send("POST", `/api/tickets/${(await ticketByKeyOrId(ticket)).id}/comments`, { body, replyToId: comment }),
+        ),
+    );
+
+    server.registerTool(
+      "retry_run",
+      {
+        title: "Retry a Ticket's Run",
+        description:
+          "With a Full token: starts a fresh Run of the same Step on a delegated Ticket whose latest Run failed, was " +
+          "lost or couldn't start, while it is still in that Run's Status (`nothing_to_retry` otherwise). Only when " +
+          "your Owner owns its Delegate (`not_delegates_owner`), since the Run spends their credentials. Returns the " +
+          "Ticket: its `lastRun` is the new Run, or its `waiting` says what it waits for.",
+        inputSchema: { ticket: ticketArgument },
+      },
+      ({ ticket }) =>
+        answer(async () => send("POST", `/api/tickets/${(await ticketByKeyOrId(ticket)).id}/retry`)),
     );
   }
 

@@ -8,7 +8,7 @@ export const agentRights =
   "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only " +
   "Users change a Decision's status). An Agent whose Owner is an Admin may also create Projects, and with Write in " +
   "a Project change its board, a Step's content only when its Owner is an Admin. With Write in a Project an Agent may also create, rename " +
-  "and delete its planned Releases (only Users cut and release them). During its running Run on a Ticket " +
+  "and delete its planned Releases (only Users and Full tokens cut and release them). During its running Run on a Ticket " +
   "an Agent may also edit the Ticket's description, Priority, Labels, Release, due date and estimate, attach files to it, " +
   "split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink them, and finish " +
   "the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). While it has a " +
@@ -25,7 +25,10 @@ export const agentRights =
   "it; edit every field of any Ticket it has Write on with `edit_ticket`, delegated or running included, delegating " +
   "only to its Owner's Agents and setting Autonomous Delegation; make Sub-Tickets of any Ticket and link Documents and " +
   "Artifacts to it; dismiss Discovered Tickets with `dismiss_ticket`; and add any Relation with `add_relation` and " +
-  "remove one with `remove_relation`: each a Change by the Agent with no Run. Accept and Reopen, Access and Admin settings, a Decision's status " +
+  "remove one with `remove_relation`: each a Change by the Agent with no Run. It may also queue a Ticket in the Merge Queue and remove it " +
+  "(`queue_merge`, `remove_from_queue`), Cronk's merge of what it queued completing the Ticket as Unverified; Cut " +
+  "and Release a Release (`cut_release`, `publish_release`); answer a Run's Question (`answer_question`) and " +
+  "dismiss one; and retry a Run gone wrong on a Ticket delegated to one of its Owner's Agents (`retry_run`). Accept and Reopen, Access and Admin settings, a Decision's status " +
   "and resolving threads stay human-only, even for a Full token (`human_only`); a Write token attempting a Full act " +
   "gets `full_token_needed`. Anything else is refused with the rule and what to do instead.";
 

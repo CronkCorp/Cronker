@@ -6,7 +6,7 @@ import { installationCovering, tokenFor } from "../github/installations.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import type { Caller } from "../identity/callers.js";
-import { userName, type User } from "../identity/user.js";
+import { userName } from "../identity/user.js";
 import { literals } from "../literals.js";
 import type { ChangeActor } from "./changes.js";
 import { findProject, projectNotFound, requireProjectWrite, type Project } from "./projects.js";
@@ -14,8 +14,9 @@ import { lockTickets, writeTicket } from "./ticket-writes.js";
 
 /**
  * Releases: a Project's named sets of Tickets that ship together, such as `v0.3.0`. A Release goes from planned to cut
- * to released. A User with Write cuts a planned Release, and Cronk creates its release branch at the default branch's
- * head in each Repository the Project lists. A User with Write then releases the cut Release, and Cronk tags each
+ * to released. A User with Write, or an Agent with a Full token and Write, cuts a planned Release, and Cronk creates
+ * its release branch at the default branch's head in each Repository the Project lists. They then release the cut
+ * Release, and Cronk tags each
  * release branch's head `<name>` and creates a GitHub Release with notes listing its Tickets. Only a planned Release is renamed, deleted or has Tickets tagged with it, but for a completed Ticket, which may also be tagged with a cut one and is then backported if its merge came after the Cut. A Ticket has at most one Release, of its own Project.
  */
 
@@ -39,7 +40,12 @@ export const ticketReleaseColumn = (alias: string) =>
   `(select json_build_object('id', releases.id, 'name', releases.name, 'state', releases.state,
      'branch', 'release/' || releases.name) from releases where releases.id = ${alias}.release_id)`;
 
-const UserRef = Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() });
+/** Who cut or released a Release: a User, or an Agent with a Full token. */
+const ActorRef = Type.Object({
+  kind: Type.Union([Type.Literal("user"), Type.Literal("agent")]),
+  id: Type.String({ format: "uuid" }),
+  name: Type.String(),
+});
 
 const ReleaseTicket = Type.Object({
   id: Type.String({ format: "uuid" }),
@@ -59,11 +65,13 @@ export const Release = Type.Object({
   openCount: Type.Integer({ minimum: 0, description: "How many of its Tickets are in a Backlog, Active or Review Status." }),
   doneCount: Type.Integer({ minimum: 0, description: "How many of its Tickets are in a Done Status." }),
   tickets: Type.Array(ReleaseTicket, { description: "Its Tickets, by key." }),
-  cutBy: Type.Union([UserRef, Type.Null()], {
-    description: "The User who cut it; null while planned.",
+  cutBy: Type.Union([ActorRef, Type.Null()], {
+    description: "The User, or Agent with a Full token, who cut it; null while planned.",
   }),
   cutAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], { description: "When it was cut; null while planned." }),
-  releasedBy: Type.Union([UserRef, Type.Null()], { description: "The User who released it; null until released." }),
+  releasedBy: Type.Union([ActorRef, Type.Null()], {
+    description: "The User, or Agent with a Full token, who released it; null until released.",
+  }),
   releasedAt: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
     description: "When it was released; null until released.",
   }),
@@ -129,12 +137,17 @@ export function checkReleaseName(name: string): string {
   return trimmed;
 }
 
+/** Who took an act on a Release, as SQL: the User in `userColumn`, else the Agent in `agentColumn`, else null. */
+const actorRef = (userColumn: string, agentColumn: string) => `coalesce(
+    (select json_build_object('kind', 'user', 'id', users.id, 'name', ${userName()}) from users where users.id = ${userColumn}),
+    (select json_build_object('kind', 'agent', 'id', agents.id, 'name', agents.name) from agents where agents.id = ${agentColumn}))`;
+
 const releasesSql = (where: string) => `
   select releases.id, releases.project_id as "projectId", releases.name, releases.state,
     'release/' || releases.name as branch, releases.created_at as "createdAt", releases.cut_at as "cutAt",
-    (select json_build_object('id', users.id, 'name', ${userName()}) from users where users.id = releases.cut_by) as "cutBy",
+    ${actorRef("releases.cut_by", "releases.cut_by_agent")} as "cutBy",
     releases.released_at as "releasedAt", releases.upgrade_notes as "upgradeNotes",
-    (select json_build_object('id', users.id, 'name', ${userName()}) from users where users.id = releases.released_by) as "releasedBy",
+    ${actorRef("releases.released_by", "releases.released_by_agent")} as "releasedBy",
     (select coalesce(json_agg(json_build_object('repository', json_build_object('id', repositories.id,
         'fullName', repositories.full_name), 'commit', release_repositories.cut_sha, 'tag', release_repositories.tag,
         'releaseUrl', release_repositories.release_url) order by lower(repositories.full_name)),
@@ -347,10 +360,10 @@ interface CutPlan {
  * any branch is created. A branch that appears between the two passes, or GitHub failing partway, leaves the branches
  * already created and the Release planned; the refusal names them.
  */
-export async function cutRelease(context: Context, user: User, projectId: string, releaseId: string): Promise<Release> {
+export async function cutRelease(context: Context, caller: Caller, projectId: string, releaseId: string): Promise<Release> {
   const { db, clock, live, config } = context;
   return transaction(db, async (tx) => {
-    const project = await writableProject(tx, { kind: "user", ...user }, projectId);
+    const project = await writableProject(tx, caller, projectId);
     const release = await plannedRelease(tx, project, releaseId, "cut");
     const branch = `release/${release.name}`;
     const { rows: repositories } = await tx.query<{ id: string; fullName: string }>(
@@ -418,7 +431,13 @@ export async function cutRelease(context: Context, user: User, projectId: string
         plan.head,
       ]);
     }
-    await tx.query("update releases set state = 'cut', cut_by = $2, cut_at = $3 where id = $1", [release.id, user.id, clock.now()]);
+    const [byUser, byAgent] = caller.kind === "user" ? [caller.id, null] : [null, caller.id];
+    await tx.query("update releases set state = 'cut', cut_by = $2, cut_by_agent = $3, cut_at = $4 where id = $1", [
+      release.id,
+      byUser,
+      byAgent,
+      clock.now(),
+    ]);
     live.publish(tx, project.workspaceId, { type: "releases.changed", projectId: project.id });
     return readRelease(tx, release.id);
   });
@@ -465,14 +484,14 @@ interface ReleasePlan {
  */
 export async function publishRelease(
   context: Context,
-  user: User,
+  caller: Caller,
   projectId: string,
   releaseId: string,
   input: ReleasePublish,
 ): Promise<Release> {
   const { db, clock, live, config } = context;
   return transaction(db, async (tx) => {
-    const project = await writableProject(tx, { kind: "user", ...user }, projectId);
+    const project = await writableProject(tx, caller, projectId);
     const release = await lockedRelease(tx, project, releaseId);
     if (release.state !== "cut") {
       throw new ApiError(409, "release_not_cut", `${release.name} is ${release.state}, so it can't be released.`, {
@@ -573,8 +592,9 @@ export async function publishRelease(
       ]);
     }
     await tx.query(
-      "update releases set state = 'released', released_by = $2, released_at = $3, upgrade_notes = $4 where id = $1",
-      [release.id, user.id, clock.now(), upgradeNotes || null],
+      `update releases set state = 'released', released_by = $2, released_by_agent = $3, released_at = $4, upgrade_notes = $5
+       where id = $1`,
+      [release.id, caller.kind === "user" ? caller.id : null, caller.kind === "agent" ? caller.id : null, clock.now(), upgradeNotes || null],
     );
     live.publish(tx, project.workspaceId, { type: "releases.changed", projectId: project.id });
     return readRelease(tx, release.id);

@@ -38,7 +38,7 @@ export interface Backport {
   pullRequest: { id: number; repository: string; number: number; url: string };
   /** The merge commit, once GitHub named it. */
   mergeCommit: string | null;
-  queuedBy: { userId: string | null; agentId: string | null };
+  queuedBy: { userId: string | null; agentId: string | null; byFullToken: boolean };
 }
 
 /** The Ticket's Backport, if it waits for one. */
@@ -49,7 +49,8 @@ export async function backportOf(tx: Db | Tx, ticketId: string): Promise<Backpor
        json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
          'number', pull_requests.number, 'url', pull_requests.url) as "pullRequest",
        coalesce(pull_requests.merge_commit_sha, pull_requests.answered_merge_sha) as "mergeCommit",
-       json_build_object('userId', b.queued_by_user_id, 'agentId', b.queued_by_agent_id) as "queuedBy"
+       json_build_object('userId', b.queued_by_user_id, 'agentId', b.queued_by_agent_id,
+         'byFullToken', b.by_full_token) as "queuedBy"
      from ticket_backports b join releases on releases.id = b.release_id
      join pull_requests on pull_requests.id = b.pull_request_id
      where b.ticket_id = $1`,
@@ -119,20 +120,31 @@ export async function awaitBackport(
   now: Date,
   queuedBy?: { userId: string },
 ): Promise<void> {
-  const { rows: queued } = await tx.query<{ userId: string | null; agentId: string | null }>(
+  const { rows: queued } = await tx.query<{ userId: string | null; agentId: string | null; byFullToken: boolean }>(
     `delete from merge_queue where ticket_id = $1 and pull_request_id = $2
-     returning queued_by_user_id as "userId", queued_by_agent_id as "agentId"`,
+     returning queued_by_user_id as "userId", queued_by_agent_id as "agentId", by_full_token as "byFullToken"`,
     [ticket.id, pullRequestId],
   );
-  const rows = queuedBy ? [{ userId: queuedBy.userId, agentId: null }] : queued;
+  const rows = queuedBy ? [{ userId: queuedBy.userId, agentId: null, byFullToken: false }] : queued;
   await tx.query(
     `insert into ticket_backports (ticket_id, workspace_id, release_id, status_id, pull_request_id, queued_by_user_id,
-       queued_by_agent_id, state, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7, 'backporting', $8)
+       queued_by_agent_id, by_full_token, state, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, 'backporting', $9)
      on conflict (ticket_id) do update set release_id = excluded.release_id, status_id = excluded.status_id,
        pull_request_id = excluded.pull_request_id, queued_by_user_id = excluded.queued_by_user_id,
-       queued_by_agent_id = excluded.queued_by_agent_id, state = 'backporting', created_at = excluded.created_at`,
-    [ticket.id, ticket.workspaceId, releaseId, statusId, pullRequestId, rows[0]?.userId ?? null, rows[0]?.agentId ?? null, now],
+       queued_by_agent_id = excluded.queued_by_agent_id, by_full_token = excluded.by_full_token, state = 'backporting',
+       created_at = excluded.created_at`,
+    [
+      ticket.id,
+      ticket.workspaceId,
+      releaseId,
+      statusId,
+      pullRequestId,
+      rows[0]?.userId ?? null,
+      rows[0]?.agentId ?? null,
+      rows[0]?.byFullToken ?? false,
+      now,
+    ],
   );
 }
 
@@ -260,7 +272,7 @@ export async function queueBackports(context: Context, tx: Tx, ticketIds: string
     );
     if (pullRequests.length === 0) continue;
     const now = context.clock.now();
-    const { userId, agentId } = backport.queuedBy;
+    const { userId, agentId, byFullToken } = backport.queuedBy;
     if (!userId && !agentId) {
       const review = (await statusesOf(tx, ticket.projectId)).find((s) => s.kind === "review");
       if (!review) continue;
@@ -283,9 +295,10 @@ export async function queueBackports(context: Context, tx: Tx, ticketIds: string
     }
     for (const pullRequest of pullRequests) {
       await tx.query(
-        `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, queued_by_agent_id, entered_at)
-         values ($1, $2, $3, $4, $5, $6)`,
-        [pullRequest.id, ticket.id, backport.statusId, userId, userId ? null : agentId, now],
+        `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, queued_by_agent_id, by_full_token,
+           entered_at)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [pullRequest.id, ticket.id, backport.statusId, userId, userId ? null : agentId, !userId && byFullToken, now],
       );
     }
     await recordChanges(

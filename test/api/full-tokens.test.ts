@@ -1,16 +1,37 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, test } from "vitest";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 /**
  * Token access (CRONK-123): Read, Write and Full, and a Full token moving Tickets as its Owner would; editing,
- * delegating, dismissing and relating any Ticket as its Owner would (CRONK-124).
+ * delegating, dismissing and relating any Ticket as its Owner would (CRONK-124); and answering and dismissing
+ * Questions and retrying Runs (CRONK-125).
  */
 
 let cronk: StartedCronk;
+const clients: Client[] = [];
 afterEach(async () => {
+  await Promise.all(clients.splice(0).map((client) => client.close()));
   await cronk?.stop();
 });
+
+async function connect(token: string) {
+  const client = new Client({ name: "cronk-test", version: "0.0.0" });
+  const transport = new StreamableHTTPClientTransport(new URL("/mcp", cronk.url), {
+    requestInit: { headers: { authorization: `Bearer ${token}` } },
+  });
+  await client.connect(transport);
+  clients.push(client);
+  return client;
+}
+
+async function tool(client: Client, name: string, args: Record<string, unknown>) {
+  const result = await client.callTool({ name, arguments: args });
+  const [content] = result.content as { type: string; text: string }[];
+  return { isError: result.isError ?? false, json: JSON.parse(content!.text) };
+}
 
 interface Request {
   cookie?: string;
@@ -46,7 +67,18 @@ async function adaWithAgent() {
   const write = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "write" });
   const full = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
-  return { workspace, user, ada, project, ticket, agent, asWrite: bearer(write.secret), asFull: bearer(full.secret), status };
+  return {
+    workspace,
+    user,
+    ada,
+    project,
+    ticket,
+    agent,
+    asWrite: bearer(write.secret),
+    asFull: bearer(full.secret),
+    fullSecret: full.secret as string,
+    status,
+  };
 }
 
 const runsOf = (ticketId: string, as: Request) => ok("GET", `/api/tickets/${ticketId}/runs`, as);
@@ -288,5 +320,87 @@ describe("human-only acts", () => {
     const { ticket, asWrite } = await adaWithAgent();
     const accept = await call("POST", `/api/tickets/${ticket.id}/accept`, asWrite);
     expect([accept.status, accept.json.error.code]).toEqual([403, "agent_not_allowed"]);
+  });
+});
+
+describe("a Full token and a Run's Question", () => {
+  /** `adaWithAgent` with CRONK-1's Investigate Run, delegated to claude-max, having asked a Question. */
+  async function asked() {
+    const setup = await adaWithAgent();
+    const { workspace, ada, ticket, agent, asWrite, status } = setup;
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Investigate") });
+    const [run] = await runsOf(ticket.id, ada);
+    await ok("POST", `/api/runs/${run.id}/finish`, asWrite, { outcome: "needs you", question: "Blue or green?" });
+    const { items } = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    const { question } = items.find((item: { kind: string }) => item.kind === "question");
+    return { ...setup, question: question as { id: string; commentId: string } };
+  }
+
+  test("answers it through answer_question: the Ticket goes back as the Agent's move and a new Run starts", async () => {
+    const { workspace, ada, ticket, fullSecret, status, question } = await asked();
+
+    const answered = await tool(await connect(fullSecret), "answer_question", {
+      ticket: "CRONK-1",
+      comment: question.commentId,
+      body: "Green.",
+    });
+
+    expect(answered.isError, JSON.stringify(answered.json)).toBe(false);
+    expect(answered.json).toEqual(expect.objectContaining({ body: "Green.", replyToId: question.commentId }));
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
+    const runs = await runsOf(ticket.id, ada);
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["finished", "running"]);
+    expect((await moves(ticket.id, ada)).at(-1)).toEqual({ by: "claude-max", runId: null, to: "Investigate" });
+    expect((await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada)).items).toEqual([]);
+  });
+
+  test("a Write token's reply is just a Comment, and it can't dismiss the Question; a Full token dismisses it", async () => {
+    const { workspace, ada, ticket, asWrite, asFull, status, question } = await asked();
+
+    await ok("POST", `/api/tickets/${ticket.id}/comments`, asWrite, { body: "Still wondering.", replyToId: question.commentId });
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+    const byWrite = await call("POST", `/api/questions/${question.id}/dismiss`, asWrite);
+    expect([byWrite.status, byWrite.json.error.code]).toEqual([403, "full_token_needed"]);
+
+    const byFull = await call("POST", `/api/questions/${question.id}/dismiss`, asFull);
+
+    expect(byFull.status).toBe(204);
+    const inbox = await ok("GET", `/api/workspaces/${workspace.id}/inbox`, ada);
+    expect(inbox.items.filter((i: { kind: string }) => i.kind === "question")).toEqual([]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+  });
+});
+
+describe("a Full token retrying a Run", () => {
+  test("retry_run starts a fresh Run; a Write token gets full_token_needed", async () => {
+    const { ada, ticket, agent, asWrite, fullSecret, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+    await cronk.runner.endWithoutFinishing(run.id, "The session crashed.");
+
+    const byWrite = await call("POST", `/api/tickets/${ticket.id}/retry`, asWrite);
+    expect([byWrite.status, byWrite.json.error.code]).toEqual([403, "full_token_needed"]);
+
+    const retried = await tool(await connect(fullSecret), "retry_run", { ticket: "CRONK-1" });
+
+    expect(retried.isError, JSON.stringify(retried.json)).toBe(false);
+    const runs = await runsOf(ticket.id, ada);
+    expect(runs.map((r: { state: string }) => r.state)).toEqual(["failed", "running"]);
+    expect(retried.json.lastRun).toEqual(expect.objectContaining({ id: runs[1].id, state: "running" }));
+  });
+
+  test("is refused for a Delegate another User owns, as its Owner would be", async () => {
+    const { workspace, ada, ticket, agent, status } = await adaWithAgent();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+    await cronk.runner.endWithoutFinishing(run.id);
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    const beasAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: bea.cookie }, { name: "bea-claude" });
+    const beasToken = await ok("POST", `/api/agents/${beasAgent.id}/tokens`, { cookie: bea.cookie }, { name: "laptop", access: "full" });
+
+    const refused = await call("POST", `/api/tickets/${ticket.id}/retry`, bearer(beasToken.secret));
+
+    expect([refused.status, refused.json.error.code]).toEqual([403, "not_delegates_owner"]);
+    expect(cronk.runner.starts).toHaveLength(1);
   });
 });

@@ -7,6 +7,7 @@ import { given, warnAgent, withAvoidedWords } from "../http/avoided-words.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { placeOfTicket } from "../knowledge/places.js";
 import { requireCaller } from "../identity/callers.js";
+import { requireOwnerCaller } from "../identity/acts.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { Brief, previewBrief } from "./brief.js";
 import { dismissQuestion } from "./questions.js";
@@ -149,14 +150,18 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Dismiss a Question",
           description:
             "Removes the Question from its Ticket's Assignee's Inbox without moving the Ticket. The Question stays on " +
-            "the Ticket as its Comment, and the first User's reply to that Comment still answers it. Users only.",
+            "the Ticket as its Comment, and the first User's reply to that Comment still answers it. Users and Agents " +
+            "with a Full token dismiss; an Agent with a Write token gets `full_token_needed`.",
           params: Type.Object({ questionId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        await dismissQuestion(context, { kind: "user", id: user.id }, request.params.questionId);
+        const caller = await requireOwnerCaller(context, request, {
+          act: "dismissing a Question",
+          rule: "A Question waits for its Ticket's Assignee, who answers or dismisses it.",
+        });
+        await dismissQuestion(context, caller.kind === "user" ? { kind: "user", id: caller.id } : caller, request.params.questionId);
         return reply.code(204).send(null);
       },
     );
@@ -170,14 +175,21 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Starts a fresh Run of the same Step on a delegated Ticket whose latest Run failed, was lost or couldn't " +
             "start, while the Ticket is still in that Run's Status; refused with `nothing_to_retry` otherwise. Only the " +
-            "Delegate's Owner retries, since the Run spends their credentials. Nothing retries by itself. Like any " +
+            "Delegate's Owner retries, or an Agent of theirs with a Full token, since the Run spends their credentials; " +
+            "an Agent with a Write token gets `full_token_needed`. Nothing retries by itself. Like any " +
             "Ticket needing a Run, it waits while its Runner is full or it is blocked. Returns the Ticket: its " +
             "`lastRun` is the new Run, or its `waiting` says what it waits for.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
-      async (request) => retryRun(context, (await requireUser(context, request)).id, request.params.ticketId),
+      async (request) => {
+        const caller = await requireOwnerCaller(context, request, {
+          act: "retrying a Run",
+          rule: "Retry starts a fresh Run, spending its Delegate's Owner's credentials, as their act.",
+        });
+        return retryRun(context, caller, request.params.ticketId);
+      },
     );
 
     app.get(

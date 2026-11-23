@@ -358,7 +358,7 @@ describe("cutting a Release", () => {
     const byGrace = await cut(project.id, release.id, grace);
     expect([byGrace.status, byGrace.json.error.code]).toEqual([403, "read_access"]);
     const byAgent = await cut(project.id, release.id, { headers: { authorization: `Bearer ${secret}` } });
-    expect([byAgent.status, byAgent.json.error.code]).toEqual([403, "agent_not_allowed"]);
+    expect([byAgent.status, byAgent.json.error.code]).toEqual([403, "full_token_needed"]);
     expect(cronk.github.refsCreated).toEqual([]);
 
     await ok("POST", `/api/projects/${project.id}/releases/${release.id}/cut`, ada);
@@ -547,7 +547,7 @@ describe("releasing a Release", () => {
     const byGrace = await publish(project.id, release.id, grace, { confirm: true });
     expect([byGrace.status, byGrace.json.error.code]).toEqual([403, "read_access"]);
     const byAgent = await publish(project.id, release.id, { headers: { authorization: `Bearer ${secret}` } }, { confirm: true });
-    expect([byAgent.status, byAgent.json.error.code]).toEqual([403, "agent_not_allowed"]);
+    expect([byAgent.status, byAgent.json.error.code]).toEqual([403, "full_token_needed"]);
     const notCut = await publish(project.id, planned.id, ada, { confirm: true });
     expect(notCut.status).toBe(409);
     expect(notCut.json.error).toEqual(
@@ -690,7 +690,7 @@ describe("managing Releases through MCP", () => {
     ]);
   });
 
-  test("a cut Release is neither renamed nor deleted, and no tool cuts or releases one", async () => {
+  test("a cut Release is neither renamed nor deleted, and no tool cuts or releases one for a Write token", async () => {
     const { workspace, ada, project } = await withRepositories();
     const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
     expect((await cut(project.id, release.id, ada)).status).toBe(200);
@@ -709,5 +709,58 @@ describe("managing Releases through MCP", () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).filter((n) => /cut|publish/.test(n) || /^release/.test(n))).toEqual([]);
+  });
+
+  test("a Full token cuts and releases by name, recorded as its Agent's, with the same refusals as a User", async () => {
+    const { workspace, ada, project, first, second, status, cronker } = await withRepositories();
+    await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { release: "v0.3.0", statusId: status("Done") });
+    await ok("PATCH", `/api/tickets/${second.id}`, ada, { release: "v0.3.0" });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, ada, { name: "laptop", access: "full" });
+    const client = await connect(secret);
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["cut_release", "publish_release"]));
+
+    const cutOne = await tool(client, "cut_release", { project: "CRONK", release: "V0.3.0" });
+    expect(cutOne.isError, JSON.stringify(cutOne.json)).toBe(false);
+    expect(cutOne.json).toEqual(
+      expect.objectContaining({ state: "cut", cutBy: { kind: "agent", id: created.id, name: "claude-max" } }),
+    );
+    expect(branchesOf(cronker).has("release/v0.3.0")).toBe(true);
+    const again = await tool(client, "cut_release", { project: "CRONK", release: "v0.3.0" });
+    expect(again).toEqual({ isError: true, json: expect.objectContaining({ code: "release_not_planned" }) });
+
+    const open = await tool(client, "publish_release", { project: "CRONK", release: "v0.3.0", upgradeNotes: "Migrate." });
+    expect(open).toEqual({
+      isError: true,
+      json: expect.objectContaining({ code: "release_has_open_tickets", openTickets: [expect.objectContaining({ key: "CRONK-2" })] }),
+    });
+    const released = await tool(client, "publish_release", { project: "CRONK", release: "v0.3.0", upgradeNotes: "Migrate.", confirm: true });
+    expect(released.isError, JSON.stringify(released.json)).toBe(false);
+    expect(released.json).toEqual(
+      expect.objectContaining({
+        state: "released",
+        upgradeNotes: "Migrate.",
+        releasedBy: { kind: "agent", id: created.id, name: "claude-max" },
+      }),
+    );
+    expect(cronk.github.releasesCreated).toHaveLength(2);
+    // A User's Cut is recorded as theirs, with its kind.
+    const next = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.4.0" });
+    const byAda = await ok("POST", `/api/projects/${project.id}/releases/${next.id}/cut`, ada);
+    expect(byAda.cutBy).toEqual(expect.objectContaining({ kind: "user" }));
+  });
+
+  test("a Full token whose Owner has Read in the Project is refused a Cut with read_access", async () => {
+    const { workspace, ada, grace, project } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, grace, { name: "grace-claude" });
+    const { secret } = await ok("POST", `/api/agents/${created.id}/tokens`, grace, { name: "laptop", access: "full" });
+
+    const refused = await cut(project.id, release.id, { headers: { authorization: `Bearer ${secret}` } });
+
+    expect([refused.status, refused.json.error.code]).toEqual([403, "read_access"]);
+    expect(cronk.github.refsCreated).toEqual([]);
   });
 });
