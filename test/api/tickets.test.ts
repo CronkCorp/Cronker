@@ -383,6 +383,9 @@ describe("Comments", () => {
       mentions: [],
       questionId: null,
       sentBack: false,
+      quote: null,
+      quoteVersion: null,
+      anchor: null,
       attachments: [],
     });
 

@@ -89,6 +89,9 @@ describe("Comments on a Document", () => {
         attachments: [],
         questionId: null,
         sentBack: false,
+        quote: null,
+        quoteVersion: null,
+        anchor: null,
       },
     });
     expect(reply).toEqual(
@@ -230,6 +233,116 @@ describe("Comments on a Document", () => {
       data: { projectId: null, documentId: guide.id, commentId: onGuide.id },
     });
     stream.close();
+  });
+});
+
+describe("Comments on a passage of a Document", () => {
+  async function comment(documentId: string, as: As, body: Record<string, unknown>) {
+    return call("POST", `/api/documents/${documentId}/comments`, as, body);
+  }
+
+  async function save(documentId: string, as: As, body: string) {
+    const { version } = await ok("GET", `/api/documents/${documentId}`, as);
+    return ok("PATCH", `/api/documents/${documentId}`, as, { baseVersion: version.number, body });
+  }
+
+  test("a User and an Agent quote a passage, recorded with its Version and placed at its offset", async () => {
+    const { ada, plan, asAgent } = await documentsAndTickets();
+    await save(plan.id, ada, "Step one.\n\nStep two: drag and drop.");
+
+    const byAda = await comment(plan.id, ada, { body: "Needed?", quote: "drag and drop" });
+    const byAgent = await comment(plan.id, asAgent, { body: "First?", quote: "Step one." });
+    const whole = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Looks good." });
+    const reply = await ok("POST", `/api/documents/${plan.id}/comments`, asAgent, { body: "Yes.", replyToId: byAda.json.id });
+
+    expect(byAda).toEqual({
+      status: 201,
+      json: expect.objectContaining({ quote: "drag and drop", quoteVersion: 2, anchor: { offset: 21 } }),
+    });
+    expect(byAgent.json).toEqual(expect.objectContaining({ quote: "Step one.", quoteVersion: 2, anchor: { offset: 0 } }));
+    // Without a quote, a Comment is on the whole Document; a reply is on its thread's passage.
+    expect(whole).toEqual(expect.objectContaining({ quote: null, quoteVersion: null, anchor: null }));
+    expect(reply).toEqual(expect.objectContaining({ quote: null, anchor: null }));
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([byAda.json, byAgent.json, whole, reply]);
+    expect((await ok("GET", `/api/documents/${plan.id}`, ada)).comments).toEqual([byAda.json, byAgent.json, whole, reply]);
+  });
+
+  test("a quote that isn't in the current Version is refused, for Users and Agents alike", async () => {
+    const { ada, plan, asAgent } = await documentsAndTickets();
+    await save(plan.id, ada, "Two.");
+
+    for (const as of [ada, asAgent]) {
+      // "One." was in Version 1, not in the current one.
+      const refused = await comment(plan.id, as, { body: "Here?", quote: "One." });
+      expect(refused.status).toBe(400);
+      expect(refused.json.error).toEqual(
+        expect.objectContaining({ code: "quote_not_found", rule: expect.any(String), advice: expect.any(String) }),
+      );
+    }
+    const empty = await comment(plan.id, ada, { body: "Here?", quote: "" });
+    expect(empty.status).toBe(400);
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([]);
+  });
+
+  test("a reply takes no quote", async () => {
+    const { ada, plan } = await documentsAndTickets();
+    const thread = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "About this.", quote: "One." });
+
+    const refused = await comment(plan.id, ada, { body: "And this.", quote: "One.", replyToId: thread.id });
+
+    expect(refused.status).toBe(400);
+    expect(refused.json.error.code).toBe("quote_on_reply");
+  });
+
+  test("line endings are normalised when matching and placing a quote", async () => {
+    const { ada, plan } = await documentsAndTickets();
+    await save(plan.id, ada, "Intro.\r\nStep one.\r\nStep two.");
+
+    const quoted = await ok("POST", `/api/documents/${plan.id}/comments`, ada, {
+      body: "Split these?",
+      quote: "Step one.\nStep two.",
+    });
+    const crlf = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Why?", quote: "Intro.\r\nStep" });
+
+    expect(quoted).toEqual(expect.objectContaining({ quote: "Step one.\nStep two.", anchor: { offset: 7 } }));
+    expect(crlf).toEqual(expect.objectContaining({ quote: "Intro.\nStep", anchor: { offset: 0 } }));
+  });
+
+  test("the offset follows edits elsewhere, and the thread is outdated once its quote is gone", async () => {
+    const { ada, plan } = await documentsAndTickets();
+    await save(plan.id, ada, "Step one.\n\nStep two.");
+    const thread = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Needed?", quote: "Step two." });
+    expect(thread.anchor).toEqual({ offset: 11 });
+
+    await save(plan.id, ada, "# Plan\n\nStep one.\n\nStep two.");
+    expect((await ok("GET", `/api/documents/${plan.id}/comments`, ada))[0].anchor).toEqual({ offset: 19 });
+
+    await save(plan.id, ada, "# Plan\n\nStep one.\n\nStep 2.");
+    const [outdated] = await ok("GET", `/api/documents/${plan.id}/comments`, ada);
+    expect(outdated).toEqual(expect.objectContaining({ quote: "Step two.", quoteVersion: 2, anchor: "outdated" }));
+    // An earlier Version still reads as it was, without threads.
+    expect(await ok("GET", `/api/documents/${plan.id}/versions/2`, ada)).not.toHaveProperty("comments");
+  });
+
+  test("of several appearances, the first is chosen", async () => {
+    const { ada, plan } = await documentsAndTickets();
+    await save(plan.id, ada, "Drag. Then drag again. Drag.");
+
+    const quoted = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Which?", quote: "drag" });
+    expect(quoted.anchor).toEqual({ offset: 11 });
+
+    await save(plan.id, ada, "Drag. Then drop.");
+    expect((await ok("GET", `/api/documents/${plan.id}/comments`, ada))[0].anchor).toBe("outdated");
+    await save(plan.id, ada, "drag, drag, drag");
+    expect((await ok("GET", `/api/documents/${plan.id}/comments`, ada))[0].anchor).toEqual({ offset: 0 });
+  });
+
+  test("a Ticket's and an Artifact's Comments quote nothing", async () => {
+    const { ada, ticket } = await documentsAndTickets();
+
+    const onTicket = await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "Hi.", quote: "Hi" });
+
+    expect(onTicket).toEqual(expect.objectContaining({ quote: null, quoteVersion: null, anchor: null }));
   });
 });
 

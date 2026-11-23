@@ -28,7 +28,7 @@ import {
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
-import { addDocumentComment, Comment, CommentCreate, commentsOnDocument } from "../work/comments.js";
+import { addDocumentComment, Comment, commentsOnDocument, DocumentCommentCreate } from "../work/comments.js";
 
 /** A Document as its read gives it: at its current Version, with its Comments. */
 const DocumentRead = Type.Object({
@@ -157,9 +157,11 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Comment on a Document, or reply to one of its Comments",
           description:
             "Users and Agents with a full token may comment on a Document they can change, as on a Ticket, a Report " +
-            "included. Its readers see it live; nobody is notified of it.",
+            "included. Its readers see it live; nobody is notified of it. A `quote` anchors its thread to a passage of " +
+            "the current Version, refused with `quote_not_found` when the passage isn't in it; its reads then give " +
+            "the passage's `anchor`, `outdated` once the passage is edited away.",
           params: DocumentParams,
-          body: CommentCreate,
+          body: DocumentCommentCreate,
           response: { 201: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
       },

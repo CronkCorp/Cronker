@@ -92,6 +92,9 @@ describe("Comments on an Artifact", () => {
         attachments: [],
         questionId: null,
         sentBack: false,
+        quote: null,
+        quoteVersion: null,
+        anchor: null,
       },
     });
     expect(reply).toEqual(
