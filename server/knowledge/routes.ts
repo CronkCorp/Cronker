@@ -28,7 +28,18 @@ import {
   versionsOf,
   VersionWithBody,
 } from "./documents.js";
-import { addDocumentComment, Comment, CommentCreate, commentsOnDocument } from "../work/comments.js";
+import {
+  addDocumentComment,
+  Comment,
+  CommentCreate,
+  commentsOnDocument,
+  resolveDocumentThread,
+} from "../work/comments.js";
+
+/** Whether a Document's read includes its resolved threads. */
+const CommentsQuery = Type.Object({
+  resolved: Type.Optional(Type.Boolean({ description: "Include resolved threads, with their replies.", default: false })),
+});
 
 /** A Document as its read gives it: at its current Version, with its Comments. */
 const DocumentRead = Type.Object({
@@ -122,8 +133,11 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags,
           summary: "A Document at its current Version, with its Comments",
-          description: "Its Comments are oldest first, a reply naming the Comment it answers, as its Comments route lists them.",
+          description:
+            "Its Comments are oldest first, a reply naming the Comment it answers, as its Comments route lists them: " +
+            "resolved threads left out unless `resolved=true` asks for them.",
           params: DocumentParams,
+          querystring: CommentsQuery,
           response: { 200: DocumentRead, 401: ErrorBody, 404: ErrorBody },
         },
       },
@@ -131,7 +145,10 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         const caller = await requireCaller(context, request);
         const document = await findDocument(db, caller, request.params.documentId);
         if (!document) throw documentNotFound();
-        return { ...document, comments: await commentsOnDocument(db, caller, document.id) };
+        return {
+          ...document,
+          comments: await commentsOnDocument(db, caller, document.id, { includeResolved: request.query.resolved }),
+        };
       },
     );
 
@@ -141,13 +158,44 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags,
           summary: "A Document's Comments",
-          description: "Oldest first. A reply names the Comment it answers. A Report is a Document, and has Comments too.",
+          description:
+            "Oldest first. A reply names the Comment it answers. A Report is a Document, and has Comments too. A " +
+            "resolved thread, with its replies, is left out unless `resolved=true` asks for it.",
           params: DocumentParams,
+          querystring: CommentsQuery,
           response: { 200: Type.Array(Comment), 401: ErrorBody, 404: ErrorBody },
         },
       },
-      async (request) => commentsOnDocument(db, await requireCaller(context, request), request.params.documentId),
+      async (request) =>
+        commentsOnDocument(db, await requireCaller(context, request), request.params.documentId, {
+          includeResolved: request.query.resolved,
+        }),
     );
+
+    for (const [action, resolved] of [
+      ["resolve", true],
+      ["unresolve", false],
+    ] as const) {
+      app.post(
+        `/api/comments/:commentId/${action}`,
+        {
+          schema: {
+            tags,
+            summary: resolved ? "Resolve a thread on a Document" : "Unresolve a thread on a Document",
+            description: resolved
+              ? "A User with Write resolves the thread a Document's Comment starts once its review is dealt with, " +
+                "recording when and by whom; it is then left out of the Document's read unless asked for. Agents " +
+                "are refused. Resolving a resolved thread changes nothing."
+              : "A User with Write unresolves a resolved thread on a Document, so its read shows it again. Agents " +
+                "are refused. Unresolving an open thread changes nothing.",
+            params: Type.Object({ commentId: Type.String() }),
+            response: { 200: Comment, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          },
+        },
+        async (request) =>
+          resolveDocumentThread(context, await requireCaller(context, request), request.params.commentId, resolved),
+      );
+    }
 
     app.post(
       "/api/documents/:documentId/comments",

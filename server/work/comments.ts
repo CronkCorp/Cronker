@@ -8,13 +8,14 @@ import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { answerQuestion } from "../runs/questions.js";
 import { insertComment } from "./comment-writes.js";
-import { ActorOrCronk, actorOrCronkColumn } from "./actors.js";
+import { Actor, ActorOrCronk, actorColumn, actorOrCronkColumn } from "./actors.js";
 import { findTicketRow, ticketNotFound } from "./tickets.js";
 import { Mention, mentionsOf } from "./mentions.js";
 import { slugColumn } from "../http/readable.js";
 import { artifactNotFound, findArtifact } from "../artifacts/artifacts.js";
 import { insertArtifactComment, insertDocumentComment } from "./comment-writes.js";
 import { documentNotFound, findDocument } from "../knowledge/documents.js";
+import { ownerName } from "../agents/tokens.js";
 
 /** The Artifact a Comment is on, as a Ticket's timeline marks it. */
 export const CommentArtifact = Type.Object(
@@ -38,6 +39,16 @@ export const CommentDocument = Type.Object(
   { description: "The Document the Comment is on; null for a Comment on a Ticket or an Artifact." },
 );
 import { markdown } from "./fields.js";
+
+/** A resolved thread on a Document: when, and the User who resolved it. */
+export const CommentResolution = Type.Object(
+  {
+    at: Type.String({ format: "date-time" }),
+    by: Actor,
+  },
+  { description: "A resolved thread: when, and by which User. Only Users resolve threads." },
+);
+export type CommentResolution = Static<typeof CommentResolution>;
 
 /** The author of a Comment imported from a GitHub issue whom no User of the Workspace has linked. */
 export const GitHubAuthor = Type.Object(
@@ -81,10 +92,19 @@ export const Comment = Type.Object({
   sentBack: Type.Boolean({
     description: "Whether this is Cronk's Comment on a send-back, linking the failing check or the review requesting changes.",
   }),
+  resolved: Type.Union([CommentResolution, Type.Null()], {
+    description:
+      "When and by whom the thread this Comment starts on a Document was resolved; null for an open thread, a reply, or " +
+      "a Comment on a Ticket or an Artifact.",
+  }),
 });
 export type Comment = Static<typeof Comment>;
 
-type Row = Omit<Comment, "createdAt" | "mentions" | "attachments"> & { createdAt: Date };
+type Row = Omit<Comment, "createdAt" | "mentions" | "attachments" | "resolved"> & {
+  createdAt: Date;
+  resolvedAt: Date | null;
+  resolvedBy: Actor | null;
+};
 
 const columns = `comments.id, comments.ticket_id as "ticketId", comments.artifact_id as "artifactId",
   case when artifacts.id is null then null else json_build_object('id', artifacts.id, 'projectId', artifacts.project_id,
@@ -96,11 +116,14 @@ const columns = `comments.id, comments.ticket_id as "ticketId", comments.artifac
   case when comments.github_author_login is not null then json_build_object('kind', 'github',
     'login', comments.github_author_login, 'name', '@' || comments.github_author_login || ' on GitHub')
     else ${actorOrCronkColumn("users", "agents")} end as actor, comments.created_at as "createdAt", questions.id as "questionId",
-  comments.sent_back as "sentBack"`;
+  comments.sent_back as "sentBack",
+  comments.resolved_at as "resolvedAt",
+  case when resolvers.id is null then null else ${actorColumn("resolvers")} end as "resolvedBy"`;
 
 const fromComments = `comments
   left join users on users.id = comments.actor_user_id
   left join agents on agents.id = comments.actor_agent_id
+  left join users resolvers on resolvers.id = comments.resolved_by_user_id
   left join questions on questions.comment_id = comments.id
   left join artifacts on artifacts.id = comments.artifact_id
   left join artifact_versions on artifact_versions.artifact_id = artifacts.id and artifact_versions.number = artifacts.version
@@ -150,11 +173,12 @@ async function documentRowsOf(db: Db | Tx, documentId: string, commentId?: strin
 async function present(db: Db | Tx, viewer: Viewer, rows: Row[]): Promise<Comment[]> {
   const mentions = await mentionsOf(db, viewer, "comment", rows.map((row) => row.id));
   const attachments = await attachmentsOnComments(db, rows.map((row) => row.id));
-  return rows.map((row) => ({
+  return rows.map(({ resolvedAt, resolvedBy, ...row }) => ({
     ...row,
     createdAt: row.createdAt.toISOString(),
     mentions: mentions.get(row.id)!,
     attachments: attachments.get(row.id)!,
+    resolved: resolvedAt && resolvedBy ? { at: resolvedAt.toISOString(), by: resolvedBy } : null,
   }));
 }
 
@@ -242,11 +266,109 @@ export async function addArtifactComment(
   });
 }
 
-/** The Document's Comments, oldest first, for a Viewer who can read it; a Report's included. */
-export async function commentsOnDocument(db: Db | Tx, viewer: Viewer, documentId: string): Promise<Comment[]> {
+/**
+ * The Document's Comments, oldest first, for a Viewer who can read it; a Report's included. A resolved thread is left
+ * out, its replies with it, unless `includeResolved` asks for it.
+ */
+export async function commentsOnDocument(
+  db: Db | Tx,
+  viewer: Viewer,
+  documentId: string,
+  { includeResolved = false }: { includeResolved?: boolean } = {},
+): Promise<Comment[]> {
   const document = await findDocument(db, viewer, documentId);
   if (!document) throw documentNotFound();
-  return present(db, viewer, await documentRowsOf(db, document.id));
+  const rows = await documentRowsOf(db, document.id);
+  return present(db, viewer, includeResolved ? rows : withoutResolvedThreads(rows));
+}
+
+/** The Comments whose thread is open: each reply, however deep, goes with the first Comment of its thread. */
+function withoutResolvedThreads(rows: Row[]): Row[] {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const rootOf = (row: Row): Row => {
+    let at = row;
+    for (let parent = at.replyToId && byId.get(at.replyToId); parent; parent = at.replyToId && byId.get(at.replyToId)) {
+      at = parent;
+    }
+    return at;
+  };
+  return rows.filter((row) => rootOf(row).resolvedAt === null);
+}
+
+/**
+ * Resolves the thread a Comment on a Document starts, or unresolves it, as a User with Write where the Document is
+ * kept. Resolving a resolved thread, or unresolving an open one, changes nothing and tells nobody.
+ */
+export async function resolveDocumentThread(
+  context: Context,
+  actor: Caller,
+  commentId: string,
+  resolved: boolean,
+): Promise<Comment> {
+  return transaction(context.db, async (tx) => {
+    const { rows: found } = isUuid(commentId)
+      ? await tx.query<{
+          documentId: string | null;
+          ticketId: string | null;
+          artifactId: string | null;
+          replyToId: string | null;
+          resolved: boolean;
+        }>(
+          `select document_id as "documentId", ticket_id as "ticketId", artifact_id as "artifactId",
+             reply_to_id as "replyToId", resolved_at is not null as resolved
+           from comments where id = $1 for update`,
+          [commentId],
+        )
+      : { rows: [] };
+    const comment = found[0];
+    if (!comment) throw commentNotFound();
+    if (comment.documentId === null) {
+      // A Comment on a Ticket or an Artifact the caller can't read answers as not found, as an unknown one does.
+      const readable = comment.ticketId
+        ? await findTicketRow(tx, actor, comment.ticketId)
+        : await findArtifact(tx, actor, comment.artifactId!);
+      if (!readable) throw commentNotFound();
+      throw new ApiError(400, "not_a_document_thread", "Only a thread on a Document is resolved.", {
+        rule: "Threads are resolved on Documents, Reports included; a Ticket's or an Artifact's Comments stay as they are.",
+        advice: "Resolve a thread on a Document, through its first Comment.",
+      });
+    }
+    const document = await findDocument(tx, actor, comment.documentId);
+    if (!document) throw commentNotFound();
+    await requireWrite(tx, actor, document);
+    if (actor.kind === "agent") {
+      const verb = resolved ? "resolve" : "unresolve";
+      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can ${verb} a thread.`, {
+        rule: "Only a User resolves or unresolves a thread on a Document, once its review is dealt with; Agents read threads.",
+        advice: `Reply in the thread to say what you did; ask ${ownerName(actor)}, ${actor.name}'s Owner, to ${verb} it.`,
+      });
+    }
+    if (comment.replyToId !== null) {
+      throw new ApiError(400, "not_a_thread", "A thread is resolved through its first Comment, not a reply.", {
+        rule: "Resolving a thread resolves it whole, through the Comment that starts it.",
+        advice: "Resolve the Comment this reply's thread starts with.",
+      });
+    }
+    if (comment.resolved !== resolved) {
+      await tx.query("update comments set resolved_at = $2, resolved_by_user_id = $3 where id = $1", [
+        commentId,
+        resolved ? context.clock.now() : null,
+        resolved ? actor.id : null,
+      ]);
+      context.live.publish(tx, document.workspaceId, {
+        type: "comment.changed",
+        projectId: document.projectId,
+        documentId: document.id,
+        commentId,
+      });
+    }
+    const [updated] = await present(tx, actor, await documentRowsOf(tx, document.id, commentId));
+    return updated!;
+  });
+}
+
+function commentNotFound(): ApiError {
+  return new ApiError(404, "not_found", "No such Comment.");
 }
 
 /**

@@ -494,16 +494,27 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read a Document",
       description:
         "A Document of your Workspace as Markdown, at its current Version, whose number a save names as its " +
-        "`baseVersion`, with its Comments, oldest first, each reply naming the Comment it answers; or, given a " +
-        "Version's number, that earlier Version, without Comments.",
+        "`baseVersion`, with its Comments, oldest first, each reply naming the Comment it answers, leaving out " +
+        "threads a User resolved unless `resolved` asks for them; or, given a Version's number, that earlier " +
+        "Version, without Comments. Only Users resolve threads.",
       inputSchema: {
         document: documentArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+        resolved: z
+          .boolean()
+          .optional()
+          .describe("Include resolved threads, each Comment's `resolved` saying when and by whom. Left out when false."),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ document, version }) =>
-      answer(() => get(version === undefined ? documentPath(document) : `${documentPath(document)}/versions/${version}`)),
+    ({ document, version, resolved }) =>
+      answer(() =>
+        get(
+          version === undefined
+            ? `${documentPath(document)}${resolved ? "?resolved=true" : ""}`
+            : `${documentPath(document)}/versions/${version}`,
+        ),
+      ),
   );
 
   server.registerTool(

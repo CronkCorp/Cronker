@@ -93,8 +93,8 @@ A free-form tag on a Ticket, matched ignoring case. A Step may require a Label o
 _Avoid_: Tag, category
 
 **Comment**:
-A Markdown message an Actor, or Cronk itself, writes on a Ticket, an Artifact or a Document (a Report included), possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline; a Comment on a Document shows only with the Document. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it. A merge conflict sends nothing back and writes none: it only marks the Pull Request.
-_Avoid_: Note, message, post
+A Markdown message an Actor, or Cronk itself, writes on a Ticket, an Artifact or a Document (a Report included), possibly as a reply to another Comment on the same one. A Comment on an Artifact linked to a Ticket also shows on that Ticket's timeline; a Comment on a Document shows only with the Document. Cronk writes one when a failing check or a review requesting changes sends a Ticket back, linking it. A merge conflict sends nothing back and writes none: it only marks the Pull Request. A thread on a Document is one Comment with its replies; a User **Resolves** it, through its first Comment, once its review is dealt with, which records when and by whom and hides it from the Document's read without deleting it, until asked for or unresolved. Only Users resolve and unresolve threads; Agents read them.
+_Avoid_: Note, message, post; (for Resolve) close, archive, dismiss
 
 **Change**:
 One recorded edit to a Ticket: which field, its value before and after, the Actor who made it (or Cronk itself, such as when it moves a Ticket on past a skipped Step) and when. A Ticket's Changes make up its timeline.

@@ -3,7 +3,7 @@ import { api, type Comment, type User, type Workspace } from "./api.js";
 import { useArrivals, useLatest, useLiveEvents, type StreamEvent } from "./live.js";
 import { CommentForm, CommentThread } from "./tickets.js";
 import { Avatar } from "./ui/actor.js";
-import { FormError } from "./ui/controls.js";
+import { Button, FormError } from "./ui/controls.js";
 import { useCanWrite } from "./write-access.js";
 
 /** What a Comments panel is under: an Artifact, or a Document (a Report included). */
@@ -18,9 +18,11 @@ const sources = {
   document: {
     list: api.documentComments,
     post: api.commentOnDocument,
-    // A Comment added, or a file attached to or removed from one of them, names only the Document.
+    // A Comment added or a thread resolved, or a file attached to or removed from one of them, names only the Document.
     changed: (event: StreamEvent, id: string) =>
-      (event.type === "comment.added" || event.type === "attachments.changed") && "documentId" in event && event.documentId === id,
+      (event.type === "comment.added" || event.type === "comment.changed" || event.type === "attachments.changed") &&
+      "documentId" in event &&
+      event.documentId === id,
   },
 } satisfies Record<CommentTarget["kind"], unknown>;
 
@@ -47,12 +49,37 @@ export function CommentsPanel({ workspace, target, user }: { workspace: Workspac
   // The live refetch may have shown the new Comment already.
   const added = (comment: Comment) =>
     setComments((list) => ((list ?? []).some((c) => c.id === comment.id) ? list : [...(list ?? []), comment]));
-  const threads = shown.filter((c) => c.replyToId === null);
+  const [showResolved, setShowResolved] = useState(false);
+  const allThreads = shown.filter((c) => c.replyToId === null);
+  const resolvedCount = allThreads.filter((c) => c.resolved !== null).length;
+  // With the last resolved thread unresolved, the next one resolved hides again.
+  useEffect(() => {
+    if (resolvedCount === 0) setShowResolved(false);
+  }, [resolvedCount]);
+  const threads = showResolved ? allThreads : allThreads.filter((c) => c.resolved === null);
+  // Resolving is for a Document's threads; the Comment comes back with its new state.
+  const resolvable = target.kind === "document";
+  const resolve = async (comment: Comment, resolved: boolean) => {
+    setFailure(null);
+    try {
+      const updated = await (resolved ? api.resolveComment(comment.id) : api.unresolveComment(comment.id));
+      setComments((list) => (list ?? []).map((c) => (c.id === updated.id ? updated : c)));
+    } catch (e) {
+      setFailure((e as Error).message);
+    }
+  };
   return (
     <section aria-label="Comments" className="comments-panel">
       <h2>Comments</h2>
       <FormError error={failure} />
-      {comments && threads.length === 0 && <p className="muted">No Comments yet.</p>}
+      {resolvable && resolvedCount > 0 && (
+        <Button variant="ghost" size="small" aria-pressed={showResolved} onClick={() => setShowResolved((shown) => !shown)}>
+          {showResolved ? "Hide resolved" : `Show resolved (${resolvedCount})`}
+        </Button>
+      )}
+      {comments && threads.length === 0 && (
+        <p className="muted">{resolvedCount > 0 ? "No open Comments." : "No Comments yet."}</p>
+      )}
       {threads.length > 0 && (
         <ol className="comments-panel-list">
           {threads.map((comment) => (
@@ -70,6 +97,7 @@ export function CommentsPanel({ workspace, target, user }: { workspace: Workspac
                 arrived={arrived}
                 onAdded={added}
                 onChanged={load}
+                onResolve={resolvable && canWrite ? (resolved) => resolve(comment, resolved) : undefined}
               />
             </li>
           ))}
