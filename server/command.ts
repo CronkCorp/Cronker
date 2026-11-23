@@ -4,6 +4,7 @@ import { ConfigError, loadConfig } from "./config.js";
 import { createPool, migrate } from "./db.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { Live } from "./live/live.js";
+import { Jobs } from "./jobs.js";
 import { ApiError } from "./http/errors.js";
 import { issueResetLinkByEmail } from "./identity/links.js";
 
@@ -36,7 +37,7 @@ async function main(args: string[]): Promise<number> {
   const db = createPool(config.databaseUrl);
   try {
     await migrate(db);
-    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live(), runners: {}, installationTokens: new InstallationTokens(systemClock), installationListings: new InstallationListings(systemClock), attachments: directoryStorage(config.attachments.directory) }, email);
+    const { user, link } = await issueResetLinkByEmail({ config, db, clock: systemClock, live: new Live(), runners: {}, installationTokens: new InstallationTokens(systemClock), installationListings: new InstallationListings(systemClock), attachments: directoryStorage(config.attachments.directory), jobs: new Jobs() }, email);
     console.log(`Pass this link to ${user.email}. It sets a new password, works once and expires ${link.expiresAt}:`);
     console.log(link.url);
     return 0;

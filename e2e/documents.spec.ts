@@ -87,3 +87,79 @@ test("Comments on a Document show under it, with replies, and arrive live", asyn
   await cronk.request("POST", `/api/documents/${document.id}/comments`, { cookie, body: { body: "Added it to the page." } });
   await expect(comments.getByText("Added it to the page.")).toBeVisible();
 });
+
+test("a resolved thread hides with its replies, shows on request, unresolves, and resolves live", async ({ page, cronk }) => {
+  const { document } = await openDocument(page, cronk, "Runs start on delegation.");
+  const cookie = await signIn(cronk);
+  const post = async (body: string, replyToId?: string) =>
+    (await cronk.request("POST", `/api/documents/${document.id}/comments`, { cookie, body: { body, replyToId } })).json();
+  const thread = await post("Does a Merge Step count?");
+  await post("It does.", thread.id);
+  const other = await post("Typo in the second line.");
+  const comments = page.getByRole("region", { name: "Comments" });
+  const first = comments.getByRole("article", { name: "Comment by ada@example.com" }).filter({ hasText: "Does a Merge Step count?" });
+  await expect(first).toBeVisible();
+
+  // The Resolve on the thread's first Comment, not on its reply.
+  await first.getByRole("button", { name: "Resolve" }).first().click();
+  await expect(comments.getByText("Does a Merge Step count?")).toBeHidden();
+  await expect(comments.getByText("It does.")).toBeHidden();
+  await expect(comments.getByText("Typo in the second line.")).toBeVisible();
+
+  await comments.getByRole("button", { name: "Show resolved (1)" }).click();
+  await expect(first).toContainText("Resolved by ada@example.com");
+  await expect(comments.getByText("It does.")).toBeVisible();
+  await first.getByRole("button", { name: "Unresolve" }).click();
+  await expect(first).not.toContainText("Resolved by");
+  await expect(comments.getByRole("button", { name: /resolved/ })).toBeHidden();
+
+  // Another User's Resolve arrives live.
+  await cronk.request("POST", `/api/comments/${other.id}/resolve`, { cookie });
+  await expect(comments.getByText("Typo in the second line.")).toBeHidden();
+  await expect(comments.getByRole("button", { name: "Show resolved (1)" })).toBeVisible();
+});
+
+test("selecting a passage comments on it, shown after its paragraph, and at the top once the passage is edited away", async ({ page, cronk }) => {
+  const { document } = await openDocument(page, cronk, "Runs start on delegation.\n\nA Merge Step merges the Pull Request.");
+  const cookie = await signIn(cronk);
+  const body = page.getByRole("article", { name: "How Runs start" });
+
+  // Selecting text within the first paragraph offers Comment under it.
+  await body.getByText("Runs start on delegation.").evaluate((paragraph) => {
+    const text = paragraph.firstChild!;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, "Runs start".length);
+    getSelection()!.removeAllRanges();
+    getSelection()!.addRange(range);
+  });
+  await page.getByRole("button", { name: "Comment on the selected passage" }).click();
+  const dialog = page.getByRole("dialog", { name: "Comment on a passage" });
+  await expect(dialog.getByLabel("Quoted passage")).toHaveText("Runs start");
+  await page.keyboard.type("Only on delegation?");
+  await dialog.getByRole("button", { name: /^Comment/ }).click();
+  await expect(dialog).toBeHidden();
+
+  // The thread sits after its paragraph, before the next one, not in the Comments panel.
+  const thread = body.getByRole("list", { name: "Comments on this passage" });
+  await expect(thread).toContainText("Only on delegation?");
+  const [threadTop, nextTop] = await Promise.all([
+    thread.evaluate((element) => element.getBoundingClientRect().top),
+    body.getByText("A Merge Step merges").evaluate((element) => element.getBoundingClientRect().top),
+  ]);
+  expect(threadTop).toBeLessThan(nextTop);
+  const comments = page.getByRole("region", { name: "Comments" });
+  await expect(comments.getByText("No Comments yet.")).toHaveCount(0);
+  await expect(comments.getByText("Only on delegation?")).toHaveCount(0);
+
+  // Once an edit takes the passage away, the thread shows at the top of the Comments panel with its quote and Version.
+  await cronk.request("PATCH", `/api/documents/${document.id}`, {
+    cookie,
+    body: { baseVersion: 1, body: "Delegation starts a Run.\n\nA Merge Step merges the Pull Request." },
+  });
+  await expect(thread).toBeHidden();
+  const outdated = comments.getByLabel("Quoted passage");
+  await expect(outdated).toContainText("Runs start");
+  await expect(outdated).toContainText("Written on Version 1");
+  await expect(comments.getByText("Only on delegation?")).toBeVisible();
+});

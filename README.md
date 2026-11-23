@@ -51,8 +51,9 @@ Without Docker, run `npm run command -- reset-link ada@example.com` with the ser
 | `CRONK_MANAGED_AGENTS_API_URL` | no | The address of the Claude API's Managed Agents endpoints (default `https://api.anthropic.com`), which the Managed Agents Runner calls. |
 | `CRONK_ATTACHMENTS_DIR` | no | The directory Attachments are kept in, one file each, named by id (default `data/attachments` under the working directory; `/app/data/attachments`, a volume, under Compose). A backup is the database plus this directory. |
 | `CRONK_ATTACHMENT_LIMIT_MB` | no | The largest file that may be attached, in megabytes (default `25`). Larger files are refused, naming the limit. |
+| `CRONK_WEBHOOKS_ALLOW_PRIVATE` | no | `true` lets Users' webhooks point at private, loopback and link-local addresses, such as a receiver on your LAN (default `false`: refused, so webhooks can't probe Cronk's network). See [setup](docs/setup.md#11-get-your-inbox-on-your-phone-optional). |
 
-The Compose file also reads `CRONK_PORT` (published port, default `3000`), `POSTGRES_PASSWORD`, `CRONK_SECRET_KEY` and `CRONK_ATTACHMENT_LIMIT_MB`, and keeps Attachments in the `attachments` volume.
+The Compose file also reads `CRONK_PORT` (published port, default `3000`), `POSTGRES_PASSWORD`, `CRONK_SECRET_KEY`, `CRONK_ATTACHMENT_LIMIT_MB` and `CRONK_WEBHOOKS_ALLOW_PRIVATE`, and keeps Attachments in the `attachments` volume.
 
 The API is documented at `/api/docs` (OpenAPI at `/api/openapi.json`).
 

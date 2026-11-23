@@ -24,10 +24,18 @@ export async function pick(page: Page, label: string, option: string) {
   await page.getByRole("listbox", { name: label }).getByRole("option", { name: option, exact: true }).click();
 }
 
-/** Sets a filter above the board or List by picking from its list, as "Filter by Priority" → "High". */
+/**
+ * Sets a filter above the board or List by picking from its list, as "Filter by Priority" → "High". Waits for the list
+ * to close and give focus back to its button, which the popover does a moment after closing: otherwise that focus can
+ * land after the test has moved on, and take keys meant for another field.
+ */
 export async function pickFilter(page: Page, label: string, option: string) {
-  await page.getByRole("button", { name: new RegExp(`^Filter by ${label}`) }).click();
-  await page.getByRole("listbox", { name: label }).getByRole("option", { name: option, exact: true }).click();
+  const button = page.getByRole("button", { name: new RegExp(`^Filter by ${label}`) });
+  await button.click();
+  const list = page.getByRole("listbox", { name: label });
+  await list.getByRole("option", { name: option, exact: true }).click();
+  await expect(list).toBeHidden();
+  await expect(button).toBeFocused();
 }
 
 /** Creates a Ticket from the Project's page head, as New Ticket does. */

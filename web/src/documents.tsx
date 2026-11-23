@@ -22,7 +22,7 @@ import { Attachments } from "./attachments.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
-import { Markdown } from "./markdown.js";
+import { Markdown, type Slot } from "./markdown.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
@@ -30,7 +30,9 @@ import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError
 import { Diff, lineDiff } from "./ui/diff.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { ProjectAccessProvider, ProjectNote } from "./write-access.js";
-import { CommentsPanel } from "./comments-panel.js";
+import { CommentsPanel, placed, ThreadEntry, useComments } from "./comments-panel.js";
+import { CommentForm } from "./tickets.js";
+import { useSelectionIn } from "./ui/selection.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
 /** Nests a page tree's Documents, listed in tree order, under their parents. */
@@ -43,6 +45,9 @@ function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSu
 }
 
 /** Where a page tree is shown: a Project's Documents page, or the Workspace's. */
+
+/** Text with its line endings made `\n`, as the server matches and places quotes. */
+const normaliseLineEndings = (text: string) => text.replace(/\r\n?/g, "\n");
 
 /** Who saved a Version and when, as a line of meta. */
 export function VersionMeta({ version }: { version: { number: number; actor: ActorInfo; savedAt: string } }) {
@@ -70,21 +75,23 @@ export function DocumentBody({
   label,
   empty,
   after,
+  slots,
 }: {
   body: string;
   /** The Ticket keys it mentions, linked; only the current Version's are known, so a past Version's are plain text. */
   mentions?: Mention[];
   label?: string;
   empty?: ReactNode;
-  /** What follows the body at the same measure, such as a Term's words to avoid. */
+  /** What follows the block of the body each offset falls in, such as the threads on a passage. */
   after?: ReactNode;
+  slots?: Slot[];
 }) {
   const content =
     empty && !body.trim() ? (
       empty
     ) : (
       <div className="prose">
-        <Markdown text={body} mentions={mentions} />
+        <Markdown text={slots ? normaliseLineEndings(body) : body} mentions={mentions} slots={slots} />
         {after}
       </div>
     );
@@ -335,30 +342,16 @@ export function DocumentScreen({
       ) : (
         <div className="page-split">
           <div className="page">
-            <DocumentBody
-              body={document.body}
-              mentions={document.mentions}
-              label={document.title}
-              empty={
-                <EmptyState title="Nothing written yet.">
-                  {canWrite ? "Edit adds the first words, and saving makes a new Version." : null}
-                </EmptyState>
-              }
-            />
-            <Attachments
-              owner={{ kind: "document", id: document.id }}
-              attachments={attachments}
-              label="Attachments"
-              canAttach={canWrite}
-              dropHint="or, while editing, drop or paste them into the text"
-              onChanged={loadAttachments}
-            />
-            {!gone && (
-              // The Workspace's own Documents are for every User to change; a Project's, with Write in it.
-              <ProjectAccessProvider access={canWrite ? "write" : "read"}>
-                <CommentsPanel workspace={workspace} target={{ kind: "document", id: document.id }} user={user} />
-              </ProjectAccessProvider>
-            )}
+            <DocumentRead workspace={workspace} user={user} document={document} canWrite={canWrite} gone={gone}>
+              <Attachments
+                owner={{ kind: "document", id: document.id }}
+                attachments={attachments}
+                label="Attachments"
+                canAttach={canWrite}
+                dropHint="or, while editing, drop or paste them into the text"
+                onChanged={loadAttachments}
+              />
+            </DocumentRead>
           </div>
           <aside className="side" aria-label="Document details">
             <Versions
@@ -716,5 +709,101 @@ export function Versions<V extends VersionWithBody, C = VersionsCompared<V>>({
           (showComparison ? showComparison(comparison) : <BodiesCompared comparison={comparison as unknown as Comparison} />)}
       </Dialog>
     </section>
+  );
+}
+
+/**
+ * A Document as it reads, with its threads: each on a passage placed after the block holding it, the others, and
+ * the outdated ones first, under its Attachments. Selecting a passage offers to comment on it, with Write.
+ */
+function DocumentRead({
+  workspace,
+  user,
+  document,
+  canWrite,
+  gone,
+  children,
+}: {
+  workspace: Workspace;
+  user: User;
+  document: Document;
+  canWrite: boolean;
+  gone: boolean;
+  /** Its Attachments, between the body and its Comments. */
+  children: ReactNode;
+}) {
+  const target = { kind: "document", id: document.id } as const;
+  const comments = useComments(workspace, target);
+  const text = useRef<HTMLDivElement>(null);
+  const selection = useSelectionIn(text, ".passage-threads");
+  const [quoting, setQuoting] = useState<string | null>(null);
+  // The server places each thread by its quote; the page only puts it where the server says.
+  const slots: Slot[] = (comments.list ?? [])
+    .filter(placed)
+    .filter(comments.isShown)
+    .sort((a, b) => a.anchor.offset - b.anchor.offset)
+    .map((comment) => ({
+      offset: comment.anchor.offset,
+      content: (
+        <ol className="passage-threads" aria-label="Comments on this passage">
+          <ThreadEntry comment={comment} comments={comments} user={user} />
+        </ol>
+      ),
+    }));
+  // The server matches a quote exactly against the Markdown, which text selected across formatting may not be.
+  const quotable = selection !== null && normaliseLineEndings(document.body).includes(normaliseLineEndings(selection.text));
+  return (
+    // The Workspace's own Documents are for every User to change; a Project's, with Write in it.
+    <ProjectAccessProvider access={canWrite ? "write" : "read"}>
+      <div ref={text}>
+        <DocumentBody
+          body={document.body}
+          mentions={document.mentions}
+          label={document.title}
+          slots={slots}
+          empty={
+            <EmptyState title="Nothing written yet.">
+              {canWrite ? "Edit adds the first words, and saving makes a new Version." : null}
+            </EmptyState>
+          }
+        />
+      </div>
+      {children}
+      {!gone && <CommentsPanel target={target} user={user} comments={comments} />}
+      {selection && canWrite && !gone && quoting === null && (
+        <div className="redact-pop" style={{ top: selection.bottom + 6, left: selection.left }}>
+          <Button
+            variant="secondary"
+            aria-label="Comment on the selected passage"
+            disabled={!quotable}
+            title={
+              quotable
+                ? "Comment on this passage"
+                : "Select text within one run of formatting, as it is written, to comment on it"
+            }
+            // Keeps the selection while the button is pressed.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setQuoting(selection.text)}
+          >
+            Comment
+          </Button>
+        </div>
+      )}
+      <Dialog open={quoting !== null} onOpenChange={(open) => !open && setQuoting(null)} title="Comment on a passage">
+        <blockquote className="comment-quote" aria-label="Quoted passage">
+          {quoting}
+        </blockquote>
+        <CommentForm
+          label="Comment on the passage"
+          button="Comment"
+          autoFocus
+          placeholder="Comment… Ticket keys link to their Tickets"
+          onSend={async (body) => {
+            comments.added(await api.commentOnDocument(document.id, { body, quote: quoting! }));
+            setQuoting(null);
+          }}
+        />
+      </Dialog>
+    </ProjectAccessProvider>
   );
 }

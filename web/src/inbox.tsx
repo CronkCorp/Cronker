@@ -506,6 +506,7 @@ function Answer({
         compact
         submitOnCtrlOrCmdEnter
         placeholder={`Answer ${item.question.agent.name}…`}
+        project={item.ticket.projectId}
         value={body}
         disabled={disabled}
         onChange={setBody}

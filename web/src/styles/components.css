@@ -1397,3 +1397,28 @@ textarea.markdown-source {
 .rich-editor-frame {
   min-width: 0;
 }
+
+/* Mentions while editing (CRONK-23): links as the reading view draws them, and the picker under the word typed. */
+.rich-editor {
+  position: relative;
+}
+.mention-picker {
+  position: absolute;
+  min-width: 240px;
+}
+.mention-picker-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.mention-picker-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-picker-kind {
+  margin-left: auto;
+}

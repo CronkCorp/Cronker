@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
-import { attachmentUrl, isAttachmentUrl, type ArtifactMention, type DecisionMention, type Mention, type TicketMention } from "./api.js";
+import { attachmentUrl, isAttachmentUrl, type ArtifactMention, type DecisionMention, type Mention, type TermMention, type TicketMention } from "./api.js";
 import { Embed } from "./embed.js";
 import { Link } from "./router.js";
 import { useAddresses, type Addresses } from "./addresses.js";
@@ -45,22 +45,23 @@ function markEmbeds(embeds: ArtifactMention[]) {
   };
 }
 
-/** A Mention by a key, which links in place: a Ticket's or a Decision's. */
-type KeyMention = TicketMention | DecisionMention;
+/** A Mention written in the text, which links in place: a Ticket's or a Decision's key, or a Term's name. */
+type KeyMention = TicketMention | DecisionMention | TermMention;
 
-/** The page a Mention leads to: its Ticket's or its Decision's. */
-function mentionedPage(to: Addresses, mention: KeyMention): string {
-  return mention.kind === "ticket"
-    ? to.ticket(mention)
-    : to.decision({ id: mention.decisionId, projectId: mention.projectId, number: mention.number });
+/** The page a Mention leads to: its Ticket's, its Decision's or its Term's glossary entry. */
+export function mentionedPage(to: Addresses, mention: KeyMention): string {
+  if (mention.kind === "ticket") return to.ticket(mention);
+  if (mention.kind === "decision") return to.decision({ id: mention.decisionId, projectId: mention.projectId, number: mention.number });
+  return to.term({ id: mention.termId, projectId: mention.projectId, name: mention.name });
 }
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
- * Turns each mentioned Ticket or Decision key in the text into a link to it, with the server's boundaries: a
- * Decision key never inside a longer word or key, so `D7` doesn't link inside `WEB-D7`, nor before `-3`, where
- * `D7-3` is a Ticket key.
+ * Turns each Mention in the text into a link to what it names, with the server's boundaries: a Decision key never
+ * inside a longer word or key, so `D7` doesn't link inside `WEB-D7`, nor before `-3`, where `D7-3` is a Ticket key;
+ * a Term's name with its capitalisation as a whole word (not next to a letter, digit or underscore), the longest
+ * first.
  */
 function linkMentions(mentions: KeyMention[], to: Addresses) {
   const byText = new Map(mentions.map((m) => [m.text, m]));
@@ -72,8 +73,9 @@ function linkMentions(mentions: KeyMention[], to: Addresses) {
       .map(escape)
       .join("|") || "(?!)";
   const pattern = new RegExp(
-    `\\b(${alternation("ticket")})\\b|(?<![\\w-])(${alternation("decision")})(?!\\w|-[1-9])`,
-    "g",
+    `\\b(${alternation("ticket")})\\b|(?<![\\w-])(${alternation("decision")})(?!\\w|-[1-9])` +
+      `|(?<![\\p{L}\\p{N}_])(${alternation("term")})(?![\\p{L}\\p{N}_])`,
+    "gu",
   );
 
   const split = (text: string): Node[] =>
@@ -101,6 +103,50 @@ function linkMentions(mentions: KeyMention[], to: Addresses) {
   };
 }
 
+/** A minimal view of the rendered tree's nodes, enough to place slots after its blocks. */
+interface HtmlNode {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: HtmlNode[];
+  position?: { start: { offset?: number } };
+}
+
+/**
+ * Something shown after the block of the text holding `offset`, in the text's own flow: what is placed by where it
+ * is in the Markdown, such as a Comment's thread on a passage.
+ */
+export interface Slot {
+  offset: number;
+  content: ReactNode;
+}
+
+/**
+ * Puts an empty `div` for each slot, numbered, after the top-level block its offset falls in: the last that starts at
+ * or before it. Without raw HTML, no other `div` names a slot.
+ */
+function placeSlots(offsets: number[]) {
+  return () => (tree: HtmlNode) => {
+    if (offsets.length === 0 || !tree.children) return;
+    const blocks = tree.children.filter((node) => node.type === "element" && node.position?.start.offset !== undefined);
+    if (blocks.length === 0) return;
+    const after = new Map<HtmlNode, number[]>();
+    offsets.forEach((offset, index) => {
+      const block = blocks.findLast((node) => node.position!.start.offset! <= offset) ?? blocks[0]!;
+      after.set(block, [...(after.get(block) ?? []), index]);
+    });
+    tree.children = tree.children.flatMap((node) => [
+      node,
+      ...(after.get(node) ?? []).map((index) => ({
+        type: "element",
+        tagName: "div",
+        properties: { dataSlot: String(index) },
+        children: [],
+      })),
+    ]);
+  };
+}
+
 /** Resolves `attachment:<id>` to where the Attachment downloads from; other URLs as react-markdown allows them. */
 function urlTransform(url: string): string {
   const attachment = /^attachment:([0-9a-f-]{36})$/i.exec(url.trim());
@@ -123,11 +169,14 @@ const links: Components = {
 };
 
 /**
- * Markdown as written by Users, without raw HTML, with Ticket and Decision keys as links, the Artifacts it embeds
- * shown in place and `attachment:` references resolved.
+ * Markdown as written by Users, without raw HTML, with Ticket and Decision keys and Term names as links, the Artifacts it embeds
+ * shown in place and `attachment:` references resolved; each slot follows the block its offset falls in.
  */
-export function Markdown({ text, mentions }: { text: string; mentions: Mention[] }) {
+export function Markdown({ text, mentions, slots = [] }: { text: string; mentions: Mention[]; slots?: Slot[] }) {
   const to = useAddresses();
+  // Read as the text renders, so the components below stay the same while the slots' content changes.
+  const placed = useRef(slots);
+  placed.current = slots;
   const keys = mentions.filter((m): m is KeyMention => m.kind !== "artifact");
   const embeds = mentions.filter((m): m is ArtifactMention => m.kind === "artifact");
   const components = useMemo<Components>(
@@ -138,6 +187,10 @@ export function Markdown({ text, mentions }: { text: string; mentions: Mention[]
         const embed = typeof index === "string" ? embeds[Number(index)] : undefined;
         return embed ? <Embed mention={embed} /> : <p>{children}</p>;
       },
+      div: ({ node, children }) => {
+        const index = node?.properties?.dataSlot;
+        return typeof index === "string" ? <>{placed.current[Number(index)]?.content}</> : <div>{children}</div>;
+      },
     }),
     // The Embeds as the API gives them; a new array of the same ones keeps each Embed, and its height, in place.
     [JSON.stringify(embeds)],
@@ -146,6 +199,7 @@ export function Markdown({ text, mentions }: { text: string; mentions: Mention[]
     <div className="markdown">
       <ReactMarkdown
         remarkPlugins={[markEmbeds(embeds), linkMentions(keys, to)]}
+        rehypePlugins={[placeSlots(slots.map((slot) => slot.offset))]}
         components={components}
         urlTransform={urlTransform}
       >

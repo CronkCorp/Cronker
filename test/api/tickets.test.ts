@@ -77,6 +77,7 @@ describe("creating a Ticket", () => {
       blockedByHidden: 0,
       mentions: [],
       mentionedIn: [],
+      knowledge: { terms: [], decisions: [] },
       cost: [],
     });
 
@@ -383,6 +384,10 @@ describe("Comments", () => {
       mentions: [],
       questionId: null,
       sentBack: false,
+      resolved: null,
+      quote: null,
+      quoteVersion: null,
+      anchor: null,
       attachments: [],
     });
 

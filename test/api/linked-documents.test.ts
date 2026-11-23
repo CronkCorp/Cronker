@@ -53,8 +53,8 @@ describe("Linked Documents", () => {
 
     expect(linked).toEqual({ status: 201, json: { id: design.id, projectId: project.id, title: "Sign-in design", slug: design.slug } });
     expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([
-      { id: design.id, projectId: project.id, title: "Sign-in design", slug: design.slug },
-      { id: style.id, projectId: null, title: "Style guide", slug: style.slug },
+      { id: design.id, projectId: project.id, title: "Sign-in design", slug: design.slug, threads: [] },
+      { id: style.id, projectId: null, title: "Style guide", slug: style.slug, threads: [] },
     ]);
   });
 
@@ -95,7 +95,7 @@ describe("Linked Documents", () => {
     expect(unlinked.status).toBe(204);
     expect(again.status).toBe(404);
     expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([
-      { id: style.id, projectId: null, title: "Style guide", slug: style.slug },
+      { id: style.id, projectId: null, title: "Style guide", slug: style.slug, threads: [] },
     ]);
     expect((await ok("GET", `/api/projects/${project.id}/documents`, ada)).map((d: { id: string }) => d.id)).toEqual([
       design.id,
@@ -110,7 +110,7 @@ describe("Linked Documents", () => {
     await ok("DELETE", `/api/documents/${design.id}`, ada);
 
     expect(await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).toEqual([
-      { id: style.id, projectId: null, title: "Style guide", slug: style.slug },
+      { id: style.id, projectId: null, title: "Style guide", slug: style.slug, threads: [] },
     ]);
   });
 

@@ -58,11 +58,13 @@ export const addresses = {
 
 /** The Workspace on screen and its Projects, which the addresses of its pages are built from. */
 export interface AddressBook {
-  workspace: WorkspaceRef | null;
+  workspace: (WorkspaceRef & { id: string }) | null;
   projects: ProjectSummary[] | null;
+  /** The Project the page on screen is in, as it tells the frame, or null. */
+  projectId: string | null;
 }
 
-export const AddressContext = createContext<AddressBook>({ workspace: null, projects: null });
+export const AddressContext = createContext<AddressBook>({ workspace: null, projects: null, projectId: null });
 
 /**
  * Builds the addresses of the Workspace on screen's pages, from the records the page shows. A Decision or Term names

@@ -2,8 +2,11 @@ import { EditorView, type NodeView } from "prosemirror-view";
 import type { Node } from "prosemirror-model";
 import type { Command, EditorState } from "prosemirror-state";
 import { createPortal } from "react-dom";
-import { useEffect, useId, useImperativeHandle, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
-import { api, attachmentUrl, type AttachmentOwner } from "../api.js";
+import { useContext, useEffect, useId, useImperativeHandle, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type Ref } from "react";
+import { api, attachmentUrl, type AttachmentOwner, type MentionCandidate } from "../api.js";
+import { AddressContext, useAddresses } from "../addresses.js";
+import { mentionedPage } from "../markdown.js";
+import { dismissPicker, pickerWord, pickMention, setMentions, type KeyMention, type TypedWord } from "../editor/mentions.js";
 import { markdownReference } from "../attachments.js";
 import { schema } from "../editor/schema.js";
 import {
@@ -337,6 +340,77 @@ export interface RichEditorProps {
   attachTo?: AttachmentOwner;
   onAttached?: () => void;
   handle?: Ref<RichEditorHandle>;
+  /**
+   * The Project the text is written in, by its id, whose glossary its Term names are read by, or null for the
+   * Workspace's own text; left out, the Project of the page on screen. Mentions show as links while editing, and the Mention picker offers what may be mentioned.
+   */
+  project?: string | null;
+}
+
+/** How long the text rests before its Mentions are looked up again, and the word typed before the picker asks. */
+const mentionsDelay = 300;
+const pickerDelay = 120;
+
+/** What the Mention picker shows: the word it is open for and what it offers, the one marked first. */
+interface PickerShown {
+  word: TypedWord;
+  candidates: MentionCandidate[];
+  active: number;
+}
+
+const candidateKind = { ticket: "Ticket", decision: "Decision", term: "Term" } as const;
+
+/**
+ * The Mention picker: a list under the word being typed, of the Tickets, Decisions and Terms it may start, which the
+ * text keeps the focus over (`aria-activedescendant`); Up and Down move, Enter picks, Escape closes it.
+ */
+function MentionPicker({
+  view,
+  shown,
+  id,
+  onPick,
+  onHover,
+}: {
+  view: EditorView;
+  shown: PickerShown;
+  id: string;
+  onPick: (candidate: MentionCandidate) => void;
+  onHover: (index: number) => void;
+}) {
+  // Placed within the editor, which may sit in a dialog, by where the word starts.
+  const editor = view.dom.closest(".rich-editor");
+  if (!editor) return null;
+  const frame = editor.getBoundingClientRect();
+  let at: { left: number; bottom: number };
+  try {
+    at = view.coordsAtPos(shown.word.from);
+  } catch {
+    return null;
+  }
+  const left = Math.max(0, Math.min(at.left - frame.left, frame.width - 240));
+  return (
+    <div className="popover mention-picker" style={{ left, top: at.bottom - frame.top + 4 }}>
+      <ul role="listbox" id={id} aria-label="Mention" className="picker-list">
+        {shown.candidates.map((candidate, index) => (
+          <li
+            key={`${candidate.kind}:${candidate.id}`}
+            id={`${id}-${index}`}
+            role="option"
+            aria-selected={index === shown.active}
+            className={`picker-option${index === shown.active ? " active" : ""}`}
+            // The text keeps the focus and its cursor while an option is clicked.
+            onMouseDown={(event) => event.preventDefault()}
+            onMouseEnter={() => onHover(index)}
+            onClick={() => onPick(candidate)}
+          >
+            <span className="mention-picker-text">{candidate.text}</span>
+            {candidate.kind !== "term" && <span className="mention-picker-title">{candidate.title}</span>}
+            <span className="kind-label mention-picker-kind">{candidateKind[candidate.kind]}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 /**
@@ -359,8 +433,19 @@ export function RichEditor({
   attachTo,
   onAttached,
   handle,
+  project: given,
 }: RichEditorProps) {
   const labelId = useId();
+  const pickerId = useId();
+  const { workspace, projectId: shownProject } = useContext(AddressContext);
+  const workspaceId = workspace?.id ?? null;
+  const project = given === undefined ? shownProject : given;
+  const to = useAddresses();
+  const address = useRef((mention: KeyMention) => mentionedPage(to, mention));
+  address.current = (mention: KeyMention) => mentionedPage(to, mention);
+  const [picker, setPicker] = useState<PickerShown | null>(null);
+  const pickerRef = useRef(picker);
+  pickerRef.current = picker;
   const [mode, setMode] = useState<EditorMode>(storedEditorMode);
   const [state, setState] = useState<EditorState | null>(null);
   const [linking, setLinking] = useState(false);
@@ -393,7 +478,39 @@ export function RichEditor({
     [],
   );
 
-  const hooks = { editLink: () => setLinking(true) };
+  const hooks = { editLink: () => setLinking(true), mentionAddress: (mention: KeyMention) => address.current(mention) };
+
+  /** Puts what was picked in place of the word typed, as plain text. */
+  const pick = (candidate: MentionCandidate) => {
+    const view = viewRef.current;
+    const shown = pickerRef.current;
+    if (!view || !shown) return;
+    view.dispatch(pickMention(view.state, shown.word, candidate.text));
+    setPicker(null);
+    view.focus();
+  };
+
+  /** The picker's keys, while it is open: Up and Down move, Enter picks, Escape closes it for this word. */
+  const pickerKeys = (view: EditorView, event: globalThis.KeyboardEvent): boolean => {
+    const shown = pickerRef.current;
+    if (!shown || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+    const count = shown.candidates.length;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setPicker({ ...shown, active: (shown.active + step + count) % count });
+      return true;
+    }
+    if (event.key === "Enter") {
+      pick(shown.candidates[shown.active]!);
+      return true;
+    }
+    if (event.key === "Escape") {
+      view.dispatch(dismissPicker(view.state.tr, shown.word.from));
+      setPicker(null);
+      return true;
+    }
+    return false;
+  };
 
   /** Attaches each file, then puts its reference where it was given: at a position in the text, or the cursor. */
   const attach = async (files: File[], pos?: number) => {
@@ -445,6 +562,7 @@ export function RichEditor({
           class: "markdown rich-editor-text",
           role: "textbox",
           "aria-multiline": "true",
+          "aria-autocomplete": "list",
           "aria-labelledby": labelId,
           spellcheck: "true",
           ...(latest.current.disabled ? { "aria-disabled": "true" } : {}),
@@ -481,6 +599,15 @@ export function RichEditor({
         dragstart: (view) => (view.dom.classList.add("rich-editor-dragging"), false),
         dragend: (view) => (view.dom.classList.remove("rich-editor-dragging"), false),
         drop: (view) => (view.dom.classList.remove("rich-editor-dragging"), false),
+        // A Mention's link opens with Ctrl or Cmd held, in a new tab so the draft stays; a plain click edits its text.
+        click: (_view, event) => {
+          const link = (event.target as HTMLElement | null)?.closest?.("a.mention");
+          if (!link || !(event.ctrlKey || event.metaKey)) return false;
+          event.preventDefault();
+          window.open(link.getAttribute("href") ?? "", "_blank", "noopener");
+          return true;
+        },
+        blur: () => (setPicker(null), false),
       },
       handleDrop(view, event, _slice, moved) {
         const files = event.dataTransfer?.files;
@@ -490,6 +617,10 @@ export function RichEditor({
         return true;
       },
       handleKeyDown(view, event) {
+        if (pickerKeys(view, event)) {
+          event.preventDefault();
+          return true;
+        }
         if (latest.current.submits && submitOnCtrlOrCmdEnter(event, view.dom)) return true;
         // Alt+F10 reaches the toolbar from the text, as in other editors.
         if (event.altKey && event.key === "F10") {
@@ -517,6 +648,63 @@ export function RichEditor({
       setState(null);
     };
   }, [mode]);
+
+  // The draft's Mentions, looked up once the text rests, linked where they are written.
+  useEffect(() => {
+    if (mode !== "rich" || !workspaceId) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      api.draftMentions(workspaceId, { markdown: value, ...(project ? { project } : {}) }).then(
+        (mentions) => {
+          const view = viewRef.current;
+          if (current && view) view.dispatch(setMentions(view.state.tr, mentions).setMeta("addToHistory", false));
+        },
+        () => undefined,
+      );
+    }, mentionsDelay);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [value, mode, workspaceId, project]);
+
+  // What the picker offers for the word being typed, asked once typing pauses; nothing offered, nothing shown.
+  const word = state && mode === "rich" && !disabled ? pickerWord(state) : null;
+  const wordKey = word ? `${word.from}:${word.text}` : null;
+  useEffect(() => {
+    if (!word || !workspaceId) {
+      setPicker(null);
+      return;
+    }
+    let current = true;
+    setPicker((shown) => (shown && shown.word.from === word.from ? { ...shown, word } : null));
+    const timer = setTimeout(() => {
+      api.mentionCandidates(workspaceId, { q: word.text, ...(project ? { project } : {}) }).then(
+        (candidates) => {
+          if (!current) return;
+          setPicker(candidates.length > 0 ? { word, candidates, active: 0 } : null);
+        },
+        () => current && setPicker(null),
+      );
+    }, pickerDelay);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [wordKey, workspaceId, project]);
+
+  // The text names the open list and the option marked in it, as the focus stays in the text.
+  useEffect(() => {
+    const dom = viewRef.current?.dom;
+    if (!dom) return;
+    if (picker) {
+      dom.setAttribute("aria-controls", pickerId);
+      dom.setAttribute("aria-activedescendant", `${pickerId}-${picker.active}`);
+    } else {
+      dom.removeAttribute("aria-controls");
+      dom.removeAttribute("aria-activedescendant");
+    }
+  }, [picker, pickerId]);
 
   // Disabled, as while what was written is being sent, the text can't be changed.
   useEffect(() => {
@@ -591,6 +779,15 @@ export function RichEditor({
       </div>
       {hint && <span className="field-hint">{hint}</span>}
       <FormError error={attachError} />
+      {mode === "rich" && picker && viewRef.current && (
+        <MentionPicker
+          view={viewRef.current}
+          shown={picker}
+          id={pickerId}
+          onPick={pick}
+          onHover={(active) => setPicker((shown) => (shown ? { ...shown, active } : shown))}
+        />
+      )}
       {mode === "rich" && embeds.map((slot) => createPortal(<EditorEmbed address={slot.address} />, slot.dom, slot.id))}
       {linking && viewRef.current && <LinkDialog view={viewRef.current} onClose={() => setLinking(false)} />}
     </div>

@@ -142,6 +142,23 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
+  test("an Agent reads a Ticket with the Terms and Decisions it and its Comments mention", async () => {
+    const { cookie, workspace, ticket, secret } = await workspaceWithTicket();
+    await post(cookie, `/api/workspaces/${workspace.id}/terms`, { name: "Lane", definition: "A column.", avoid: ["Swimlane"] });
+    await post(cookie, `/api/projects/${ticket.projectId}/decisions`, { title: "One Lane", body: "Because." });
+    await cronk.jobsSettled();
+    await post(cookie, `/api/tickets/${ticket.id}/comments`, { body: "Each Lane, by CRONK-D1." });
+    const client = await connect(secret);
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.ticket.knowledge).toEqual({
+      terms: [expect.objectContaining({ name: "Lane", definition: "A column.", avoid: ["Swimlane"], scope: "workspace" })],
+      decisions: [expect.objectContaining({ key: "CRONK-D1", title: "One Lane", status: "proposed", scope: "project" })],
+    });
+    expect(json.ticket.knowledge.decisions[0]).not.toHaveProperty("body");
+  });
+
   test("an Agent reads a Ticket with its Pull Requests, their state and checks", async () => {
     const { cookie, ticket, secret } = await workspaceWithTicket();
     await createGitHubApp(cronk, cookie);
@@ -277,13 +294,54 @@ describe("MCP with an Agent token", () => {
       expect.objectContaining({ documentId: plan.id, replyToId: byAda.id, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
     );
     expect(two).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
+    const { avoidedWords, ...replied } = reply.json;
+    expect(avoidedWords).toEqual([]);
     const read = await call(client, "read_document", { document: plan.id });
-    expect(read.json).toEqual(expect.objectContaining({ title: "Plan", comments: [byAda, reply.json] }));
+    expect(read.json).toEqual(expect.objectContaining({ title: "Plan", comments: [byAda, replied] }));
     // An earlier Version is read without them.
     expect((await call(client, "read_document", { document: plan.id, version: 1 })).json).not.toHaveProperty("comments");
     // A Document's Comments stay off the Ticket's.
     const readTicket = await call(client, "read_ticket", { ticket: "CRONK-1" });
     expect(readTicket.json.comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts."]);
+  });
+
+  test("read_document leaves out threads a User resolved unless asked for them", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const plan = await (
+      await cronk.request("POST", `/api/projects/${ticket.projectId}/documents`, { cookie, body: { title: "Plan", body: "One." } })
+    ).json();
+    const post = async (body: string) =>
+      (await cronk.request("POST", `/api/documents/${plan.id}/comments`, { cookie, body: { body } })).json();
+    const done = await post("Is step two needed?");
+    const open = await post("Typo in step one.");
+    const resolved = await (await cronk.request("POST", `/api/comments/${done.id}/resolve`, { cookie })).json();
+
+    expect((await call(client, "read_document", { document: plan.id })).json.comments).toEqual([open]);
+    expect((await call(client, "read_document", { document: plan.id, resolved: true })).json.comments).toEqual([resolved, open]);
+    expect(resolved.resolved).toEqual(expect.objectContaining({ by: expect.objectContaining({ kind: "user" }) }));
+  });
+
+  test("an Agent quotes a passage of a Document, and read_document places the thread", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const plan = await (
+      await cronk.request("POST", `/api/projects/${ticket.projectId}/documents`, {
+        cookie,
+        body: { title: "Plan", body: "Step one.\n\nStep two." },
+      })
+    ).json();
+
+    const quoted = await call(client, "comment", { document: plan.id, body: "Needed?", quote: "Step two." });
+    const missing = await call(client, "comment", { document: plan.id, body: "Here?", quote: "Step three." });
+    const onTicket = await call(client, "comment", { ticket: "CRONK-1", body: "Here?", quote: "Step two." });
+
+    expect(quoted.json).toEqual(expect.objectContaining({ quote: "Step two.", quoteVersion: 1, anchor: { offset: 11 } }));
+    expect(missing).toEqual({ isError: true, json: expect.objectContaining({ code: "quote_not_found" }) });
+    expect(onTicket).toEqual({ isError: true, json: expect.objectContaining({ code: "quote_outside_document" }) });
+    const { avoidedWords: _, ...thread } = quoted.json;
+    const read = await call(client, "read_document", { document: plan.id });
+    expect(read.json.comments).toEqual([thread]);
   });
 
   test("an Agent comments on an Artifact, sees the Comments with read_artifact and on the linking Ticket with read_ticket", async () => {
@@ -435,6 +493,35 @@ describe("MCP with an Agent token", () => {
     expect(later.json.reports).toEqual([
       expect.objectContaining({ runId: read.runs[0].id, title: "Findings", body: "In the parser." }),
     ]);
+  });
+
+  test("read_ticket carries the unresolved threads on its Reports and Linked Documents, and Report Comments on its timeline", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    const spec = await post(cookie, `/api/projects/${ticket.projectId}/documents`, { title: "Spec", body: "Step one.\n\nStep two." });
+    await post(cookie, `/api/tickets/${ticket.id}/documents`, { documentId: spec.id });
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Investigate") },
+    });
+    const client = await connect(secret);
+    const report = (await call(client, "write_report", { ticket: "CRONK-1", title: "Findings", body: "In the parser." })).json;
+    const onReport = await post(cookie, `/api/documents/${report.id}/comments`, { body: "Which parser?", quote: "In the parser." });
+    const onSpec = await post(cookie, `/api/documents/${spec.id}/comments`, { body: "Needed?", quote: "Step two." });
+    const done = await post(cookie, `/api/documents/${spec.id}/comments`, { body: "Typo." });
+    await cronk.request("POST", `/api/comments/${done.id}/resolve`, { cookie });
+
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(read.reports[0].threads).toEqual([expect.objectContaining({ id: onReport.id, quote: "In the parser.", anchor: { offset: 0 } })]);
+    expect(read.linkedDocuments).toEqual([
+      expect.objectContaining({ id: spec.id, threads: [expect.objectContaining({ id: onSpec.id, anchor: { offset: 11 } })] }),
+    ]);
+    expect(read.comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts.", "Which parser?"]);
+    expect(read.comments[1].document).toEqual(expect.objectContaining({ id: report.id, title: "Findings" }));
   });
 
   test("a value a Ticket route refuses is refused by its tool, before anything is written", async () => {
@@ -1061,6 +1148,13 @@ describe("MCP with an Agent token", () => {
     expect(compared.json.avoid).toEqual([{ change: "added", text: "session" }]);
     const viaApi = await (await cronk.request("GET", `/api/terms/${projectRun.json.id}`, { cookie })).json();
     expect(viaApi.avoid).toEqual(["session"]);
+    // A Term lists the texts mentioning its name.
+    const document = await call(client, "create_document", { title: "Board", body: "Each Ticket has a key." });
+    expect(document.json.mentions).toEqual([
+      { kind: "term", text: "Ticket", termId: ticket.json.id, name: "Ticket", projectId: null },
+    ]);
+    const mentioned = await call(client, "read_term", { term: "Ticket" });
+    expect(mentioned.json.mentionedIn).toEqual([expect.objectContaining({ kind: "document", id: document.json.id })]);
   });
 
   test("an Agent attaches files as base64 to a Document and its own Comment, and reads a Ticket's Attachments", async () => {

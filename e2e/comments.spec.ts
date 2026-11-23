@@ -121,3 +121,35 @@ test("Ctrl+Enter places a Comment from the rich editor and from its Markdown sou
   await expect(comments.last().getByRole("strong")).toHaveText("Markdown");
   await expect(source).toHaveValue("");
 });
+
+test("a Comment on a Report shows on its Ticket's timeline, marked with the Report, live", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown, as: { cookie?: string; headers?: Record<string, string> } = { cookie }) =>
+    (await cronk.request(method, path, { ...as, body })).json();
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Sign in with GitHub" });
+  const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
+  const report = await call(
+    "POST",
+    `/api/tickets/${ticket.id}/reports`,
+    { title: "Findings", body: "Use the OAuth app." },
+    { headers: { authorization: `Bearer ${secret}` } },
+  );
+  await call("POST", `/api/documents/${report.id}/comments`, { body: "Which OAuth app?" });
+  await signInInBrowser(page, cronk);
+
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const timeline = page.getByRole("region", { name: "Timeline" });
+  const onReport = timeline.getByRole("article", { name: "Comment by ada@example.com" }).first();
+  await expect(onReport).toContainText("Which OAuth app?");
+  await expect(onReport.getByRole("link", { name: "Findings" })).toBeVisible();
+  // Another arrives live.
+  await call("POST", `/api/documents/${report.id}/comments`, { body: "Cronk's own." });
+  await expect(timeline.getByText("Cronk's own.")).toBeVisible();
+});

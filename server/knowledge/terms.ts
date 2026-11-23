@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { Context } from "../context.js";
-import { transaction, violates, type Db, type Tx } from "../db.js";
+import { afterCommit, transaction, violates, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import type { Live } from "../live/live.js";
 import { isUuid } from "../http/ids.js";
@@ -11,7 +11,7 @@ import { Actor, actorColumn } from "../work/actors.js";
 import type { Place } from "./places.js";
 import { ComparedLine, compareLines, compareWords } from "./compare.js";
 import { outdatedVersion } from "./versions.js";
-import { indexMentions, Mention, mentionsOf } from "../work/mentions.js";
+import { indexMentions, Mention, mentionedIn, MentioningText, mentionsOf, reindexMentions } from "../work/mentions.js";
 
 /**
  * Terms: each names one concept, with its definition and the words to avoid, kept by a Project or by the Workspace. Each save makes a Version
@@ -42,9 +42,24 @@ export const Term = Type.Object({
     },
     { description: "The current Version, which a save names as its base." },
   ),
-  mentions: Type.Array(Mention, { description: "The Ticket and Decision keys its definition mentions and the Artifacts it embeds that the caller may read." }),
+  mentions: Type.Array(Mention, {
+    description: "The Ticket and Decision keys and other Terms' names its definition mentions and the Artifacts it embeds that the caller may read.",
+  }),
 });
 export type Term = Static<typeof Term>;
+
+/** A Term as the API shows one alone: with the texts mentioning it. */
+export const TermDetail = Type.Object({
+  ...Term.properties,
+  mentionedIn: Type.Array(MentioningText, {
+    description:
+      "Mentioned in: each other text whose Markdown mentions its name, with its capitalisation as a whole word, " +
+      "outside code and links, by the glossary of the text's place, that the caller may read, most recently saved " +
+      "first; for knowledge, only its current Version counts. Only a single Term's read lists it, not a glossary. " +
+      "A Term's creation, rename or removal indexes the texts it may be mentioned in again shortly after its save.",
+  }),
+});
+export type TermDetail = Static<typeof TermDetail>;
 
 /** A Term as stored, without what its definition mentions. */
 export type TermRecord = Omit<Term, "mentions">;
@@ -66,15 +81,20 @@ const present = (row: Row): TermRecord => ({
   version: { ...row.version, savedAt: new Date(row.version.savedAt).toISOString() },
 });
 
-/** A Term in the Viewer's view; otherwise nothing, as if it didn't exist. */
-export async function findTerm(db: Db | Tx, viewer: Viewer, termId: string): Promise<Term | undefined> {
+/** A Term in the Viewer's view, with the texts mentioning it; otherwise nothing, as if it didn't exist. */
+export async function findTerm(db: Db | Tx, viewer: Viewer, termId: string): Promise<TermDetail | undefined> {
   if (!isUuid(termId)) return undefined;
   const view = inReach(viewer, { project: "terms.project_id", workspace: "terms.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(`select ${columns} from ${fromTerms} where terms.id = $1 and ${view.sql}`, [
     termId,
     view.value,
   ]);
-  return rows[0] && (await withMentions(db, viewer, [present(rows[0])]))[0];
+  if (!rows[0]) return undefined;
+  const [term] = await withMentions(db, viewer, [present(rows[0])]);
+  return {
+    ...term!,
+    mentionedIn: await mentionedIn(db, viewer, { kind: "term", id: term!.id, workspaceId: term!.workspaceId }),
+  };
 }
 
 /** Terms with the Ticket and Decision keys their definitions mention that the Viewer may read. */
@@ -163,8 +183,18 @@ function termChanged(live: Live, tx: Tx, term: Glossary & { id: string }): void 
   live.publish(tx, term.workspaceId, { type: "term.changed", projectId: term.projectId, termId: term.id });
 }
 
+/**
+ * Indexes again, once the transaction commits and without its response waiting, the texts a change to the glossary's
+ * names changes: every text of the Workspace for a Workspace Term, the Project's texts for a Project Term.
+ */
+function reindexAfter({ db, jobs }: Context, tx: Tx, glossary: Glossary): void {
+  const scope = { workspaceId: glossary.workspaceId, projectId: glossary.projectId };
+  afterCommit(tx, () => jobs.add(`mentions ${scope.workspaceId} ${scope.projectId ?? "workspace"}`, () => reindexMentions(db, scope)));
+}
+
 /** Creates a Term in the glossary at Version 1 by its Actor; refused if the glossary has its name, ignoring case. */
-export async function createTerm({ db, clock, live }: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<Term> {
+export async function createTerm(context: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<TermDetail> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     await requireWrite(tx, actor, glossary);
     const now = clock.now();
@@ -177,6 +207,7 @@ export async function createTerm({ db, clock, live }: Context, actor: Caller, gl
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: glossary.workspaceId }, 1, input, actor, now);
     termChanged(live, tx, { ...glossary, id });
+    reindexAfter(context, tx, glossary);
     return (await findTerm(tx, actor, id))!;
   });
 }
@@ -228,7 +259,8 @@ async function lockTerm(tx: Tx, viewer: Viewer, termId: string): Promise<(Glossa
  * current Version: one based on an outdated Version is refused with the current one, so its Actor can see what
  * changed.
  */
-export async function editTerm({ db, clock, live }: Context, actor: Caller, termId: string, edit: TermEdit): Promise<Term> {
+export async function editTerm(context: Context, actor: Caller, termId: string, edit: TermEdit): Promise<TermDetail> {
+  const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     const locked = await lockTerm(tx, actor, termId);
     if (!locked) throw termNotFound();
@@ -248,6 +280,7 @@ export async function editTerm({ db, clock, live }: Context, actor: Caller, term
       tx.query("update terms set version = $2, name = $3 where id = $1", [locked.id, number, content.name]),
     );
     termChanged(live, tx, locked);
+    if (content.name !== current.name) reindexAfter(context, tx, locked);
     return (await findTerm(tx, actor, locked.id))!;
   });
 }
@@ -326,7 +359,8 @@ export async function glossaryOf(db: Db, project: Glossary & { projectId: string
 }
 
 /** Deletes a Term with all its Versions; only a User may. */
-export async function deleteTerm({ db, live }: Context, actor: Caller, termId: string): Promise<void> {
+export async function deleteTerm(context: Context, actor: Caller, termId: string): Promise<void> {
+  const { db, live } = context;
   await transaction(db, async (tx) => {
     const term = await lockTerm(tx, actor, termId);
     if (!term) throw termNotFound();
@@ -337,8 +371,10 @@ export async function deleteTerm({ db, live }: Context, actor: Caller, termId: s
         advice: `Leave the Term as it is, or edit it; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
       });
     }
-    await tx.query("delete from mentions where source_term_id = $1", [term.id]);
+    await tx.query("delete from mentions where source_term_id = $1 or target_term_id = $1", [term.id]);
     await tx.query("delete from terms where id = $1", [term.id]);
     termChanged(live, tx, term);
+    // Its Mentions go with it; a Workspace Term of the same name a Project Term replaced comes back in the Project.
+    reindexAfter(context, tx, term);
   });
 }

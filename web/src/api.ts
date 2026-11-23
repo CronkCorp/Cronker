@@ -46,8 +46,9 @@ import type {
   VersionWithBody,
 } from "../../server/knowledge/documents.js";
 import type { DocumentLink, LinkedDocument } from "../../server/knowledge/linked-documents.js";
-import type { Report, ReportRef } from "../../server/knowledge/reports.js";
-import type { Term, TermComparison, TermCreate, TermEdit, TermVersion } from "../../server/knowledge/terms.js";
+import type { ReportRef } from "../../server/knowledge/reports.js";
+import type { LinkedDocumentWithThreads, ReportWithThreads as Report } from "../../server/knowledge/ticket-threads.js";
+import type { Term, TermComparison, TermCreate, TermDetail, TermEdit, TermVersion } from "../../server/knowledge/terms.js";
 import type { AuthorizationRequest as ConnectRequest } from "../../server/oauth/authorizations.js";
 import type { Brief } from "../../server/runs/brief.js";
 import type { Cost } from "../../server/runs/costs.js";
@@ -56,13 +57,14 @@ import type { RunnerRecord as Runner, Trigger } from "../../server/runs/runners.
 import type { Run } from "../../server/runs/runs.js";
 import type { RunState } from "../../server/runs/states.js";
 import type { SearchKind, SearchResult } from "../../server/search/search.js";
+import type { KeyMention, MentionCandidate } from "../../server/work/draft-mentions.js";
 import type { TranscriptHook } from "../../server/transcripts/hook.js";
 import type { EntryPage, TicketTranscript, Transcript, TranscriptEntry } from "../../server/transcripts/transcripts.js";
 import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work/access.js";
 import type { Actor, ActorOrCronk } from "../../server/work/actors.js";
 import type { Change } from "../../server/work/changes.js";
-import type { Comment, CommentCreate } from "../../server/work/comments.js";
-import type { ArtifactMention, DecisionMention, Mention, TicketMention } from "../../server/work/mentions.js";
+import type { Comment, CommentCreate, DocumentCommentCreate } from "../../server/work/comments.js";
+import type { ArtifactMention, DecisionMention, Mention, TermMention, TicketMention } from "../../server/work/mentions.js";
 import type { Project, ProjectSummary, Status, StatusKind, Visibility } from "../../server/work/projects.js";
 import type { Relation, RelationCreate, RelationKind, TicketRelations } from "../../server/work/relations.js";
 import type { LabelRule, Outcome, Step, StepKind } from "../../server/work/steps.js";
@@ -104,7 +106,8 @@ import type { StatusAdd, StatusEdit } from "../../server/work/statuses.js";
 import type { StepPut } from "../../server/work/steps.js";
 import type { Webhook, WebhookCreate, WebhookDelivery, WebhookEdit, WebhookKind } from "../../server/webhooks/webhooks.js";
 
-export type { ArtifactMention, Change, Comment, Cost, DecisionMention, Mention, MentioningText, TicketMention, Priority, Relation, RelationKind, Report, RunState };
+export type { KeyMention, MentionCandidate };
+export type { ArtifactMention, Change, Comment, Cost, DecisionMention, Mention, MentioningText, TermMention, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 export type { ProjectCreate, ProjectEdit, StatusAdd, StatusEdit, StepPut, SetupInput, WorkspaceCreate, WorkspaceSettingsEdit };
@@ -115,7 +118,7 @@ export type { Agent, AgentRecord, AgentToken, RecordEntry, Brief, RoutinePlan, R
 export type { TicketTranscript, Transcript, TranscriptEntry, TranscriptHook };
 export type { Actor, Attachment, AttachmentOwner };
 export type { ComparedLine, Comparison, Document, DocumentSummary, LinkedDocument, ReportRef, Version, VersionWithBody };
-export type { Term, TermComparison, TermVersion };
+export type { Term, TermComparison, TermDetail, TermVersion };
 export type { Decision, DecisionComparison, DecisionStatus, DecisionSummary, DecisionVersion, DecisionVersionWithBody };
 export type { Artifact, ArtifactComparison, ArtifactFile, ArtifactSummary, ArtifactVersion, ComparedFile, LinkedArtifact };
 export type { Check, Completion, MovedOnDependent, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
@@ -320,9 +323,14 @@ export const api = {
     call<Comment[]>("GET", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`),
   commentOnArtifact: (artifactId: string, input: CommentCreate) =>
     call<Comment>("POST", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`, input),
+  /** A Document's Comments, its resolved threads included, as its Comments panel hides or shows them. */
   documentComments: (documentId: string) =>
-    call<Comment[]>("GET", `/api/documents/${encodeURIComponent(documentId)}/comments`),
-  commentOnDocument: (documentId: string, input: { body: string; replyToId?: string }) =>
+    call<Comment[]>("GET", `/api/documents/${encodeURIComponent(documentId)}/comments?resolved=true`),
+  resolveComment: (commentId: string) =>
+    call<Comment>("POST", `/api/comments/${encodeURIComponent(commentId)}/resolve`),
+  unresolveComment: (commentId: string) =>
+    call<Comment>("POST", `/api/comments/${encodeURIComponent(commentId)}/unresolve`),
+  commentOnDocument: (documentId: string, input: DocumentCommentCreate) =>
     call<Comment>("POST", `/api/documents/${encodeURIComponent(documentId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
@@ -406,7 +414,7 @@ export const api = {
   unlinkPullRequest: (ticketId: string, pullRequestId: number) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests/${pullRequestId}`),
   linkedDocuments: (ticketId: string) =>
-    call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
+    call<LinkedDocumentWithThreads[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>
     call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId } satisfies DocumentLink),
   unlinkDocument: (ticketId: string, documentId: string) =>
@@ -437,9 +445,9 @@ export const api = {
     call<Comparison>("GET", `${doc(documentId)}/versions/compare?from=${from}&to=${to}`),
   terms: (place: Place) => call<Term[]>("GET", `${placePath(place)}/terms`),
   glossary: (projectId: string) => call<Term[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/glossary`),
-  createTerm: (place: Place, input: TermCreate) => call<Term>("POST", `${placePath(place)}/terms`, input),
-  term: (id: string) => call<Term>("GET", term(id)),
-  editTerm: (id: string, edit: TermEdit) => call<Term>("PATCH", term(id), edit),
+  createTerm: (place: Place, input: TermCreate) => call<TermDetail>("POST", `${placePath(place)}/terms`, input),
+  term: (id: string) => call<TermDetail>("GET", term(id)),
+  editTerm: (id: string, edit: TermEdit) => call<TermDetail>("PATCH", term(id), edit),
   deleteTerm: (id: string) => call<void>("DELETE", term(id)),
   termVersions: (termId: string) => call<TermVersion[]>("GET", `${term(termId)}/versions`),
   termVersion: (termId: string, number: number) => call<TermVersion>("GET", `${term(termId)}/versions/${number}`),
@@ -464,6 +472,15 @@ export const api = {
     call<SearchResult[]>(
       "GET",
       `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${new URLSearchParams({ ...query })}`,
+    ),
+  /** What a draft mentions, as it would once saved in its place: a Project's text, or the Workspace's own. */
+  draftMentions: (workspaceId: string, input: { markdown: string; project?: string }) =>
+    call<KeyMention[]>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/mentions`, input),
+  /** What the editor's Mention picker offers for the word typed before the cursor. */
+  mentionCandidates: (workspaceId: string, query: { q: string; project?: string }) =>
+    call<MentionCandidate[]>(
+      "GET",
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mention-candidates?${new URLSearchParams({ ...query })}`,
     ),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };

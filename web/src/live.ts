@@ -31,6 +31,7 @@ const eventTypes = Object.keys({
   "ticket.created": true,
   "ticket.changed": true,
   "comment.added": true,
+  "comment.changed": true,
   "report.added": true,
   "report.changed": true,
   "attachments.changed": true,

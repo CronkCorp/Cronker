@@ -50,9 +50,9 @@ async function runningRun(options: StartCronkOptions = {}) {
   // Setting up, creating a Project and starting its Runs, as today's API does, needs Workspace slugs and the Merge
   // Step's columns and the Repositories a Project lists; setting up a Runner needs the columns of a Managed Agents
   // Runner's setup; reading a Ticket or a Runner needs the columns of Runs' costs; finding a Project or a Ticket
-  // needs Access; any User read needs display names; writing a Ticket's description or a Comment needs the Mention index; finding a
-  // Project and starting a Run need Concise Reports; any Access needs archived Projects; reading a Ticket needs Pull Requests' conflict markers;
-  // reading a text's Mentions needs the Decisions they may name.
+  // needs Access; any User read needs display names; writing a Ticket's description or a Comment needs the Mention index,
+  // Embeds, Decision Mentions and Term Mentions among it; finding a Project and starting a Run need Concise Reports; any
+  // Access needs archived Projects; reading a Ticket needs Pull Requests' conflict markers.
   if (options.migrateBefore !== undefined) {
     await cronk.applyAhead("0022_repositories.sql");
     await cronk.applyAhead("0026_decisions.sql");
@@ -64,6 +64,9 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0051_access.sql");
     await cronk.applyAhead("0053_display_name.sql");
     await cronk.applyAhead("0055_mentions.sql");
+    await cronk.applyAhead("0057_embeds.sql");
+    await cronk.applyAhead("0068_decision_mentions.sql");
+    await cronk.applyAhead("0070_term_mentions.sql");
     await cronk.applyAhead("0056_concise_reports.sql");
     await cronk.applyAhead("0057_archived_projects.sql");
     await cronk.applyAhead("0027_pull_requests.sql");
@@ -71,7 +74,7 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0042_merge_conflicts.sql");
     await cronk.applyAhead("0061_merge_queue.sql");
     await cronk.applyAhead("0065_merge_queue_conflicts.sql");
-    await cronk.applyAhead("0071_agent_access_undelegated.sql");
+    await cronk.applyAhead("0073_agent_access_undelegated.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
@@ -123,7 +126,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         slug: `findings-${findings.slice(0, 8)}`,
         body: "The bug is in **parsing**.",
         createdAt: "2026-01-01T09:30:00.000Z",
-        mentions: [],
+        mentions: [], threads: [],
       },
       {
         id: plan,
@@ -134,7 +137,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         slug: `plan-${plan.slice(0, 8)}`,
         body: "Fix the parser.",
         createdAt: "2026-01-01T09:30:00.000Z",
-        mentions: [],
+        mentions: [], threads: [],
       },
     ]);
     expect(await ok("GET", `/api/documents/${findings}/versions`, ada)).toEqual([
@@ -190,7 +193,7 @@ describe("Reports as Documents", () => {
         slug: `findings-${report.id.slice(0, 8)}`,
         body: "Parsing, in `lex()`.",
         createdAt: "2026-01-01T09:00:00.000Z",
-        mentions: [],
+        mentions: [], threads: [],
       },
     ]);
     const versions = await ok("GET", `/api/documents/${report.id}/versions`, ada);

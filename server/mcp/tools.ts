@@ -11,7 +11,7 @@ import { DecisionCreate, DecisionEdit } from "../knowledge/decisions.js";
 import { DocumentCreate, DocumentEdit, SectionReplace } from "../knowledge/documents.js";
 import { ReportCreate } from "../knowledge/reports.js";
 import { TermCreate, TermEdit } from "../knowledge/terms.js";
-import { CommentCreate } from "../work/comments.js";
+import { DocumentCommentCreate } from "../work/comments.js";
 import { AgentTicketEdit, TicketCreate, type TicketSummary } from "../work/tickets.js";
 import { ProjectCreate, type Project, type ProjectSummary } from "../work/projects.js";
 import { StatusAdd, StatusEdit } from "../work/statuses.js";
@@ -155,16 +155,18 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields, the Ticket and Decision keys its description mentions and, as `mentionedIn`, " +
+        "A Ticket of your Workspace with its fields, the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
-        "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
+        "as `knowledge`, the Terms (with their definitions and words to avoid) and Decisions (key, title and status; " +
+        "read one with `read_decision` for its reasoning) its description and Comments mention, each once; " +
+        "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`, and those on its Reports, each naming its `document`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
-        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
+        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on, each with its unresolved threads (`threads`: the review written on it, each thread's first Comment with its `quote` and `anchor`, `outdated` once the passage is gone, and its replies); its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
         "changes requested, and by whom), the Step that produced it and the failing check or review requesting changes that last sent the Ticket back to that Step, which Cronk's Comment also links, " +
         "and, while it is open, the conflict with its base branch GitHub last reported (`conflict`: the base commit and the merge that made it conflict), which sends nothing back; " +
         "its Linked Documents, " +
-        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; its " +
+        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`, each with its unresolved `threads` as Reports have; its " +
         "Linked Artifacts, which you read with `read_artifact`; and the " +
         "files attached to it, each Comment carrying its own. Markdown refers to an Attachment as `attachment:<id>`. " +
         "A Ticket outside your Workspace answers as not found.",
@@ -295,7 +297,8 @@ export function buildMcpServer(api: Api): McpServer {
         "Comment on an Artifact also shows on the Tickets linking it. Refused for a read-only token; a Ticket, " +
         "Artifact or Document outside your Workspace answers as not found, and a reply only goes to a Comment on the " +
         "same Ticket, Artifact or Document: reply to a Comment on a Linked Artifact, as `read_ticket` shows it, by " +
-        "its `artifactId`." + avoidedWordsNote,
+        "its `artifactId`. On a Document, a `quote` anchors the thread to a passage of its current Version, copied " +
+        "exactly from its Markdown as `read_document` gives it; one that isn't there is refused." + avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument.optional(),
         artifact: z
@@ -308,10 +311,10 @@ export function buildMcpServer(api: Api): McpServer {
           .min(1)
           .optional()
           .describe("The Document's slug, such as `onboarding-3f9a1b2c` (its words may be stale), or its id."),
-        ...bodyFields(CommentCreate),
+        ...bodyFields(DocumentCommentCreate),
       },
     },
-    ({ ticket, artifact, document, body, replyToId }) =>
+    ({ ticket, artifact, document, body, replyToId, quote }) =>
       answer(async () => {
         if ([ticket, artifact, document].filter((target) => target !== undefined).length !== 1) {
           throw new Refused({
@@ -321,11 +324,19 @@ export function buildMcpServer(api: Api): McpServer {
             advice: "Give exactly one of `ticket`, `artifact` and `document`; comment again for another.",
           });
         }
+        if (quote !== undefined && document === undefined) {
+          throw new Refused({
+            code: "quote_outside_document",
+            message: "Only a Comment on a Document quotes a passage.",
+            rule: "A quote anchors a thread to a passage of a Document; a Ticket's or an Artifact's Comments are on the whole of it.",
+            advice: "Comment without `quote`, or quote a passage of a Document by giving `document`.",
+          });
+        }
         if (artifact !== undefined) {
           return send("POST", `/api/artifacts/${encodeURIComponent(artifact)}/comments`, { body, replyToId });
         }
         if (document !== undefined) {
-          return send("POST", `/api/documents/${encodeURIComponent(document)}/comments`, { body, replyToId });
+          return send("POST", `/api/documents/${encodeURIComponent(document)}/comments`, { body, replyToId, quote });
         }
         const found = await ticketByKeyOrId(ticket!);
         return send("POST", `/api/tickets/${found.id}/comments`, { body, replyToId });
@@ -503,16 +514,29 @@ export function buildMcpServer(api: Api): McpServer {
       title: "Read a Document",
       description:
         "A Document of your Workspace as Markdown, at its current Version, whose number a save names as its " +
-        "`baseVersion`, with its Comments, oldest first, each reply naming the Comment it answers; or, given a " +
+        "`baseVersion`, with its Comments, oldest first, each reply naming the Comment it answers; a thread on a " +
+        "passage carries its `quote`, the `quoteVersion` it was written on and its `anchor`: the offset of the " +
+        "quote's first appearance in the current Markdown, or `outdated` once it no longer appears. Threads a User resolved are left out unless " +
+        "`resolved` asks for them; only Users resolve threads. Given a " +
         "Version's number, that earlier Version, without Comments.",
       inputSchema: {
         document: documentArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+        resolved: z
+          .boolean()
+          .optional()
+          .describe("Include resolved threads, each Comment's `resolved` saying when and by whom. Left out when false."),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ document, version }) =>
-      answer(() => get(version === undefined ? documentPath(document) : `${documentPath(document)}/versions/${version}`)),
+    ({ document, version, resolved }) =>
+      answer(() =>
+        get(
+          version === undefined
+            ? `${documentPath(document)}${resolved ? "?resolved=true" : ""}`
+            : `${documentPath(document)}/versions/${version}`,
+        ),
+      ),
   );
 
   server.registerTool(
@@ -654,8 +678,9 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Term",
       description:
-        "A Term at its current Version, whose number a save names as its `baseVersion`; or, given a Version's " +
-        "number, what that earlier Version said.",
+        "A Term at its current Version, whose number a save names as its `baseVersion`, with `mentionedIn`: the " +
+        "texts of your Workspace that mention its name, with its capitalisation as a whole word, outside code and " +
+        "links; or, given a Version's number, what that earlier Version said.",
       inputSchema: {
         term: termArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),

@@ -375,7 +375,7 @@ export function TicketScreen({
           />
           <MentionedIn texts={ticket.mentionedIn} />
           <FileList
-            attachments={[...attachments, ...comments.filter((c) => c.artifactId === null).flatMap((c) => c.attachments), ...reportFiles]}
+            attachments={[...attachments, ...comments.filter((c) => c.artifactId === null && c.documentId === null).flatMap((c) => c.attachments), ...reportFiles]}
             onChanged={() => {
               loadAttachments();
               loadComments();
@@ -1720,6 +1720,7 @@ export function CommentThread({
   arrived,
   onAdded,
   onChanged,
+  onResolve,
 }: {
   comment: Comment;
   comments: Comment[];
@@ -1731,8 +1732,19 @@ export function CommentThread({
   arrived: Set<string>;
   onAdded: (comment: Comment) => void;
   onChanged: () => void;
+  /** Resolves or unresolves the thread this first Comment of a Document's starts; left out where that isn't offered. */
+  onResolve?: (resolved: boolean) => Promise<void>;
 }) {
   const [replying, setReplying] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const toggleResolved = async () => {
+    setResolving(true);
+    try {
+      await onResolve?.(comment.resolved === null);
+    } finally {
+      setResolving(false);
+    }
+  };
   const canWrite = useCanWrite();
   const replies = comments.filter((c) => c.replyToId === comment.id);
   const parent = comment.replyToId ? comments.find((c) => c.id === comment.replyToId) : undefined;
@@ -1766,9 +1778,20 @@ export function CommentThread({
             on <Link to={to.artifact(comment.artifact)}>{comment.artifact.title}</Link>{" "}
           </span>
         )}
+        {depth === 0 && ticket && comment.document && (
+          <span className="muted small">
+            on <Link to={to.document(comment.document)}>{comment.document.title}</Link>{" "}
+          </span>
+        )}
         <RelativeTime at={comment.createdAt} clock />
         {parent && <span className="muted small"> in reply to {parent.actor.name}</span>}
         {question && (answered ? <Chip tone="ok">Answered</Chip> : <Chip tone="warn">Waiting for an answer</Chip>)}
+        {comment.resolved && (
+          <span className="muted small">
+            {" "}
+            · Resolved by {comment.resolved.by.name} <RelativeTime at={comment.resolved.at} clock />
+          </span>
+        )}
       </p>
       <div className={question ? "bubble bubble-question" : "bubble"}>
         <Markdown text={comment.body} mentions={comment.mentions} />
@@ -1811,11 +1834,18 @@ export function CommentThread({
       ) : replying ? (
         <CommentForm label="Reply" button="Send reply" primary={false} autoFocus onSend={send} />
       ) : (
-        depth < 4 && (
-          <Button variant="ghost" size="small" onClick={() => setReplying(true)}>
-            Reply
-          </Button>
-        )
+        <>
+          {depth < 4 && (
+            <Button variant="ghost" size="small" onClick={() => setReplying(true)}>
+              Reply
+            </Button>
+          )}
+          {onResolve && depth === 0 && (
+            <Button variant="ghost" size="small" disabled={resolving} onClick={toggleResolved}>
+              {comment.resolved ? "Unresolve" : "Resolve"}
+            </Button>
+          )}
+        </>
       )}
     </article>
   );

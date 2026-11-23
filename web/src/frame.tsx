@@ -62,7 +62,10 @@ export function Frame({
   }, []);
   const sidebar = useSidebarHiding();
   const projects = useProjects(current?.id ?? null);
-  const book = useMemo(() => ({ workspace: current ?? null, projects }), [current, projects]);
+  const book = useMemo(
+    () => ({ workspace: current ?? null, projects, projectId: place.projectId }),
+    [current, projects, place.projectId],
+  );
   return (
     <AddressContext.Provider value={book}>
       <PlaceContext.Provider value={set}>

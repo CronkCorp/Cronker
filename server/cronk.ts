@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Socket } from "node:net";
+import type { LookupFunction, Socket } from "node:net";
 import type { Writable } from "node:stream";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import pg from "pg";
@@ -13,6 +13,7 @@ import { backfillMentions } from "./work/mentions.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
+import { Jobs } from "./jobs.js";
 import { runImports } from "./github/importing.js";
 import { Live } from "./live/live.js";
 import { checkMergeability } from "./pipeline/conflicts.js";
@@ -32,6 +33,8 @@ export interface CronkOptions {
   runnerKinds?: Record<string, RunnerKind>;
   /** Stops migrating short of this migration and those after it; only a test of that migration sets it. */
   migrateBefore?: string;
+  /** Resolves host names Users give, such as webhooks'; the system's resolver when left out. */
+  resolver?: LookupFunction;
 }
 
 export interface Cronk {
@@ -49,6 +52,8 @@ export interface Cronk {
   replayFailedDeliveries(): Promise<void>;
   /** Asks GitHub whether the Pull Requests waiting on a mergeability check conflict, marking conflicting ones. */
   checkMergeability(): Promise<void>;
+  /** Resolves once the work done after changes committed, such as indexing texts again after a Term's save, is done. */
+  jobsSettled(): Promise<void>;
   /** Advances the Merge Queue: merges each queue's head that is clean and green, one per queue. */
   checkQueue(): Promise<void>;
   /** Reads the next page of issues of each running import of a Repository's GitHub issues. */
@@ -65,6 +70,7 @@ export async function createCronk({
   logStream,
   runnerKinds = {},
   migrateBefore,
+  resolver,
 }: CronkOptions): Promise<Cronk> {
   // Until the app (and its logger) exists, which is while migrating, a dropped connection goes to stderr.
   let log: FastifyBaseLogger | undefined;
@@ -84,6 +90,8 @@ export async function createCronk({
       installationTokens: new InstallationTokens(clock),
       installationListings: new InstallationListings(clock),
       attachments: directoryStorage(config.attachments.directory),
+      jobs: new Jobs(),
+      resolver,
     };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
@@ -91,6 +99,7 @@ export async function createCronk({
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
     log = app.log;
+    context.jobs.onError = (error, key) => app.log.error({ err: error, job: key }, "A job after a change failed.");
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
     const notifier = new InboxNotifier(context, (error) => app.log.error(error));
@@ -107,6 +116,7 @@ export async function createCronk({
       resumePausedRunners: () => resumePausedRunners(context),
       replayFailedDeliveries: () => replayFailedDeliveries(context),
       checkMergeability: () => checkMergeability(context),
+      jobsSettled: () => context.jobs.settled(),
       checkQueue: () => queuePass(context),
       runImports: () => runImports(context),
       async deliverWebhooks() {
@@ -115,6 +125,7 @@ export async function createCronk({
       },
       async close() {
         await app.close();
+        await context.jobs.settled();
         await notifier.stop();
         await endPool(db);
       },

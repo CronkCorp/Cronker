@@ -36,7 +36,7 @@ export async function insertComment(
     ],
   );
   const commentId = rows[0]!.id;
-  await indexMentions(tx, "comment", { id: commentId, workspaceId: ticket.workspaceId }, body);
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: ticket.workspaceId, projectId: ticket.projectId }, body);
   live.publish(tx, ticket.workspaceId, { type: "comment.added", projectId: ticket.projectId, ticketId: ticket.id, commentId });
   return commentId;
 }
@@ -67,12 +67,15 @@ export async function insertArtifactComment(
     ],
   );
   const commentId = rows[0]!.id;
-  await indexMentions(tx, "comment", { id: commentId, workspaceId: artifact.workspaceId }, body);
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: artifact.workspaceId, projectId: artifact.projectId }, body);
   await publishArtifactComments(context, tx, artifact, (ticket) => ({ type: "comment.added", ...ticket, commentId }));
   return commentId;
 }
 
-/** Writes a Comment on the Document, a Report included, as the Actor, telling its readers, and returns its id. */
+/**
+ * Writes a Comment on the Document, a Report included, as the Actor, on its whole or on the passage it quotes from the
+ * Version given, telling its readers, and returns its id.
+ */
 export async function insertDocumentComment(
   context: Context,
   tx: Tx,
@@ -80,10 +83,12 @@ export async function insertDocumentComment(
   actor: { kind: "user" | "agent"; id: string },
   body: string,
   replyToId: string | null,
+  quote: { quote: string; version: number } | null = null,
 ): Promise<string> {
   const { rows } = await tx.query<{ id: string }>(
-    `insert into comments (workspace_id, document_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    `insert into comments (workspace_id, document_id, reply_to_id, actor_user_id, actor_agent_id, body, created_at,
+       quote, quote_version)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
     [
       document.workspaceId,
       document.id,
@@ -92,15 +97,23 @@ export async function insertDocumentComment(
       actor.kind === "agent" ? actor.id : null,
       body,
       context.clock.now(),
+      quote?.quote ?? null,
+      quote?.version ?? null,
     ],
   );
   const commentId = rows[0]!.id;
-  await indexMentions(tx, "comment", { id: commentId, workspaceId: document.workspaceId }, body);
+  await indexMentions(tx, "comment", { id: commentId, workspaceId: document.workspaceId, projectId: document.projectId }, body);
   context.live.publish(tx, document.workspaceId, {
     type: "comment.added",
     projectId: document.projectId,
     documentId: document.id,
     commentId,
   });
+  // A Report's Comments show on its Ticket's timeline too, so its readers are told as well.
+  const { rows: report } = await tx.query<{ ticketId: string; projectId: string }>(
+    `select ticket_id as "ticketId", project_id as "projectId" from documents where id = $1 and ticket_id is not null`,
+    [document.id],
+  );
+  if (report[0]) context.live.publish(tx, document.workspaceId, { type: "comment.added", ...report[0], commentId });
   return commentId;
 }

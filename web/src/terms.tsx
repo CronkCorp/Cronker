@@ -1,11 +1,12 @@
 import { useAddresses, useCanonicalAddress } from "./addresses.js";
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, type Mention, type Place, type ProjectSummary, type Term, type TermComparison, type TermVersion, type Workspace } from "./api.js";
+import { api, ApiError, type Mention, type Place, type ProjectSummary, type Term, type TermComparison, type TermDetail, type TermVersion, type Workspace } from "./api.js";
 import { DocumentBody, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
+import { MentionedIn } from "./mentioned-in.js";
 import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
@@ -242,7 +243,7 @@ export function TermScreen({
   termId: string;
 }) {
   const to = useAddresses();
-  const [term, setTerm] = useState<Term | null>(null);
+  const [term, setTerm] = useState<TermDetail | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -326,6 +327,7 @@ export function TermScreen({
         <div className="page-split">
           <TermBody name={term.name} definition={term.definition} avoid={term.avoid} mentions={term.mentions} />
           <aside className="side" aria-label="Term details">
+            <MentionedIn texts={term.mentionedIn} />
             <Versions current={term.version.number} source={termVersions(term.id)} />
           </aside>
         </div>
@@ -357,7 +359,7 @@ function Editor({
   onCancel,
 }: {
   term: Term;
-  onSaved: (next: Term) => void;
+  onSaved: (next: TermDetail) => void;
   /** The draft is now based on the Term's current Version, which the screen shows again. */
   onRebased: () => void;
   onCancel: () => void;

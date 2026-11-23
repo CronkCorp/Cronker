@@ -97,6 +97,40 @@ describe("a User's webhooks", () => {
     expect((await call("POST", hooks, ada, { name: "Hook", url: "https://ntfy.sh/a", kinds: ["comment"] })).status).toBe(400);
   });
 
+  test("a URL that is or resolves to a private network address is refused, so a webhook can't probe Cronk's network", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    cronk.hosts.set("intranet.example.com", "10.1.2.3");
+    cronk.hosts.set("metadata.example.com", "fd00:ec2::254");
+    cronk.hosts.set("hooks.example.com", "203.0.113.10");
+    for (const url of [
+      "https://10.0.0.5/",
+      "https://172.16.0.1/",
+      "https://192.168.1.10/hook",
+      "https://127.0.0.2/",
+      "https://0.0.0.0/",
+      "https://100.64.0.1/",
+      "https://169.254.169.254/latest/meta-data/",
+      "https://[fd00::1]/",
+      "https://[fe80::1]/",
+      "https://[::ffff:10.0.0.5]/",
+      "https://[::ffff:169.254.169.254]/",
+      "https://0x0a000005/",
+      "https://intranet.example.com/hook",
+      "https://metadata.example.com/",
+    ]) {
+      const refused = await call("POST", hooks, ada, { name: "Hook", url });
+      expect(refused.status, url).toBe(400);
+      expect(refused.json.error, url).toEqual({ code: "invalid_webhook_url", message: expect.stringContaining("private network") });
+    }
+    // A public host, one that doesn't resolve yet (each delivery checks again), and localhost on a local Cronk.
+    for (const url of ["https://hooks.example.com/", "https://not-yet.example.com/", "http://localhost/hook", "https://127.0.0.1/"]) {
+      expect((await call("POST", hooks, ada, { name: "Hook", url })).status, url).toBe(201);
+    }
+    const { id } = await ok("POST", hooks, ada, { name: "Hook", url: "https://hooks.example.com/" });
+    expect((await call("PATCH", `${hooks}/${id}`, ada, { url: "https://intranet.example.com/" })).json.error.code).toBe("invalid_webhook_url");
+    expect((await ok("GET", `${hooks}/${id}`, ada)).url).toBe("https://hooks.example.com/");
+  });
+
   test("each User sees and changes only their own webhooks, and only in Workspaces they belong to", async () => {
     const { ada, hooks, workspace } = await adasWorkspace();
     const { id } = await ok("POST", hooks, ada, { name: "Ada's", url: "https://ntfy.sh/a" });
@@ -221,6 +255,45 @@ describe("Send test", () => {
       expect(d.nextAt).toBe("2026-01-01T09:00:31.000Z");
       expect(d.attempts).toEqual([{ at: "2026-01-01T09:00:01.000Z", statusCode: d.statusCode, error: d.error }]);
     }
+  });
+
+  test("a host whose DNS turned private after saving isn't contacted, on Send test or a retry", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    cronk.hosts.set("hooks.example.com", "203.0.113.10");
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: "https://hooks.example.com/" });
+    cronk.hosts.set("hooks.example.com", "127.0.0.1");
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    cronk.clock.advance(30_000);
+    await cronk.deliverWebhooks();
+    const [delivery] = await ok("GET", `${hooks}/${id}/deliveries`, ada);
+    expect(delivery.state).toBe("pending");
+    expect(delivery.attempts).toEqual([
+      { at: "2026-01-01T09:00:00.000Z", statusCode: null, error: "The receiver is on a private network." },
+      { at: "2026-01-01T09:00:30.000Z", statusCode: null, error: "The receiver is on a private network." },
+    ]);
+    expect(cronk.webhooks.received).toEqual([]);
+  });
+
+  test("a webhook saved with a private address before it was refused gets no deliveries", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: "https://hooks.example.com/" });
+    await cronk.stage("update webhooks set url = $2 where id = $1", [id, "https://169.254.169.254/latest/meta-data/"]);
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    const [delivery] = await ok("GET", `${hooks}/${id}/deliveries`, ada);
+    expect(delivery.attempts).toEqual([{ at: "2026-01-01T09:00:00.000Z", statusCode: null, error: "The receiver is on a private network." }]);
+  });
+
+  test("a redirect isn't followed: it is recorded as the receiver's answer", async () => {
+    const { ada, hooks } = await adasWorkspace();
+    const { id } = await ok("POST", hooks, ada, { name: "Receiver", url: `${cronk.webhooks.url}/hook` });
+    cronk.webhooks.redirectNext(`${cronk.webhooks.url}/elsewhere`);
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    expect(cronk.webhooks.received.map((d) => d.path)).toEqual(["/hook"]);
+    const [delivery] = await ok("GET", `${hooks}/${id}/deliveries`, ada);
+    expect(delivery).toMatchObject({ state: "pending", statusCode: 302 });
   });
 
   test("a failed delivery is retried about 30 seconds later, and delivered then", async () => {
@@ -391,6 +464,28 @@ describe("Send test", () => {
     await ok("POST", "/api/links/use", {}, { token: new URL(link.url).hash.slice(1), password: bea.password });
     const back = { cookie: await signIn(cronk, "bea@example.com", bea.password) };
     expect(await ok("GET", hooks, back)).toEqual([]);
+  });
+});
+
+describe("CRONK_WEBHOOKS_ALLOW_PRIVATE", () => {
+  test("lets webhooks point at private addresses, such as a receiver on the LAN, and delivers to them", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ allowPrivateWebhooks: true });
+    const { ada, hooks } = await adasWorkspace();
+    for (const url of ["https://10.0.0.5/", "https://192.168.1.10:8123/api/webhook/cronk", "https://[fd00::1]/"]) {
+      expect((await call("POST", hooks, ada, { name: "LAN", url })).status, url).toBe(201);
+    }
+    // Still only https, or plain http to localhost on a local Cronk.
+    expect((await call("POST", hooks, ada, { name: "LAN", url: "http://192.168.1.10/" })).json.error.code).toBe("invalid_webhook_url");
+
+    // A LAN host name, here resolving to the stand-in receiver's address.
+    cronk.hosts.set("homeassistant.lan", "127.0.0.1");
+    const { id } = await ok("POST", hooks, ada, { name: "LAN", url: `https://homeassistant.lan:${new URL(cronk.webhooks.url).port}/` });
+    await ok("POST", `${hooks}/${id}/test`, ada);
+    await cronk.deliverWebhooks();
+    // The receiver speaks plain http, so the https connection fails, but it was made: not refused as private.
+    const [delivery] = await ok("GET", `${hooks}/${id}/deliveries`, ada);
+    expect(delivery.attempts).toEqual([{ at: "2026-01-01T09:00:00.000Z", statusCode: null, error: "The receiver couldn't be reached." }]);
   });
 });
 

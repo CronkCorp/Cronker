@@ -73,6 +73,9 @@ export function invalidations(event: StreamEvent): QueryKey[] {
       return "ticketId" in event
         ? [keys.comments(event.ticketId), keys.agentRecords]
         : [keys.everythingOf("document", event.documentId), keys.agentRecords];
+    case "comment.changed":
+      // Only a User resolves or unresolves a thread, so no Agent Record changes.
+      return [keys.everythingOf("document", event.documentId)];
     case "report.added":
     case "report.changed":
       return [keys.reports(event.ticketId), keys.documentAttachments(event.reportId), keys.agentRecords];
