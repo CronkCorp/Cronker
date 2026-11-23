@@ -121,16 +121,25 @@ export function archivedRefusal(): ApiError {
   });
 }
 
-/** The refusal of a write to a Viewer without Write at the Access given: archived, or only Read. */
-export function writeRefusal(access: Access): ApiError {
-  return access === "archived" ? archivedRefusal() : readAccessRefusal();
+/**
+ * The refusal of a write to a Viewer without Write at the Access given: archived, or only Read, in a Project or, with
+ * no Project, the Workspace's own knowledge.
+ */
+export function writeRefusal(access: Access, where: "project" | "workspace" = "project"): ApiError {
+  return access === "archived" ? archivedRefusal() : readAccessRefusal(where);
 }
 
-/** The refusal of a write to a Viewer with only Read where the write lands. */
-export function readAccessRefusal(): ApiError {
-  return new ApiError(403, "read_access", "You have Read in this Project, so you may only read it.", {
-    rule: "A Viewer with Read in a Project may read everything in it but change nothing.",
-    advice: "Read instead, or ask an Admin of this Workspace for Write in this Project.",
+/**
+ * The refusal of a write to a Viewer with only Read where the write lands: in a Project, or, with no Project, the
+ * Workspace's own knowledge.
+ */
+export function readAccessRefusal(where: "project" | "workspace" = "project"): ApiError {
+  const place = where === "project" ? "this Project" : "this Workspace's own knowledge";
+  return new ApiError(403, "read_access", `You have Read in ${place}, so you may only read it.`, {
+    rule:
+      `A Viewer with Read in ${place} may read everything in it but change nothing. An Agent has the least of the ` +
+      "Agent Access there, its Owner's Access and its token's access.",
+    advice: `Read instead, or ask an Admin of this Workspace for Write in ${place}, or to raise its Agent Access.`,
   });
 }
 
@@ -144,7 +153,7 @@ export async function requireWrite(
   place: { workspaceId: string; projectId: string | null },
 ): Promise<void> {
   const access = await accessOf(db, viewer, place);
-  if (access !== "write") throw writeRefusal(access);
+  if (access !== "write") throw writeRefusal(access, place.projectId === null ? "workspace" : "project");
 }
 
 /**

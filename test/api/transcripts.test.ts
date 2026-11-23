@@ -498,6 +498,8 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0065_merge_queue_conflicts.sql");
     await cronk.applyAhead("0068_decision_mentions.sql");
     await cronk.applyAhead("0070_term_mentions.sql");
+    // Writing a Ticket clears its undelegated mark.
+    await cronk.applyAhead("0073_agent_access_undelegated.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

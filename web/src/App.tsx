@@ -8,6 +8,7 @@ import {
   nameOf,
   type PendingAdd,
   type User,
+  type AgentAccess,
   type WorkspaceSettings,
   type WorkspaceSummary,
 } from "./api.js";
@@ -534,6 +535,11 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
             children: <ModelIds workspace={workspace} settings={settings} onSaved={setSettings} />,
           },
           !!settings && {
+            id: "agent-access",
+            label: "Agent Access",
+            children: <WorkspaceAgentAccess workspace={workspace} settings={settings} onSaved={setSettings} />,
+          },
+          !!settings && {
             id: "lost-runs",
             label: "Lost Runs",
             children: (
@@ -556,6 +562,54 @@ function WorkspaceSettingsPage({ workspace, onChanged }: { workspace: WorkspaceS
         ]}
       />
     </div>
+  );
+}
+
+/**
+ * How far Agents may go in the Workspace's own Documents, Terms, Decisions and Artifacts. Projects set their own in
+ * their Access settings.
+ */
+function WorkspaceAgentAccess({
+  workspace,
+  settings,
+  onSaved,
+}: {
+  workspace: WorkspaceSummary;
+  settings: WorkspaceSettings;
+  onSaved: (settings: WorkspaceSettings) => void;
+}) {
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const change = async (agentAccess: AgentAccess) => {
+    setSaved(false);
+    setError(null);
+    setBusy(true);
+    try {
+      onSaved(await api.changeWorkspaceSettings(workspace.id, { agentAccess }));
+      setSaved(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel
+      title="Agent Access"
+      id="agent-access"
+      description="How far Agents may go in the Workspace's own Documents, Terms, Decisions and Artifacts. An Agent may do the least of this, its Owner's Access and its token's access. Each Project sets its own in its Access settings."
+    >
+      <Field label="Agent Access to Workspace knowledge">
+        <select aria-label="Agent Access to Workspace knowledge" value={settings.agentAccess} disabled={busy} onChange={(e) => void change(e.target.value as AgentAccess)}>
+          <option value="write">Write: Agents read and save it</option>
+          <option value="read">Read: Agents read it, and change nothing</option>
+          <option value="none">None: out of Agents' reach</option>
+        </select>
+      </Field>
+      <FormError error={error} />
+      <Saved shown={saved} />
+    </Panel>
   );
 }
 

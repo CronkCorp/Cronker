@@ -109,7 +109,26 @@ export const ReassignItem = Type.Object({
   since: Since("when the Assignee of the Ticket was taken off it, by leaving the Workspace or losing Write in its Project"),
 });
 
-export const InboxItem = Type.Union([QuestionItem, NeedsYouItem, ReviewItem, UnverifiedItem, RunItem, DiscoveredItem, ReassignItem]);
+/**
+ * A Ticket its Project's Agent Access dropping below Write undelegated, stopping its Run, waiting for its Assignee
+ * until a User moves, reassigns or delegates it.
+ */
+export const UndelegatedItem = Type.Object({
+  kind: Type.Literal("undelegated"),
+  ticket: TicketSummary,
+  since: Since("when an Admin dropped its Project's Agent Access below Write"),
+});
+
+export const InboxItem = Type.Union([
+  QuestionItem,
+  NeedsYouItem,
+  ReviewItem,
+  UnverifiedItem,
+  RunItem,
+  DiscoveredItem,
+  ReassignItem,
+  UndelegatedItem,
+]);
 export type InboxItem = Static<typeof InboxItem>;
 
 export const Inbox = Type.Object({
@@ -238,6 +257,18 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
   );
   for (const { agent, ...row } of discovered) {
     items.push({ kind: "discovered", ticket: ticketSummary(row), agent, since: row.createdAt.toISOString() });
+  }
+  const undelegated = seen("$3");
+  const { rows: undelegatedRows } = await db.query<TicketRow & { undelegatedAt: Date }>(
+    `select ${undelegated.columns}, tickets.workspace_id as "workspaceId", tickets.undelegated_at as "undelegatedAt"
+     from tickets join projects on projects.id = tickets.project_id
+     where tickets.workspace_id = $1 and tickets.assignee_id = $2 and tickets.undelegated_at is not null
+       and ${undelegated.readable}
+     order by projects.key, tickets.number`,
+    [workspaceId, userId, undelegated.value],
+  );
+  for (const { undelegatedAt, ...row } of undelegatedRows) {
+    items.push({ kind: "undelegated", ticket: ticketSummary(row), since: undelegatedAt.toISOString() });
   }
   if (workspace.isAdmin) {
     // Removing its Assignee recorded its latest assignee Change: assigning it again takes it out of the Inbox.

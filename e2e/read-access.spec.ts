@@ -37,6 +37,9 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
   await access.getByLabel("Access of grace@example.com").selectOption("Read");
   await expect(access.getByRole("status")).toHaveText("Saved.");
   await expect(access.getByLabel("Access of grace@example.com")).toHaveValue("read");
+  // Ada lets Agents only read CRONK: nothing is delegated, so it saves at once.
+  await access.getByLabel("Agent Access", { exact: true }).selectOption("read");
+  await expect(access.getByLabel("Agent Access", { exact: true })).toHaveValue("read");
 
   // Ada, with Write, still edits the Document in the rich editor.
   await page.goto(`${cronk.url}/documents/${document.id}`);

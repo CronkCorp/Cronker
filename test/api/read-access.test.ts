@@ -290,6 +290,7 @@ describe("Write in the same Project", () => {
     expect(await ok("GET", `/api/projects/${project.id}/access`, ada)).toEqual({
       visibility: "private",
       users: [{ userId: grace.user.id, level: "read" }],
+      agentAccess: "write",
     });
     expect((await call("POST", `/api/tickets/${ticket.id}/comments`, grace.as, { body: "Mine." })).status).toBe(403);
     await ok("PUT", `/api/projects/${project.id}/access`, ada, {

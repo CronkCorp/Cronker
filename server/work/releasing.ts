@@ -38,11 +38,6 @@ async function heldBy(db: Db | Tx, { workspaceId, userId, projectId }: Releasing
   return rows;
 }
 
-/** How many Tickets {@link releaseTickets} would unassign or undelegate, read without changing anything. */
-export async function countHeld(db: Db | Tx, releasing: Releasing): Promise<number> {
-  return (await heldBy(db, releasing, { lock: false })).length;
-}
-
 /**
  * Takes the User off their Tickets there, and their Agents off those delegated to them: a running Run is stopped with
  * `reason`, and the Admin's Changes record the Assignee and Delegate taken away. Tickets left without an Assignee wait
@@ -58,19 +53,82 @@ export async function releaseTickets(
 ): Promise<number> {
   const { userId } = releasing;
   const tickets = await heldBy(tx, releasing, { lock: true });
+  await letGo(context, tx, adminId, tickets, userId, reason, now);
+  return tickets.length;
+}
+
+/** The Project's Tickets delegated to an Agent, as {@link undelegateProject} takes them. */
+async function delegatedIn(db: Db | Tx, projectId: string, { lock }: { lock: boolean }): Promise<Held[]> {
+  const { rows } = await db.query<Held>(
+    `select tickets.id, tickets.project_id as "projectId", null as assignee,
+       json_build_object('id', agents.id, 'name', agents.name) as delegate
+     from tickets join agents on agents.id = tickets.delegate_id
+     where tickets.project_id = $1
+     order by tickets.id ${lock ? "for update of tickets" : ""}`,
+    [projectId],
+  );
+  return rows;
+}
+
+/** The ids of the Project's Tickets {@link undelegateProject} would undelegate, read without changing anything. */
+export async function delegatedTickets(db: Db | Tx, projectId: string): Promise<string[]> {
+  return (await delegatedIn(db, projectId, { lock: false })).map((ticket) => ticket.id);
+}
+
+/** The ids of the Tickets {@link releaseTickets} would unassign or undelegate, read without changing anything. */
+export async function heldTickets(db: Db | Tx, releasing: Releasing): Promise<string[]> {
+  return (await heldBy(db, releasing, { lock: false })).map((ticket) => ticket.id);
+}
+
+/**
+ * Undelegates every Ticket of the Project, as when its Agent Access drops below Write: a running Run is stopped with
+ * `reason`, and the Admin's Changes record the Delegate taken away. Each keeps its Assignee, in whose Inbox it waits
+ * until a User moves, reassigns or delegates it.
+ * Returns how many Tickets it changed.
+ */
+export async function undelegateProject(
+  context: Context,
+  tx: Tx,
+  adminId: string,
+  project: { id: string; workspaceId: string },
+  reason: string,
+  now: Date,
+): Promise<number> {
+  const tickets = await delegatedIn(tx, project.id, { lock: true });
+  // Marked first, so the live update each one gets finds it waiting.
+  await tx.query("update tickets set undelegated_at = $2 where id = any($1::uuid[]) and assignee_id is not null", [
+    tickets.map((ticket) => ticket.id),
+    now,
+  ]);
+  await letGo(context, tx, adminId, tickets, null, reason, now);
+  return tickets.length;
+}
+
+/**
+ * Takes each Ticket's Assignee given (remembering `formerAssignee`) and Delegate given, as the Admin's Changes,
+ * stopping a running Run.
+ */
+async function letGo(
+  context: Context,
+  tx: Tx,
+  adminId: string,
+  tickets: Held[],
+  formerAssignee: string | null,
+  reason: string,
+  now: Date,
+): Promise<void> {
   const locked = new Map((await lockTickets(tx, tickets.map((t) => t.id))).map((row) => [row.id, row]));
   for (const ticket of tickets) {
     if (ticket.delegate) await stopRunningRun(context, tx, ticket.id, reason, now);
     // A Ticket left without an Assignee remembers whom it had, for the Admins' Inbox.
     const patch: TicketPatch = {
-      ...(ticket.assignee ? { assigneeId: null, formerAssigneeId: userId } : {}),
+      ...(ticket.assignee ? { assigneeId: null, formerAssigneeId: formerAssignee } : {}),
       ...(ticket.delegate ? { delegateId: null } : {}),
     };
     await writeTicket(context, tx, locked.get(ticket.id)!, adminId, patch, { at: now });
     // Losing its Delegate ends a Ticket's wait for a Run.
     if (ticket.delegate) await startRunIfNeeded(context, tx, ticket.id, now);
   }
-  return tickets.length;
 }
 
 /** How Cronk names a User in what it writes, as `userName` says. */

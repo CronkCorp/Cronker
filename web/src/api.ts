@@ -81,6 +81,7 @@ import type {
 import type { Completion, MovedOnDependent, ReopenPreview, TicketReopen } from "../../server/work/verification.js";
 import type { AddedMember, Member, MemberAdd, MemberAddByGitHub, MemberEdit, PendingAdd } from "../../server/workspaces/members.js";
 import type {
+  AgentAccess,
   Membership as WorkspaceSummary,
   Workspace,
   WorkspaceCreate,
@@ -111,7 +112,7 @@ export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
 export type { ProjectCreate, ProjectEdit, StatusAdd, StatusEdit, StepPut, SetupInput, WorkspaceCreate, WorkspaceSettingsEdit };
 export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
-export type { Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
+export type { AgentAccess, Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
 export type { LabelRule, ListedUser, Outcome, Project, ProjectAccess, ProjectSummary, Status, StatusKind, Step, StepKind, Visibility };
 export type { Agent, AgentRecord, AgentToken, RecordEntry, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
 export type { TicketTranscript, Transcript, TranscriptEntry, TranscriptHook };

@@ -193,6 +193,11 @@ export async function writeTicket(
   if (differs.includes("assigneeId") && patch.assigneeId !== null && !differs.includes("formerAssigneeId")) {
     set("former_assignee_id", null);
   }
+  // A Ticket undelegated by its Project's Agent Access waits in its Assignee's Inbox until a User moves, reassigns or
+  // delegates it.
+  if (differs.includes("statusId") || differs.includes("assigneeId") || (differs.includes("delegateId") && patch.delegateId !== null)) {
+    sets.push("undelegated_at = null");
+  }
   if (differs.includes("verification") && patch.verification === null && !differs.includes("completedFromStatusId")) {
     set("completed_from_status_id", null);
   }
