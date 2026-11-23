@@ -20,7 +20,19 @@ import {
 import { requireProjectCreator } from "./board-rights.js";
 import { changeStatuses, StatusAdd, StatusEdit } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { createRelease, cutRelease, deleteRelease, Release, ReleaseCreate, ReleaseEdit, releasesOf, renameRelease } from "./releases.js";
+import {
+  createRelease,
+  cutRelease,
+  deleteRelease,
+  OpenReleaseTicket,
+  publishRelease,
+  Release,
+  ReleaseCreate,
+  ReleaseEdit,
+  ReleasePublish,
+  releasesOf,
+  renameRelease,
+} from "./releases.js";
 import { defaultRoundLimit, StepPut } from "./steps.js";
 
 const ReleaseParams = Type.Object({ projectId: Type.String(), releaseId: Type.String() });
@@ -215,6 +227,46 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         const user = await requireUser(context, request);
         const { projectId, releaseId } = request.params;
         return cutRelease(context, user, projectId, releaseId);
+      },
+    );
+
+    app.post(
+      "/api/projects/:projectId/releases/:releaseId/release",
+      {
+        schema: {
+          tags: ["Releases"],
+          summary: "Release a Release",
+          description:
+            "Tags each release branch's head `<name>` and creates a GitHub Release in each Repository the Release was " +
+            "cut in, as the GitHub App, with notes of an Upgrade notes part (`upgradeNotes`, left out when blank) then " +
+            "its Tickets by key and title, and makes the Release released, recording each tag and GitHub Release and " +
+            "who released it. A released Release keeps its Tickets: tagging and untagging them is refused. Only a User " +
+            "with Write releases, and only a cut Release (`release_not_cut`). While any of its Tickets is open, it is " +
+            "refused with `release_has_open_tickets`, listing them as `openTickets`, unless `confirm` is true. Every " +
+            "Repository is checked first: a missing release branch (`release_branch_missing`), an existing tag " +
+            "(`release_tag_exists`) or a Repository the App can't reach (`repository_not_installed`) refuses the whole " +
+            "Release before anything is created.",
+          params: ReleaseParams,
+          body: ReleasePublish,
+          response: {
+            200: Release,
+            ...statusRefusals,
+            409: Type.Object({
+              error: Type.Object({
+                ...ErrorBody.properties.error.properties,
+                openTickets: Type.Optional(
+                  Type.Array(OpenReleaseTicket, { description: "With `release_has_open_tickets`: its open Tickets, by key." }),
+                ),
+              }),
+            }),
+            502: ErrorBody,
+          },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const { projectId, releaseId } = request.params;
+        return publishRelease(context, user, projectId, releaseId, request.body);
       },
     );
 

@@ -1974,3 +1974,18 @@
 .release-tickets a {
   overflow-wrap: anywhere;
 }
+
+/* The Release dialog's open Tickets, before Release anyway. */
+.release-open {
+  margin-top: var(--space-2);
+}
+.release-open p {
+  margin: 0 0 var(--space-1);
+}
+.release-open ul {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

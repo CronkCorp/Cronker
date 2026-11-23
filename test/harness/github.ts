@@ -6,7 +6,7 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers (listed, or one by id), branches and the refs created in them, a Pull Request with its mergeability, a repository's issues, and sending the App's webhook deliveries signed with its secret,
+ * installation covers (listed, or one by id), branches and tags and the refs created in them, the GitHub Releases created, a Pull Request with its mergeability, a repository's issues, and sending the App's webhook deliveries signed with its secret,
  * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
@@ -52,6 +52,19 @@ export interface StandInRepository {
   defaultBranch?: string;
   /** Its branches by name, each with the commit it points at; until a test sets them, only its default branch. */
   branches?: Map<string, string>;
+  /** Its tags by name, each with the commit it points at; none until a test sets them or the App creates one. */
+  tags?: Map<string, string>;
+}
+
+/** A GitHub Release GitHub created at the App's request. */
+export interface StandInRelease {
+  /** `owner/name`. */
+  repository: string;
+  tag: string;
+  name: string;
+  body: string;
+  /** Its address on GitHub. */
+  url: string;
 }
 
 /** A ref GitHub created at the App's request. */
@@ -246,6 +259,10 @@ export interface StandInGitHub {
   merges: StandInMerge[];
   /** Every ref the App asked GitHub's API to create that GitHub created, oldest first. */
   refsCreated: StandInRef[];
+  /** Every GitHub Release the App asked GitHub's API to create that GitHub created, oldest first. */
+  releasesCreated: StandInRelease[];
+  /** Repositories, by `owner/name`, where creating a GitHub Release fails with a 500 until a test removes them. */
+  failingReleases: Set<string>;
   /** The branch updates GitHub made at the App's request, in order; each clears `behind` and moves the head. */
   updates: StandInBranchUpdate[];
   /** Called while GitHub updates a branch, before it answers, as a test's look at Cronk mid-update. */
@@ -329,6 +346,12 @@ const defaultBranchOf = (repository: StandInRepository) => repository.defaultBra
 export function branchesOf(repository: StandInRepository): Map<string, string> {
   repository.branches ??= new Map([[defaultBranchOf(repository), createHash("sha1").update(repository.fullName).digest("hex")]]);
   return repository.branches;
+}
+
+/** The repository's tags. */
+export function tagsOf(repository: StandInRepository): Map<string, string> {
+  repository.tags ??= new Map();
+  return repository.tags;
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {
@@ -460,6 +483,8 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     },
     merges: [],
     refsCreated: [],
+    releasesCreated: [],
+    failingReleases: new Set(),
     updates: [],
     onUpdate: null,
     onMerge: null,
@@ -753,25 +778,42 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       });
     }
 
-    // API: one branch's ref, and creating a ref, with a token of an installation that covers the repository.
-    const gitRef = /^\/repos\/([^/]+\/[^/]+)\/git\/(?:ref\/heads\/(.+)|refs)$/.exec(path);
-    if (gitRef && ((request.method === "GET" && gitRef[2]) || (request.method === "POST" && !gitRef[2]))) {
+    // API: one branch's or tag's ref, creating a ref, and creating a GitHub Release, with a token of an installation
+    // that covers the repository.
+    const gitRef = /^\/repos\/([^/]+\/[^/]+)\/(?:git\/(?:ref\/(heads|tags)\/(.+)|refs)|(releases))$/.exec(path);
+    const reading = request.method === "GET" && gitRef?.[2];
+    const writing = request.method === "POST" && gitRef && !gitRef[2];
+    if (gitRef && (reading || writing)) {
       const issued = bearer ? installationTokens.get(bearer) : undefined;
       const installation = github.installations.find((i) => i.id === issued?.installationId);
       if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
       const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(gitRef[1]!).toLowerCase());
       if (!repository) return json(response, 404, { message: "Not Found" });
-      if (request.method === "GET") {
-        const branch = gitRef[2]!.split("/").map(decodeURIComponent).join("/");
-        const sha = branchesOf(repository).get(branch);
+      if (reading) {
+        const kind = gitRef[2] as "heads" | "tags";
+        const name = gitRef[3]!.split("/").map(decodeURIComponent).join("/");
+        const sha = (kind === "heads" ? branchesOf(repository) : tagsOf(repository)).get(name);
         if (!sha) return json(response, 404, { message: "Not Found" });
-        return json(response, 200, { ref: `refs/heads/${branch}`, object: { type: "commit", sha } });
+        return json(response, 200, { ref: `refs/${kind}/${name}`, object: { type: "commit", sha } });
+      }
+      if (gitRef[4]) {
+        const body = JSON.parse(await readBody(request)) as { tag_name?: string; name?: string; body?: string };
+        if (github.failingReleases.has(repository.fullName)) return json(response, 500, { message: "Server Error" });
+        const tag = body.tag_name ?? "";
+        if (!tagsOf(repository).has(tag)) return json(response, 422, { message: "Validation Failed: tag_name doesn't exist" });
+        if (github.releasesCreated.some((r) => r.repository === repository.fullName && r.tag === tag)) {
+          return json(response, 422, { message: "Validation Failed: already_exists" });
+        }
+        const url = `https://github.com/${repository.fullName}/releases/tag/${encodeURIComponent(tag)}`;
+        github.releasesCreated.push({ repository: repository.fullName, tag, name: body.name ?? tag, body: body.body ?? "", url });
+        return json(response, 201, { tag_name: tag, name: body.name, html_url: url });
       }
       const body = JSON.parse(await readBody(request)) as { ref?: string; sha?: string };
-      const branch = /^refs\/heads\/(.+)$/.exec(body.ref ?? "")?.[1];
-      if (!branch || !body.sha) return json(response, 422, { message: "Invalid request." });
-      if (branchesOf(repository).has(branch)) return json(response, 422, { message: "Reference already exists" });
-      branchesOf(repository).set(branch, body.sha);
+      const match = /^refs\/(heads|tags)\/(.+)$/.exec(body.ref ?? "");
+      if (!match || !body.sha) return json(response, 422, { message: "Invalid request." });
+      const refs = match[1] === "heads" ? branchesOf(repository) : tagsOf(repository);
+      if (refs.has(match[2]!)) return json(response, 422, { message: "Reference already exists" });
+      refs.set(match[2]!, body.sha);
       github.refsCreated.push({ repository: repository.fullName, ref: body.ref!, sha: body.sha });
       return json(response, 201, { ref: body.ref, object: { type: "commit", sha: body.sha } });
     }
