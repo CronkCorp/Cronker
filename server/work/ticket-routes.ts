@@ -139,9 +139,10 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Changes whichever fields are given; `null` clears a field. Labels that differ only in case are kept once, " +
             "as first written. An Assignee must be a member of the Ticket's Workspace. A delegated Ticket entering a Status " +
-            "with a Step, or delegated where it is, gets a Run. An Agent may set or clear the parent of any Ticket of a " +
-            "Project it has a running Run in, alone in its edit, and otherwise gets `no_running_run`. Agents without a Full token never set a Status: " +
-            "their Runs move Tickets with `finish`; an Agent with a Write token is refused with `full_token_needed`. An Agent with a Full token moves any Ticket it has Write on, alone in its edit, as its Owner's move: entering a Status with a Step starts its Run and leaving a running one stops it, each a Change by the Agent with no Run. An Agent's save answers with `avoidedWords`: the words the " +
+            "with a Step, or delegated where it is, gets a Run. An Agent with a Write token edits only the fields the Agent " +
+            "rules allow (`agent_field_not_allowed`), during its running Run on the Ticket or on a waiting Discovered Ticket it filed; it may set or clear the parent of any Ticket of a " +
+            "Project it has a running Run in, alone in its edit, and otherwise gets `no_running_run`. It never sets a Status: " +
+            "its Runs move Tickets with `finish`, and it is refused with `full_token_needed`. An Agent with a Full token edits every field of any Ticket it has Write on, delegated or running included, as its Owner would: it moves it (entering a Status with a Step starts its Run and leaving a running one stops it), and delegates it only to its Owner's Agents with Write, each a Change by the Agent with no Run. An Agent's save answers with `avoidedWords`: the words the " +
             "Project's glossary avoids that the title and description it gives use.",
           params: Type.Object({ ticketId: Type.String() }),
           body: TicketEdit,
@@ -174,14 +175,21 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Takes a Discovered Ticket waiting for a User out of its Assignee's Inbox, and out of the hands of the " +
             "Agent that filed it, leaving it where it is. Delegating or moving it does the same. Refused for any " +
-            "other Ticket (`not_waiting`).",
+            "other Ticket (`not_waiting`). An Agent with a Full token dismisses as its Owner would, a Change by the " +
+            "Agent with no Run; any other Agent gets `full_token_needed`.",
           params: Type.Object({ ticketId: Type.String() }),
           response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
         },
       },
       async (request) => {
-        const user = await requireUser(context, request);
-        return dismissTicket(context, user.id, request.params.ticketId);
+        const agent = await authenticateAgent(context, request);
+        if (agent) {
+          requireOwnerAct(agent, {
+            act: "dismissing a Discovered Ticket",
+            rule: "Dismissing a Discovered Ticket is its Users' act: it takes the Ticket out of the Inbox for good.",
+          });
+        }
+        return dismissTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId);
       },
     );
 
@@ -428,7 +436,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Relate a Ticket to another",
           description:
             "Marks that this Ticket blocks, is blocked by, or relates to another Ticket of the same Workspace, " +
-            "named by its id or its key. An Agent adds only blocks (`agent_adds_only_blocks`), and only where " +
+            "named by its id or its key. An Agent with a Full token adds any Relation, as its Owner would; any other " +
+            "Agent adds only blocks (`agent_adds_only_blocks`), and only where " +
             "one of the two Tickets is a Discovered Ticket it filed that still waits for a User " +
             "(`not_your_discovered_ticket`): from it to any Ticket, or to it from any Ticket.",
           params: Type.Object({ ticketId: Type.String() }),
@@ -448,14 +457,24 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "Remove a Relation",
-          description: "Removes a Relation of this Ticket, whichever of its two Tickets it was made from.",
+          description:
+            "Removes a Relation of this Ticket, whichever of its two Tickets it was made from. Needs Write in both " +
+            "Tickets' Projects. An Agent with a Full token removes it as its Owner would, a Change by the Agent with " +
+            "no Run; any other Agent gets `full_token_needed`.",
           params: Type.Object({ ticketId: Type.String(), relationId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 404: ErrorBody },
         },
       },
       async (request, reply) => {
-        const user = await requireUser(context, request);
-        await removeRelation(context, user.id, request.params.ticketId, request.params.relationId);
+        const agent = await authenticateAgent(context, request);
+        if (agent) {
+          requireOwnerAct(agent, {
+            act: "removing a Relation",
+            rule: "Removing a Relation is its Users' act: an Agent with a Write token only adds blocks from a Discovered Ticket it filed.",
+          });
+        }
+        const caller = agent ?? (await requireCaller(context, request));
+        await removeRelation(context, caller, request.params.ticketId, request.params.relationId);
         return reply.code(204).send(null);
       },
     );

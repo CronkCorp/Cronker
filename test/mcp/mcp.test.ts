@@ -149,11 +149,19 @@ describe("MCP with an Agent token", () => {
       "delete_document",
       "delete_term",
       "delete_artifact",
+      "dismiss_ticket",
+      "add_relation",
+      "remove_relation",
     ];
     expect(await names(full.secret)).toEqual(expect.arrayContaining(fullOnly));
     for (const secret of [write.secret, read.secret]) {
       expect((await names(secret)).filter((name) => fullOnly.includes(name))).toEqual([]);
     }
+    // `edit_ticket` takes every field only for a Full token.
+    const editFields = async (secret: string) =>
+      Object.keys((await (await connect(secret)).listTools()).tools.find((t) => t.name === "edit_ticket")!.inputSchema.properties ?? {});
+    expect(await editFields(full.secret)).toEqual(expect.arrayContaining(["title", "assignee", "delegate", "autonomousDelegation", "parent"]));
+    expect(await editFields(write.secret)).not.toContain("delegate");
     expect((await connect(full.secret)).getInstructions()).toContain("Your token is Full");
     expect((await connect(write.secret)).getInstructions()).toContain("Your token is Write");
   });
@@ -201,6 +209,32 @@ describe("MCP with an Agent token", () => {
     }
     const terms = await (await cronk.request("GET", `/api/projects/${project.id}/terms`, { cookie })).json();
     expect(terms).toEqual([]);
+  });
+
+  test("a Full token edits and delegates any Ticket, dismisses a Discovered Ticket and relates and unrelates Tickets", async () => {
+    const { workspace, cookie, agent, ticket } = await workspaceWithTicket("write");
+    const helper = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "Helper" });
+    const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
+    const client = await connect(full.secret);
+
+    const edited = await call(client, "edit_ticket", { ticket: "CRONK-1", title: "Read me again", delegate: "helper", parent: null });
+    expect(edited).toMatchObject({ isError: false, json: { title: "Read me again", delegateId: helper.id } });
+    const undelegated = await call(client, "edit_ticket", { ticket: "CRONK-1", delegate: null });
+    expect(undelegated.json.delegateId).toBeNull();
+    const unknown = await call(client, "edit_ticket", { ticket: "CRONK-1", delegate: "Nobody" });
+    expect(unknown).toMatchObject({ isError: true, json: { code: "unknown_agent" } });
+
+    const writeClient = await connect((await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "write", access: "write" })).secret);
+    const filed = await call(writeClient, "file_ticket", { project: "CRONK", title: "Found on the way" });
+    const dismissed = await call(client, "dismiss_ticket", { ticket: filed.json.key });
+    expect(dismissed).toMatchObject({ isError: false, json: { discovered: { waiting: false } } });
+
+    const related = await call(client, "add_relation", { ticket: "CRONK-1", kind: "relatesTo", other: filed.json.key });
+    expect(related).toMatchObject({ isError: false, json: { kind: "relatesTo" } });
+    const removed = await call(client, "remove_relation", { ticket: "CRONK-1", relation: related.json.id });
+    expect(removed).toMatchObject({ isError: false, json: { removed: related.json.id } });
+    const relations = await (await cronk.request("GET", `/api/tickets/${ticket.id}/relations`, { cookie })).json();
+    expect(JSON.stringify(relations)).not.toContain(related.json.id);
   });
 
   test("an Agent reads a Ticket by key with its Comments and Relations", async () => {
