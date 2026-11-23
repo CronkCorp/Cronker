@@ -1,13 +1,14 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { addMember, setUp, signIn } from "../harness/flows.js";
+import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
+import { branchesOf } from "../harness/github.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openStream } from "../harness/stream.js";
 
 /**
  * Releases (CRONK-114): a Project's planned Releases, named by semantic versions, and Tickets tagged with one through
- * the HTTP API and MCP. Nothing reaches GitHub yet.
+ * the HTTP API and MCP. Cutting one (CRONK-115) creates its release branch in each of the Project's Repositories.
  */
 
 let cronk: StartedCronk;
@@ -278,5 +279,151 @@ describe("tagging a Ticket with a Release", () => {
     const unknown = await tool(client, "edit_ticket", { ticket: "CRONK-1", release: "v1.0.0" });
     expect(unknown.isError).toBe(true);
     expect(unknown.json.code).toBe("unknown_release");
+  });
+});
+
+/** `withProject`, with the GitHub App installed on `cronkcorp`'s `cronker` and `website`, both listed on CRONK. */
+async function withRepositories() {
+  const setup = await withProject();
+  const { ada, project } = setup;
+  await createGitHubApp(cronk, ada.cookie!);
+  const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker", "website"]);
+  const [cronker, website] = [installation.repositories[0]!, installation.repositories[1]!];
+  for (const repository of [cronker, website]) {
+    await ok("POST", `/api/projects/${project.id}/repositories`, ada, { id: repository.id });
+  }
+  return { ...setup, installation, cronker, website };
+}
+
+const cut = (projectId: string, releaseId: string, as: As) => call("POST", `/api/projects/${projectId}/releases/${releaseId}/cut`, as);
+
+describe("cutting a Release", () => {
+  test("creates release/<name> at the default branch's head in each Repository, and records the commits", async () => {
+    const { ada, project, first, cronker, website } = await withRepositories();
+    website.defaultBranch = "trunk";
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { release: "v0.3.0" });
+    const [cronkerHead, websiteHead] = [branchesOf(cronker).get("main")!, branchesOf(website).get("trunk")!];
+
+    const answer = await cut(project.id, release.id, ada);
+
+    expect(answer.status, JSON.stringify(answer.json)).toBe(200);
+    expect(answer.json).toEqual(
+      expect.objectContaining({
+        state: "cut",
+        cutBy: expect.objectContaining({ name: expect.any(String) }),
+        cutAt: expect.any(String),
+        repositories: [
+          { repository: { id: cronker.id, fullName: "cronkcorp/cronker" }, commit: cronkerHead },
+          { repository: { id: website.id, fullName: "cronkcorp/website" }, commit: websiteHead },
+        ],
+      }),
+    );
+    expect(cronk.github.refsCreated).toEqual([
+      { repository: "cronkcorp/cronker", ref: "refs/heads/release/v0.3.0", sha: cronkerHead },
+      { repository: "cronkcorp/website", ref: "refs/heads/release/v0.3.0", sha: websiteHead },
+    ]);
+    const [listed] = await ok("GET", `/api/projects/${project.id}/releases`, ada);
+    expect(listed).toEqual(answer.json);
+    expect((await ok("GET", `/api/tickets/${first.id}`, ada)).release.state).toBe("cut");
+  });
+
+  test("one existing release branch refuses the whole Cut, naming it, and nothing is created", async () => {
+    const { ada, project, website } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    branchesOf(website).set("release/v0.3.0", "0".repeat(40));
+
+    const refused = await cut(project.id, release.id, ada);
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toEqual(
+      expect.objectContaining({
+        code: "release_branch_exists",
+        message: "release/v0.3.0 already exists in cronkcorp/website, so v0.3.0 wasn't cut and no branch was created.",
+      }),
+    );
+    expect(cronk.github.refsCreated).toEqual([]);
+    expect(cronk.github.apiCalls.filter((c) => c.startsWith("POST /repos/"))).toEqual([]);
+    const [listed] = await ok("GET", `/api/projects/${project.id}/releases`, ada);
+    expect(listed).toEqual(expect.objectContaining({ state: "planned", cutBy: null, cutAt: null, repositories: [] }));
+  });
+
+  test("needs a User with Write and a planned Release", async () => {
+    const { workspace, ada, grace, project } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
+    const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
+
+    const byGrace = await cut(project.id, release.id, grace);
+    expect([byGrace.status, byGrace.json.error.code]).toEqual([403, "read_access"]);
+    const byAgent = await cut(project.id, release.id, { headers: { authorization: `Bearer ${secret}` } });
+    expect([byAgent.status, byAgent.json.error.code]).toEqual([403, "agent_not_allowed"]);
+    expect(cronk.github.refsCreated).toEqual([]);
+
+    await ok("POST", `/api/projects/${project.id}/releases/${release.id}/cut`, ada);
+    const again = await cut(project.id, release.id, ada);
+    expect(again.status).toBe(409);
+    expect(again.json.error).toEqual(expect.objectContaining({ code: "release_not_planned", message: "v0.3.0 is cut, so it can't be cut." }));
+    expect(cronk.github.refsCreated).toHaveLength(2);
+  });
+
+  test("a Project with no Repositories refuses with the reason", async () => {
+    const { ada, project } = await withProject();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+
+    const refused = await cut(project.id, release.id, ada);
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toEqual(
+      expect.objectContaining({
+        code: "no_repositories",
+        message: "CRONK lists no Repositories, so there is nowhere to cut release/v0.3.0.",
+        advice: expect.stringContaining("Add the Project's Repositories"),
+      }),
+    );
+  });
+
+  test("a Repository the App no longer covers refuses the whole Cut", async () => {
+    const { ada, project, installation, website } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    installation.repositories.splice(installation.repositories.indexOf(website), 1);
+
+    const refused = await cut(project.id, release.id, ada);
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("repository_not_installed");
+    expect(refused.json.error.message).toContain("cronkcorp/website");
+    expect(cronk.github.refsCreated).toEqual([]);
+  });
+
+  test("a cut Release can't be renamed, deleted or given more Tickets, and its Tickets stay tagged", async () => {
+    const { ada, project, first, second } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    await ok("PATCH", `/api/tickets/${first.id}`, ada, { release: "v0.3.0" });
+    await ok("POST", `/api/projects/${project.id}/releases/${release.id}/cut`, ada);
+
+    const attempts = [
+      await call("PATCH", `/api/projects/${project.id}/releases/${release.id}`, ada, { name: "v0.3.1" }),
+      await call("DELETE", `/api/projects/${project.id}/releases/${release.id}`, ada),
+      await call("PATCH", `/api/tickets/${second.id}`, ada, { release: "v0.3.0" }),
+      await call("PATCH", `/api/tickets/${first.id}`, ada, { release: null }),
+    ];
+    for (const attempt of attempts) {
+      expect(attempt.status).toBe(409);
+      expect(attempt.json.error.code).toBe("release_not_planned");
+    }
+    expect((await ok("GET", `/api/tickets/${first.id}`, ada)).release.name).toBe("v0.3.0");
+  });
+
+  test("is told live", async () => {
+    const { workspace, ada, project } = await withRepositories();
+    const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
+    const stream = await openStream(cronk, ada.cookie!, workspace.id);
+    try {
+      await ok("POST", `/api/projects/${project.id}/releases/${release.id}/cut`, ada);
+      expect(await stream.next()).toEqual({ type: "releases.changed", data: { projectId: project.id } });
+    } finally {
+      stream.close();
+    }
   });
 });

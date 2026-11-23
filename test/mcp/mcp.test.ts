@@ -180,6 +180,7 @@ describe("MCP with an Agent token", () => {
         merged: false,
         html_url: "https://github.com/cronkcorp/cronker/pull/7",
         head: { ref: "cronk-1", sha: "c1" },
+        base: { ref: "main", sha: "b1" },
         updated_at: "2026-01-01T09:00:00Z",
       },
     });
@@ -200,6 +201,7 @@ describe("MCP with an Agent token", () => {
         number: 7,
         title: "CRONK-1: read me",
         branch: "cronk-1",
+        baseBranch: "main",
         url: "https://github.com/cronkcorp/cronker/pull/7",
         state: "draft",
         checks: [{ name: "test", state: "failed", url: null }],

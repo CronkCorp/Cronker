@@ -46,6 +46,8 @@ interface PullRequestFields {
   /** Set while auto-merge is on, naming who turned it on. */
   autoMerge?: { enabled_by: { login: string; id: number } };
   updatedAt?: string;
+  /** The branch it merges into. */
+  base?: string;
 }
 
 /** A `pull_request` delivery as GitHub sends it, with only the fields Cronk reads. */
@@ -70,6 +72,7 @@ function pullRequestEvent(
       auto_merge: pr.autoMerge ?? null,
       html_url: `https://github.com/${repository.fullName}/pull/${pr.number}`,
       head: { ref: pr.branch, sha: pr.sha ?? "aaaa" },
+      ...(pr.base ? { base: { ref: pr.base, sha: "bbbb" } } : {}),
       updated_at: pr.updatedAt ?? "2026-01-01T09:00:00Z",
     },
   };
@@ -167,7 +170,13 @@ describe("Pull Requests linking to Tickets", () => {
     await deliver(
       app,
       "pull_request",
-      pullRequestEvent("opened", installation, cronker, { id: 501, number: 7, title: "Fix CRONK-2 too", branch: "feat/cronk-1-fix" }),
+      pullRequestEvent("opened", installation, cronker, {
+        id: 501,
+        number: 7,
+        title: "Fix CRONK-2 too",
+        branch: "feat/cronk-1-fix",
+        base: "release/v0.3.0",
+      }),
     );
 
     const shown = {
@@ -176,6 +185,7 @@ describe("Pull Requests linking to Tickets", () => {
       number: 7,
       title: "Fix CRONK-2 too",
       branch: "feat/cronk-1-fix",
+      baseBranch: "release/v0.3.0",
       url: "https://github.com/cronkcorp/cronker/pull/7",
       state: "open",
       checks: [],

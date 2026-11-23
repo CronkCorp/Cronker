@@ -200,6 +200,8 @@ export interface RepositoryOnGitHub {
   allow_merge_commit?: boolean;
   allow_squash_merge?: boolean;
   allow_rebase_merge?: boolean;
+  /** Its default branch, such as `main`. */
+  default_branch?: string;
 }
 
 /** A repository by GitHub's id, as an installation covering it sees it now; nothing if it no longer covers it. */
@@ -291,6 +293,43 @@ export async function updateBranchOnGitHub(
   }
   await jsonOf<unknown>(response, "The branch update");
   return { updated: true };
+}
+
+/** The commit a branch of a repository, by `owner/name`, points at; nothing if it has no such branch. */
+export async function branchHead({ github }: Config, token: string, fullName: string, branch: string): Promise<string | undefined> {
+  const ref = branch.split("/").map(encodeURIComponent).join("/");
+  const response = await call(under(github.apiUrl, `${repoPath(fullName)}/git/ref/heads/${ref}`), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (response.status === 404) return undefined;
+  const body = await jsonOf<{ ref?: unknown; object?: { sha?: unknown } }>(response, "The branch");
+  // GitHub answers a prefix of several refs with a list, so only an exact match counts.
+  if (Array.isArray(body) || body.ref !== `refs/heads/${branch}` || typeof body.object?.sha !== "string") return undefined;
+  return body.object.sha;
+}
+
+/**
+ * Creates a ref, such as `refs/heads/release/v0.3.0`, at a commit of a repository by `owner/name`. GitHub's refusal of
+ * a ref that already exists (422) comes back with its message.
+ */
+export async function createRef(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  ref: string,
+  sha: string,
+): Promise<{ created: true } | { created: false; status: number; message: string }> {
+  const response = await call(under(github.apiUrl, `${repoPath(fullName)}/git/refs`), {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ ref, sha }),
+  });
+  if (response.status === 409 || response.status === 422) {
+    const body = (await response.json().catch(() => ({}))) as { message?: unknown };
+    return { created: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };
+  }
+  await jsonOf<unknown>(response, "The ref creation");
+  return { created: true };
 }
 
 /** One attempt at one of the App's webhook deliveries, as GitHub's delivery log lists it. */

@@ -1,4 +1,5 @@
-import { addMember, setUp, signIn } from "../test/harness/flows.js";
+import { addMember, createGitHubApp, setUp, signIn } from "../test/harness/flows.js";
+import { branchesOf } from "../test/harness/github.js";
 import { expect, fieldPicker, pick, signInInBrowser, test } from "./fixtures.js";
 
 /**
@@ -64,4 +65,41 @@ test("the Releases page, a Ticket's Release field and its card's chip follow liv
   await expect(page.getByRole("region", { name: "Timeline" })).toContainText("changed Release from v0.4.0 to v0.3.0");
   await asBob("PATCH", `/api/tickets/${ticket.id}`, { release: null });
   await expect(fieldPicker(page, "Release")).toContainText("None");
+});
+
+/** Cutting a Release (CRONK-115) from the Releases page: the dialog lists the Repositories, then the cut commits show. */
+test("Cut creates the release branches and shows each Repository's commit", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker", "website"]);
+  const asAda = (method: string, path: string, body?: unknown) =>
+    cronk.request(method, path, { cookie, body }).then(async (response) => {
+      expect(response.ok, await response.clone().text()).toBe(true);
+      return response.json();
+    });
+  const project = await asAda("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  for (const repository of installation.repositories) {
+    await asAda("POST", `/api/projects/${project.id}/repositories`, { id: repository.id });
+  }
+  await asAda("POST", `/api/projects/${project.id}/releases`, { name: "v0.3.0" });
+  const [cronker, website] = installation.repositories.map((r) => branchesOf(r).get("main")!);
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("button", { name: "More of this Project" }).click();
+  await page.getByRole("menuitem", { name: "Releases" }).click();
+  const release = page.getByRole("region", { name: "Release v0.3.0" });
+  await release.getByRole("button", { name: "Cut…" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("cronkcorp/cronker and cronkcorp/website");
+  await dialog.getByRole("button", { name: "Cut" }).click();
+
+  await expect(release.getByText(/^Cut by /)).toBeVisible();
+  const commits = release.getByRole("list", { name: "Commits v0.3.0 was cut at" });
+  await expect(commits).toContainText(`cronkcorp/cronker ${cronker!.slice(0, 7)}`);
+  await expect(commits).toContainText(`cronkcorp/website ${website!.slice(0, 7)}`);
+  await expect(release.getByRole("button", { name: "Cut…" })).toHaveCount(0);
+  await expect(release.getByRole("button", { name: "More of v0.3.0" })).toHaveCount(0);
+  expect(cronk.github.refsCreated.map((r) => r.repository)).toEqual(["cronkcorp/cronker", "cronkcorp/website"]);
 });
