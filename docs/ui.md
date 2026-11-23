@@ -155,6 +155,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 ![Inbox](ui/inbox.png)
 
 - **Layout:** a split view. The list on the left (360px) is grouped **Questions**, **Needs you**, **Runs gone wrong**, **To review**, **Unverified** and **Discovered**, each with a count, and the selected item opens on the right.
+- **Filters:** a row above the split holds two multi-selects (`<MultiFilterPicker>`, the board's filter button whose list stays open and toggles each choice): **Project**, the Projects the User's items come from by key and name (and **Workspace** for items of no Project, once there are any), and **Kind**, the groups above. Each list's first option, "Any Project" or "Any kind", clears it. An item shows when it is in a chosen Project and of a chosen kind. The filters are kept in the address (`project=CRONK&project=WEB&kind=question`; `kind=` takes `question`, `needs-you`, `run`, `review`, `unverified` and `discovered`) beside `item=`, without a history entry, so a reload or a shared link keeps them. While a filter is on, a muted "Showing 4 of 12" line with **Clear filters** follows them. The row shows only while something waits or a filter is on.
+- **Counts under a filter:** the groups and their counts are what the filters show; the sidebar's red count stays the whole Inbox, so nothing is hidden by accident. Selection, J and K and live updates stay within the filtered list: a new item the filters hide doesn't appear, and when the selected item is filtered out the first shown one is selected.
 - **List items:** each shows its kind label, Ticket key, time, Ticket title and a two-line snippet: the Question, the Report's title, or else a line saying why it waits. A Question or *needs you* item, or a Run that couldn't start, has a `--warn` left border, a failed or lost Run a `--danger` one. **Needs you** also holds Tickets whose Assignee left the Workspace, with a picker for a new one, and Tickets undelegated by their Project's Agent Access dropping below Write, until they are moved, reassigned or delegated.
 - **Detail pane:**
   - **A Question** shows the Agent, the Step that asked and the full Question, with an answer box underneath. "Post answer" says the answer sends the Ticket back to that Step; Dismiss, in the ghost style, sets it aside.
@@ -166,8 +168,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 - **Keyboard:** J and K move through the list, A focuses the answer box, C Accepts and R opens Reopen…, on items that offer them. None fire while focus is in a text field. A line under the split names them.
 - **Selection** is kept in the address (`item=`), so a reload or a shared link reopens it. Without one, the first item is selected.
 - **Acting on an item** selects the next item, or the previous one when it was the last. It never jumps to the top.
-- **Empty:** a calm empty state, not an empty split.
-- **Phone:** the list and the detail stack, and selecting an item opens the detail full width.
+- **Empty:** a calm empty state, not an empty split. When items wait but the filters hide them all, it says "Nothing here matches these filters." with **Clear filters** instead.
+- **Phone:** the list and the detail stack, and selecting an item opens the detail full width. The filters fold into one **Filter** button above the list (showing how many are chosen, as "Filter · 2"), which unfolds them.
 
 ![Inbox on a phone](ui/phone-inbox.png)
 

@@ -268,3 +268,56 @@ export function FilterPicker({
     />
   );
 }
+
+/**
+ * A filter of several choices in a row of filters: like `FilterPicker`, but picking toggles a choice and keeps the
+ * list open, and its first option, such as "Any Project", clears them all.
+ */
+export function MultiFilterPicker({
+  label,
+  anyLabel,
+  options,
+  values,
+  onChange,
+}: {
+  /** What it filters by, such as "Project": the button reads "Filter by Project". */
+  label: string;
+  /** The choice that clears the filter, such as "Any Project". */
+  anyLabel: string;
+  options: PickerOption[];
+  /** The chosen values; none while the filter is clear. */
+  values: string[];
+  onChange: (values: string[]) => void;
+}) {
+  const id = useId();
+  const chosen = options.filter((o) => values.includes(o.value));
+  return (
+    <Picker
+      label={label}
+      multiple
+      options={[{ value: "", label: anyLabel, content: <span className="muted">{anyLabel}</span> }, ...options]}
+      selected={values.length === 0 ? [""] : values}
+      onPick={(picked) =>
+        onChange(picked === "" ? [] : values.includes(picked) ? values.filter((v) => v !== picked) : [...values, picked])
+      }
+      trigger={
+        <button
+          type="button"
+          className={`filter-trigger${chosen.length > 0 ? " filter-trigger-on" : ""}`}
+          aria-labelledby={`${id}-label ${id}-value`}
+          aria-haspopup="listbox"
+        >
+          <span id={`${id}-label`} className="sr-only">
+            Filter by {label}
+          </span>
+          <span id={`${id}-value`} className="picker-value">
+            {chosen.length > 0 ? chosen.map((o) => o.label).join(", ") : <span className="muted">{anyLabel}</span>}
+          </span>
+          <span className="filter-caret" aria-hidden="true">
+            ▾
+          </span>
+        </button>
+      }
+    />
+  );
+}
