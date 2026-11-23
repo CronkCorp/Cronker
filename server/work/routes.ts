@@ -20,12 +20,12 @@ import {
 import { requireProjectCreator } from "./board-rights.js";
 import { changeStatuses, StatusAdd, StatusEdit } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
-import { createRelease, deleteRelease, Release, ReleaseCreate, ReleaseEdit, releasesOf, renameRelease } from "./releases.js";
+import { createRelease, cutRelease, deleteRelease, Release, ReleaseCreate, ReleaseEdit, releasesOf, renameRelease } from "./releases.js";
 import { defaultRoundLimit, StepPut } from "./steps.js";
 
 const ReleaseParams = Type.Object({ projectId: Type.String(), releaseId: Type.String() });
 const releaseRule =
-  "Needs Write in the Project. Only a planned Release is renamed or deleted (`release_not_planned`). A name is a " +
+  "Needs Write in the Project. Only a planned Release is renamed, deleted or cut (`release_not_planned`). A name is a " +
   "semantic version such as `v0.3.0`, with or without a leading `v` (`invalid_release_name`), unique in the Project " +
   "ignoring case (`release_name_taken`).";
 const StatusParams = Type.Object({ projectId: Type.String(), statusId: Type.String() });
@@ -191,6 +191,30 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
         const { projectId, releaseId } = request.params;
         await deleteRelease(context, caller, projectId, releaseId);
         return reply.code(204).send(null);
+      },
+    );
+
+    app.post(
+      "/api/projects/:projectId/releases/:releaseId/cut",
+      {
+        schema: {
+          tags: ["Releases"],
+          summary: "Cut a Release",
+          description:
+            "Creates `release/<name>` at the default branch's head in each Repository the Project lists, as the GitHub " +
+            "App, and makes the Release cut, recording each Repository's commit and who cut it. Only a User with Write " +
+            "cuts, and only a planned Release (`release_not_planned`). Every Repository is checked first: a Project " +
+            "listing none (`no_repositories`), a Repository the App can't reach (`repository_not_installed`) or a " +
+            "release branch that already exists in any of them (`release_branch_exists`) refuses the whole Cut before " +
+            "anything is created.",
+          params: ReleaseParams,
+          response: { 200: Release, ...statusRefusals, 502: ErrorBody },
+        },
+      },
+      async (request) => {
+        const user = await requireUser(context, request);
+        const { projectId, releaseId } = request.params;
+        return cutRelease(context, user, projectId, releaseId);
       },
     );
 

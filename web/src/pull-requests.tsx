@@ -72,6 +72,11 @@ export function PullRequestRows({
               </a>
               <span className="pr-meta">
                 <PullRequestState state={pr.state} />
+                {pr.baseBranch && (
+                  <span className="small muted" title="Base branch">
+                    into <span className="mono">{pr.baseBranch}</span>
+                  </span>
+                )}
                 <CheckCounts checks={pr.checks} />
                 <ReviewState pullRequest={pr} />
                 {pr.manual && <span className="small muted">Linked by hand</span>}
@@ -207,6 +212,12 @@ export function PullRequestCards({ pullRequests }: { pullRequests: PullRequest[]
           </header>
           <p className="small muted">
             <span className="mono">{pr.branch}</span>
+            {pr.baseBranch && (
+              <>
+                {" into "}
+                <span className="mono">{pr.baseBranch}</span>
+              </>
+            )}
             {pr.producingStep && <> · from the {pr.producingStep.name} Step</>}
             {(pr.mergedBy || pr.reviewState) && (
               <>

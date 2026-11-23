@@ -7,7 +7,7 @@ import { usePlace } from "./frame.js";
 import { keys } from "./live-queries.js";
 import { ProjectMenu } from "./projects.js";
 import { Link } from "./router.js";
-import { Button, EmptyState, Field, FormError, LiveIndicator, PageHead, workspaceCrumb } from "./ui/controls.js";
+import { Button, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Chip, Key, StatusDot, type Tone } from "./ui/labels.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { ReadOnlyNote } from "./write-access.js";
@@ -22,7 +22,8 @@ export function ReleaseState({ state }: { state: Release["state"] }) {
 
 /**
  * A Project's Releases, newest first: each with its state, release branch, how many of its Tickets are open and done,
- * and its Tickets. With Write, New Release, and Rename… and Delete… on a planned one.
+ * and its Tickets; a cut one with who cut it, when, and each Repository's cut commit. With Write, New Release, and
+ * Cut…, Rename… and Delete… on a planned one.
  */
 export function ProjectReleases({
   workspace,
@@ -73,6 +74,7 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
   const to = useAddresses();
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [cutting, setCutting] = useState(false);
   const statusOf = (statusId: string) => project.statuses.find((s) => s.id === statusId);
   const editable = canWrite && release.state === "planned";
   return (
@@ -85,12 +87,34 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
           {release.openCount} open · {release.doneCount} done
         </span>
         {editable && (
+          <Button size="small" onClick={() => setCutting(true)}>
+            Cut…
+          </Button>
+        )}
+        {editable && (
           <Menu label={`More of ${release.name}`}>
             <MenuItem onSelect={() => setRenaming(true)}>Rename…</MenuItem>
             <MenuItem onSelect={() => setDeleting(true)}>Delete…</MenuItem>
           </Menu>
         )}
       </div>
+      {release.cutAt && (
+        <div className="release-cut small">
+          <p className="muted">
+            Cut{release.cutBy && <> by {release.cutBy.name}</>} <RelativeTime at={release.cutAt} />
+          </p>
+          <ul className="release-commits" aria-label={`Commits ${release.name} was cut at`}>
+            {release.repositories.map(({ repository, commit }) => (
+              <li key={repository.id}>
+                <span className="mono">{repository.fullName}</span>{" "}
+                <span className="mono muted" title={commit}>
+                  {commit.slice(0, 7)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {release.tickets.length === 0 ? (
         <p className="muted small">No Tickets yet.</p>
       ) : (
@@ -109,6 +133,7 @@ function ReleaseCard({ project, release, canWrite }: { project: Project; release
         </ul>
       )}
       <RenameRelease project={project} release={release} open={renaming} onOpenChange={setRenaming} />
+      <CutRelease project={project} release={release} open={cutting} onOpenChange={setCutting} />
       <ConfirmDialog
         open={deleting}
         onOpenChange={setDeleting}
@@ -194,5 +219,54 @@ function RenameRelease({
         </DialogActions>
       </form>
     </Dialog>
+  );
+}
+
+/** Confirms a Cut, listing the Repositories Cronk creates the release branch in; a refusal shows in the dialog. */
+function CutRelease({
+  project,
+  release,
+  open,
+  onOpenChange,
+}: {
+  project: Project;
+  release: Release;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const repositories = useQuery({
+    queryKey: ["project", project.id, "repositories"],
+    queryFn: () => api.repositories(project.id),
+    enabled: open,
+  });
+  const listed = repositories.data ?? null;
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Cut ${release.name}?`}
+      confirm="Cut"
+      onConfirm={async () => {
+        await api.cutRelease(project.id, release.id);
+        onOpenChange(false);
+      }}
+    >
+      {listed === null ? (
+        "Cronk creates its release branch at the head of each Repository's default branch."
+      ) : listed.length === 0 ? (
+        `${project.key} lists no Repositories yet: add them in Project settings first.`
+      ) : (
+        <>
+          Cronk creates <span className="mono">{release.branch}</span> at the head of the default branch in{" "}
+          {listed.map((repository, i) => (
+            <span key={repository.id}>
+              {i > 0 && (i === listed.length - 1 ? " and " : ", ")}
+              <span className="mono">{repository.fullName}</span>
+            </span>
+          ))}
+          . It can't be renamed or deleted afterwards, and its Tickets stay tagged.
+        </>
+      )}
+    </ConfirmDialog>
   );
 }

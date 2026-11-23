@@ -322,6 +322,8 @@ export const api = {
     ),
   deleteRelease: (projectId: string, releaseId: string) =>
     call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}`),
+  cutRelease: (projectId: string, releaseId: string) =>
+    call<Release>("POST", `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}/cut`),
   createTicket: (projectId: string, input: TicketCreate) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),

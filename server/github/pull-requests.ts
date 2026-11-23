@@ -122,6 +122,9 @@ export const PullRequest = Type.Object({
   number: Type.Integer(),
   title: Type.String(),
   branch: Type.String({ description: "The branch it proposes to merge." }),
+  baseBranch: Type.Union([Type.String(), Type.Null()], {
+    description: "The branch it merges into, such as `main` or a release branch; null until GitHub has reported it.",
+  }),
   url: Type.String({ description: "Where GitHub shows it." }),
   state: literals(
     pullRequestStates,
@@ -162,7 +165,8 @@ export async function pullRequestsOf(db: Db | Tx, viewer: Viewer, ticketId: stri
   }>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId", pull_requests.head_sha as sha,
        pull_requests.repository_full_name as repository, pull_requests.number, pull_requests.title,
-       pull_requests.branch, pull_requests.url, pull_requests.state, pull_requests.merged_by_login as "mergedBy",
+       pull_requests.branch, pull_requests.base_branch as "baseBranch", pull_requests.url, pull_requests.state,
+       pull_requests.merged_by_login as "mergedBy",
        case when runs.id is null then null
          else json_build_object('runId', runs.id, 'statusId', runs.status_id, 'name', runs.status_name) end
          as "producingStep",

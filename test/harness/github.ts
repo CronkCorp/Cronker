@@ -1,4 +1,4 @@
-import { createHmac, createPublicKey, generateKeyPair, randomBytes, verify, type KeyObject } from "node:crypto";
+import { createHash, createHmac, createPublicKey, generateKeyPair, randomBytes, verify, type KeyObject } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Clock } from "../../server/clock.js";
 
@@ -6,7 +6,7 @@ import type { Clock } from "../../server/clock.js";
  * A stand-in for GitHub, for the parts Cronk uses: creating a GitHub App from a manifest,
  * a User authorizing the App to sign them in (OAuth), looking up accounts, the App asking
  * about itself and its installations with its JWT, installation tokens, the repositories an
- * installation covers (listed, or one by id), a Pull Request with its mergeability, a repository's issues, and sending the App's webhook deliveries signed with its secret,
+ * installation covers (listed, or one by id), branches and the refs created in them, a Pull Request with its mergeability, a repository's issues, and sending the App's webhook deliveries signed with its secret,
  * keeping a log of them the App may list and ask to redeliver from.
  * Like the real thing it redirects the browser, so a test (or Playwright) follows `Location`s.
  *
@@ -48,6 +48,19 @@ export interface StandInRepository {
   fullName: string;
   /** Whether its settings allow each merge method; GitHub allows all three unless a test says otherwise. */
   mergeMethods?: Partial<Record<MergeMethod, boolean>>;
+  /** Its default branch: `main` unless a test says otherwise. */
+  defaultBranch?: string;
+  /** Its branches by name, each with the commit it points at; until a test sets them, only its default branch. */
+  branches?: Map<string, string>;
+}
+
+/** A ref GitHub created at the App's request. */
+export interface StandInRef {
+  /** `owner/name`. */
+  repository: string;
+  /** Such as `refs/heads/release/v0.3.0`. */
+  ref: string;
+  sha: string;
 }
 
 export type MergeMethod = "merge" | "squash" | "rebase";
@@ -231,6 +244,8 @@ export interface StandInGitHub {
   rateLimitLinks(until: Date, options?: { status?: 403 | 429; header?: "reset" | "retry-after" }): void;
   /** Every merge the App asked of GitHub's API that GitHub made, oldest first. */
   merges: StandInMerge[];
+  /** Every ref the App asked GitHub's API to create that GitHub created, oldest first. */
+  refsCreated: StandInRef[];
   /** The branch updates GitHub made at the App's request, in order; each clears `behind` and moves the head. */
   updates: StandInBranchUpdate[];
   /** Called while GitHub updates a branch, before it answers, as a test's look at Cronk mid-update. */
@@ -307,6 +322,14 @@ function page<T>(url: URL, items: T[]): { items: T[]; link?: string } {
 const accountJson = (account: GitHubAccount | null) => (account ? { id: account.id, login: account.login, type: "User" } : null);
 
 const allows = (repository: StandInRepository, method: MergeMethod) => repository.mergeMethods?.[method] ?? true;
+
+const defaultBranchOf = (repository: StandInRepository) => repository.defaultBranch ?? "main";
+
+/** The repository's branches, starting with its default branch at a commit of its own. */
+export function branchesOf(repository: StandInRepository): Map<string, string> {
+  repository.branches ??= new Map([[defaultBranchOf(repository), createHash("sha1").update(repository.fullName).digest("hex")]]);
+  return repository.branches;
+}
 
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -436,6 +459,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       linksLimit = { until, status, header };
     },
     merges: [],
+    refsCreated: [],
     updates: [],
     onUpdate: null,
     onMerge: null,
@@ -725,7 +749,31 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
         allow_merge_commit: allows(repository, "merge"),
         allow_squash_merge: allows(repository, "squash"),
         allow_rebase_merge: allows(repository, "rebase"),
+        default_branch: defaultBranchOf(repository),
       });
+    }
+
+    // API: one branch's ref, and creating a ref, with a token of an installation that covers the repository.
+    const gitRef = /^\/repos\/([^/]+\/[^/]+)\/git\/(?:ref\/heads\/(.+)|refs)$/.exec(path);
+    if (gitRef && ((request.method === "GET" && gitRef[2]) || (request.method === "POST" && !gitRef[2]))) {
+      const issued = bearer ? installationTokens.get(bearer) : undefined;
+      const installation = github.installations.find((i) => i.id === issued?.installationId);
+      if (!issued || !installation || issued.expiresAt <= clock.now()) return json(response, 401, { message: "Bad credentials" });
+      const repository = installation.repositories.find((r) => r.fullName.toLowerCase() === decodeURIComponent(gitRef[1]!).toLowerCase());
+      if (!repository) return json(response, 404, { message: "Not Found" });
+      if (request.method === "GET") {
+        const branch = gitRef[2]!.split("/").map(decodeURIComponent).join("/");
+        const sha = branchesOf(repository).get(branch);
+        if (!sha) return json(response, 404, { message: "Not Found" });
+        return json(response, 200, { ref: `refs/heads/${branch}`, object: { type: "commit", sha } });
+      }
+      const body = JSON.parse(await readBody(request)) as { ref?: string; sha?: string };
+      const branch = /^refs\/heads\/(.+)$/.exec(body.ref ?? "")?.[1];
+      if (!branch || !body.sha) return json(response, 422, { message: "Invalid request." });
+      if (branchesOf(repository).has(branch)) return json(response, 422, { message: "Reference already exists" });
+      branchesOf(repository).set(branch, body.sha);
+      github.refsCreated.push({ repository: repository.fullName, ref: body.ref!, sha: body.sha });
+      return json(response, 201, { ref: body.ref, object: { type: "commit", sha: body.sha } });
     }
 
     // API: an issue's Comments, oldest first, with a token of an installation that covers its repository and may read issues.

@@ -153,14 +153,21 @@ describe("which names are Mentions", () => {
     expect(onDocument.mentions).toEqual([mentionOf(projectLane)]);
 
     // Indexed again after a rename, the Comment keeps its Project's glossary.
+    // Settled between the renames, and compared in any order: indexing again goes by kind and then by random id, so
+    // which text was indexed last, and so comes first, is not fixed.
     await ok("PATCH", `/api/terms/${projectLane.id}`, s.ada, { name: "Swimlane", baseVersion: 1 });
+    await cronk.jobsSettled();
     await ok("PATCH", `/api/terms/${projectLane.id}`, s.ada, { name: "Lane", baseVersion: 2 });
     await cronk.jobsSettled();
-    expect(await mentionedIn(s.ada, projectLane.id)).toEqual([
-      ["document", written.id],
-      ["comment", onDocument.id],
-      ["comment", comment.id],
-    ]);
+    const lanes = await mentionedIn(s.ada, projectLane.id);
+    expect(lanes).toHaveLength(3);
+    expect(lanes).toEqual(
+      expect.arrayContaining([
+        ["document", written.id],
+        ["comment", onDocument.id],
+        ["comment", comment.id],
+      ]),
+    );
     expect(await mentionedIn(s.ada, workspaceLane.id)).toEqual([]);
     expect((await document(s, "Per CRONK-D1, one Lane.")).mentions).toHaveLength(2);
   });
