@@ -12,7 +12,7 @@ import { outdatedVersion } from "../knowledge/versions.js";
 import { Actor, actorColumn } from "../work/actors.js";
 import { title } from "../work/fields.js";
 import { describeSize, forgetAttachments } from "../attachments/attachments.js";
-import { ownerName } from "../agents/tokens.js";
+import { requireOwnerAct } from "../identity/acts.js";
 import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
 import { insertLink } from "./linked-artifacts.js";
 import { noticeKnowledge } from "../inbox/knowledge-notices.js";
@@ -441,8 +441,8 @@ export async function saveArtifact(context: Context, actor: Caller, artifactId: 
 }
 
 /**
- * Deletes the Artifact with all its Versions, their files' bytes once the delete is committed. Only a User may, so an
- * agent can't remove work. Its Comments go with it. It drops out of its links, and the Tickets linking it show the change.
+ * Deletes the Artifact with all its Versions, their files' bytes once the delete is committed. Only a User, or an Agent
+ * with a Full token, may, so delegated work can't remove work. Its Comments go with it. It drops out of its links, and the Tickets linking it show the change.
  */
 export async function deleteArtifact(context: Context, actor: Caller, artifactId: string): Promise<void> {
   const { db, live } = context;
@@ -450,12 +450,10 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
     const artifact = await lockArtifact(tx, actor, artifactId);
     if (!artifact) throw artifactNotFound();
     await requireWrite(tx, actor, artifact);
-    if (actor.kind === "agent") {
-      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete an Artifact.`, {
-        rule: "Only a User deletes an Artifact, so an agent can't remove work.",
-        advice: `Leave the Artifact as it is, or save a new Version; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
-      });
-    }
+    requireOwnerAct(actor, {
+      act: "deleting an Artifact",
+      rule: "An Agent with a Write token doesn't delete an Artifact, so delegated work can't remove work; leave it, or save a new Version.",
+    });
     const linking = await tx.query<{ ticketId: string; projectId: string }>(
       `select tickets.id as "ticketId", tickets.project_id as "projectId"
        from linked_artifacts join tickets on tickets.id = linked_artifacts.ticket_id
@@ -488,8 +486,8 @@ export async function deleteArtifact(context: Context, actor: Caller, artifactId
 
 /**
  * Deletes one Version of the Artifact, such as one that leaked something, keeping the others; its files' bytes go
- * once the delete is committed, unless a remaining Version shares them. Only a User may, so an agent can't remove
- * work. Deleting the current Version makes the newest remaining one current. Its number is never used again.
+ * once the delete is committed, unless a remaining Version shares them. Only a User, or an Agent with a Full token,
+ * may, so delegated work can't remove work. Deleting the current Version makes the newest remaining one current. Its number is never used again.
  */
 export async function deleteArtifactVersion(context: Context, actor: Caller, artifactId: string, number: number): Promise<void> {
   const { db, live } = context;
@@ -497,12 +495,10 @@ export async function deleteArtifactVersion(context: Context, actor: Caller, art
     const artifact = await lockArtifact(tx, actor, artifactId);
     if (!artifact) throw artifactNotFound();
     await requireWrite(tx, actor, artifact);
-    if (actor.kind === "agent") {
-      throw new ApiError(403, "agent_not_allowed", `${actor.name} is an Agent, and only a User can delete a Version of an Artifact.`, {
-        rule: "Only a User deletes a Version of an Artifact, so an agent can't remove work.",
-        advice: `Leave the Version as it is, or save a new one; ask ${ownerName(actor)}, ${actor.name}'s Owner, if it should go.`,
-      });
-    }
+    requireOwnerAct(actor, {
+      act: "deleting a Version of an Artifact",
+      rule: "An Agent with a Write token doesn't delete a Version of an Artifact, so delegated work can't remove work; save a new one instead.",
+    });
     const versions = await versionsOfFound(tx, artifact.id);
     if (!versions.some((version) => version.number === number)) {
       throw await missingVersion(tx, artifact, number);

@@ -702,7 +702,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "A new title or body saves a Document as its next Version, by your Agent, based on the Version you read: give " +
         "its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, carrying " +
         "the current Version as `current`: merge your change into it and save again based on it. A new parent or place " +
-        "moves the Document within its page tree, making no Version. Only Users delete Documents." +
+        "moves the Document within its page tree, making no Version. Only Users, and Agents with a Full token, delete Documents." +
         avoidedWordsNote,
       inputSchema: {
         document: documentArgument,
@@ -860,7 +860,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
         "Saves a Term as its next Version, by your Agent, keeping what you leave out, based on the Version you read: " +
         "give its number as `baseVersion`. A save based on an outdated Version is refused with `outdated_version`, " +
         "carrying the current Version as `current`: merge your change into it and save again based on it. Only Users " +
-        "delete Terms." + avoidedWordsNote,
+        "and Agents with a Full token delete Terms." + avoidedWordsNote,
       inputSchema: {
         term: termArgument,
         ...bodyFields(TermEdit),
@@ -1688,6 +1688,67 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
       },
       ({ ticket }) =>
         answer(async () => send("POST", `/api/tickets/${(await ticketByKeyOrId(ticket)).id}/retry`)),
+    );
+
+    server.registerTool(
+      "delete_document",
+      {
+        title: "Delete a Document",
+        description:
+          "With a Full token: deletes a Document with all its Versions, Attachments and Comments, as your Owner could; it " +
+          "drops out of the Tickets linking it. It can't be undone. Refused while Documents sit under it " +
+          "(`document_has_children`): move or delete them first.",
+        inputSchema: { document: documentArgument },
+        annotations: { destructiveHint: true },
+      },
+      ({ document }) =>
+        answer(async () => {
+          await send("DELETE", documentPath(document));
+          return { deleted: document };
+        }),
+    );
+
+    server.registerTool(
+      "delete_term",
+      {
+        title: "Delete a Term",
+        description:
+          "With a Full token: deletes a Term with all its Versions, as your Owner could. It can't be undone. A Workspace " +
+          "Term of the same name a deleted Project Term replaced comes back in the Project's glossary.",
+        inputSchema: { term: termArgument },
+        annotations: { destructiveHint: true },
+      },
+      ({ term }) =>
+        answer(async () => {
+          await send("DELETE", termPath(term));
+          return { deleted: term };
+        }),
+    );
+
+    server.registerTool(
+      "delete_artifact",
+      {
+        title: "Delete an Artifact or one of its Versions",
+        description:
+          "With a Full token: deletes an Artifact with all its Versions and Comments, as your Owner could; it drops out " +
+          "of the Tickets linking it. Given a Version's number, deletes only that Version, such as one that leaked " +
+          "something; deleting the current Version makes the newest remaining one current, and the only Version is " +
+          "refused (`only_version`): delete the Artifact instead. It can't be undone.",
+        inputSchema: {
+          artifact: artifactArgument,
+          version: z.number().int().min(1).optional().describe("A Version's number, to delete only that Version."),
+        },
+        annotations: { destructiveHint: true },
+      },
+      ({ artifact, version }) =>
+        answer(async () => {
+          if (version === undefined) {
+            await send("DELETE", artifactPath(artifact));
+            return { deleted: artifact };
+          }
+          await send("DELETE", `${artifactPath(artifact)}/versions/${version}`);
+          return { deleted: artifact, version };
+        }),
     );
   }
 

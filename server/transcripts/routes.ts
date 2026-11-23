@@ -177,8 +177,8 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Transcripts"],
           summary: "Delete a Transcript",
           description:
-            "Deletes the Transcript's entries, for when the scrubbing missed a secret. Only a User may; Agents are " +
-            "refused with `agent_not_allowed`. Its Run then says its Transcript was deleted (`transcriptDeleted`), and " +
+            "Deletes the Transcript's entries, for when the scrubbing missed a secret. Only a User, or an Agent with a Full token, may; " +
+            "an Agent with a Write token is refused with `full_token_needed`. Its Run then says its Transcript was deleted (`transcriptDeleted`), and " +
             "a later upload of the same session is refused with `transcript_deleted`.",
           params: TranscriptParams,
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
@@ -199,7 +199,8 @@ export function transcriptRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "For when the scrubbing missed a secret: every appearance of the string in the Transcript's messages, tool " +
             "inputs and tool results becomes `[redacted]`, and so it does in every later upload or fetch of its " +
-            "session. Only a User who can read the Transcript may; Agents are refused with `agent_not_allowed`, and a " +
+            "session. Only a User who can read the Transcript, or an Agent with a Full token that can, may; an Agent with a " +
+            "Write token is refused with `full_token_needed`, and a " +
             "string shorter than 4 characters with `redaction_too_short`. The string is never returned, and a " +
             "Redaction can't be removed. Answers with the Transcript.",
           params: TranscriptParams,

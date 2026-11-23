@@ -131,7 +131,7 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
-  test("only a Full token lists the Full tools, and its instructions name the token's level", async () => {
+  test("only a Full token lists the Full tools, the delete tools included, and its instructions name the token's level", async () => {
     const { cookie, agent } = await workspaceWithTicket("write");
     const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
     const read = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "read", access: "read" });
@@ -146,6 +146,9 @@ describe("MCP with an Agent token", () => {
       "publish_release",
       "answer_question",
       "retry_run",
+      "delete_document",
+      "delete_term",
+      "delete_artifact",
       "dismiss_ticket",
       "add_relation",
       "remove_relation",
@@ -178,6 +181,34 @@ describe("MCP with an Agent token", () => {
     const write = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "write", access: "write" });
     const tools = await (await connect(write.secret)).callTool({ name: "move_ticket", arguments: { ticket: "CRONK-1", status: "Backlog" } });
     expect(tools.isError).toBe(true);
+  });
+
+  test("a Full token deletes a Document, a Term, an Artifact's Version and the Artifact by their slugs and names", async () => {
+    const { cookie, agent, workspace } = await workspaceWithTicket("write");
+    const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
+    const client = await connect(full.secret);
+    const project = (await (await cronk.request("GET", `/api/workspaces/${workspace.id}/projects`, { cookie })).json())[0];
+    const document = await post(cookie, `/api/projects/${project.id}/documents`, { title: "Plan", body: "One." });
+    await post(cookie, `/api/projects/${project.id}/terms`, { name: "Ticket", definition: "Work." });
+    const html = (text: string) => [{ path: "index.html", contentBase64: Buffer.from(text).toString("base64") }];
+    const artifact = await post(cookie, `/api/projects/${project.id}/artifacts`, { title: "Prototype", files: html("1") });
+    await cronk.request("PATCH", `/api/artifacts/${artifact.id}`, { cookie, body: { baseVersion: 1, files: html("2") } });
+
+    expect(await call(client, "delete_document", { document: document.slug })).toMatchObject({ isError: false });
+    expect(await call(client, "delete_term", { term: "CRONK/ticket" })).toMatchObject({ isError: false });
+    expect(await call(client, "delete_artifact", { artifact: artifact.slug, version: 2 })).toMatchObject({
+      isError: false,
+      json: { version: 2 },
+    });
+    const only = await call(client, "delete_artifact", { artifact: artifact.slug, version: 1 });
+    expect(only).toMatchObject({ isError: true, json: { code: "only_version" } });
+    expect(await call(client, "delete_artifact", { artifact: artifact.slug })).toMatchObject({ isError: false });
+
+    for (const path of [`/api/documents/${document.id}`, `/api/artifacts/${artifact.id}`]) {
+      expect((await cronk.request("GET", path, { cookie })).status).toBe(404);
+    }
+    const terms = await (await cronk.request("GET", `/api/projects/${project.id}/terms`, { cookie })).json();
+    expect(terms).toEqual([]);
   });
 
   test("a Full token edits and delegates any Ticket, dismisses a Discovered Ticket and relates and unrelates Tickets", async () => {

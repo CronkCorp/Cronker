@@ -115,7 +115,7 @@ _Avoid_: Prompt, system prompt, instructions
 ### Knowledge
 
 **Document**:
-A piece of written knowledge kept as Markdown, in the page tree of a Project or the Workspace. Only a User may delete one.
+A piece of written knowledge kept as Markdown, in the page tree of a Project or the Workspace. Only a User, or an Agent with a Full token, may delete one.
 _Avoid_: Page, doc, wiki page, note
 
 **Version**:
@@ -155,7 +155,7 @@ A recorded choice with its reasoning and a status: proposed, accepted, rejected,
 _Avoid_: ADR (in the product), RFC
 
 **Artifact**:
-A live, viewable page an Actor builds, such as an HTML prototype, with the files it refers to, kept with Versions in a Project or the Workspace and shown in isolation from Cronk itself. One made during a Run is linked to its Ticket, which may link others as it links Documents. Only a User may delete one.
+A live, viewable page an Actor builds, such as an HTML prototype, with the files it refers to, kept with Versions in a Project or the Workspace and shown in isolation from Cronk itself. One made during a Run is linked to its Ticket, which may link others as it links Documents. Only a User, or an Agent with a Full token, may delete one, or one of its Versions.
 _Avoid_: Prototype (as the general term), preview, app
 
 **Transcript**:
@@ -163,7 +163,7 @@ The verbatim record of an agent's conversation that led it to change things in C
 _Avoid_: Chat log, conversation, session log
 
 **Redaction**:
-A string a User removed from a Transcript because the secret scrubbing missed it: every appearance becomes `[redacted]`, in what Cronk holds and in every later upload or fetch of the session. Cronk keeps the string only to apply it again and never shows it; a Redaction can't be removed, and only a User adds one.
+A string a User removed from a Transcript because the secret scrubbing missed it: every appearance becomes `[redacted]`, in what Cronk holds and in every later upload or fetch of the session. Cronk keeps the string only to apply it again and never shows it; a Redaction can't be removed, and only a User, or an Agent with a Full token, adds one.
 _Avoid_: Scrub (for what a User does), mask, censor
 
 ### Code

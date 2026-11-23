@@ -4,8 +4,7 @@
  */
 export const agentRights =
   "Agents may read their Workspace, comment on its Tickets, file Tickets, create, save and move Documents, " +
-  "attaching files to Documents and to their own Comments, create and save Terms (only Users delete Documents " +
-  "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only " +
+  "attaching files to Documents and to their own Comments, create and save Terms, create and save Artifacts, and propose Decisions and edit their text (only " +
   "Users change a Decision's status). An Agent whose Owner is an Admin may also create Projects, and with Write in " +
   "a Project change its board, a Step's content only when its Owner is an Admin. With Write in a Project an Agent may also create, rename " +
   "and delete its planned Releases (only Users and Full tokens cut and release them). During its running Run on a Ticket " +
@@ -28,7 +27,8 @@ export const agentRights =
   "remove one with `remove_relation`: each a Change by the Agent with no Run. It may also queue a Ticket in the Merge Queue and remove it " +
   "(`queue_merge`, `remove_from_queue`), Cronk's merge of what it queued completing the Ticket as Unverified; Cut " +
   "and Release a Release (`cut_release`, `publish_release`); answer a Run's Question (`answer_question`) and " +
-  "dismiss one; and retry a Run gone wrong on a Ticket delegated to one of its Owner's Agents (`retry_run`). Accept and Reopen, Access and Admin settings, a Decision's status " +
+  "dismiss one; retry a Run gone wrong on a Ticket delegated to one of its Owner's Agents (`retry_run`); and delete " +
+  "Documents, Terms, Artifacts and Artifact Versions (`delete_document`, `delete_term`, `delete_artifact`). Accept and Reopen, Access and Admin settings, a Decision's status " +
   "and resolving threads stay human-only, even for a Full token (`human_only`); a Write token attempting a Full act " +
   "gets `full_token_needed`. Anything else is refused with the rule and what to do instead.";
 

@@ -200,8 +200,8 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
             "its files' bytes are kept while another Version shares them. Deleting the current Version makes the " +
             "newest remaining one current. Its number is never used again: reading it answers `version_deleted`, " +
             "and a save based on it is refused as `outdated_version`. The only Version is refused with " +
-            "`only_version`: delete the Artifact instead. Only a User may; Agents are refused with " +
-            "`agent_not_allowed`.",
+            "`only_version`: delete the Artifact instead. Only a User, or an Agent with a Full token, may; an Agent " +
+            "with a Write token is refused with `full_token_needed`.",
           params: VersionParams,
           response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody, 410: ErrorBody },
         },
@@ -273,7 +273,8 @@ export function artifactRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Delete an Artifact",
           description:
             "Deletes the Artifact with all its Versions and their files, which are no longer served; it drops out of " +
-            "the Tickets linking it. Only a User may; Agents are refused with `agent_not_allowed`.",
+            "the Tickets linking it. Only a User, or an Agent with a Full token, may; an Agent with a Write token is " +
+            "refused with `full_token_needed`.",
           params: ArtifactParams,
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },

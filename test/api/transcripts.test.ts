@@ -673,13 +673,13 @@ describe("deleting a Transcript", () => {
     expect(run).toMatchObject({ transcriptId: null, transcriptDeleted: true });
   });
 
-  test("an Agent's delete is refused, its own Transcript included, and the Transcript is kept", async () => {
+  test("a Write token's delete is refused, its own Transcript included, and the Transcript is kept", async () => {
     const { ada, asAgent } = await adaWithAgent();
     const transcript = await uploaded("laptop-session", [userSays("Hello.", 1)], asAgent);
 
     const refused = await call("DELETE", `/api/transcripts/${transcript.id}`, asAgent);
 
-    expect(refused).toMatchObject({ status: 403, json: { error: { code: "agent_not_allowed" } } });
+    expect(refused).toMatchObject({ status: 403, json: { error: { code: "full_token_needed" } } });
     expect(await entriesOf(transcript.id, ada)).toMatchObject([{ text: "Hello." }]);
   });
 
@@ -826,7 +826,7 @@ describe("redacting part of a Transcript", () => {
     expect((await ok("GET", `/api/transcripts/${transcript.id}`, ada)).redactions).toEqual([]);
   });
 
-  test("an Agent is refused, its own Transcript included, with a rule and advice", async () => {
+  test("a Write token is refused, its own Transcript included, with a rule and advice", async () => {
     const { ada, asAgent } = await adaWithAgent();
     const transcript = await uploaded("laptop-session", [userSays(`code ${secret}`, 1)], asAgent);
 
@@ -834,7 +834,7 @@ describe("redacting part of a Transcript", () => {
 
     expect(refused).toMatchObject({
       status: 403,
-      json: { error: { code: "agent_not_allowed", rule: expect.any(String), advice: expect.any(String) } },
+      json: { error: { code: "full_token_needed", rule: expect.any(String), advice: expect.any(String) } },
     });
     expect(await entriesOf(transcript.id, ada)).toMatchObject([{ text: `code ${secret}` }]);
   });
