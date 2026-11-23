@@ -4,6 +4,7 @@ import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import type { InstallationListings, InstallationTokens } from "./github/installations.js";
 import type { Jobs } from "./jobs.js";
+import type { LookupFunction } from "node:net";
 import type { Live } from "./live/live.js";
 import type { Runner } from "./runs/runner.js";
 
@@ -24,4 +25,6 @@ export interface Context {
   attachments: AttachmentStorage;
   /** Work done after a change commits, without the response waiting for it. */
   jobs: Jobs;
+  /** How host names Users give, such as webhooks', are resolved: the system's resolver unless a test stands one in. */
+  resolver?: LookupFunction;
 }

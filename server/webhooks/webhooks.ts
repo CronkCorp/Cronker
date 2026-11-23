@@ -1,4 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { Type, type Static } from "typebox";
 import type { Config } from "../config.js";
 import type { Context } from "../context.js";
@@ -7,6 +9,7 @@ import { requireSecretBox } from "../encryption.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { literals } from "../literals.js";
+import { addressLiteral, isPrivateAddress, publicOnly, resolveAll, systemResolver } from "../net/public-address.js";
 import type { Workspace } from "../workspaces/workspaces.js";
 
 /**
@@ -129,11 +132,24 @@ const notFound = () => new ApiError(404, "not_found", "No such webhook.");
 
 const localHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
+/** Whether Cronk is a local one: its own public address is plain http to localhost. */
+const isLocalCronk = (config: Config) => config.publicUrl.protocol === "http:" && localHosts.has(config.publicUrl.hostname);
+
+/**
+ * Whether a webhook's URL may be on a private network without being refused: when the server allows it
+ * (`CRONK_WEBHOOKS_ALLOW_PRIVATE`), or for a local address on a local Cronk.
+ */
+const mayBePrivate = (config: Config, url: URL) => config.webhooks.allowPrivate || (isLocalCronk(config) && localHosts.has(url.hostname));
+
+const privateNetwork = "A webhook's URL can't point at a private network address, such as 10.0.0.5 or 169.254.169.254.";
+
 /**
  * A webhook's URL must be `https`, so deliveries aren't sent in the clear; plain `http` only to a local address, and
- * only on a local Cronk (one whose own public address is plain http to localhost).
+ * only on a local Cronk (one whose own public address is plain http to localhost). Its host mustn't be or resolve to
+ * a private network address, so a webhook can't probe the network Cronk runs in, unless the server allows that. A
+ * host that doesn't resolve now is accepted: each delivery checks again.
  */
-export function checkWebhookUrl(config: Config, value: string): string {
+export async function checkWebhookUrl({ config, resolver = systemResolver }: Pick<Context, "config" | "resolver">, value: string): Promise<string> {
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -143,16 +159,22 @@ export function checkWebhookUrl(config: Config, value: string): string {
   if (url.username || url.password) {
     throw new ApiError(400, "invalid_webhook_url", "A webhook's URL can't carry a user name or password.");
   }
-  if (url.protocol === "https:") return url.href;
-  const localCronk = config.publicUrl.protocol === "http:" && localHosts.has(config.publicUrl.hostname);
-  if (url.protocol === "http:" && localCronk && localHosts.has(url.hostname)) return url.href;
-  throw new ApiError(
-    400,
-    "invalid_webhook_url",
-    localCronk
-      ? "A webhook's URL must use https, or plain http to localhost."
-      : "A webhook's URL must use https, so deliveries aren't sent in the clear.",
-  );
+  const localCronk = isLocalCronk(config);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && localCronk && localHosts.has(url.hostname))) {
+    throw new ApiError(
+      400,
+      "invalid_webhook_url",
+      localCronk
+        ? "A webhook's URL must use https, or plain http to localhost."
+        : "A webhook's URL must use https, so deliveries aren't sent in the clear.",
+    );
+  }
+  if (!mayBePrivate(config, url)) {
+    const literal = addressLiteral(url);
+    const addresses = literal ? [literal] : await resolveAll(resolver, url.hostname);
+    if (addresses.some(isPrivateAddress)) throw new ApiError(400, "invalid_webhook_url", privateNetwork);
+  }
+  return url.href;
 }
 
 function checkKinds(kinds: string[]): WebhookKind[] {
@@ -186,12 +208,13 @@ export async function findWebhook(db: Db, userId: string, workspaceId: string, w
 
 /** Adds a webhook, returning its signing secret this once; it is kept sealed under `CRONK_SECRET_KEY`. */
 export async function createWebhook(
-  { db, clock, config }: Context,
+  context: Context,
   userId: string,
   workspaceId: string,
   input: WebhookCreate,
 ): Promise<Webhook & { secret: string }> {
-  const url = checkWebhookUrl(config, input.url);
+  const { db, clock, config } = context;
+  const url = await checkWebhookUrl(context, input.url);
   const kinds = checkKinds(input.kinds ?? defaultWebhookKinds);
   const box = requireSecretBox(config);
   const secret = `whsec_${randomBytes(32).toString("base64")}`;
@@ -205,14 +228,15 @@ export async function createWebhook(
 
 /** Changes whichever of a webhook's name, URL, kinds and on or off are given. */
 export async function editWebhook(
-  { db, config }: Context,
+  context: Context,
   userId: string,
   workspaceId: string,
   webhookId: string,
   input: WebhookEdit,
 ): Promise<Webhook> {
+  const { db } = context;
   const current = await findOwn(db, userId, workspaceId, webhookId);
-  const url = input.url === undefined ? current.url : checkWebhookUrl(config, input.url);
+  const url = input.url === undefined ? current.url : await checkWebhookUrl(context, input.url);
   const kinds = input.kinds === undefined ? current.kinds : checkKinds(input.kinds);
   const { rows } = await db.query<WebhookRow>(
     `update webhooks set name = $2, url = $3, kinds = $4, enabled = $5 where id = $1 returning ${columns}`,
@@ -339,6 +363,39 @@ export function signDelivery(secret: string, id: string, timestamp: string, body
 }
 
 /**
+ * Posts a delivery, answering the receiver's status code, or failing with why there was none. A receiver on a
+ * private network is refused unless its URL may be (`mayBePrivate`): its address literal is checked, and the very
+ * addresses a host name resolves to as it connects, so a host whose DNS changed after it was saved isn't contacted.
+ * Redirects aren't followed, so they can't lead there either.
+ */
+function post(context: Context, url: URL, body: string, headers: Record<string, string>): Promise<number> {
+  const { config, resolver = systemResolver } = context;
+  const exempt = mayBePrivate(config, url);
+  const literal = addressLiteral(url);
+  const refused = new Error("The receiver is on a private network.");
+  if (!exempt && literal && isPrivateAddress(literal)) return Promise.reject(refused);
+  return new Promise((resolve, reject) => {
+    const request = (url.protocol === "https:" ? httpsRequest : httpRequest)(
+      url,
+      { method: "POST", headers, timeout: deliveryTimeoutMs, lookup: exempt ? resolver : publicOnly(resolver) },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode!);
+      },
+    );
+    request.on("timeout", () => request.destroy(Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })));
+    request.on("error", (error: Error & { code?: string }) =>
+      reject(
+        error.code === "EPRIVATE"
+          ? refused
+          : new Error(error.code === "ETIMEDOUT" ? "The receiver didn't answer in time." : "The receiver couldn't be reached."),
+      ),
+    );
+    request.end(body);
+  });
+}
+
+/**
  * The delivery check: sends every due delivery once, recording the attempt with the receiver's status code (or why
  * there was none) and the time. A 2xx delivers it and clears the webhook's failing; otherwise it is due again after
  * the backoff of `nextAttemptAt`, or, once that is spent, is given up on and marks its webhook failing. Then keeps only
@@ -369,24 +426,15 @@ export async function deliverWebhooks(context: Context): Promise<void> {
       let statusCode: number | null = null;
       let error: string | null = null;
       try {
-        const response = await fetch(delivery.url, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "user-agent": "Cronk-Webhooks",
-            "webhook-id": delivery.id,
-            "webhook-timestamp": timestamp,
-            "webhook-signature": signDelivery(box.open(delivery.secretSealed), delivery.id, timestamp, delivery.body),
-          },
-          body: delivery.body,
-          redirect: "manual",
-          signal: AbortSignal.timeout(deliveryTimeoutMs),
+        statusCode = await post(context, new URL(delivery.url), delivery.body, {
+          "content-type": "application/json",
+          "user-agent": "Cronk-Webhooks",
+          "webhook-id": delivery.id,
+          "webhook-timestamp": timestamp,
+          "webhook-signature": signDelivery(box.open(delivery.secretSealed), delivery.id, timestamp, delivery.body),
         });
-        statusCode = response.status;
-        await response.body?.cancel().catch(() => {});
       } catch (failure) {
-        const name = (failure as Error).name;
-        error = name === "TimeoutError" ? "The receiver didn't answer in time." : "The receiver couldn't be reached.";
+        error = (failure as Error).message;
       }
       const now = clock.now();
       const delivered = statusCode !== null && statusCode >= 200 && statusCode < 300;

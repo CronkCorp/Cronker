@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Socket } from "node:net";
+import type { LookupFunction, Socket } from "node:net";
 import type { Writable } from "node:stream";
 import type { FastifyBaseLogger, FastifyInstance } from "fastify";
 import pg from "pg";
@@ -33,6 +33,8 @@ export interface CronkOptions {
   runnerKinds?: Record<string, RunnerKind>;
   /** Stops migrating short of this migration and those after it; only a test of that migration sets it. */
   migrateBefore?: string;
+  /** Resolves host names Users give, such as webhooks'; the system's resolver when left out. */
+  resolver?: LookupFunction;
 }
 
 export interface Cronk {
@@ -68,6 +70,7 @@ export async function createCronk({
   logStream,
   runnerKinds = {},
   migrateBefore,
+  resolver,
 }: CronkOptions): Promise<Cronk> {
   // Until the app (and its logger) exists, which is while migrating, a dropped connection goes to stderr.
   let log: FastifyBaseLogger | undefined;
@@ -88,6 +91,7 @@ export async function createCronk({
       installationListings: new InstallationListings(clock),
       attachments: directoryStorage(config.attachments.directory),
       jobs: new Jobs(),
+      resolver,
     };
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);

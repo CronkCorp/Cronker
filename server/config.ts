@@ -19,6 +19,11 @@ export interface Config {
   managedAgentsApiUrl: URL;
   /** Where Attachments are kept, and how large each may be. */
   attachments: { directory: string; limitBytes: number };
+  /**
+   * Whether webhooks may be delivered to private, loopback and link-local addresses, such as a receiver on the LAN
+   * (`CRONK_WEBHOOKS_ALLOW_PRIVATE=true`). Off by default, so a User's webhook can't reach the network Cronk runs in.
+   */
+  webhooks: { allowPrivate: boolean };
 }
 
 /** An Attachment may be this large unless configured otherwise: 25 MB. */
@@ -77,6 +82,11 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { webRoot?: string 
     throw new ConfigError("CRONK_ATTACHMENT_LIMIT_MB must be a number of megabytes above 0, such as 25");
   }
 
+  const allowPrivate = env.CRONK_WEBHOOKS_ALLOW_PRIVATE?.trim().toLowerCase() || "false";
+  if (allowPrivate !== "true" && allowPrivate !== "false") {
+    throw new ConfigError("CRONK_WEBHOOKS_ALLOW_PRIVATE must be true or false");
+  }
+
   return {
     publicUrl,
     databaseUrl: required(env, "DATABASE_URL"),
@@ -94,5 +104,6 @@ export function loadConfig(env: NodeJS.ProcessEnv, defaults: { webRoot?: string 
       directory: resolve(env.CRONK_ATTACHMENTS_DIR?.trim() || "data/attachments"),
       limitBytes: Math.floor(limitMb * megabyte),
     },
+    webhooks: { allowPrivate: allowPrivate === "true" },
   };
 }

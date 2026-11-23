@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { createServer } from "node:net";
+import { createServer, isIP, type LookupFunction } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -44,6 +44,11 @@ export interface StartedCronk {
   managedAgents: StandInManagedAgents;
   /** A stand-in webhook receiver on 127.0.0.1, which records what Cronk delivers to it and can fail on cue. */
   webhooks: StandInWebhookReceiver;
+  /**
+   * The addresses host names resolve to for what Users give Cronk, such as webhook URLs, by lowercase name; change it
+   * to have a host resolve elsewhere. Only `localhost` resolves unless a test adds a name.
+   */
+  hosts: Map<string, string>;
   /** The fake Runner, installed as the Runner kind `fake`: what it was asked to start, and what to do next. */
   runner: FakeRunner;
   clock: TestClock;
@@ -119,6 +124,8 @@ export interface StartCronkOptions {
    * it, for a test of that migration: it stages what an earlier Cronk wrote with `stage()`, then calls `upgrade()`.
    */
   migrateBefore?: string;
+  /** Starts Cronk with `CRONK_WEBHOOKS_ALLOW_PRIVATE=true`, so webhooks may be on private networks. */
+  allowPrivateWebhooks?: boolean;
 }
 
 /** How many ports `startCronk()` and `upgrade()` try before giving up, each picked afresh. */
@@ -158,6 +165,16 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     },
   });
 
+  // Host names resolve only as a test sets them in `hosts`, besides `localhost`; any other doesn't resolve.
+  const hosts = new Map<string, string>([["localhost", "127.0.0.1"]]);
+  const resolver: LookupFunction = (hostname, options, callback) => {
+    const address = hosts.get(hostname.toLowerCase());
+    if (!address) return callback(Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), { code: "ENOTFOUND" }), "", 0);
+    const family = isIP(address);
+    if (options.all) return callback(null, [{ address, family }]);
+    return callback(null, address, family);
+  };
+
   const attachmentsDirectory = await mkdtemp(join(tmpdir(), "cronk-attachments-"));
   const removeAttachments = () => rm(attachmentsDirectory, { recursive: true, force: true });
   let url = "";
@@ -182,7 +199,9 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
           claudeApiUrl: new URL(claude.apiUrl),
           managedAgentsApiUrl: new URL(managedAgents.apiUrl),
           attachments: { directory: attachmentsDirectory, limitBytes: options.attachmentLimitBytes ?? 25 * 1024 * 1024 },
+          webhooks: { allowPrivate: options.allowPrivateWebhooks ?? false },
         },
+        resolver,
         clock,
         logStream,
         runnerKinds: { fake: runner.kind },
@@ -218,6 +237,7 @@ export async function startCronk(options: StartCronkOptions = {}): Promise<Start
     claude,
     managedAgents,
     webhooks,
+    hosts,
     runner,
     clock,
     checkForLostRuns: () => cronk.checkForLostRuns(),

@@ -1,9 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { lookup } from "node:dns";
 import { get as httpGet, type IncomingMessage } from "node:http";
 import { get as httpsGet } from "node:https";
-import { isIP, type LookupFunction } from "node:net";
+import { isIP } from "node:net";
 import type { Context } from "../context.js";
+import { isPrivateAddress, publicOnlyLookup } from "../net/public-address.js";
 
 /**
  * OAuth clients of Cronk's MCP server. A client either registers itself (RFC 7591) and gets
@@ -138,37 +138,6 @@ function metadataDocumentUrl(clientId: string, local: boolean): URL {
   if (url.pathname === "/" || url.hash || url.username || url.password) throw refuseUrl("it needs a path, and no fragment or credentials");
   return url;
 }
-
-/** Whether an address is on a loopback, private, shared or otherwise non-public network. */
-function isPrivateAddress(address: string): boolean {
-  if (isIP(address) === 6) {
-    const lower = address.toLowerCase();
-    const embedded = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-    if (embedded) return isPrivateAddress(embedded[1]!);
-    return lower === "::" || lower === "::1" || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower) || /^ff/.test(lower) ||
-      lower.startsWith("64:ff9b:");
-  }
-  const [a, b] = address.split(".").map(Number) as [number, number];
-  return (
-    a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19))
-  );
-}
-
-/**
- * Resolves a host as usual, but refuses one on a private network. Checking the very addresses
- * the connection then uses leaves no gap for the host to answer differently in between.
- */
-const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
-  lookup(hostname, { ...options, all: true }, (error, addresses) => {
-    if (error) return callback(error, "", 0);
-    if (addresses.length === 0 || addresses.some((a) => isPrivateAddress(a.address))) {
-      return callback(Object.assign(new Error(`${hostname} is on a private network`), { code: "EPRIVATE" }), "", 0);
-    }
-    if (options.all) return (callback as unknown as (e: null, a: typeof addresses) => void)(null, addresses);
-    return callback(null, addresses[0]!.address, addresses[0]!.family);
-  });
-};
 
 const documentLimitBytes = 64 * 1024;
 
