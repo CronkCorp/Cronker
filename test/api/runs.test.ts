@@ -109,6 +109,9 @@ describe("starting Runs", () => {
         "Rules:",
         "",
         "- Call `finish` exactly once, as the last thing you do.",
+        "- Work on until you call `finish`. Don't end your turn to wait for anything, such as CI or activity on a pull " +
+          "request: Cronk can't tell a session waiting from one that has gone, so a Run whose session stops without " +
+          "`finish` becomes lost.",
         "- *needs you* takes a Question.",
         "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
           "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
