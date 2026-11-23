@@ -1526,6 +1526,10 @@
   border-radius: var(--radius-panel);
   background: var(--canvas);
 }
+/* An Artifact shown in the Inbox's detail pane, as New knowledge: shorter than on its own page. */
+.artifact-frame.inbox-artifact-frame {
+  height: 360px;
+}
 /* An Embed: an Artifact shown in place in Markdown, in the same frame as on its page, with a handle to resize it. */
 .embed {
   margin: var(--space-3) 0;

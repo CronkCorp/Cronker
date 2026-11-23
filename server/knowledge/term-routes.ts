@@ -83,7 +83,8 @@ export function termRoutes(context: Context): FastifyPluginAsyncTypebox {
         async (request, reply) => {
           const caller = await requireCaller(context, request);
           const { definition = "", avoid = [], name } = tidy(request.body);
-          const created = await createTerm(context, caller, await place.find(request, caller), { name, definition, avoid });
+          const glossary = await place.find(request, caller);
+          const created = await createTerm(context, caller, glossary, { name, definition, avoid }, request.body.runId);
           return reply.code(201).send(await warnAgent(db, caller, created, { plain: [name], markdown: [definition] }, created));
         },
       );

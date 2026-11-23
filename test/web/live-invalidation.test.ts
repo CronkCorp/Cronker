@@ -37,6 +37,7 @@ const samples: { [type in StreamEvent["type"]]: Extract<StreamEvent, { type: typ
   "artifact.changed": [{ type: "artifact.changed", projectId: p, artifactId: "artifact-1" }],
   "artifact.comments.changed": [{ type: "artifact.comments.changed", projectId: p, artifactId: "artifact-1" }],
   "transcript.changed": [{ type: "transcript.changed", transcriptId: "transcript-1", runId: null }],
+  "inbox.changed": [{ type: "inbox.changed" }],
 };
 
 /** Whether invalidating `key` makes `loaded` stale, as `invalidateQueries` matches: by prefix. */

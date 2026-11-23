@@ -8,6 +8,7 @@ import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import { clearDecisionNotices, creatingRun, noticeKnowledge } from "../inbox/knowledge-notices.js";
 import { title } from "../work/fields.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
@@ -264,6 +265,7 @@ export async function createDecision(
     await requireWrite(tx, actor, scope);
     await lockScope(tx, scope);
     await requireReplacementInScope(tx, { ...scope, id: null }, asked);
+    const run = await creatingRun(tx, actor, input.runId, "a Decision");
     const now = clock.now();
     const { rows } = await tx.query<{ id: string }>(
       `insert into decisions (workspace_id, project_id, number, version, created_at)
@@ -275,6 +277,7 @@ export async function createDecision(
     const id = rows[0]!.id;
     const content: Content = { title: input.title, body: input.body, ...asked };
     await insertVersion(tx, { id, workspaceId: scope.workspaceId }, 1, content, actor, now);
+    await noticeKnowledge(tx, live, actor, { kind: "decision", id, workspaceId: scope.workspaceId }, run, now);
     decisionChanged(live, tx, { ...scope, id });
     return (await findDecision(tx, actor, id))!;
   });
@@ -348,6 +351,13 @@ export const DecisionCreate = Type.Object({
   body: Type.Optional(Body),
   status: Type.Optional(DecisionStatus),
   supersededById: Type.Optional(SupersedingDecision),
+  runId: Type.Optional(
+    Type.String({
+      description:
+        "For an Agent, its running Run the Decision is created in: its New knowledge item waits for the Assignee of the Run's " +
+        "Ticket rather than the Agent's Owner.",
+    }),
+  ),
 });
 export type DecisionCreate = Static<typeof DecisionCreate>;
 
@@ -397,6 +407,8 @@ export async function editDecision(
     if (unchanged) return (await findDecision(tx, actor, decision.id))!;
     await insertVersion(tx, decision, number, content, actor, clock.now());
     await tx.query("update decisions set version = $2 where id = $1", [decision.id, number]);
+    // Accepting, rejecting or otherwise deciding a proposed Decision is what its New knowledge items waited for.
+    if (content.status !== "proposed") await clearDecisionNotices(tx, live, decision, clock.now());
     decisionChanged(live, tx, decision);
     return (await findDecision(tx, actor, decision.id))!;
   });

@@ -100,6 +100,9 @@ const kindTones: Record<string, string> = {
   run: "agent",
   transcript: "agent",
   decision: "agent",
+  term: "agent",
+  document: "agent",
+  artifact: "agent",
   "to review": "info",
   unverified: "info",
 };

@@ -691,7 +691,7 @@ describe("MCP with an Agent token", () => {
     expect(input("create_document").properties.title).toEqual(expect.objectContaining({ maxLength: 300, pattern: "\\S" }));
     expect(input("create_document").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000, description: "Markdown." }));
     // The tools name a Document's parent their own way, by its slug or id.
-    expect(fields("create_document")).toEqual(["body", "parent", "position", "project", "title"]);
+    expect(fields("create_document")).toEqual(["body", "parent", "position", "project", "run", "title"]);
     expect(fields("edit_document")).toEqual(["baseVersion", "body", "document", "parent", "position", "title"]);
     expect(input("edit_document").required).toEqual(["document"]);
     expect(input("edit_document").properties.position).toEqual(
@@ -701,6 +701,8 @@ describe("MCP with an Agent token", () => {
     expect(input("replace_section").properties.body).toEqual(expect.objectContaining({ maxLength: 500_000 }));
     expect(input("replace_section").required?.sort()).toEqual(["baseVersion", "body", "document", "section"]);
 
+    // Naming the Run routes the New knowledge item to its Ticket's Assignee.
+    expect(fields("create_term")).toEqual(["avoid", "definition", "name", "project", "run"]);
     expect(input("create_term").properties.name).toEqual(expect.objectContaining({ maxLength: 200, pattern: "\\S" }));
     expect(input("create_term").properties.avoid).toEqual(
       expect.objectContaining({ maxItems: 50, items: expect.objectContaining({ maxLength: 200 }) }),
@@ -709,7 +711,7 @@ describe("MCP with an Agent token", () => {
     expect(input("edit_term").required?.sort()).toEqual(["baseVersion", "term"]);
 
     // Agents are offered a Decision's text, never its status.
-    expect(fields("propose_decision")).toEqual(["body", "project", "title"]);
+    expect(fields("propose_decision")).toEqual(["body", "project", "run", "title"]);
     expect(fields("edit_decision")).toEqual(["baseVersion", "body", "decision", "title"]);
     expect(input("edit_decision").required?.sort()).toEqual(["baseVersion", "decision"]);
     expect(input("propose_decision").properties.body).toEqual(

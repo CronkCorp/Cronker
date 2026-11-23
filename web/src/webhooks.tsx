@@ -15,6 +15,7 @@ const kinds: { kind: WebhookKind; label: string; hint?: string }[] = [
   { kind: "discovered", label: "Discovered" },
   { kind: "reassign", label: "To reassign", hint: "For Admins: Tickets whose Assignee left or lost Write." },
   { kind: "undelegated", label: "Undelegated", hint: "Your Tickets undelegated when Agents lost Write in their Project." },
+  { kind: "knowledge", label: "New knowledge", hint: "Decisions, Terms, Documents and Artifacts an Agent created." },
 ];
 const defaultKinds: WebhookKind[] = ["question", "needsYou", "run"];
 

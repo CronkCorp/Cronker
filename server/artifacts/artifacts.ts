@@ -15,6 +15,7 @@ import { describeSize, forgetAttachments } from "../attachments/attachments.js";
 import { ownerName } from "../agents/tokens.js";
 import { findTicketRow, runningRunOf, runOfAgent } from "../work/tickets.js";
 import { insertLink } from "./linked-artifacts.js";
+import { noticeKnowledge } from "../inbox/knowledge-notices.js";
 import { ComparedLine, compareWords } from "../knowledge/compare.js";
 import { sandboxPath } from "./sandbox-path.js";
 
@@ -356,6 +357,7 @@ export async function createArtifact(
       const content = { title: input.title, description: input.description ?? "", page: input.page ?? "index.html", files };
       checkVersion(content, context.config.attachments.limitBytes);
       await insertVersion(tx, { id, workspaceId: place.workspaceId }, 1, content, actor, now);
+      await noticeKnowledge(tx, context.live, actor, { kind: "artifact", id, workspaceId: place.workspaceId }, run, now);
       context.live.publish(tx, place.workspaceId, { type: "artifact.changed", projectId: place.projectId, artifactId: id });
       const created = (await findArtifact(tx, actor, id))!;
       if (run && actor.kind === "agent") {

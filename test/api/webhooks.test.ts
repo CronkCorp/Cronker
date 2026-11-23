@@ -569,6 +569,30 @@ describe("Inbox items", () => {
     expect(receivedAt("/review").map((d) => [d.kind, d.ticket.key])).toEqual([["review", review.key]]);
   });
 
+  test("New knowledge reaches only a webhook that chose it, naming its knowledge instead of a Ticket, without its text", async () => {
+    const { ada, hooks, workspace, project, asAgent } = await withProject();
+    await ok("POST", hooks, ada, { name: "Default", url: `${cronk.webhooks.url}/default` });
+    await ok("POST", hooks, ada, { name: "Knowledge", url: `${cronk.webhooks.url}/knowledge`, kinds: ["knowledge"] });
+    const decision = await ok("POST", `/api/projects/${project.id}/decisions`, asAgent, { title: "Use Postgres", body: "The secret reason" });
+    await ok("POST", `/api/workspaces/${workspace.id}/terms`, asAgent, { name: "Run", definition: "The secret meaning" });
+    await cronk.deliverWebhooks();
+
+    expect(receivedAt("/default")).toEqual([]);
+    const got = receivedAt("/knowledge");
+    expect(got.map((d) => d.item.kind).sort()).toEqual(["decision", "term"]);
+    expect(got.find((d) => d.item.kind === "decision")).toEqual({
+      id: expect.any(String),
+      kind: "knowledge",
+      workspace: workspace.slug,
+      item: { kind: "decision", title: decision.title, url: `${cronk.url}/${workspace.slug}/projects/CRONK/decisions/1` },
+      at: "2026-01-01T09:00:00.000Z",
+    });
+    expect(got.find((d) => d.item.kind === "term")!.item.url).toBe(`${cronk.url}/${workspace.slug}/glossary/Run`);
+    const bodies = cronk.webhooks.received.map((d) => d.body).join("\n");
+    expect(bodies).not.toContain("The secret reason");
+    expect(bodies).not.toContain("The secret meaning");
+  });
+
   test("each item reaches each webhook once, and entering a Review Status again is a new item", async () => {
     const { ada, adaId: me, hooks, status, ticket } = await withProject();
     await ok("POST", hooks, ada, { name: "Reviews", url: `${cronk.webhooks.url}/review`, kinds: ["review"] });
