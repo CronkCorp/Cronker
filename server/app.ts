@@ -90,7 +90,9 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
       const agent =
         agentOfRequest(request) ??
         (offersBearer(header) ? await agentOfToken(context, header).catch(() => undefined) : undefined);
-      if (agent) await noteRunCall(context, agent, named);
+      // Only the Transcript hook's upload on `Stop` says the session ended its turn.
+      const stopped = request.method === "PUT" && request.routeOptions.url === "/api/transcripts/sessions/:sessionId";
+      if (agent) await noteRunCall(context, agent, named, { stopped });
     } catch (error) {
       // The call itself is answered as it was; only the Run's last call goes unrecorded.
       request.log.error(error);
