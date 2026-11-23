@@ -138,7 +138,8 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "Changes whichever fields are given; `null` clears a field. Labels that differ only in case are kept once, " +
             "as first written. An Assignee must be a member of the Ticket's Workspace. A delegated Ticket entering a Status " +
-            "with a Step, or delegated where it is, gets a Run. Agents never set a Status (`agent_sets_no_status`): " +
+            "with a Step, or delegated where it is, gets a Run. An Agent may set or clear the parent of any Ticket of a " +
+            "Project it has a running Run in, alone in its edit, and otherwise gets `no_running_run`. Agents never set a Status (`agent_sets_no_status`): " +
             "their Runs move Tickets with `finish`. An Agent's save answers with `avoidedWords`: the words the " +
             "Project's glossary avoids that the title and description it gives use.",
           params: Type.Object({ ticketId: Type.String() }),

@@ -252,10 +252,12 @@ describe("the filing Agent and its Discovered Ticket", () => {
     ]);
   });
 
-  test("still doesn't set its Assignee, Delegation, parent or Status", async () => {
-    const { user, found, asAgent, status } = await discovered();
+  test("still doesn't set its Assignee, Delegation or Status, but may set its parent", async () => {
+    const { user, ticket, found, asAgent, status } = await discovered();
 
-    for (const edit of [{ assigneeId: user.id }, { delegateId: null }, { parentId: null }]) {
+    const parented = await call("PATCH", `/api/tickets/${found.id}`, asAgent, { parentId: ticket.id });
+    expect(parented.json).toEqual(expect.objectContaining({ parentId: ticket.id, delegateId: null }));
+    for (const edit of [{ assigneeId: user.id }, { delegateId: null }, { parentId: null, delegateId: null }]) {
       const refused = await call("PATCH", `/api/tickets/${found.id}`, asAgent, edit);
       expect(refused.json.error.code).toBe("agent_field_not_allowed");
     }

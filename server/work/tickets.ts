@@ -795,7 +795,8 @@ export const TicketEdit = Type.Object({
           "Makes the Ticket a Sub-Ticket of this Ticket of the same Project; " +
           "never of itself or of one of its own Sub-Tickets. Under a delegated parent it takes the parent's " +
           "Assignee and Delegate, replacing its own and stopping its running Run, unless `assigneeId` or " +
-          "`delegateId` is given too; under an undelegated parent it keeps its own.",
+          "`delegateId` is given too; under an undelegated parent it keeps its own. An Agent may set or clear the " +
+          "parent of any Ticket of a Project it has a running Run in; its Ticket keeps its own Delegation and Run.",
       }),
     ),
   ),
@@ -805,8 +806,14 @@ export type TicketEdit = Static<typeof TicketEdit>;
 /** The fields of a Ticket an Agent may edit: during its running Run on it, and the title only on a Discovered Ticket it filed. */
 export const AgentTicketEdit = Type.Pick(TicketEdit, ["title", "description", "priority", "labels", "dueDate", "estimate", "release"]);
 
-/** The fields of a Ticket an Agent may edit, during its running Run on it. */
-const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate", "release"]);
+/** The fields of a Ticket an Agent may edit, during its running Run on it; the parent of any Ticket of a Project it has a running Run in. */
+const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate", "release", "parentId"]);
+
+/** Whether the edit only sets or clears the parent, which an Agent may do on any Ticket of a Project it has a running Run in. */
+function isParentOnly(edit: TicketEdit): boolean {
+  return (Object.keys(edit) as (keyof TicketEdit)[]).every((field) => field === "parentId" || edit[field] === undefined)
+    && edit.parentId !== undefined;
+}
 
 /**
  * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
@@ -843,8 +850,12 @@ export async function editTicketIn(
       checkAgentFields(editor, edit, filed);
       actor = filed
         ? await discoveringAgent(tx, editor, ticket)
-        : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
+        : isParentOnly(edit)
+          ? { kind: "agent", id: editor.id, runId: await runForParent(tx, editor, ticket) }
+          : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
     }
+    /** Whether an Agent made the edit: its Ticket keeps its own Delegation under a new parent, and no Run is stopped. */
+    const byAgent = editor.kind === "agent";
     // Only Users get this far with fields that name a User.
     const userId = editor.id;
     const next = { ...ticket };
@@ -904,7 +915,7 @@ export async function editTicketIn(
       // even over a Delegation of its own; under an undelegated parent it keeps its own. An Assignee or Delegate
       // given along with the parent wins.
       const delegationGiven = edit.assigneeId !== undefined || edit.delegateId !== undefined;
-      const delegation = newParent && !delegationGiven ? await heldDelegationOf(tx, newParent.id) : null;
+      const delegation = newParent && !delegationGiven && !byAgent ? await heldDelegationOf(tx, newParent.id) : null;
       if (delegation) {
         next.assigneeId = delegation.assigneeId;
         next.delegateId = delegation.delegateId;
@@ -915,7 +926,8 @@ export async function editTicketIn(
       next.autonomousDelegation = edit.autonomousDelegation;
     } else {
       // A new Sub-Ticket takes its parent's Autonomous Delegation; a Ticket first delegated, its Project's.
-      const inherited = newParent ? await autonomousDelegationOf(tx, newParent.id) : null;
+      // An Agent's reparenting changes the parent only: the Ticket keeps its own Autonomous Delegation.
+      const inherited = newParent && !byAgent ? await autonomousDelegationOf(tx, newParent.id) : null;
       if (inherited !== null) {
         next.autonomousDelegation = inherited;
       } else if (next.delegateId !== null && next.delegateId !== ticket.delegateId && next.autonomousDelegation === null) {
@@ -1282,8 +1294,8 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
     {
       rule:
         "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, Release, due date and estimate, " +
-        "and the title too of a Discovered Ticket it filed, until a User takes that up; " +
-        "a Ticket's Assignee, Delegation, parent and Status are for Users to change.",
+        "and the title too of a Discovered Ticket it filed, until a User takes that up; it may set or clear the parent of " +
+        "any Ticket of a Project it has a running Run in; a Ticket's Assignee, Delegation and Status are for Users to change.",
       advice:
         `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
         "to change the rest; a Run moves its Ticket with `finish`.",
@@ -1298,6 +1310,26 @@ export async function runOfAgent(tx: Tx, agent: AgentCaller, ticket: TicketRow):
   throw new ApiError(403, "no_running_run", `${agent.name} has no running Run on ${ticket.key}.`, {
     rule: "An Agent changes a Ticket, and writes Reports on it, only during its own running Run on that Ticket.",
     advice: `Read ${ticket.key} and leave a Comment on it instead; changing it is for its Users, or a Run of its own.`,
+  });
+}
+
+/**
+ * The Run an Agent's change of a Ticket's parent records: its running Run on that Ticket, or else one of its running
+ * Runs in the Ticket's Project; refused if it has none there.
+ */
+async function runForParent(tx: Tx, agent: AgentCaller, ticket: TicketRow): Promise<string> {
+  const own = await findRunningRunOn(tx, agent, ticket);
+  if (own) return own;
+  const { rows } = await tx.query<{ id: string }>(
+    `select runs.id from runs join tickets on tickets.id = runs.ticket_id
+     where runs.agent_id = $1 and runs.state = 'running' and tickets.project_id = $2
+     order by runs.started_at limit 1`,
+    [agent.id, ticket.projectId],
+  );
+  if (rows[0]) return rows[0].id;
+  throw new ApiError(403, "no_running_run", `${agent.name} has no running Run in ${ticket.key}'s Project.`, {
+    rule: "An Agent sets or clears a Ticket's parent only during one of its own running Runs in the Ticket's Project.",
+    advice: `Leave a Comment on ${ticket.key} asking its Users to change its parent.`,
   });
 }
 

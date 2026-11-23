@@ -33,6 +33,8 @@ What Agents can't do outside a Run: change any Ticket's Status, edit Tickets oth
 
 A skill that asks for a parent and children files a ticket set: the parent with `file_ticket`, each child with `create_sub_ticket` under it. Link the spec Document to the parent and to each Sub-Ticket with `link_document`. The User triages the set as one: delegating the parent delegates its Sub-Tickets, and the parent gets no Runs until they are finished.
 
+To put existing Tickets under a parent, or take them out from under one, use `set_parent` during a Run in their Project. The Tickets keep their own Assignee and Delegation.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.**

@@ -126,7 +126,7 @@ describe("what an Agent may not edit", () => {
     expect(edit.json.error).toEqual({ ...noRunningRun, message: "laptop-claude has no running Run on CRONK-2." });
   });
 
-  test("its title, Assignee, Delegation and parent stay for Users, even during its Run", async () => {
+  test("its title, Assignee and Delegation stay for Users, even during its Run", async () => {
     const { ada, ticket, other, agent, asAgent } = await runningRun();
 
     for (const edit of [
@@ -134,7 +134,7 @@ describe("what an Agent may not edit", () => {
       { assigneeId: null },
       { delegateId: null },
       { delegateId: agent.id },
-      { parentId: other.id },
+      { parentId: other.id, delegateId: null },
       { priority: "high", title: "Mine" },
     ]) {
       const response = await call("PATCH", `/api/tickets/${ticket.id}`, asAgent, edit);
@@ -144,8 +144,8 @@ describe("what an Agent may not edit", () => {
         message: expect.any(String),
         rule:
           "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, Release, due date and estimate, " +
-          "and the title too of a Discovered Ticket it filed, until a User takes that up; " +
-          "a Ticket's Assignee, Delegation, parent and Status are for Users to change.",
+          "and the title too of a Discovered Ticket it filed, until a User takes that up; it may set or clear the parent of " +
+          "any Ticket of a Project it has a running Run in; a Ticket's Assignee, Delegation and Status are for Users to change.",
         advice: expect.stringContaining("ada@example.com"),
       });
     }
