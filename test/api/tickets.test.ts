@@ -77,6 +77,7 @@ describe("creating a Ticket", () => {
       blockedByHidden: 0,
       mentions: [],
       mentionedIn: [],
+      knowledge: { terms: [], decisions: [] },
       cost: [],
     });
 
