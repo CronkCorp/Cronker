@@ -141,6 +141,25 @@ export const TicketSummary = Type.Object({
       "The base branches its open Pull Requests conflict with, as GitHub last answered Cronk asking, for marking the " +
       "board's card; its Pull Requests say with which commit and merge.",
   }),
+  backport: Type.Union(
+    [
+      Type.Object({
+        state: Type.Union([Type.Literal("backporting"), Type.Literal("backported")], {
+          description:
+            "`backporting` while a Run of the Merge Step cherry-picks the merge onto the release branch; `backported` once " +
+            "it opened the backport, until the backport merges.",
+        }),
+        branch: Type.String({ description: "The release branch it is backported onto: `release/<name>`." }),
+        mergeCommit: Type.Union([Type.String(), Type.Null()], { description: "The merge commit being backported, once GitHub named it." }),
+      }),
+      Type.Null(),
+    ],
+    {
+      description:
+        "While the Ticket waits in its Merge Status for a backport, its Pull Request having merged after its Release was " +
+        "cut: it completes once a Pull Request on the release branch merges too. Null otherwise.",
+    },
+  ),
   queue: Type.Union(
     [
       Type.Object({
@@ -283,6 +302,11 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
     where pull_request_links.ticket_id = tickets.id and pull_requests.state in ('open', 'draft')
       and pull_requests.conflict_sha is not null order by pull_requests.conflict_branch) as conflicts,
   ${queueColumn("tickets")} as queue,
+  (select json_build_object('state', b.state, 'branch', 'release/' || backport_releases.name,
+     'mergeCommit', coalesce(backported_pr.merge_commit_sha, backported_pr.answered_merge_sha))
+   from ticket_backports b join releases backport_releases on backport_releases.id = b.release_id
+   join pull_requests backported_pr on backported_pr.id = b.pull_request_id
+   where b.ticket_id = tickets.id) as backport,
   case when tickets.discovered_by_agent_id is null then null else json_build_object(
     'agentId', tickets.discovered_by_agent_id,
     'sourceTicket', (select ${ticketRefColumn("sources", "source_projects")} from tickets sources

@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { queueBackports } from "../pipeline/backports.js";
 import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
@@ -82,6 +83,8 @@ export async function linkPullRequest(context: Context, userId: string, ticketId
       [found.id, ticket.id, ticket.workspaceId, now, userId],
     );
     await announce(context, tx, [Number(found.id)]);
+    // A Backport linked by hand joins its release branch's Merge Queue, as one linked by key does.
+    await queueBackports(context, tx, [ticket.id]);
     return (await pullRequestsOf(tx, viewer, ticket.id)).find((pr) => pr.id === Number(found.id))!;
   });
 }

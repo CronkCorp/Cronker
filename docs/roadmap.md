@@ -105,7 +105,7 @@ Choices from the initial grilling (2026-11-18) that are not ADRs but should not 
 
 Ideas, not yet grilled.
 
-- **Releases** (Spec: Releases, CRONK-113). A Project's Releases, such as `v0.3.0`, tag Tickets that ship together. Planned Releases and tagging Tickets with them are built (CRONK-114), and so is Cut, which creates `release/<name>` in each of the Project's Repositories (CRONK-115, ADR 0012); Backports and Release come next.
+- **Releases** (Spec: Releases, CRONK-113). A Project's Releases, such as `v0.3.0`, tag Tickets that ship together. Planned Releases and tagging Tickets with them are built (CRONK-114), and so is Cut, which creates `release/<name>` in each of the Project's Repositories (CRONK-115, ADR 0012), and so are Backports: a tagged Ticket merging into the default branch after the Cut waits in Merge while a Run of the Merge Step backports it, completing once both merged (CRONK-116). Tagging a completed Ticket and Release come next.
 - **Hosted skills.** Skills (a `SKILL.md` plus files, with Versions) kept per Workspace and Project in Cronk and edited in the web client. They reach Runs natively on the Managed Agents Runner, and over MCP (listed in the Brief, with a `read_skill` tool) on the others, hand-connected Claude Code included. A `SessionStart` hook installing them into `.claude/skills/` could follow once it is proven. They may replace the old Cronk's Guidance: a skill marked as always loaded does Guidance's job.
 
 ## Not now

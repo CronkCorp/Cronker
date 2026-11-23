@@ -281,11 +281,13 @@ export const conflictCap = 3;
 
 /**
  * The Merge Step's Outcome a Run resolving a conflict finishes with once it pushed a resolution: the one, neither the
- * default nor *needs you*, that leaves the Ticket in the Merge Status, as the default Merge Step's *resolved* does.
+ * default nor *needs you* nor *backported*, that leaves the Ticket in the Merge Status, as the default Merge Step's
+ * *resolved* does.
  */
 export function resolvingOutcome(status: Pick<Status, "id"> & { step: Step | null }): Outcome | undefined {
   if (status.step?.kind !== "merge") return undefined;
-  return status.step.outcomes.find((o) => o.statusId === status.id && !o.default && !o.needsYou);
+  // *backported* leaves it there too, but is for a Run backporting a merge (`backports.ts`).
+  return status.step.outcomes.find((o) => o.statusId === status.id && !o.default && !o.needsYou && o.name.toLowerCase() !== "backported");
 }
 
 /** Whether one of the Ticket's entries waits for a Run of the Merge Step to resolve its conflict. */

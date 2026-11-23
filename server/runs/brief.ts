@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox";
 import type { Config } from "../config.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
+import { backportOf } from "../pipeline/backports.js";
 import type { Viewer } from "../identity/viewers.js";
 import { mcpPath } from "../mcp/paths.js";
 import { statusesOf, type Status } from "../work/projects.js";
@@ -39,9 +40,13 @@ export async function previewBrief({ db, config }: Context, viewer: Viewer, tick
     `select concise_reports as "conciseReports" from projects where id = $1`,
     [ticket.projectId],
   );
+  const backport = status.step.kind === "merge" ? await backportOf(db, ticket.id) : null;
   return buildBrief(config, ticket.key, statuses, status as Status & { step: Step }, {
     autonomous: ticket.autonomousDelegation === true,
     conciseReports: rows[0]!.conciseReports,
+    ...(backport?.state === "backporting" && backport.statusId === status.id
+      ? { backport: { release: backport.release.name, branch: backport.branch, mergeCommit: backport.mergeCommit, pullRequest: backport.pullRequest } }
+      : {}),
   });
 }
 
@@ -61,13 +66,28 @@ export const conciseReportsRule =
   "findings, what you verified and anything the next Run or User needs, in as few lines as you can. Leave out the " +
   "working, such as a step-by-step log of what you read or tried.";
 
+/** The Backport a Run of a Merge Step makes, as its Brief names it. */
+export interface BriefBackport {
+  release: string;
+  branch: string;
+  /** The merge commit, once GitHub named it. */
+  mergeCommit: string | null;
+  /** The merged Pull Request to backport. */
+  pullRequest: { repository: string; number: number; url: string };
+}
+
 /** The Brief of a Run of the Status's Step on the Ticket; without a Run id, as a preview. */
 export function buildBrief(
   config: Config,
   ticketKey: string,
   statuses: Status[],
   status: Status & { step: Step },
-  { autonomous, conciseReports, runId }: { autonomous: boolean; conciseReports: boolean; runId?: string },
+  {
+    autonomous,
+    conciseReports,
+    runId,
+    backport,
+  }: { autonomous: boolean; conciseReports: boolean; runId?: string; backport?: BriefBackport },
 ): Brief {
   const step = status.step;
   const nameOf = (statusId: string) => statuses.find((s) => s.id === statusId)!.name;
@@ -77,6 +97,9 @@ export function buildBrief(
       return `${moves}, completing it as Unverified until its Assignee Accepts or Reopens it.`;
     }
     if (o.needsYou) return `${moves} and hands it back to its Assignee. Give a Question saying what you need.`;
+    if (step.kind === "merge" && o.statusId === status.id && !o.default && o.name.toLowerCase() === "backported") {
+      return `- **${o.name}**: once you've opened the backport pull request against the release branch, naming ${ticketKey} in its title, leaves ${ticketKey} in ${status.name}, where the backport joins the release branch's Merge Queue.`;
+    }
     if (step.kind === "merge" && o.statusId === status.id && !o.default) {
       return `- **${o.name}**: once you've pushed a resolution of the conflict, leaves ${ticketKey} in ${status.name}, waiting for the new commit's checks to go green, when it rejoins the Merge Queue at the front.`;
     }
@@ -100,6 +123,17 @@ export function buildBrief(
     "",
     runId ? `Your Run id is ${runId}.` : "Your Run id is given when the Run starts.",
     "",
+    ...(backport
+      ? [
+          `This Run backports ${ticketKey} onto its Release ${backport.release}: ` +
+            `[${backport.pullRequest.repository}#${backport.pullRequest.number}](${backport.pullRequest.url}) merged ` +
+            (backport.mergeCommit ? `as \`${backport.mergeCommit}\` ` : "") +
+            `after ${backport.release} was cut, so its change also has to land on the release branch \`${backport.branch}\`. ` +
+            `Cherry-pick it onto \`backport/${ticketKey}-${backport.release}\` off \`${backport.branch}\`, and open the ` +
+            `pull request against \`${backport.branch}\`.`,
+          "",
+        ]
+      : []),
     mergesItself
       ? "End the Run by merging its Pull Request with `merge_pull_request`, or by calling `finish` with your Run id and one of these Outcomes:"
       : "End the Run by calling `finish` with your Run id and one of these Outcomes:",

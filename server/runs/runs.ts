@@ -15,7 +15,7 @@ import { recordReport } from "../knowledge/reports.js";
 import { findTicket, findTicketRefByKey, findTicketRow, ticketNotFound, type Ticket, type TicketRow } from "../work/tickets.js";
 import { moveByCronk } from "../pipeline/cronk-moves.js";
 import { sendBackOnEnteringReview } from "../pipeline/conflicts.js";
-import { Brief, buildBrief, offeredOutcomes } from "./brief.js";
+import { Brief, buildBrief, offeredOutcomes, type BriefBackport } from "./brief.js";
 import { Cost } from "./costs.js";
 import { isLocalOnly, type RunReports, type RunToStart, type StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
@@ -23,6 +23,7 @@ import { RunState, wentWrong } from "./states.js";
 import { inArchivedProject, isBlocked, queueOrder } from "./waiting.js";
 import { userName } from "../identity/user.js";
 import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
+import { backported, backportingOutcome, backportOf, queueBackports, type Backport } from "../pipeline/backports.js";
 import { sessionIdOf } from "./session-ids.js";
 
 /**
@@ -248,11 +249,20 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   }
   // A Ticket queued in the Merge Queue waits there for Cronk to merge it, with no Merge Run (ADR 0011), unless one of its
   // entries stepped aside for a conflict: then it gets a Run to resolve it, whatever the Step's rules say.
+  // A Ticket waiting there for a Backport gets a Run to backport it, whatever the Step's rules say, and none once it was
+  // backported: it waits for the Backport to join the queue.
   let resolving = false;
+  let backport: Backport | null = null;
   if (status.step.kind === "merge") {
     const { rowCount: queued } = await tx.query("select from merge_queue where ticket_id = $1 and status_id = $2", [ticketId, status.id]);
     if (queued && !(await resolvingConflict(tx, ticketId))) return needsNone();
     resolving = queued !== 0;
+    if (!resolving) {
+      backport = await backportOf(tx, ticketId);
+      if (backport && backport.statusId !== status.id) backport = null;
+      if (backport?.state === "backported") return needsNone();
+      resolving = backport !== null;
+    }
   }
   // A Merge Step skips itself unless an agent may merge this Ticket, or a User queued it; otherwise the Label rule decides.
   const mergeRule =
@@ -314,7 +324,12 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
     ticket.key,
     statuses,
     status as Status & { step: Step },
-    { autonomous: ticket.autonomousDelegation === true, conciseReports: ticket.conciseReports, runId },
+    {
+      autonomous: ticket.autonomousDelegation === true,
+      conciseReports: ticket.conciseReports,
+      runId,
+      ...(backport ? { backport: briefBackport(backport) } : {}),
+    },
   );
   // At most one running Run per Ticket: a second is never recorded, even by requests racing this one.
   const inserted = await tx.query(
@@ -817,7 +832,16 @@ export async function finishRun(
         advice: `Finish with another Outcome: ${offered.filter((o) => o !== chosen).map((o) => o.name).join(", ")}.`,
       });
     }
-    const outcome = chosen && resolving && chosen.countsAsRound ? { ...chosen, countsAsRound: false } : chosen;
+    // A Run of a Merge Step backporting a merge: likewise, and its backporting Outcome is for that Run only.
+    const backporting = step?.kind === "merge" && (await backportOf(tx, ticket.id))?.state === "backporting";
+    const backports = chosen !== undefined && stepStatus !== undefined && backportingOutcome(stepStatus)?.name === chosen.name;
+    if (backports && !backporting) {
+      throw new ApiError(409, "nothing_to_backport", `${ticket.key} waits for no backport, so it can't finish ${chosen.name}.`, {
+        rule: `${chosen.name} is for a Run backporting a merge onto its Release's release branch.`,
+        advice: `Finish with another Outcome: ${offered.filter((o) => o !== chosen).map((o) => o.name).join(", ")}.`,
+      });
+    }
+    const outcome = chosen && (resolving || backporting) && chosen.countsAsRound ? { ...chosen, countsAsRound: false } : chosen;
     if (!outcome) {
       throw new ApiError(400, "outcome_not_offered", `${input.outcome} isn't an Outcome this Run may choose.`, {
         rule: finishRule,
@@ -853,6 +877,8 @@ export async function finishRun(
         await tellRunnerEnded(context, tx, run.id);
         // Resolved: the entry waits, out of line, for the resolution's checks, so the Ticket gets no other Run here.
         if (resolves) await conflictResolved(context, tx, ticket);
+        // Backported: the Ticket waits for the Backport to link and join the queue, with no other Run here.
+        if (backports) await backported(context, tx, ticket);
         if (input.report !== undefined) {
           await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
         }
@@ -861,8 +887,15 @@ export async function finishRun(
         if (applied!.needsYou && questionBy === "agent") await askQuestion(context, tx, ticket, asking, question!, now);
       },
     });
+    // A Backport linked before the Run finished joins the queue now.
+    if (backports) await queueBackports(context, tx, [ticket.id]);
     return present((await findRunRow(tx, caller, run.id))!);
   });
+}
+
+/** What a Brief says of the Backport its Run makes. */
+export function briefBackport(backport: Backport): BriefBackport {
+  return { release: backport.release.name, branch: backport.branch, mergeCommit: backport.mergeCommit, pullRequest: backport.pullRequest };
 }
 
 /**
