@@ -131,16 +131,26 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
-  test("only a Full token lists move_ticket, and its instructions name the token's level", async () => {
+  test("only a Full token lists the Full tools, and its instructions name the token's level", async () => {
     const { cookie, agent } = await workspaceWithTicket("write");
     const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
     const read = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "read", access: "read" });
     const names = async (secret: string) => (await (await connect(secret)).listTools()).tools.map((tool) => tool.name);
     const write = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "write", access: "write" });
 
-    expect(await names(full.secret)).toContain("move_ticket");
-    expect(await names(write.secret)).not.toContain("move_ticket");
-    expect(await names(read.secret)).not.toContain("move_ticket");
+    const fullOnly = [
+      "move_ticket",
+      "queue_merge",
+      "remove_from_queue",
+      "cut_release",
+      "publish_release",
+      "answer_question",
+      "retry_run",
+    ];
+    expect(await names(full.secret)).toEqual(expect.arrayContaining(fullOnly));
+    for (const secret of [write.secret, read.secret]) {
+      expect((await names(secret)).filter((name) => fullOnly.includes(name))).toEqual([]);
+    }
     expect((await connect(full.secret)).getInstructions()).toContain("Your token is Full");
     expect((await connect(write.secret)).getInstructions()).toContain("Your token is Write");
   });

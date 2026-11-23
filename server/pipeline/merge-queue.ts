@@ -88,7 +88,7 @@ const waitAdvice: MergeAdvice = {
  * and moves the Ticket into its Project's Merge Status, as
  * the User's move, refusing, naming the rule, as the module says.
  */
-export async function joinQueue(context: Context, caller: Caller & { kind: "user" }, ticketId: string): Promise<Ticket> {
+export async function joinQueue(context: Context, caller: Caller, ticketId: string): Promise<Ticket> {
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
@@ -123,16 +123,19 @@ export async function joinQueue(context: Context, caller: Caller & { kind: "user
       );
     }
     const now = context.clock.now();
+    // A Full Agent's entry is its Agent's merge, as an Autonomous Delegation one is, but taken as its Owner would.
+    const byAgent = caller.kind === "agent";
     for (const pullRequest of pullRequests) {
       await tx.query(
-        `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, entered_at) values ($1, $2, $3, $4, $5)`,
-        [pullRequest.id, ticket.id, mergeStatus.id, caller.id, now],
+        `insert into merge_queue (pull_request_id, ticket_id, status_id, queued_by_user_id, queued_by_agent_id, by_full_token, entered_at)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [pullRequest.id, ticket.id, mergeStatus.id, byAgent ? null : caller.id, byAgent ? caller.id : null, byAgent, now],
       );
     }
     await recordChanges(
       tx,
       ticket,
-      caller.id,
+      byAgent ? { kind: "agent", id: caller.id, runId: null } : caller.id,
       now,
       pullRequests.map(queueJoined),
     );
@@ -196,7 +199,8 @@ export async function joinQueueAutonomously(
 /**
  * Turning *agents may merge* off: takes the Project's entries only Autonomous Delegation queued out of the queue,
  * recording a `queueLeft` Change by Cronk on each, and returns their Tickets with their Runners, for their Merge Step
- * to pass them on as entering it now would. Entries a User queued stay, and so does one Cronk is asking GitHub about.
+ * to pass them on as entering it now would. Entries a User or a Full token queued stay, and so does one Cronk is asking
+ * GitHub about.
  */
 export async function dropAutonomousEntries(
   context: Context,
@@ -207,7 +211,8 @@ export async function dropAutonomousEntries(
     `with dropped as (
        delete from merge_queue using tickets
        where tickets.id = merge_queue.ticket_id and tickets.project_id = $1
-         and merge_queue.queued_by_agent_id is not null and merge_queue.state in ('queued', 'waiting-for-checks')
+         and merge_queue.queued_by_agent_id is not null and not merge_queue.by_full_token
+         and merge_queue.state in ('queued', 'waiting-for-checks')
        returning merge_queue.ticket_id, merge_queue.pull_request_id)
      select tickets.id as "ticketId", tickets.workspace_id as "workspaceId", agents.runner_id as "runnerId",
        json_build_object('id', pull_requests.id, 'repository', pull_requests.repository_full_name,
@@ -229,7 +234,7 @@ export async function dropAutonomousEntries(
 }
 
 /** Remove from queue: sends the queued Ticket back to its Project's first Review Status, as the User's move. */
-export async function leaveQueue(context: Context, caller: Caller & { kind: "user" }, ticketId: string): Promise<Ticket> {
+export async function leaveQueue(context: Context, caller: Caller, ticketId: string): Promise<Ticket> {
   return transaction(context.db, async (tx) => {
     const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
@@ -314,9 +319,11 @@ interface Head {
   pullRequestId: string;
   ticketId: string;
   state: QueueState;
-  /** The User who pressed Merge, or null for an entry Autonomous Delegation queued for `queuedByAgent`. */
+  /** The User who pressed Merge, or null for an entry an Agent queued: `queuedByAgent`. */
   queuedBy: string | null;
   queuedByAgent: string | null;
+  /** Whether `queuedByAgent` pressed Merge with a Full token, rather than Autonomous Delegation queueing it. */
+  byFullToken: boolean;
 }
 
 /** The states in which a head waits for the pass to act on it, rather than Cronk asking GitHub about it now. */
@@ -355,6 +362,7 @@ export async function queuePass(context: Context, only?: { pullRequestIds: numbe
 
 const headColumns = `merge_queue.pull_request_id::text as "pullRequestId", merge_queue.ticket_id as "ticketId", merge_queue.state,
   merge_queue.queued_by_user_id as "queuedBy", merge_queue.queued_by_agent_id as "queuedByAgent",
+  merge_queue.by_full_token as "byFullToken",
   projects.archived_at is null and projects.pull_request_automation as active`;
 
 /**
@@ -399,7 +407,8 @@ async function setState(context: Context, tx: Tx, head: Head, to: QueueState, fr
 /**
  * Whom Cronk merges the head for: the User who queued it, completing the Ticket as Verified, or the Agent Autonomous
  * Delegation queued it for, completing it as Unverified, as an agent's merge does, while its Project still has agents
- * may merge on and the Agent isn't removed. Null leaves the head waiting.
+ * may merge on and the Agent isn't removed. An Agent that pressed Merge with a Full token merges as Autonomous
+ * Delegation's does, Unverified, but needs no agents may merge: it acted as its Owner. Null leaves the head waiting.
  */
 async function mergerOf(
   tx: Tx,
@@ -413,8 +422,8 @@ async function mergerOf(
   }
   const { rows } = await tx.query(
     `select from agents join projects on projects.id = $2
-     where agents.id = $1 and agents.removed_at is null and projects.agents_may_merge`,
-    [head.queuedByAgent, ticket.projectId],
+     where agents.id = $1 and agents.removed_at is null and ($3 or projects.agents_may_merge)`,
+    [head.queuedByAgent, ticket.projectId, head.byFullToken],
   );
   if (rows.length === 0) return null;
   return {

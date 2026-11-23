@@ -5,6 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { inReach, type Viewer } from "../identity/viewers.js";
 import { insertComment } from "../work/comment-writes.js";
+import type { ChangeActor } from "../work/changes.js";
 import { lockTickets, writeTicket } from "../work/ticket-writes.js";
 import { startRunIfNeeded, blockingChanged } from "./runs.js";
 
@@ -70,7 +71,8 @@ export async function openQuestionsFor(
 }
 
 /**
- * Answers the Question a User's reply is to, if it is the first User's reply to one. Should the Ticket
+ * Answers the Question a reply by a User, or by an Agent with a Full token, is to, if it is the first such reply to
+ * one; the move back is a Change by whoever answered. Should the Ticket
  * still sit where the Question's *needs you* Outcome moved it, it moves back to the Status of the Step
  * that asked, starting a new Run that reads the answer in the Comments; otherwise the answer is just a
  * Comment. Call it in the transaction that wrote the reply, holding the Ticket's lock.
@@ -79,7 +81,7 @@ export async function answerQuestion(
   context: Context,
   tx: Tx,
   ticket: { id: string; workspaceId: string; projectId: string; statusId: string },
-  userId: string,
+  answerer: ChangeActor,
   replyToId: string,
   answerId: string,
 ): Promise<void> {
@@ -99,9 +101,9 @@ export async function answerQuestion(
     return;
   }
 
-  // The User moves it back, as moving it by hand would: entering the Status resets its rounds.
+  // The answerer moves it back, as moving it by hand would: entering the Status resets its rounds.
   const [locked] = await lockTickets(tx, [ticket.id]);
-  await writeTicket(context, tx, locked!, userId, { statusId: question.stepStatusId }, { at: now });
+  await writeTicket(context, tx, locked!, answerer, { statusId: question.stepStatusId }, { at: now });
   await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
   await startRunIfNeeded(context, tx, ticket.id, now);
   await blockingChanged(context, tx, [ticket.id]);
@@ -111,7 +113,7 @@ export async function answerQuestion(
  * Dismisses a Question from the Inbox of its Ticket's Assignee, moving nothing. It stays on the Ticket,
  * where a User's reply still answers it.
  */
-export async function dismissQuestion({ db, clock, live }: Context, viewer: Viewer & { kind: "user" }, questionId: string): Promise<void> {
+export async function dismissQuestion({ db, clock, live }: Context, viewer: Viewer, questionId: string): Promise<void> {
   await transaction(db, async (tx) => {
     const view = inReach(viewer, { project: "tickets.project_id", workspace: "questions.workspace_id" }, "$2");
     const { rows } = await tx.query<{ workspaceId: string; projectId: string; ticketId: string }>(
@@ -123,8 +125,9 @@ export async function dismissQuestion({ db, clock, live }: Context, viewer: View
     const question = rows[0];
     if (!question) throw new ApiError(404, "not_found", "No such Question.");
     await tx.query(
-      "update questions set dismissed_at = $2, dismissed_by = $3 where id = $1 and dismissed_at is null",
-      [questionId, clock.now(), viewer.id],
+      `update questions set dismissed_at = $2, dismissed_by = $3, dismissed_by_agent = $4
+       where id = $1 and dismissed_at is null`,
+      [questionId, clock.now(), viewer.kind === "user" ? viewer.id : null, viewer.kind === "agent" ? viewer.id : null],
     );
     live.publish(tx, question.workspaceId, { type: "ticket.changed", projectId: question.projectId, ticketId: question.ticketId });
   });

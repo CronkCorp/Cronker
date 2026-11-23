@@ -2,7 +2,7 @@ import type { FastifyRequest } from "fastify";
 import { authenticateAgent, ownerName } from "../agents/tokens.js";
 import type { Context } from "../context.js";
 import { ApiError } from "../http/errors.js";
-import type { Caller } from "./callers.js";
+import { requireCaller, type Caller } from "./callers.js";
 import { requireUser } from "./sign-ins.js";
 import type { User } from "./user.js";
 
@@ -40,4 +40,21 @@ export function requireHumanAct(caller: Caller | undefined, act: string): void {
 export async function requireHuman(context: Context, request: FastifyRequest, act: string): Promise<User> {
   requireHumanAct(await authenticateAgent(context, request), act);
   return requireUser(context, request);
+}
+
+/**
+ * The caller of a request for an act a User or a Full token takes: an Agent without a Full token gets
+ * `full_token_needed`, naming the rule, before anything else is read.
+ */
+export async function requireOwnerCaller(
+  context: Context,
+  request: FastifyRequest,
+  rule: { act: string; rule: string },
+): Promise<Caller> {
+  const agent = await authenticateAgent(context, request);
+  if (agent) {
+    requireOwnerAct(agent, rule);
+    return agent;
+  }
+  return requireCaller(context, request);
 }
