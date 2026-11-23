@@ -78,6 +78,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0061_merge_queue.sql");
     await cronk.applyAhead("0065_merge_queue_conflicts.sql");
     await cronk.applyAhead("0073_agent_access_undelegated.sql");
+    // Reading a Ticket needs its Release.
+    await cronk.applyAhead("0075_releases.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
