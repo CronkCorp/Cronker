@@ -3,7 +3,8 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
-import { inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
+import { actsAsOwner } from "../identity/acts.js";
+import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { blockingChanged } from "../runs/runs.js";
@@ -50,7 +51,8 @@ export const RelationCreate = Type.Union([
 export type RelationCreate = Static<typeof RelationCreate>;
 
 /**
- * Relates the Ticket to another of its Workspace. A User adds any Relation; an Agent only adds blocks in which one
+ * Relates the Ticket to another of its Workspace. A User, or an Agent with a Full token, adds any Relation; any
+ * other Agent only adds blocks in which one
  * of the two Tickets is a Discovered Ticket it filed, until a User delegates, moves or dismisses it: its own waiting
  * Ticket may block any Ticket, or wait on any Ticket, delegated or running included.
  */
@@ -75,11 +77,14 @@ export async function addRelation(
     await requireWrite(tx, caller, otherRow);
     if (other.id === ticket.id) throw new ApiError(400, "relation_to_itself", "A Ticket can't be related to itself.");
     let actor: ChangeActor;
-    if (caller.kind === "agent") {
+    if (caller.kind === "user") {
+      actor = caller.id;
+    } else if (actsAsOwner(caller)) {
+      // A Full token relates any two Tickets it has Write on, as its Owner would, outside any Run.
+      actor = { kind: "agent", id: caller.id, runId: null };
+    } else {
       const held = checkAgentRelation(caller, ticket, otherRow, input.kind);
       actor = await discoveringAgent(tx, caller, held);
-    } else {
-      actor = caller.id;
     }
     const [from, to] = input.kind === "blockedBy" ? [other.id, ticket.id] : [ticket.id, other.id];
     if (input.kind !== "relatesTo" && (await blocksTransitively(tx, ticket.workspaceId, to, from))) {
@@ -154,14 +159,18 @@ function relationNotFound(): ApiError {
   return new ApiError(404, "not_found", "This Ticket has no such Relation.");
 }
 
+/**
+ * Removes a Relation of the Ticket, whichever of its two Tickets it was made from: a User's act, or a Full token's
+ * as its Owner's (the route refuses other Agents), recorded with the Agent and no Run.
+ */
 export async function removeRelation(
   context: Context,
-  userId: string,
+  caller: Caller,
   ticketId: string,
   relationId: string,
 ): Promise<void> {
   await transaction(context.db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId);
+    const ticket = await findTicketRow(tx, caller, ticketId);
     if (!ticket) throw ticketNotFound();
     if (!isUuid(relationId)) throw relationNotFound();
     const { rows } = await tx.query<{ kind: StoredKind; ticketId: string; otherTicketId: string }>(
@@ -173,14 +182,15 @@ export async function removeRelation(
     if (!removed) throw relationNotFound();
     // A Relation with a Ticket the User can't read isn't listed for them, so it answers as if it didn't exist.
     const otherId = removed.ticketId === ticket.id ? removed.otherTicketId : removed.ticketId;
-    const otherRow = await findTicketRow(tx, userViewer(userId), otherId);
+    const otherRow = await findTicketRow(tx, caller, otherId);
     if (!otherRow) throw relationNotFound();
-    await requireWrite(tx, userViewer(userId), ticket);
-    await requireWrite(tx, userViewer(userId), otherRow);
+    await requireWrite(tx, caller, ticket);
+    await requireWrite(tx, caller, otherRow);
     const from = (await findTicketRef(tx, ticket.workspaceId, removed.ticketId))!;
     const to = (await findTicketRef(tx, ticket.workspaceId, removed.otherTicketId))!;
     const kind = kindFromTicket[removed.kind];
-    await recordRelationChanges(context, tx, ticket.workspaceId, userId, kind, from, to, "removed");
+    const actor: ChangeActor = caller.kind === "user" ? caller.id : { kind: "agent", id: caller.id, runId: null };
+    await recordRelationChanges(context, tx, ticket.workspaceId, actor, kind, from, to, "removed");
     if (removed.kind === "blocks") await blockingChanged(context, tx, [], [removed.otherTicketId]);
   });
 }

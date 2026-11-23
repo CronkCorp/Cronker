@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "vitest";
 import { addMember, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
-/** Token access (CRONK-123): Read, Write and Full, and a Full token moving Tickets as its Owner would. */
+/**
+ * Token access (CRONK-123): Read, Write and Full, and a Full token moving Tickets as its Owner would; editing,
+ * delegating, dismissing and relating any Ticket as its Owner would (CRONK-124).
+ */
 
 let cronk: StartedCronk;
 afterEach(async () => {
@@ -104,7 +107,7 @@ describe("a Full token moving a Ticket", () => {
     ]);
   });
 
-  test("a Write token is refused with full_token_needed, and a Full token's move goes alone", async () => {
+  test("a Write token is refused with full_token_needed, and a Full token moves it along with other fields", async () => {
     const { ada, ticket, asWrite, asFull, status } = await adaWithAgent();
 
     const byWrite = await call("PATCH", `/api/tickets/${ticket.id}`, asWrite, { statusId: status("Canceled") });
@@ -115,10 +118,10 @@ describe("a Full token moving a Ticket", () => {
       rule: expect.stringContaining("An Agent takes this act only with a Full token"),
       advice: expect.stringContaining("ada@example.com"),
     });
-    // The Status alone: the other fields keep today's Agent rules.
-    const mixed = await call("PATCH", `/api/tickets/${ticket.id}`, asFull, { statusId: status("Canceled"), title: "Gone" });
-    expect(mixed.status).toBe(403);
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+    // A Full token moves it along with other fields, as its Owner would.
+    const mixed = await ok("PATCH", `/api/tickets/${ticket.id}`, asFull, { statusId: status("Canceled"), title: "Gone" });
+    expect(mixed).toMatchObject({ statusId: status("Canceled"), title: "Gone" });
   });
 
   test("is bounded by the Project's Agent Access and its Owner's Access", async () => {
@@ -139,6 +142,126 @@ describe("a Full token moving a Ticket", () => {
     const underOwner = await call("PATCH", `/api/tickets/${ticket.id}`, bearer(beasToken.secret), { statusId: status("Canceled") });
     expect([underOwner.status, underOwner.json.error.code]).toEqual([403, "read_access"]);
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Backlog"));
+  });
+});
+
+/** Each Change on the Ticket's timeline for the fields given: who made it, with which Run, and to what. */
+const changesTo = async (ticketId: string, as: Request, ...fields: string[]) =>
+  ((await ok("GET", `/api/tickets/${ticketId}/timeline`, as)) as { field: string; actor: { name: string }; runId: string | null; to: unknown }[])
+    .filter((c) => fields.includes(c.field))
+    .map((c) => ({ field: c.field, by: c.actor.name, runId: c.runId, to: c.to }));
+
+const refusal = (response: { status: number; json: { error: { code: string } } }) => [response.status, response.json.error.code];
+
+describe("a Full token editing a Ticket", () => {
+  test("edits a running Ticket's title and Assignee, as Changes by the Agent with no Run", async () => {
+    const { workspace, ada, ticket, agent, asFull, status } = await adaWithAgent();
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: status("Triage") });
+    const [run] = await runsOf(ticket.id, ada);
+    expect(run.state).toBe("running");
+
+    const edited = await ok("PATCH", `/api/tickets/${ticket.id}`, asFull, { title: "Make it so, properly", assigneeId: bea.user.id });
+
+    expect(edited).toMatchObject({ title: "Make it so, properly", assigneeId: bea.user.id });
+    expect((await changesTo(ticket.id, ada, "title", "assignee")).filter((c) => c.by === "claude-max")).toEqual([
+      { field: "title", by: "claude-max", runId: null, to: "Make it so, properly" },
+      { field: "assignee", by: "claude-max", runId: null, to: expect.objectContaining({ id: bea.user.id }) },
+    ]);
+    // Bea doesn't own the Delegate, so the new Assignee removes it and its running Run stops, as on the Owner's edit.
+    const [stopped] = await runsOf(ticket.id, ada);
+    expect(stopped).toMatchObject({ id: run.id, state: "stopped", endReason: "claude-max undelegated CRONK-1." });
+  });
+
+  test("delegates a Ticket to another Agent of its Owner and undelegates it; another User's Agent is refused", async () => {
+    const { workspace, ada, ticket, asFull } = await adaWithAgent();
+    const helper = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "helper" });
+
+    const delegated = await ok("PATCH", `/api/tickets/${ticket.id}`, asFull, { delegateId: helper.id, autonomousDelegation: true });
+    // Unassigned, it is assigned the Owner, whose Agent the Delegate is.
+    expect(delegated).toMatchObject({ delegateId: helper.id, assigneeId: expect.any(String), autonomousDelegation: true });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, asFull, { delegateId: null });
+    expect(await changesTo(ticket.id, ada, "delegate", "autonomousDelegation")).toEqual([
+      { field: "delegate", by: "claude-max", runId: null, to: expect.objectContaining({ name: "helper" }) },
+      { field: "autonomousDelegation", by: "claude-max", runId: null, to: true },
+      { field: "delegate", by: "claude-max", runId: null, to: null },
+    ]);
+
+    const bea = await addMember(cronk, ada.cookie, workspace.id, "bea@example.com");
+    const beasAgent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: bea.cookie }, { name: "bea-claude" });
+    const toBeas = await call("PATCH", `/api/tickets/${ticket.id}`, asFull, { delegateId: beasAgent.id });
+    expect(refusal(toBeas)).toEqual([403, "not_your_agent"]);
+  });
+
+  test("makes Sub-Tickets of any Ticket and links Documents to it, outside any Run", async () => {
+    const { ada, project, ticket, asFull } = await adaWithAgent();
+
+    const sub = await ok("POST", `/api/projects/${project.id}/tickets`, asFull, { title: "A slice", parentId: ticket.id });
+    expect(sub.parentId).toBe(ticket.id);
+    const document = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Plan", body: "One." });
+    await ok("POST", `/api/tickets/${ticket.id}/documents`, asFull, { documentId: document.id });
+    expect((await ok("GET", `/api/tickets/${ticket.id}/documents`, ada)).map((d: { id: string }) => d.id)).toEqual([document.id]);
+  });
+
+  test("a Write token keeps today's Agent rules", async () => {
+    const { workspace, ada, project, ticket, agent, asWrite } = await adaWithAgent();
+    const helper = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "helper" });
+
+    expect(refusal(await call("PATCH", `/api/tickets/${ticket.id}`, asWrite, { title: "Mine" }))).toEqual([403, "agent_field_not_allowed"]);
+    const delegating = await call("PATCH", `/api/tickets/${ticket.id}`, asWrite, { delegateId: helper.id });
+    expect(refusal(delegating)).toEqual([403, "agent_field_not_allowed"]);
+    expect(delegating.json.error.advice).toContain("Full token");
+    expect(refusal(await call("PATCH", `/api/tickets/${ticket.id}`, asWrite, { priority: "high" }))).toEqual([403, "no_running_run"]);
+    const sub = await call("POST", `/api/projects/${project.id}/tickets`, asWrite, { title: "A slice", parentId: ticket.id });
+    expect(refusal(sub)).toEqual([403, "no_running_run"]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada))).toMatchObject({ title: "Make it so", delegateId: null });
+    expect(agent.id).not.toBe(helper.id);
+  });
+});
+
+describe("a Full token triaging", () => {
+  test("dismisses a Discovered Ticket, adds a relates Relation and removes a block", async () => {
+    const { ada, project, ticket, asWrite, asFull } = await adaWithAgent();
+    const discovered = await ok("POST", `/api/projects/${project.id}/tickets`, asWrite, { title: "Found on the way" });
+    expect(discovered.discovered.waiting).toBe(true);
+
+    const dismissed = await ok("POST", `/api/tickets/${discovered.id}/dismiss`, asFull);
+    expect(dismissed.discovered.waiting).toBe(false);
+    expect(await changesTo(discovered.id, ada, "dismissed")).toEqual([{ field: "dismissed", by: "claude-max", runId: null, to: null }]);
+
+    const relates = await ok("POST", `/api/tickets/${ticket.id}/relations`, asFull, { kind: "relatesTo", ticketKey: discovered.key });
+    expect(relates).toMatchObject({ kind: "relatesTo", ticket: { id: discovered.id } });
+    const block = await ok("POST", `/api/tickets/${ticket.id}/relations`, asFull, { kind: "blocks", ticketId: discovered.id });
+    await ok("DELETE", `/api/tickets/${ticket.id}/relations/${block.id}`, asFull);
+
+    const relations = await ok("GET", `/api/tickets/${ticket.id}/relations`, ada);
+    expect(JSON.stringify(relations)).not.toContain(block.id);
+    expect(await changesTo(ticket.id, ada, "relatesTo", "blocks")).toEqual([
+      expect.objectContaining({ by: "claude-max", runId: null }),
+      expect.objectContaining({ by: "claude-max", runId: null }),
+      expect.objectContaining({ by: "claude-max", runId: null }),
+    ]);
+  });
+
+  test("a Write token gets full_token_needed for dismissing and removing a Relation, and today's rules for relating", async () => {
+    const { ada, project, ticket, asWrite } = await adaWithAgent();
+    const discovered = await ok("POST", `/api/projects/${project.id}/tickets`, asWrite, { title: "Found on the way" });
+    const other = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Another" });
+
+    const dismissing = await call("POST", `/api/tickets/${discovered.id}/dismiss`, asWrite);
+    expect(refusal(dismissing)).toEqual([403, "full_token_needed"]);
+    expect(dismissing.json.error.message).toBe("claude-max's token is Write, and dismissing a Discovered Ticket needs a Full token.");
+
+    // Its own waiting Discovered Ticket may still block, but not relate.
+    const block = await ok("POST", `/api/tickets/${discovered.id}/relations`, asWrite, { kind: "blocks", ticketId: other.id });
+    const relating = await call("POST", `/api/tickets/${discovered.id}/relations`, asWrite, { kind: "relatesTo", ticketId: ticket.id });
+    expect(refusal(relating)).toEqual([403, "agent_adds_only_blocks"]);
+    const unrelated = await call("POST", `/api/tickets/${ticket.id}/relations`, asWrite, { kind: "blocks", ticketId: other.id });
+    expect(refusal(unrelated)).toEqual([403, "not_your_discovered_ticket"]);
+
+    const removing = await call("DELETE", `/api/tickets/${discovered.id}/relations/${block.id}`, asWrite);
+    expect(refusal(removing)).toEqual([403, "full_token_needed"]);
+    expect((await ok("GET", `/api/tickets/${discovered.id}`, ada)).discovered.waiting).toBe(true);
   });
 });
 

@@ -22,7 +22,10 @@ export const agentRights =
   "its slices under it. These are the rules for a Write token; a Read token may only read. A Full token, which " +
   "its Owner picks by hand and a Run never holds, may also move any Ticket it has Write on to any Status with " +
   "`move_ticket`, as its Owner's move: entering a Status with a Step starts its Run, and leaving a running one stops " +
-  "it, each a Change by the Agent with no Run. Accept and Reopen, Access and Admin settings, a Decision's status " +
+  "it; edit every field of any Ticket it has Write on with `edit_ticket`, delegated or running included, delegating " +
+  "only to its Owner's Agents and setting Autonomous Delegation; make Sub-Tickets of any Ticket and link Documents and " +
+  "Artifacts to it; dismiss Discovered Tickets with `dismiss_ticket`; and add any Relation with `add_relation` and " +
+  "remove one with `remove_relation`: each a Change by the Agent with no Run. Accept and Reopen, Access and Admin settings, a Decision's status " +
   "and resolving threads stay human-only, even for a Full token (`human_only`); a Write token attempting a Full act " +
   "gets `full_token_needed`. Anything else is refused with the rule and what to do instead.";
 
