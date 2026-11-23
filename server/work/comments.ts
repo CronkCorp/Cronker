@@ -162,14 +162,16 @@ const fromComments = `comments
   left join document_versions on document_versions.document_id = documents.id and document_versions.number = documents.version`;
 
 /**
- * The Ticket's Comments, oldest first, with those on its Linked Artifacts the Viewer can read among them; or only
- * the one given.
+ * The Ticket's Comments, oldest first, with those on its Reports and on its Linked Artifacts the Viewer can read
+ * among them; or only the one given. Comments on its other Linked Documents stay with those Documents.
  */
 async function rowsOf(db: Db | Tx, viewer: Viewer, ticketId: string, commentId?: string): Promise<Row[]> {
   const reach = inReach(viewer, { project: "artifacts.project_id", workspace: "artifacts.workspace_id" }, "$2");
   const { rows } = await db.query<Row>(
     `select ${columns} from ${fromComments}
-     where (comments.ticket_id = $1 or (comments.artifact_id in
+     where (comments.ticket_id = $1
+       or comments.document_id in (select reports.id from documents reports where reports.ticket_id = $1)
+       or (comments.artifact_id in
        (select linked_artifacts.artifact_id from linked_artifacts where linked_artifacts.ticket_id = $1) and ${reach.sql}))
        ${commentId ? "and comments.id = $3" : ""}
      order by comments.seq`,
@@ -338,6 +340,36 @@ export async function commentsOnDocument(
   if (!document) throw documentNotFound();
   const rows = await documentRowsOf(db, document.id);
   return present(db, viewer, includeResolved ? rows : withoutResolvedThreads(rows), document.body);
+}
+
+/** The open threads of a Document, as a Ticket's read shows them with its Reports and Linked Documents. */
+export const DocumentThreads = Type.Array(Comment, {
+  description:
+    "The Document's unresolved threads, oldest first: each first Comment with its `quote` and `anchor` (`outdated` once " +
+    "its passage is gone from the current Version), and the replies in it. A resolved thread is left out, replies and all.",
+});
+
+/**
+ * The unresolved threads of each of the Documents the Viewer can read, by Document id, in one query; a Document it
+ * can't read gets none, as one without threads does.
+ */
+export async function threadsOn(db: Db | Tx, viewer: Viewer, documentIds: string[]): Promise<Map<string, Comment[]>> {
+  const threads = new Map<string, Comment[]>(documentIds.map((id) => [id, []]));
+  if (documentIds.length === 0) return threads;
+  const reach = inReach(viewer, { project: "documents.project_id", workspace: "documents.workspace_id" }, "$2");
+  const { rows } = await db.query<Row & { currentBody: string }>(
+    `select ${columns}, document_versions.body as "currentBody" from ${fromComments}
+     where comments.document_id = any($1::uuid[]) and ${reach.sql}
+     order by comments.seq`,
+    [documentIds, reach.value],
+  );
+  const byDocument = new Map<string, (Row & { currentBody: string })[]>();
+  for (const row of rows) byDocument.set(row.documentId!, [...(byDocument.get(row.documentId!) ?? []), row]);
+  for (const [documentId, onDocument] of byDocument) {
+    const open = withoutResolvedThreads(onDocument.map(({ currentBody: _, ...row }) => row));
+    threads.set(documentId, await present(db, viewer, open, onDocument[0]!.currentBody));
+  }
+  return threads;
 }
 
 /** The Comments whose thread is open: each reply, however deep, goes with the first Comment of its thread. */

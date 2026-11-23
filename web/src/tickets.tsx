@@ -375,7 +375,7 @@ export function TicketScreen({
           />
           <MentionedIn texts={ticket.mentionedIn} />
           <FileList
-            attachments={[...attachments, ...comments.filter((c) => c.artifactId === null).flatMap((c) => c.attachments), ...reportFiles]}
+            attachments={[...attachments, ...comments.filter((c) => c.artifactId === null && c.documentId === null).flatMap((c) => c.attachments), ...reportFiles]}
             onChanged={() => {
               loadAttachments();
               loadComments();
@@ -1776,6 +1776,11 @@ export function CommentThread({
         {depth === 0 && ticket && comment.artifact && (
           <span className="muted small">
             on <Link to={to.artifact(comment.artifact)}>{comment.artifact.title}</Link>{" "}
+          </span>
+        )}
+        {depth === 0 && ticket && comment.document && (
+          <span className="muted small">
+            on <Link to={to.document(comment.document)}>{comment.document.title}</Link>{" "}
           </span>
         )}
         <RelativeTime at={comment.createdAt} clock />

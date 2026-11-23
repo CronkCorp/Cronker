@@ -48,7 +48,8 @@ const DocumentRead = Type.Object({
 });
 import { knowledgePlaces } from "./places.js";
 import { OutdatedVersionBody } from "./versions.js";
-import { DocumentLink, linkDocument, LinkedDocument, linkedDocumentsOf, unlinkDocument } from "./linked-documents.js";
+import { DocumentLink, linkDocument, LinkedDocument, unlinkDocument } from "./linked-documents.js";
+import { LinkedDocumentWithThreads, linkedDocumentsWithThreads } from "./ticket-threads.js";
 
 const tags = ["Documents"];
 const DocumentParams = Type.Object({ documentId: Type.String() });
@@ -328,12 +329,14 @@ export function knowledgeRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Tickets"],
           summary: "A Ticket's Linked Documents",
-          description: "Documents of the Ticket's Project or of the Workspace linked to it, oldest link first.",
+          description:
+            "Documents of the Ticket's Project or of the Workspace linked to it, oldest link first, each with its " +
+            "unresolved threads.",
           params: TicketParams,
-          response: { 200: Type.Array(LinkedDocument), 401: ErrorBody, 404: ErrorBody },
+          response: { 200: Type.Array(LinkedDocumentWithThreads), 401: ErrorBody, 404: ErrorBody },
         },
       },
-      async (request) => linkedDocumentsOf(db, await requireCaller(context, request), request.params.ticketId),
+      async (request) => linkedDocumentsWithThreads(db, await requireCaller(context, request), request.params.ticketId),
     );
 
     app.post(

@@ -46,7 +46,8 @@ import type {
   VersionWithBody,
 } from "../../server/knowledge/documents.js";
 import type { DocumentLink, LinkedDocument } from "../../server/knowledge/linked-documents.js";
-import type { Report, ReportRef } from "../../server/knowledge/reports.js";
+import type { ReportRef } from "../../server/knowledge/reports.js";
+import type { LinkedDocumentWithThreads, ReportWithThreads as Report } from "../../server/knowledge/ticket-threads.js";
 import type { Term, TermComparison, TermCreate, TermDetail, TermEdit, TermVersion } from "../../server/knowledge/terms.js";
 import type { AuthorizationRequest as ConnectRequest } from "../../server/oauth/authorizations.js";
 import type { Brief } from "../../server/runs/brief.js";
@@ -412,7 +413,7 @@ export const api = {
   unlinkPullRequest: (ticketId: string, pullRequestId: number) =>
     call<void>("DELETE", `/api/tickets/${encodeURIComponent(ticketId)}/pull-requests/${pullRequestId}`),
   linkedDocuments: (ticketId: string) =>
-    call<LinkedDocument[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
+    call<LinkedDocumentWithThreads[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/documents`),
   linkDocument: (ticketId: string, documentId: string) =>
     call<LinkedDocument>("POST", `/api/tickets/${encodeURIComponent(ticketId)}/documents`, { documentId } satisfies DocumentLink),
   unlinkDocument: (ticketId: string, documentId: string) =>

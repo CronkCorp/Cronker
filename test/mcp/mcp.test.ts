@@ -492,6 +492,35 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
+  test("read_ticket carries the unresolved threads on its Reports and Linked Documents, and Report Comments on its timeline", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    const spec = await post(cookie, `/api/projects/${ticket.projectId}/documents`, { title: "Spec", body: "Step one.\n\nStep two." });
+    await post(cookie, `/api/tickets/${ticket.id}/documents`, { documentId: spec.id });
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Investigate") },
+    });
+    const client = await connect(secret);
+    const report = (await call(client, "write_report", { ticket: "CRONK-1", title: "Findings", body: "In the parser." })).json;
+    const onReport = await post(cookie, `/api/documents/${report.id}/comments`, { body: "Which parser?", quote: "In the parser." });
+    const onSpec = await post(cookie, `/api/documents/${spec.id}/comments`, { body: "Needed?", quote: "Step two." });
+    const done = await post(cookie, `/api/documents/${spec.id}/comments`, { body: "Typo." });
+    await cronk.request("POST", `/api/comments/${done.id}/resolve`, { cookie });
+
+    const { json: read } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(read.reports[0].threads).toEqual([expect.objectContaining({ id: onReport.id, quote: "In the parser.", anchor: { offset: 0 } })]);
+    expect(read.linkedDocuments).toEqual([
+      expect.objectContaining({ id: spec.id, threads: [expect.objectContaining({ id: onSpec.id, anchor: { offset: 11 } })] }),
+    ]);
+    expect(read.comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts.", "Which parser?"]);
+    expect(read.comments[1].document).toEqual(expect.objectContaining({ id: report.id, title: "Findings" }));
+  });
+
   test("a value a Ticket route refuses is refused by its tool, before anything is written", async () => {
     const { cookie, ticket, agent, secret } = await workspaceWithTicket();
     const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });

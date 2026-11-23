@@ -125,7 +125,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         slug: `findings-${findings.slice(0, 8)}`,
         body: "The bug is in **parsing**.",
         createdAt: "2026-01-01T09:30:00.000Z",
-        mentions: [],
+        mentions: [], threads: [],
       },
       {
         id: plan,
@@ -136,7 +136,7 @@ describe("milestone 1's Reports moved into Documents", () => {
         slug: `plan-${plan.slice(0, 8)}`,
         body: "Fix the parser.",
         createdAt: "2026-01-01T09:30:00.000Z",
-        mentions: [],
+        mentions: [], threads: [],
       },
     ]);
     expect(await ok("GET", `/api/documents/${findings}/versions`, ada)).toEqual([
@@ -192,7 +192,7 @@ describe("Reports as Documents", () => {
         slug: `findings-${report.id.slice(0, 8)}`,
         body: "Parsing, in `lex()`.",
         createdAt: "2026-01-01T09:00:00.000Z",
-        mentions: [],
+        mentions: [], threads: [],
       },
     ]);
     const versions = await ok("GET", `/api/documents/${report.id}/versions`, ada);

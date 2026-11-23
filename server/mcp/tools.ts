@@ -150,14 +150,14 @@ export function buildMcpServer(api: Api): McpServer {
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
         "as `knowledge`, the Terms (with their definitions and words to avoid) and Decisions (key, title and status; " +
         "read one with `read_decision` for its reasoning) its description and Comments mention, each once; " +
-        "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
+        "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`, and those on its Reports, each naming its `document`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
-        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
+        "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on, each with its unresolved threads (`threads`: the review written on it, each thread's first Comment with its `quote` and `anchor`, `outdated` once the passage is gone, and its replies); its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +
         "state (open, draft, merged or closed), the checks on its latest commit, its review state (approved or " +
         "changes requested, and by whom), the Step that produced it and the failing check or review requesting changes that last sent the Ticket back to that Step, which Cronk's Comment also links, " +
         "and, while it is open, the conflict with its base branch GitHub last reported (`conflict`: the base commit and the merge that made it conflict), which sends nothing back; " +
         "its Linked Documents, " +
-        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`; its " +
+        "Documents of its Project or the Workspace that the work needs, which you read with `read_document`, each with its unresolved `threads` as Reports have; its " +
         "Linked Artifacts, which you read with `read_artifact`; and the " +
         "files attached to it, each Comment carrying its own. Markdown refers to an Attachment as `attachment:<id>`. " +
         "A Ticket outside your Workspace answers as not found.",
