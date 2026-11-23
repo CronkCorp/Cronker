@@ -294,8 +294,10 @@ describe("MCP with an Agent token", () => {
       expect.objectContaining({ documentId: plan.id, replyToId: byAda.id, actor: { kind: "agent", id: agent.id, name: "claude-max" } }),
     );
     expect(two).toEqual({ isError: true, json: expect.objectContaining({ code: "one_target" }) });
+    const { avoidedWords, ...replied } = reply.json;
+    expect(avoidedWords).toEqual([]);
     const read = await call(client, "read_document", { document: plan.id });
-    expect(read.json).toEqual(expect.objectContaining({ title: "Plan", comments: [byAda, reply.json] }));
+    expect(read.json).toEqual(expect.objectContaining({ title: "Plan", comments: [byAda, replied] }));
     // An earlier Version is read without them.
     expect((await call(client, "read_document", { document: plan.id, version: 1 })).json).not.toHaveProperty("comments");
     // A Document's Comments stay off the Ticket's.
@@ -337,8 +339,9 @@ describe("MCP with an Agent token", () => {
     expect(quoted.json).toEqual(expect.objectContaining({ quote: "Step two.", quoteVersion: 1, anchor: { offset: 11 } }));
     expect(missing).toEqual({ isError: true, json: expect.objectContaining({ code: "quote_not_found" }) });
     expect(onTicket).toEqual({ isError: true, json: expect.objectContaining({ code: "quote_outside_document" }) });
+    const { avoidedWords: _, ...thread } = quoted.json;
     const read = await call(client, "read_document", { document: plan.id });
-    expect(read.json.comments).toEqual([quoted.json]);
+    expect(read.json.comments).toEqual([thread]);
   });
 
   test("an Agent comments on an Artifact, sees the Comments with read_artifact and on the linking Ticket with read_ticket", async () => {

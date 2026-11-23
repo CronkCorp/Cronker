@@ -21,12 +21,16 @@ export async function placeOfTicket(db: Db, ticketId: string): Promise<Place> {
   return rows[0]!;
 }
 
-/** Where a Comment is kept: its Ticket's Project, or its Artifact's Project or Workspace. */
-export async function placeOfComment(db: Db, comment: { ticketId: string | null; artifactId: string | null }): Promise<Place> {
+/** Where a Comment is kept: its Ticket's Project, or its Artifact's or Document's Project or Workspace. */
+export async function placeOfComment(
+  db: Db,
+  comment: { ticketId: string | null; artifactId: string | null; documentId: string | null },
+): Promise<Place> {
   if (comment.ticketId !== null) return placeOfTicket(db, comment.ticketId);
+  const [table, id] = comment.artifactId !== null ? ["artifacts", comment.artifactId] : ["documents", comment.documentId];
   const { rows } = await db.query<Place>(
-    `select workspace_id as "workspaceId", project_id as "projectId" from artifacts where id = $1`,
-    [comment.artifactId],
+    `select workspace_id as "workspaceId", project_id as "projectId" from ${table} where id = $1`,
+    [id],
   );
   return rows[0]!;
 }

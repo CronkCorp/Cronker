@@ -205,6 +205,8 @@ describe("avoided-word warnings on an Agent's saves", () => {
     const term = await ok("POST", `/api/projects/${project.id}/terms`, ada, { name: "Lane" });
     const decision = await ok("POST", `/api/projects/${project.id}/decisions`, ada, { title: "Lanes" });
     const artifact = await ok("POST", `/api/projects/${project.id}/artifacts`, ada, { title: "Board", files: page });
+    const spec = await ok("POST", `/api/projects/${project.id}/documents`, ada, { title: "Spec", body: "On the kanban." });
+    const guide = await ok("POST", `/api/workspaces/${workspace.id}/documents`, ada, { title: "Guide", body: "" });
     const current = async (path: string) => ({ baseVersion: (await ok("GET", path, ada)).version.number as number });
 
     type Save = { name: string; save: (as: As, agent: boolean) => Promise<{ avoidedWords?: unknown }>; expected: unknown[] };
@@ -241,6 +243,20 @@ describe("avoided-word warnings on an Agent's saves", () => {
         name: "commenting on an Artifact",
         save: (as) => ok("POST", `/api/artifacts/${artifact.id}/comments`, as, { body: "The kanban." }),
         expected: [{ word: "kanban", term: boardTerm }],
+      },
+      {
+        name: "commenting on a Document, quoting a passage",
+        save: (as) =>
+          ok("POST", `/api/documents/${spec.id}/comments`, as, { body: "Each task, not a repo.", quote: "the kanban" }),
+        expected: [
+          { word: "task", term: ticketTerm },
+          { word: "repo", term: projectTerm },
+        ],
+      },
+      {
+        name: "commenting on a Workspace Document uses only the Workspace's glossary",
+        save: (as) => ok("POST", `/api/documents/${guide.id}/comments`, as, { body: "On the kanban, a task." }),
+        expected: [{ word: "task", term: ticketTerm }],
       },
       {
         name: "creating a Project Term",
