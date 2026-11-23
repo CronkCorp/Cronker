@@ -29,7 +29,8 @@ import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, CommentButton, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
 import { Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
-import { FieldPicker } from "./ui/picker.js";
+import { FieldPicker, MultiFilterPicker } from "./ui/picker.js";
+import { filtering, inboxGroups, matches, noFilters, projectOf, readFilters, withFilters, workspaceOption, type InboxFilters } from "./inbox-filters.js";
 
 /**
  * The User's Inbox in the Workspace, fetched again after each live event: an Inbox is worked
@@ -72,14 +73,7 @@ export function InboxLink({ workspaceId, current }: { workspaceId: string; curre
 const keyOf = (item: InboxItem) => (item.kind === "question" ? `question:${item.question.id}` : `${item.kind}:${item.ticket.id}`);
 
 /** The Inbox's groups, in the order they are worked through. */
-const groups: { name: string; kinds: InboxItem["kind"][] }[] = [
-  { name: "Questions", kinds: ["question"] },
-  { name: "Needs you", kinds: ["needsYou", "reassign", "undelegated"] },
-  { name: "Runs gone wrong", kinds: ["run"] },
-  { name: "To review", kinds: ["review"] },
-  { name: "Unverified", kinds: ["unverified"] },
-  { name: "Discovered", kinds: ["discovered"] },
-];
+const groups = inboxGroups;
 
 const kindNames: Record<Exclude<InboxItem["kind"], "run">, string> = {
   question: "Question",
@@ -154,11 +148,24 @@ function writeSelection(key: string | null) {
   window.history.replaceState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}`);
 }
 
+/** Keeps the Inbox's filters in the address, beside `item=`, without adding a history entry. */
+function writeFilters(filters: InboxFilters) {
+  const search = withFilters(window.location.search, filters);
+  window.history.replaceState(null, "", `${window.location.pathname}${search ? `?${search}` : ""}`);
+}
+
 /** Everything in the Workspace waiting on the signed-in User, as a split view: the list, and the selected item. */
 export function InboxScreen({ workspace, user }: { workspace: Workspace; user: User }) {
   usePlace("inbox");
   const { inbox, failure, reload } = useInbox(workspace.id);
   const [selected, setSelected] = useState<string | null>(readSelection);
+  const [filters, setFilters] = useState<InboxFilters>(() => readFilters(window.location.search));
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtered = filtering(filters);
+  const changeFilters = useCallback((next: InboxFilters) => {
+    setFilters(next);
+    writeFilters(next);
+  }, []);
   // The selected item as last seen, kept while it is resolved elsewhere, until the User moves on.
   const [kept, setKept] = useState<InboxItem | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -171,11 +178,15 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
   useEffect(() => {
     if (inbox) setDone((keys) => new Set([...keys].filter((key) => inbox.items.some((i) => keyOf(i) === key))));
   }, [inbox]);
-  const live = inbox ? groups.flatMap((g) => inbox.items.filter((i) => g.kinds.includes(i.kind) && !done.has(keyOf(i)))) : [];
+  // Everything waiting, then what the filters show: groups, selection, J and K and live arrivals all follow the filters.
+  const waiting = inbox ? groups.flatMap((g) => inbox.items.filter((i) => g.kinds.includes(i.kind) && !done.has(keyOf(i)))) : [];
+  const live = waiting.filter((item) => matches(item, filters));
   const liveKeys = live.map(keyOf);
   const selectedLive = live.find((item) => keyOf(item) === selected);
   // Without a selection, or one from an old link that is gone, the first item is selected.
-  const fallback = !selectedLive && !(kept && keyOf(kept) === selected);
+  // So is the first shown item when the filters hide the selected one.
+  const keptShown = kept !== null && keyOf(kept) === selected && matches(kept, filters);
+  const fallback = !selectedLive && !keptShown;
   useEffect(() => {
     if (inbox && fallback && live[0]) setSelected(keyOf(live[0]));
   }, [inbox, fallback, live[0] && keyOf(live[0])]);
@@ -183,7 +194,7 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
     if (selectedLive) setKept(selectedLive);
   }, [selectedLive]);
 
-  const resolved = !selectedLive && kept && keyOf(kept) === selected ? kept : null;
+  const resolved = !selectedLive && keptShown ? kept : null;
   // A resolved item stays in its place in the list.
   const shown = resolved
     ? (() => {
@@ -194,6 +205,16 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
   const current = selectedLive ?? resolved ?? null;
   // With Read in the item's Project, the User changes nothing there: its answer box and actions are left out.
   const projects = useProjects(workspace.id);
+  // The Project filter offers the Projects the User's items come from, and any chosen, so it can be cleared.
+  const projectKeys = [...new Set([...(inbox?.items ?? []).map(projectOf), ...filters.projects])];
+  const projectOptions = projectKeys
+    .filter((key) => key !== workspaceOption)
+    .sort()
+    .map((key) => {
+      const project = projects?.find((p) => p.key.toUpperCase() === key);
+      return { value: key, label: key, content: project ? <><Key>{key}</Key> {project.name}</> : <Key>{key}</Key> };
+    });
+  if (projectKeys.includes(workspaceOption)) projectOptions.push({ value: workspaceOption, label: "Workspace", content: <>Workspace</> });
   const access = current && projects ? (projects.find((p) => p.id === current.ticket.projectId)?.access ?? "read") : null;
   const canWrite = access === "write";
   const arrived = useArrivals(liveKeys, inbox !== null);
@@ -248,11 +269,58 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
     <div className="page">
       <PageHead crumbs={[workspaceCrumb(workspace)]} title="Inbox" switcher={<LiveIndicator workspaceId={workspace.id} />} />
       <FormError error={failure} />
+      {inbox && (waiting.length > 0 || filtered) && (
+        <div className={`inbox-filter-bar${filtersOpen ? " inbox-filters-open" : ""}`}>
+          <Button
+            className="inbox-filter-toggle"
+            aria-expanded={filtersOpen}
+            aria-controls="inbox-filters"
+            onClick={() => setFiltersOpen((open) => !open)}
+          >
+            Filter{filtered ? ` · ${filters.projects.length + filters.kinds.length}` : ""}
+          </Button>
+          <div className="filters inbox-filters" id="inbox-filters" role="group" aria-label="Filters">
+            <MultiFilterPicker
+              label="Project"
+              anyLabel="Any Project"
+              options={projectOptions}
+              values={filters.projects}
+              onChange={(projects) => changeFilters({ ...filters, projects })}
+            />
+            <MultiFilterPicker
+              label="Kind"
+              anyLabel="Any kind"
+              options={groups.map((g) => ({ value: g.value, label: g.name }))}
+              values={filters.kinds}
+              onChange={(kinds) => changeFilters({ ...filters, kinds })}
+            />
+          </div>
+          {filtered && (
+            <p className="muted small inbox-filter-count" role="status">
+              Showing {live.length} of {waiting.length}
+              <Button variant="ghost" size="small" onClick={() => changeFilters(noFilters)}>
+                Clear filters
+              </Button>
+            </p>
+          )}
+        </div>
+      )}
       {inbox &&
         (shown.length === 0 ? (
-          <EmptyState title="Nothing is waiting on you.">
-            Questions from Agents, Runs gone wrong, and work to review or verify land here as they happen.
-          </EmptyState>
+          waiting.length > 0 || filtered ? (
+            <div className="empty">
+              <p className="empty-title">Nothing here matches these filters.</p>
+              <p className="empty-line">
+                <Button variant="ghost" size="small" onClick={() => changeFilters(noFilters)}>
+                  Clear filters
+                </Button>
+              </p>
+            </div>
+          ) : (
+            <EmptyState title="Nothing is waiting on you.">
+              Questions from Agents, Runs gone wrong, and work to review or verify land here as they happen.
+            </EmptyState>
+          )
         ) : (
           <>
             <div className={`inbox-split${detailOpen ? " inbox-detail-open" : ""}`}>
