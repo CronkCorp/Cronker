@@ -8,6 +8,7 @@ import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import { creatingRun, noticeKnowledge } from "../inbox/knowledge-notices.js";
 import type { Place } from "./places.js";
 import { ComparedLine, compareLines, compareWords } from "./compare.js";
 import { outdatedVersion } from "./versions.js";
@@ -115,7 +116,18 @@ const Avoid = Type.Array(Type.String({ minLength: 1, maxLength: 200, pattern: "\
 });
 
 /** The create-a-Term route's body. */
-export const TermCreate = Type.Object({ name: Name, definition: Type.Optional(Definition), avoid: Type.Optional(Avoid) });
+export const TermCreate = Type.Object({
+  name: Name,
+  definition: Type.Optional(Definition),
+  avoid: Type.Optional(Avoid),
+  runId: Type.Optional(
+    Type.String({
+      description:
+        "For an Agent, its running Run the Term is created in: its New knowledge item waits for the Assignee of the Run's " +
+        "Ticket rather than the Agent's Owner.",
+    }),
+  ),
+});
 export type TermCreate = Static<typeof TermCreate>;
 
 /** The save-a-Term route's body. */
@@ -193,10 +205,17 @@ function reindexAfter({ db, jobs }: Context, tx: Tx, glossary: Glossary): void {
 }
 
 /** Creates a Term in the glossary at Version 1 by its Actor; refused if the glossary has its name, ignoring case. */
-export async function createTerm(context: Context, actor: Caller, glossary: Glossary, input: TermContent): Promise<TermDetail> {
+export async function createTerm(
+  context: Context,
+  actor: Caller,
+  glossary: Glossary,
+  input: TermContent,
+  runId?: string,
+): Promise<TermDetail> {
   const { db, clock, live } = context;
   return transaction(db, async (tx) => {
     await requireWrite(tx, actor, glossary);
+    const run = await creatingRun(tx, actor, runId, "a Term");
     const now = clock.now();
     const { rows } = await withUniqueName(glossary, input.name, () =>
       tx.query<{ id: string }>(
@@ -206,6 +225,7 @@ export async function createTerm(context: Context, actor: Caller, glossary: Glos
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: glossary.workspaceId }, 1, input, actor, now);
+    await noticeKnowledge(tx, live, actor, { kind: "term", id, workspaceId: glossary.workspaceId }, run, now);
     termChanged(live, tx, { ...glossary, id });
     reindexAfter(context, tx, glossary);
     return (await findTerm(tx, actor, id))!;

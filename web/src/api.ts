@@ -335,6 +335,7 @@ export const api = {
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),
   inbox: (workspaceId: string) => call<Inbox>("GET", `${ws(workspaceId)}/inbox`),
   dismissQuestion: (questionId: string) => call<void>("POST", `/api/questions/${encodeURIComponent(questionId)}/dismiss`),
+  dismissKnowledge: (noticeId: string) => call<void>("POST", `/api/knowledge-notices/${encodeURIComponent(noticeId)}/dismiss`),
   agents: (workspaceId: string) => call<Agent[]>("GET", `${ws(workspaceId)}/agents`),
   createAgent: (workspaceId: string, name: string) => call<Agent>("POST", `${ws(workspaceId)}/agents`, { name } satisfies AgentCreate),
   renameAgent: (id: string, name: string) => call<Agent>("PATCH", agent(id), { name } satisfies AgentEdit),

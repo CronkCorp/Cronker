@@ -101,11 +101,11 @@ One recorded edit to a Ticket: which field, its value before and after, the Acto
 _Avoid_: Event, activity, history entry, audit log
 
 **Inbox**:
-A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions, Tickets waiting for their review and Discovered Tickets. An Admin's also holds the Tickets of Users removed from the Workspace or who lost Write in their Project, until someone assigns them.
+A User's list of everything waiting on them: Questions, *needs you* Outcomes, failed and lost Runs and Runs that couldn't start (with Retry), Unverified completions, Tickets waiting for their review, Discovered Tickets and New knowledge: each Decision, Term, Document or Artifact an Agent created (never a User, and never a new Version), waiting for the Assignee of the Ticket of the Run it was created in, or else the Agent's Owner, until they dismiss it, or, for a Decision, until a User accepts or rejects it. An Admin's also holds the Tickets of Users removed from the Workspace or who lost Write in their Project, until someone assigns them.
 _Avoid_: Notifications, review queue, to-do
 
 **Webhook**:
-A User's own channel for their Inbox in one Workspace: a name, a URL and the Inbox kinds it gets (by default Questions, *needs you* and Runs gone wrong). Cronk sends it one JSON delivery per item in its User's own Inbox, never with the Ticket's description or Comments, signed with the webhook's secret as Standard Webhooks lays out. Only its User sees or changes it; Agents never do. Removing the User from the Workspace removes their webhooks there.
+A User's own channel for their Inbox in one Workspace: a name, a URL and the Inbox kinds it gets (by default Questions, *needs you* and Runs gone wrong). New knowledge is a kind of its own, off by default. Cronk sends it one JSON delivery per item in its User's own Inbox, never with the Ticket's description or Comments nor knowledge's text, signed with the webhook's secret as Standard Webhooks lays out. Only its User sees or changes it; Agents never do. Removing the User from the Workspace removes their webhooks there.
 _Avoid_: Notification, subscription, hook, integration
 
 **Brief**:

@@ -5,6 +5,10 @@ import {
   api,
   nameOf,
   type Agent,
+  type Artifact,
+  type Decision,
+  type Document,
+  type TermDetail,
   type Inbox,
   type InboxItem,
   type Member,
@@ -27,7 +31,8 @@ import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, CommentButton, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
-import { Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
+import { DecisionStatusPill, Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
+import { ArtifactFrame } from "./embed.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, MultiFilterPicker } from "./ui/picker.js";
 import { filtering, inboxGroups, matches, noFilters, projectOf, readFilters, withFilters, workspaceOption, type InboxFilters } from "./inbox-filters.js";
@@ -69,13 +74,24 @@ export function InboxLink({ workspaceId, current }: { workspaceId: string; curre
   );
 }
 
-/** An item's key, kept in the address: a Question by its own id, anything else by its kind and Ticket. */
-const keyOf = (item: InboxItem) => (item.kind === "question" ? `question:${item.question.id}` : `${item.kind}:${item.ticket.id}`);
+/** An item's key, kept in the address: a Question or New knowledge by its own id, anything else by its kind and Ticket. */
+const keyOf = (item: InboxItem) =>
+  item.kind === "question"
+    ? `question:${item.question.id}`
+    : item.kind === "knowledge"
+      ? `knowledge:${item.id}`
+      : `${item.kind}:${item.ticket.id}`;
+
+type KnowledgeItem = Extract<InboxItem, { kind: "knowledge" }>;
+type TicketItem = Exclude<InboxItem, KnowledgeItem>;
+
+/** The id of the Project an item belongs to, or null for the Workspace's own knowledge. */
+const projectIdOf = (item: InboxItem) => (item.kind === "knowledge" ? item.subject.projectId : item.ticket.projectId);
 
 /** The Inbox's groups, in the order they are worked through. */
 const groups = inboxGroups;
 
-const kindNames: Record<Exclude<InboxItem["kind"], "run">, string> = {
+const kindNames: Record<Exclude<InboxItem["kind"], "run" | "knowledge">, string> = {
   question: "Question",
   needsYou: "Needs you",
   reassign: "Needs you",
@@ -85,9 +101,15 @@ const kindNames: Record<Exclude<InboxItem["kind"], "run">, string> = {
   discovered: "Discovered",
 };
 
-/** An item's kind label: a Run gone wrong is labelled by how it went wrong. */
+const knowledgeNames = { decision: "Decision", term: "Term", document: "Document", artifact: "Artifact" } as const;
+
+/** An item's kind label: a Run gone wrong is labelled by how it went wrong, New knowledge by its kind. */
 const kindOf = (item: InboxItem) =>
-  item.kind === "run" ? { failed: "Failed", lost: "Lost", refused: "Couldn't start" }[item.run.state] : kindNames[item.kind];
+  item.kind === "run"
+    ? { failed: "Failed", lost: "Lost", refused: "Couldn't start" }[item.run.state]
+    : item.kind === "knowledge"
+      ? knowledgeNames[item.subject.kind]
+      : kindNames[item.kind];
 
 const wentWrong = { failed: "failed", lost: "was lost", refused: "couldn't start" } as const;
 
@@ -117,6 +139,10 @@ function summary(item: InboxItem): string {
       return `${nameOf(item.formerAssignee)} can no longer work on it: assign it to someone`;
     case "undelegated":
       return "Undelegated, as Agents no longer have Write in its Project: work on it, move it or reassign it";
+    case "knowledge":
+      return item.subject.kind === "decision"
+        ? `Proposed by ${item.agent.name}: accept, reject or dismiss it`
+        : `Created by ${item.agent.name}: look it over, then dismiss it`;
   }
 }
 
@@ -215,7 +241,14 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
       return { value: key, label: key, content: project ? <><Key>{key}</Key> {project.name}</> : <Key>{key}</Key> };
     });
   if (projectKeys.includes(workspaceOption)) projectOptions.push({ value: workspaceOption, label: "Workspace", content: <>Workspace</> });
-  const access = current && projects ? (projects.find((p) => p.id === current.ticket.projectId)?.access ?? "read") : null;
+  // The Workspace's own knowledge is Write for every User.
+  const currentProject = current ? projectIdOf(current) : null;
+  const access =
+    current && projects
+      ? currentProject === null
+        ? "write"
+        : (projects.find((p) => p.id === currentProject)?.access ?? "read")
+      : null;
   const canWrite = access === "write";
   const arrived = useArrivals(liveKeys, inbox !== null);
 
@@ -345,10 +378,14 @@ export function InboxScreen({ workspace, user }: { workspace: Workspace; user: U
                           <button type="button" onClick={() => select(key, true)}>
                             <span className="inbox-item-head">
                               <KindLabel kind={kindOf(item)} />
-                              <Key>{item.ticket.key}</Key>
+                              {item.kind === "knowledge" ? (
+                                item.subject.projectKey && <Key>{item.subject.projectKey}</Key>
+                              ) : (
+                                <Key>{item.ticket.key}</Key>
+                              )}
                               <RelativeTime at={item.since} />
                             </span>
-                            <span className="inbox-item-title">{item.ticket.title}</span>
+                            <span className="inbox-item-title">{item.kind === "knowledge" ? item.subject.title : item.ticket.title}</span>
                             <span className="inbox-item-snippet">{isResolved ? "Resolved elsewhere" : snippet(item)}</span>
                           </button>
                         </li>
@@ -434,24 +471,36 @@ function Detail({
 }) {
   const to = useAddresses();
   const { busy, error, run } = useAction(onActed);
-  const ticket = item.ticket;
   const disabled = busy || resolved;
   const canWrite = useCanWrite();
-  acceptRef.current = canWrite && item.kind === "unverified" ? () => run(() => api.acceptTicket(ticket.id)) : null;
+  acceptRef.current = canWrite && item.kind === "unverified" ? () => run(() => api.acceptTicket(item.ticket.id)) : null;
   return (
     <div className="detail">
       <p className="detail-head">
         <KindLabel kind={kindOf(item)} />
-        <Link to={to.ticket(ticket)}>
-          <Key>{ticket.key}</Key> {ticket.title}
-        </Link>
+        {item.kind === "knowledge" ? (
+          <Link to={knowledgeAddress(to, item.subject)}>
+            {item.subject.projectKey && <Key>{item.subject.projectKey}</Key>} {item.subject.title}
+          </Link>
+        ) : (
+          <Link to={to.ticket(item.ticket)}>
+            <Key>{item.ticket.key}</Key> {item.ticket.title}
+          </Link>
+        )}
       </p>
       {resolved && (
         <Banner tone="warn" label="Resolved elsewhere">
-          <p>Resolved elsewhere: this no longer waits on you. Its actions are off; move on with J or K, or open its Ticket.</p>
+          <p>
+            Resolved elsewhere: this no longer waits on you. Its actions are off; move on with J or K, or open its{" "}
+            {item.kind === "knowledge" ? "page" : "Ticket"}.
+          </p>
         </Banner>
       )}
-      <ItemBody item={item} workspace={workspace} user={user} disabled={disabled} run={run} answerBox={answerBox} />
+      {item.kind === "knowledge" ? (
+        <KnowledgeBody item={item} workspace={workspace} disabled={disabled} run={run} />
+      ) : (
+        <ItemBody item={item} workspace={workspace} user={user} disabled={disabled} run={run} answerBox={answerBox} />
+      )}
       <ReadOnlyNote access={canWrite ? "write" : "read"} />
       {item.kind === "unverified" && canWrite && (
         <>
@@ -463,7 +512,7 @@ function Detail({
               Reopen…
             </Button>
           </Actions>
-          <Reopen ticketId={ticket.id} ticketKey={ticket.key} open={reopening} onOpenChange={onReopening} onReopened={onActed} />
+          <Reopen ticketId={item.ticket.id} ticketKey={item.ticket.key} open={reopening} onOpenChange={onReopening} onReopened={onActed} />
         </>
       )}
       <FormError error={error} />
@@ -480,7 +529,7 @@ function ItemBody({
   run,
   answerBox,
 }: {
-  item: InboxItem;
+  item: TicketItem;
   workspace: Workspace;
   user: User;
   disabled: boolean;
@@ -673,7 +722,7 @@ function TicketPullRequests({ ticketId, workspaceId }: { ticketId: string; works
 }
 
 /** The Ticket's Status, as a pill. */
-function TicketStatus({ ticket }: { ticket: InboxItem["ticket"] }) {
+function TicketStatus({ ticket }: { ticket: TicketItem["ticket"] }) {
   const project = useProject(ticket.projectId);
   const status = project?.statuses.find((s) => s.id === ticket.statusId);
   return status ? (
@@ -869,3 +918,124 @@ function Reassign({
   );
 }
 
+
+/** The page of a New knowledge item's Decision, Term, Document or Artifact. */
+function knowledgeAddress(to: ReturnType<typeof useAddresses>, subject: KnowledgeItem["subject"]): string {
+  switch (subject.kind) {
+    case "decision":
+      return to.decision({ id: subject.id, projectId: subject.projectId, number: subject.number ?? 0 });
+    case "term":
+      return to.term({ id: subject.id, projectId: subject.projectId, name: subject.title });
+    case "document":
+      return to.document({ slug: subject.slug ?? subject.id });
+    case "artifact":
+      return to.artifact({ slug: subject.slug ?? subject.id });
+  }
+}
+
+type Loaded =
+  | { kind: "decision"; decision: Decision }
+  | { kind: "term"; term: TermDetail }
+  | { kind: "document"; document: Document }
+  | { kind: "artifact"; artifact: Artifact };
+
+/** Fetches what a New knowledge item is about, again after each live event, like the Inbox. */
+function useSubject(subject: KnowledgeItem["subject"], workspaceId: string): Loaded | null {
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const latest = useLatest();
+  const load = useCallback(() => {
+    const fetched: Promise<Loaded> =
+      subject.kind === "decision"
+        ? api.decision(subject.id).then((decision) => ({ kind: "decision", decision }))
+        : subject.kind === "term"
+          ? api.term(subject.id).then((term) => ({ kind: "term", term }))
+          : subject.kind === "document"
+            ? api.document(subject.id).then((document) => ({ kind: "document", document }))
+            : api.artifact(subject.id).then((artifact) => ({ kind: "artifact", artifact }));
+    latest(fetched, setLoaded, () => setLoaded(null));
+  }, [subject.kind, subject.id, latest]);
+  useEffect(load, [load]);
+  useLiveEvents(workspaceId, load);
+  return loaded;
+}
+
+/**
+ * New knowledge an Agent created: who created it, the knowledge itself rendered inline, and Dismiss; a proposed
+ * Decision also offers Accept and Reject, since only a User changes its status, and either clears the item.
+ */
+function KnowledgeBody({
+  item,
+  workspace,
+  disabled,
+  run,
+}: {
+  item: KnowledgeItem;
+  workspace: Workspace;
+  disabled: boolean;
+  run: (action: () => Promise<unknown>) => void;
+}) {
+  const loaded = useSubject(item.subject, workspace.id);
+  const canWrite = useCanWrite();
+  const name = knowledgeNames[item.subject.kind];
+  const decide = (decision: Decision, status: "accepted" | "rejected") =>
+    run(() => api.editDecision(decision.id, { baseVersion: decision.version.number, status }));
+  return (
+    <>
+      <p className="detail-line">
+        {item.subject.kind === "decision" ? "Proposed" : "Created"} by <Actor actor={{ kind: "agent", name: item.agent.name }} />{" "}
+        <RelativeTime at={item.since} />
+      </p>
+      {loaded?.kind === "decision" && (
+        <>
+          <p className="detail-line">
+            Status <DecisionStatusPill status={loaded.decision.status} />
+          </p>
+          <div className="bubble">
+            <Markdown text={loaded.decision.body} mentions={loaded.decision.mentions} />
+          </div>
+        </>
+      )}
+      {loaded?.kind === "term" && (
+        <div className="bubble">
+          {loaded.term.definition ? (
+            <Markdown text={loaded.term.definition} mentions={loaded.term.mentions} />
+          ) : (
+            <p className="muted">No definition yet.</p>
+          )}
+          {loaded.term.avoid.length > 0 && <p className="muted small">Avoid: {loaded.term.avoid.join(", ")}</p>}
+        </div>
+      )}
+      {loaded?.kind === "document" && (
+        <div className="bubble markdown-compact">
+          <Markdown text={loaded.document.body} mentions={loaded.document.mentions} />
+        </div>
+      )}
+      {loaded?.kind === "artifact" && (
+        <>
+          {loaded.artifact.description && <p className="detail-line">{loaded.artifact.description}</p>}
+          <ArtifactFrame url={loaded.artifact.url} title={loaded.artifact.title} className="artifact-frame inbox-artifact-frame" lazy />
+        </>
+      )}
+      <Actions>
+        {loaded?.kind === "decision" && loaded.decision.status === "proposed" && canWrite && (
+          <>
+            <Button variant="primary" disabled={disabled} onClick={() => decide(loaded.decision, "accepted")}>
+              Accept
+            </Button>
+            <Button disabled={disabled} onClick={() => decide(loaded.decision, "rejected")}>
+              Reject
+            </Button>
+          </>
+        )}
+        <Button
+          variant="ghost"
+          disabled={disabled}
+          onClick={() => run(() => api.dismissKnowledge(item.id))}
+          aria-label={`Dismiss ${name} ${item.subject.title}`}
+        >
+          Dismiss
+        </Button>
+      </Actions>
+    </>
+  );
+}

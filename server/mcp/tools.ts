@@ -572,15 +572,21 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Creates a Markdown Document in a Project's page tree, or the Workspace's when no Project is given, at Version " +
         "1 by your Agent: under a parent of the same page tree or at its top, last among its siblings unless placed." +
+        " It waits as a New knowledge item in the Inbox of the Assignee of your named Run's Ticket, or else of your Owner." +
         avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's page tree when left out."),
-        ...bodyFields(Type.Omit(DocumentCreate, ["parentId"])),
+        ...bodyFields(Type.Omit(DocumentCreate, ["parentId", "runId"])),
         parent: z.string().optional().describe("The slug or id of a Document of the same page tree to sit under."),
+        run: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Your running Run's id, as your Brief gives it: its New knowledge item waits for the Assignee of the Run's Ticket, not your Owner."),
       },
     },
-    ({ project, parent, ...input }) =>
-      answer(async () => send("POST", await placePath(project, "documents"), { ...input, parentId: parent })),
+    ({ project, parent, run, ...input }) =>
+      answer(async () => send("POST", await placePath(project, "documents"), { ...input, parentId: parent, runId: run })),
   );
 
   server.registerTool(
@@ -725,14 +731,20 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Creates a Term in a Project, or in the Workspace when no Project is given, at Version 1 by your Agent. Its " +
         "name is unique ignoring case among the Project's own Terms, or the Workspace's: a taken one is refused with " +
-        "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary." + avoidedWordsNote,
+        "`term_name_taken`. A Project Term replaces a Workspace Term of the same name in the Project's glossary." +
+        " It waits as a New knowledge item in the Inbox of the Assignee of your named Run's Ticket, or else of your Owner." + avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
-        ...bodyFields(TermCreate),
+        ...bodyFields(Type.Omit(TermCreate, ["runId"])),
+        run: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Your running Run's id, as your Brief gives it: its New knowledge item waits for the Assignee of the Run's Ticket, not your Owner."),
       },
     },
-    ({ project, ...input }) =>
-      answer(async () => send("POST", await placePath(project, "terms"), input)),
+    ({ project, run, ...input }) =>
+      answer(async () => send("POST", await placePath(project, "terms"), { ...input, runId: run })),
   );
 
   server.registerTool(
@@ -900,7 +912,7 @@ export function buildMcpServer(api: Api): McpServer {
         artifactPolicy +
         " Name your running Run to " +
         "link it to the Run's Ticket, where its Users find it; it is then kept in that Ticket's Project or the " +
-        "Workspace. " +
+        "Workspace. It waits as a New knowledge item in the Inbox of the Assignee of that Ticket, or else of your Owner. " +
         sizeLimit + avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's when left out."),
@@ -1042,13 +1054,20 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "Records a choice and its reasoning as a proposed Decision of a Project, or of the Workspace when no Project " +
         "is given, numbered next there, at Version 1 by your Agent. Only a User accepts, rejects or otherwise changes " +
-        "its status." + avoidedWordsNote,
+        "its status." +
+        " It waits as a New knowledge item in the Inbox of the Assignee of your named Run's Ticket, or else of your Owner." + avoidedWordsNote,
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `CRONK`. The Workspace's own when left out."),
         ...bodyFields(Type.Pick(DecisionCreate, ["title", "body"])),
+        run: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Your running Run's id, as your Brief gives it: its New knowledge item waits for the Assignee of the Run's Ticket, not your Owner."),
       },
     },
-    ({ project, ...input }) => answer(async () => send("POST", await placePath(project, "decisions"), input)),
+    ({ project, run, ...input }) =>
+      answer(async () => send("POST", await placePath(project, "decisions"), { ...input, runId: run })),
   );
 
   server.registerTool(

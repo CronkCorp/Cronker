@@ -5,6 +5,7 @@ import { latestReportOf, ReportRef } from "../knowledge/reports.js";
 import { openQuestionsFor, Question } from "../runs/questions.js";
 import { WentWrongState, wentWrongStates } from "../runs/states.js";
 import { inReach, userViewer } from "../identity/viewers.js";
+import { KnowledgeItem, knowledgeItemsOf } from "./knowledge.js";
 import { ticketColumns, TicketSummary, ticketSummary, type TicketRow } from "../work/tickets.js";
 
 /**
@@ -128,6 +129,7 @@ export const InboxItem = Type.Union([
   DiscoveredItem,
   ReassignItem,
   UndelegatedItem,
+  KnowledgeItem,
 ]);
 export type InboxItem = Static<typeof InboxItem>;
 
@@ -139,7 +141,8 @@ export type Inbox = Static<typeof Inbox>;
 
 /**
  * The User's Inbox in the Workspace; the caller checks they belong to it, and whether they are its Admin. It holds
- * only Tickets of Projects the User may read and that aren't archived: unarchiving a Project brings back what still waits.
+ * only Tickets and knowledge of Projects the User may read and that aren't archived: unarchiving a Project brings back
+ * what still waits.
  */
 export async function inboxOf(db: Db, userId: string, workspace: { id: string; isAdmin: boolean }): Promise<Inbox> {
   const workspaceId = workspace.id;
@@ -287,6 +290,7 @@ export async function inboxOf(db: Db, userId: string, workspace: { id: string; i
       items.push({ kind: "reassign", ticket: ticketSummary(row), formerAssignee, since: removedAt.toISOString() });
     }
   }
+  items.push(...(await knowledgeItemsOf(db, userId, workspaceId)));
   return { count: items.length, items };
 }
 

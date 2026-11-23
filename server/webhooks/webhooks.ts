@@ -21,7 +21,17 @@ import type { Workspace } from "../workspaces/workspaces.js";
  */
 
 /** The Inbox kinds a webhook may get. */
-export const webhookKinds = ["question", "needsYou", "run", "review", "unverified", "discovered", "reassign", "undelegated"] as const;
+export const webhookKinds = [
+  "question",
+  "needsYou",
+  "run",
+  "review",
+  "unverified",
+  "discovered",
+  "reassign",
+  "undelegated",
+  "knowledge",
+] as const;
 export const WebhookKind = literals(webhookKinds);
 export type WebhookKind = (typeof webhookKinds)[number];
 
@@ -251,12 +261,16 @@ export async function removeWebhook(db: Db, userId: string, workspaceId: string,
   await db.query("delete from webhooks where id = $1", [current.id]);
 }
 
-/** The body of a delivery: never a Ticket's description or Comments. */
+/**
+ * The body of a delivery: never a Ticket's description or Comments, nor knowledge's text. A New knowledge item has no
+ * Ticket: it names its Decision, Term, Document or Artifact as `item` instead.
+ */
 export interface DeliveryBody {
   id: string;
   kind: WebhookKind | "test";
   workspace: string;
-  ticket: { key: string; title: string; url: string };
+  ticket?: { key: string; title: string; url: string };
+  item?: { kind: "decision" | "term" | "document" | "artifact"; title: string; url: string };
   run?: string;
   at: string;
 }

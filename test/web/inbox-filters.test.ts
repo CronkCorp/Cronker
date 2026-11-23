@@ -51,3 +51,17 @@ describe("matches", () => {
     expect(matches(item("review", "X-1", null), { projects: ["workspace"], kinds: [] })).toBe(true);
   });
 });
+
+describe("New knowledge", () => {
+  const knowledge = (projectKey: string | null) =>
+    ({ kind: "knowledge", id: "n1", subject: { kind: "term", id: "s1", title: "Run", projectId: projectKey && "p1", projectKey } }) as unknown as InboxItem;
+
+  it("belongs to its knowledge's Project, or the Workspace for the Workspace's own, and filters as `knowledge`", () => {
+    expect(projectOf(knowledge("CRONK"))).toBe("CRONK");
+    expect(projectOf(knowledge(null))).toBe("workspace");
+    expect(readFilters("?kind=knowledge").kinds).toEqual(["knowledge"]);
+    expect(matches(knowledge("CRONK"), { projects: ["CRONK"], kinds: ["knowledge"] })).toBe(true);
+    expect(matches(knowledge(null), { projects: ["workspace"], kinds: [] })).toBe(true);
+    expect(matches(knowledge("CRONK"), { projects: [], kinds: ["discovered"] })).toBe(false);
+  });
+});

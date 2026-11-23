@@ -28,6 +28,8 @@ export const keys = {
   agentRecord: (agentId: string) => ["agent", agentId, "record"] as const,
   /** Every Agent's Record: any of their doings may be what an event names. */
   agentRecords: ["agent"] as const,
+  /** The signed-in User's Inbox, and what its items show. */
+  inbox: ["inbox"] as const,
   /** Everything loaded of one record, for the events that name only the record. */
   everythingOf: (kind: "project" | "document" | "term" | "decision" | "artifact" | "transcript", id: string) => [kind, id] as const,
   /** Every query: `[]` is a prefix of every key. */
@@ -101,6 +103,9 @@ export function invalidations(event: StreamEvent): QueryKey[] {
       return [keys.everythingOf("artifact", event.artifactId), keys.agentRecords];
     case "transcript.changed":
       return [keys.everythingOf("transcript", event.transcriptId), keys.agentRecords];
+    case "inbox.changed":
+      // Only a New knowledge item was added or cleared: the Inbox, which listens to every event, fetches itself again.
+      return [keys.inbox];
     default:
       return unlisted(event);
   }

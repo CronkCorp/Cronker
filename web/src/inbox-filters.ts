@@ -8,6 +8,7 @@ export const inboxGroups: { name: string; value: string; kinds: InboxItem["kind"
   { name: "To review", value: "review", kinds: ["review"] },
   { name: "Unverified", value: "unverified", kinds: ["unverified"] },
   { name: "Discovered", value: "discovered", kinds: ["discovered"] },
+  { name: "New knowledge", value: "knowledge", kinds: ["knowledge"] },
 ];
 
 /** The Project option for items of no Project, such as the Workspace's own knowledge. */
@@ -59,8 +60,9 @@ export function withFilters(search: string, filters: InboxFilters): string {
   return params.toString();
 }
 
-/** The key of an item's Project, from its Ticket's key, or `workspace` for an item of no Project. */
+/** The key of an item's Project, from its Ticket's key (or New knowledge's Project), or `workspace` for an item of no Project. */
 export function projectOf(item: InboxItem): string {
+  if (item.kind === "knowledge") return item.subject.projectKey?.toUpperCase() ?? workspaceOption;
   const key = item.ticket?.key;
   if (!item.ticket?.projectId || !key || !key.includes("-")) return workspaceOption;
   return key.slice(0, key.lastIndexOf("-")).toUpperCase();

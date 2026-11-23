@@ -9,6 +9,7 @@ import { ownerName } from "../agents/tokens.js";
 import type { Caller } from "../identity/callers.js";
 import { inReach, requireWrite, type Viewer } from "../identity/viewers.js";
 import { Actor, actorColumn } from "../work/actors.js";
+import { creatingRun, noticeKnowledge } from "../inbox/knowledge-notices.js";
 import type { Live } from "../live/live.js";
 import { ComparedLine, compareLines } from "./compare.js";
 import type { Place } from "./places.js";
@@ -220,6 +221,13 @@ export const DocumentCreate = Type.Object({
   body: Type.Optional(Body),
   parentId: Type.Optional(ParentId),
   position: Type.Optional(Position),
+  runId: Type.Optional(
+    Type.String({
+      description:
+        "For an Agent, its running Run the Document is created in: its New knowledge item waits for the Assignee of the Run's " +
+        "Ticket rather than the Agent's Owner.",
+    }),
+  ),
 });
 export type DocumentCreate = Static<typeof DocumentCreate>;
 
@@ -238,6 +246,7 @@ export async function createDocument(
     await lockTree(tx, tree);
     const parentId = input.parentId ?? null;
     if (parentId) await requireParentInTree(tx, tree, parentId);
+    const run = await creatingRun(tx, actor, input.runId, "a Document");
     const count = await siblingCount(tx, tree, parentId);
     const position = Math.min(input.position ?? count, count);
     await shiftSiblings(tx, tree, parentId, position, 1);
@@ -249,6 +258,7 @@ export async function createDocument(
     );
     const id = rows[0]!.id;
     await insertVersion(tx, { id, workspaceId: tree.workspaceId }, 1, input, actor, now);
+    await noticeKnowledge(tx, live, actor, { kind: "document", id, workspaceId: tree.workspaceId }, run, now);
     documentChanged(live, tx, { ...tree, id, ticketId: null });
     return (await findDocument(tx, actor, id))!;
   });

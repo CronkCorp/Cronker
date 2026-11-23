@@ -1,5 +1,6 @@
 import type { Context } from "../context.js";
 import { inboxOf, type InboxItem } from "../inbox/inbox.js";
+import { knowledgePath } from "../inbox/knowledge.js";
 import type { LiveEvent } from "../live/live.js";
 import { queueDelivery, type WebhookKind } from "./webhooks.js";
 
@@ -18,6 +19,7 @@ const inboxEvents = new Set<LiveEvent["type"]>([
   "project.changed",
   "project.gained",
   "statuses.changed",
+  "inbox.changed",
 ]);
 
 /**
@@ -32,6 +34,8 @@ export function inboxItemKey(item: InboxItem): string {
       return `run:${item.run.id}`;
     case "discovered":
       return `discovered:${item.ticket.id}`;
+    case "knowledge":
+      return `knowledge:${item.id}`;
     default:
       return `${item.kind}:${item.ticket.id}:${item.since}`;
   }
@@ -78,7 +82,8 @@ export async function notifyWorkspace(context: Context, workspaceId: string): Pr
     for (const item of items) {
       const key = inboxItemKey(item);
       const since = Date.parse(item.since);
-      const fromBeforeUnarchiving = since < (unarchivedAt.get(item.ticket.projectId) ?? -Infinity);
+      const projectId = item.kind === "knowledge" ? item.subject.projectId : item.ticket.projectId;
+      const fromBeforeUnarchiving = projectId !== null && since < (unarchivedAt.get(projectId) ?? -Infinity);
       for (const webhook of own) {
         if (since < webhook.createdAt.getTime()) continue;
         const { rowCount } = await db.query(
@@ -86,15 +91,30 @@ export async function notifyWorkspace(context: Context, workspaceId: string): Pr
           [webhook.id, key],
         );
         if (!rowCount || fromBeforeUnarchiving || !webhook.enabled || !webhook.kinds.includes(item.kind)) continue;
-        const url = new URL(`/${webhook.slug}/tickets/${item.ticket.key}`, config.publicUrl).href;
-        // Never the Ticket's description or Comments: a receiver such as ntfy may be public.
+        // Never the Ticket's description or Comments, nor knowledge's text: a receiver such as ntfy may be public.
+        const about =
+          item.kind === "knowledge"
+            ? {
+                item: {
+                  kind: item.subject.kind,
+                  title: item.subject.title,
+                  url: new URL(knowledgePath(webhook.slug, item.subject), config.publicUrl).href,
+                },
+              }
+            : {
+                ticket: {
+                  key: item.ticket.key,
+                  title: item.ticket.title,
+                  url: new URL(`/${webhook.slug}/tickets/${item.ticket.key}`, config.publicUrl).href,
+                },
+              };
         await queueDelivery(
           db,
           webhook.id,
           {
             kind: item.kind,
             workspace: webhook.slug,
-            ticket: { key: item.ticket.key, title: item.ticket.title, url },
+            ...about,
             ...(item.kind === "run" ? { run: item.run.id } : {}),
             at: item.since,
           },

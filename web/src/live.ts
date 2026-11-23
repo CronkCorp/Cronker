@@ -43,6 +43,7 @@ const eventTypes = Object.keys({
   "artifact.changed": true,
   "artifact.comments.changed": true,
   "transcript.changed": true,
+  "inbox.changed": true,
 } satisfies Record<LiveEvent["type"], true>);
 
 const runnerEventTypes = Object.keys({ "runner.changed": true } satisfies Record<RunnerEvent["type"], true>);
