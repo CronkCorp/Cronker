@@ -89,6 +89,7 @@ describe("Comments on a Document", () => {
         attachments: [],
         questionId: null,
         sentBack: false,
+        resolved: null,
         quote: null,
         quoteVersion: null,
         anchor: null,
@@ -236,6 +237,123 @@ describe("Comments on a Document", () => {
   });
 });
 
+describe("Resolving a thread on a Document", () => {
+  /** Ada's Plan with a thread of a Comment, a reply and a reply to that, and an open Comment after it. */
+  async function threads() {
+    const setting = await documentsAndTickets();
+    const { ada, plan } = setting;
+    const thread = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Is step two needed?" });
+    const reply = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Yes.", replyToId: thread.id });
+    const deeper = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Why?", replyToId: reply.id });
+    const open = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Typo in step one." });
+    return { ...setting, thread, reply, deeper, open };
+  }
+
+  test("a User resolves a thread through its first Comment, recording when and by whom, and unresolves it", async () => {
+    const { user, ada, thread } = await threads();
+    cronk.clock.advance(5000);
+
+    const resolved = await ok("POST", `/api/comments/${thread.id}/resolve`, ada);
+
+    expect(resolved).toEqual({
+      ...thread,
+      resolved: { at: cronk.clock.now().toISOString(), by: { kind: "user", id: user.id, name: "ada@example.com" } },
+    });
+    // Resolving it again changes nothing.
+    cronk.clock.advance(1000);
+    expect(await ok("POST", `/api/comments/${thread.id}/resolve`, ada)).toEqual(resolved);
+
+    const unresolved = await ok("POST", `/api/comments/${thread.id}/unresolve`, ada);
+    expect(unresolved).toEqual(thread);
+    expect(await ok("POST", `/api/comments/${thread.id}/unresolve`, ada)).toEqual(thread);
+  });
+
+  test("a resolved thread is left out of the Document's read with all its replies, and returned on request", async () => {
+    const { ada, plan, thread, reply, deeper, open } = await threads();
+    const resolved = await ok("POST", `/api/comments/${thread.id}/resolve`, ada);
+
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([open]);
+    expect((await ok("GET", `/api/documents/${plan.id}`, ada)).comments).toEqual([open]);
+    const all = [resolved, reply, deeper, open];
+    expect(await ok("GET", `/api/documents/${plan.id}/comments?resolved=true`, ada)).toEqual(all);
+    expect((await ok("GET", `/api/documents/${plan.id}?resolved=true`, ada)).comments).toEqual(all);
+
+    // A reply to a resolved thread leaves it resolved, and hidden with it.
+    const late = await ok("POST", `/api/documents/${plan.id}/comments`, ada, { body: "Late.", replyToId: thread.id });
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, ada)).toEqual([open]);
+    expect((await ok("GET", `/api/documents/${plan.id}/comments?resolved=true`, ada)).map((c: { id: string }) => c.id)).toEqual(
+      [thread.id, reply.id, deeper.id, open.id, late.id],
+    );
+
+    await ok("POST", `/api/comments/${thread.id}/unresolve`, ada);
+    expect((await ok("GET", `/api/documents/${plan.id}/comments`, ada)).map((c: { id: string }) => c.id)).toEqual([
+      thread.id,
+      reply.id,
+      deeper.id,
+      open.id,
+      late.id,
+    ]);
+  });
+
+  test("an Agent is refused, with a rule and advice, and so is a read-only token", async () => {
+    const { ada, plan, thread, asAgent, asReadOnly } = await threads();
+
+    for (const action of ["resolve", "unresolve"]) {
+      const refused = await call("POST", `/api/comments/${thread.id}/${action}`, asAgent);
+      expect(refused.status, action).toBe(403);
+      expect(refused.json.error).toEqual({
+        code: "agent_not_allowed",
+        message: `claude-max is an Agent, and only a User can ${action} a thread.`,
+        rule: expect.any(String),
+        advice: expect.stringContaining("ada@example.com"),
+      });
+      expect((await call("POST", `/api/comments/${thread.id}/${action}`, asReadOnly)).json.error.code).toBe("read_only_token");
+    }
+    await ok("POST", `/api/comments/${thread.id}/resolve`, ada);
+    expect((await call("POST", `/api/comments/${thread.id}/unresolve`, asAgent)).status).toBe(403);
+    // Agents still read resolved threads on request.
+    expect(await ok("GET", `/api/documents/${plan.id}/comments`, asAgent)).toHaveLength(1);
+    expect(await ok("GET", `/api/documents/${plan.id}/comments?resolved=true`, asAgent)).toHaveLength(4);
+  });
+
+  test("a reply, a Ticket's or an Artifact's Comment and an unknown Comment are refused", async () => {
+    const { workspace, ada, ticket, reply } = await threads();
+    const onTicket = await ok("POST", `/api/tickets/${ticket.id}/comments`, ada, { body: "On the Ticket." });
+    const artifact = await ok("POST", `/api/workspaces/${workspace.id}/artifacts`, ada, {
+      title: "Prototype",
+      files: [{ path: "index.html", contentBase64: Buffer.from("<p>Hi</p>").toString("base64") }],
+    });
+    const onArtifact = await ok("POST", `/api/artifacts/${artifact.id}/comments`, ada, { body: "On the Artifact." });
+
+    const ofReply = await call("POST", `/api/comments/${reply.id}/resolve`, ada);
+    expect(ofReply.status).toBe(400);
+    expect(ofReply.json.error).toEqual(expect.objectContaining({ code: "not_a_thread", rule: expect.any(String) }));
+    for (const comment of [onTicket, onArtifact]) {
+      const refused = await call("POST", `/api/comments/${comment.id}/resolve`, ada);
+      expect(refused.status).toBe(400);
+      expect(refused.json.error).toEqual(expect.objectContaining({ code: "not_a_document_thread", advice: expect.any(String) }));
+    }
+    expect((await ok("GET", `/api/tickets/${ticket.id}/comments`, ada))[0].resolved).toBeNull();
+    for (const id of ["nope", "00000000-0000-4000-8000-000000000000"]) {
+      expect((await call("POST", `/api/comments/${id}/resolve`, ada)).status).toBe(404);
+    }
+  });
+
+  test("tells the Document's readers live, once for each change", async () => {
+    const { workspace, ada, project, plan, thread } = await threads();
+    const stream = await openStream(cronk, ada.cookie, workspace.id);
+    const changed = { type: "comment.changed", data: { projectId: project.id, documentId: plan.id, commentId: thread.id } };
+
+    await ok("POST", `/api/comments/${thread.id}/resolve`, ada);
+    expect(await stream.next()).toEqual(changed);
+    // Resolving it again tells nobody: the next event is the unresolve.
+    await ok("POST", `/api/comments/${thread.id}/resolve`, ada);
+    await ok("POST", `/api/comments/${thread.id}/unresolve`, ada);
+    expect(await stream.next()).toEqual(changed);
+    stream.close();
+  });
+});
+
 describe("Comments on a passage of a Document", () => {
   async function comment(documentId: string, as: As, body: Record<string, unknown>) {
     return call("POST", `/api/documents/${documentId}/comments`, as, body);
@@ -371,6 +489,10 @@ describe("Access to a Document's Comments", () => {
       expect(refused.status).toBe(403);
       expect(refused.json.error.code).toBe("read_access");
     }
+    // Nor resolve them.
+    const resolving = await call("POST", `/api/comments/${comment.id}/resolve`, grace);
+    expect(resolving.status).toBe(403);
+    expect(resolving.json.error.code).toBe("read_access");
   });
 
   test("a User who can't read the Project finds neither the Document's Comments nor their files, nor hears of them", async () => {
@@ -380,6 +502,7 @@ describe("Access to a Document's Comments", () => {
     expect((await call("GET", `/api/documents/${plan.id}/comments`, linus)).status).toBe(404);
     expect((await call("POST", `/api/documents/${plan.id}/comments`, linus, { body: "Hi" })).status).toBe(404);
     expect((await call("GET", `/api/comments/${comment.id}/attachments`, linus)).status).toBe(404);
+    expect((await call("POST", `/api/comments/${comment.id}/resolve`, linus)).status).toBe(404);
     expect((await call("GET", `/api/attachments/${attached.json.id}`, linus)).status).toBe(404);
 
     const stream = await openStream(cronk, linus.cookie, workspace.id);

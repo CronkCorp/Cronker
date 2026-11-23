@@ -3,7 +3,7 @@ import { api, type Comment, type User, type Workspace } from "./api.js";
 import { useArrivals, useLatest, useLiveEvents, type StreamEvent } from "./live.js";
 import { CommentForm, CommentThread } from "./tickets.js";
 import { Avatar } from "./ui/actor.js";
-import { FormError } from "./ui/controls.js";
+import { Button, FormError } from "./ui/controls.js";
 import { useCanWrite } from "./write-access.js";
 
 /** What a Comments panel is under: an Artifact, or a Document (a Report included). */
@@ -18,10 +18,13 @@ const sources = {
   document: {
     list: api.documentComments,
     post: api.commentOnDocument,
-    // A Comment added, or a file attached to or removed from one of them, names only the Document; a save of the
-    // Document moves its quoted threads, or leaves them outdated.
+    // A Comment added or a thread resolved, or a file attached to or removed from one of them, names only the
+    // Document; a save of the Document moves its quoted threads, or leaves them outdated.
     changed: (event: StreamEvent, id: string) =>
-      (event.type === "comment.added" || event.type === "attachments.changed" || event.type === "document.changed") &&
+      (event.type === "comment.added" ||
+        event.type === "comment.changed" ||
+        event.type === "attachments.changed" ||
+        event.type === "document.changed") &&
       "documentId" in event &&
       event.documentId === id,
   },
@@ -37,6 +40,15 @@ export interface Comments {
   load: () => void;
   /** Shows a Comment just placed, unless the live refetch already did. */
   added: (comment: Comment) => void;
+  /** How many threads are resolved; a Document's only, as only they resolve. */
+  resolvedCount: number;
+  /** Whether resolved threads show, in their places, until the page is left or none is resolved. */
+  showResolved: boolean;
+  setShowResolved: (show: boolean) => void;
+  /** Whether a thread shows: open, or resolved while resolved ones are shown. */
+  isShown: (thread: Comment) => boolean;
+  /** Resolves or unresolves a thread on a Document; left out on an Artifact. */
+  resolve?: (thread: Comment, resolved: boolean) => Promise<void>;
 }
 
 export function useComments(workspace: Workspace, target: CommentTarget): Comments {
@@ -57,7 +69,35 @@ export function useComments(workspace: Workspace, target: CommentTarget): Commen
     (comment: Comment) => setList((now) => ((now ?? []).some((c) => c.id === comment.id) ? now : [...(now ?? []), comment])),
     [],
   );
-  return { list, failure, arrived, load, added };
+  const [showResolved, setShowResolved] = useState(false);
+  const resolvedCount = (list ?? []).filter((c) => c.replyToId === null && c.resolved !== null).length;
+  // With the last resolved thread unresolved, the next one resolved hides again.
+  useEffect(() => {
+    if (resolvedCount === 0) setShowResolved(false);
+  }, [resolvedCount]);
+  const isShown = useCallback((thread: Comment) => showResolved || thread.resolved === null, [showResolved]);
+  // The Comment comes back with its new state, before the live refetch.
+  const resolve = useCallback(async (thread: Comment, resolved: boolean) => {
+    setFailure(null);
+    try {
+      const updated = await (resolved ? api.resolveComment(thread.id) : api.unresolveComment(thread.id));
+      setList((now) => (now ?? []).map((c) => (c.id === updated.id ? updated : c)));
+    } catch (e) {
+      setFailure((e as Error).message);
+    }
+  }, []);
+  return {
+    list,
+    failure,
+    arrived,
+    load,
+    added,
+    resolvedCount,
+    showResolved,
+    setShowResolved,
+    isShown,
+    resolve: target.kind === "document" ? resolve : undefined,
+  };
 }
 
 /** A thread placed beside its passage in its Document's text: those whose quote is still there. */
@@ -66,6 +106,8 @@ export const placed = (comment: Comment): comment is Comment & { anchor: { offse
 
 /** A thread: its first Comment, with its avatar in the gutter, and its replies under it. */
 export function ThreadEntry({ comment, comments, user }: { comment: Comment; comments: Comments; user: User }) {
+  const canWrite = useCanWrite();
+  const resolve = comments.resolve;
   return (
     <li className="entry">
       <span className="gutter">
@@ -90,6 +132,7 @@ export function ThreadEntry({ comment, comments, user }: { comment: Comment; com
           arrived={comments.arrived}
           onAdded={comments.added}
           onChanged={comments.load}
+          onResolve={resolve && canWrite ? (resolved) => resolve(comment, resolved) : undefined}
         />
       </div>
     </li>
@@ -106,12 +149,21 @@ export function CommentsPanel({ target, user, comments }: { target: CommentTarge
   const shown = comments.list ?? [];
   const threads = shown.filter((c) => c.replyToId === null);
   const outdated = threads.filter((c) => c.anchor === "outdated");
-  const listed = [...outdated, ...threads.filter((c) => c.anchor === null)];
+  const listed = [...outdated, ...threads.filter((c) => c.anchor === null)].filter(comments.isShown);
+  const { resolvedCount, showResolved, setShowResolved } = comments;
   return (
     <section aria-label="Comments" className="comments-panel">
       <h2>Comments</h2>
       <FormError error={comments.failure} />
+      {resolvedCount > 0 && (
+        <Button variant="ghost" size="small" aria-pressed={showResolved} onClick={() => setShowResolved(!showResolved)}>
+          {showResolved ? "Hide resolved" : `Show resolved (${resolvedCount})`}
+        </Button>
+      )}
       {comments.list && threads.length === 0 && <p className="muted">No Comments yet.</p>}
+      {comments.list && threads.length > 0 && resolvedCount === threads.length && !showResolved && (
+        <p className="muted">No open Comments.</p>
+      )}
       {listed.length > 0 && (
         <ol className="comments-panel-list">
           {listed.map((comment) => (

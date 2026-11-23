@@ -15,6 +15,7 @@ export type LiveEvent =
   | { type: "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
   | { type: "comment.added"; projectId: string | null; documentId: string; commentId: string }
+  | { type: "comment.changed"; projectId: string | null; documentId: string; commentId: string }
   | { type: "report.added"; projectId: string; ticketId: string; reportId: string }
   | { type: "report.changed"; projectId: string; ticketId: string; reportId: string }
   | { type: "attachments.changed"; projectId: string; ticketId: string }
@@ -41,6 +42,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "comment.added":
     "A Comment was added to a Ticket, or to an Artifact the Ticket links (`artifact.comments.changed` tells the Artifact's page), " +
     "naming the Ticket; or to a Document, a Report included, naming only the Document (`projectId` null for the Workspace's own).",
+  "comment.changed":
+    "A User resolved or unresolved a thread on a Document, a Report included, through its first Comment (`projectId` null for the Workspace's own).",
   "report.added": "A Run wrote a Report on a Ticket.",
   "report.changed": "A Report on a Ticket was saved as its next Version, or deleted.",
   "pull_requests.changed": "A Pull Request linked to a Ticket, or one linked to it changed: its title, branch, state, checks or reviews.",

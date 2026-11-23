@@ -321,8 +321,13 @@ export const api = {
     call<Comment[]>("GET", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`),
   commentOnArtifact: (artifactId: string, input: CommentCreate) =>
     call<Comment>("POST", `/api/artifacts/${encodeURIComponent(artifactId)}/comments`, input),
+  /** A Document's Comments, its resolved threads included, as its Comments panel hides or shows them. */
   documentComments: (documentId: string) =>
-    call<Comment[]>("GET", `/api/documents/${encodeURIComponent(documentId)}/comments`),
+    call<Comment[]>("GET", `/api/documents/${encodeURIComponent(documentId)}/comments?resolved=true`),
+  resolveComment: (commentId: string) =>
+    call<Comment>("POST", `/api/comments/${encodeURIComponent(commentId)}/resolve`),
+  unresolveComment: (commentId: string) =>
+    call<Comment>("POST", `/api/comments/${encodeURIComponent(commentId)}/unresolve`),
   commentOnDocument: (documentId: string, input: DocumentCommentCreate) =>
     call<Comment>("POST", `/api/documents/${encodeURIComponent(documentId)}/comments`, input),
   reports: (ticketId: string) => call<Report[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/reports`),

@@ -740,6 +740,7 @@ function DocumentRead({
   // The server places each thread by its quote; the page only puts it where the server says.
   const slots: Slot[] = (comments.list ?? [])
     .filter(placed)
+    .filter(comments.isShown)
     .sort((a, b) => a.anchor.offset - b.anchor.offset)
     .map((comment) => ({
       offset: comment.anchor.offset,

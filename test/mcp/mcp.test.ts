@@ -303,6 +303,23 @@ describe("MCP with an Agent token", () => {
     expect(readTicket.json.comments.map((c: { body: string }) => c.body)).toEqual(["First thoughts."]);
   });
 
+  test("read_document leaves out threads a User resolved unless asked for them", async () => {
+    const { cookie, ticket, secret } = await workspaceWithTicket();
+    const client = await connect(secret);
+    const plan = await (
+      await cronk.request("POST", `/api/projects/${ticket.projectId}/documents`, { cookie, body: { title: "Plan", body: "One." } })
+    ).json();
+    const post = async (body: string) =>
+      (await cronk.request("POST", `/api/documents/${plan.id}/comments`, { cookie, body: { body } })).json();
+    const done = await post("Is step two needed?");
+    const open = await post("Typo in step one.");
+    const resolved = await (await cronk.request("POST", `/api/comments/${done.id}/resolve`, { cookie })).json();
+
+    expect((await call(client, "read_document", { document: plan.id })).json.comments).toEqual([open]);
+    expect((await call(client, "read_document", { document: plan.id, resolved: true })).json.comments).toEqual([resolved, open]);
+    expect(resolved.resolved).toEqual(expect.objectContaining({ by: expect.objectContaining({ kind: "user" }) }));
+  });
+
   test("an Agent quotes a passage of a Document, and read_document places the thread", async () => {
     const { cookie, ticket, secret } = await workspaceWithTicket();
     const client = await connect(secret);

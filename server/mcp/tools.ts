@@ -507,16 +507,27 @@ export function buildMcpServer(api: Api): McpServer {
         "A Document of your Workspace as Markdown, at its current Version, whose number a save names as its " +
         "`baseVersion`, with its Comments, oldest first, each reply naming the Comment it answers; a thread on a " +
         "passage carries its `quote`, the `quoteVersion` it was written on and its `anchor`: the offset of the " +
-        "quote's first appearance in the current Markdown, or `outdated` once it no longer appears. Given a " +
+        "quote's first appearance in the current Markdown, or `outdated` once it no longer appears. Threads a User resolved are left out unless " +
+        "`resolved` asks for them; only Users resolve threads. Given a " +
         "Version's number, that earlier Version, without Comments.",
       inputSchema: {
         document: documentArgument,
         version: z.number().int().min(1).optional().describe("An earlier Version's number. The current one when left out."),
+        resolved: z
+          .boolean()
+          .optional()
+          .describe("Include resolved threads, each Comment's `resolved` saying when and by whom. Left out when false."),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ document, version }) =>
-      answer(() => get(version === undefined ? documentPath(document) : `${documentPath(document)}/versions/${version}`)),
+    ({ document, version, resolved }) =>
+      answer(() =>
+        get(
+          version === undefined
+            ? `${documentPath(document)}${resolved ? "?resolved=true" : ""}`
+            : `${documentPath(document)}/versions/${version}`,
+        ),
+      ),
   );
 
   server.registerTool(

@@ -22,6 +22,7 @@ const samples: { [type in StreamEvent["type"]]: Extract<StreamEvent, { type: typ
     { type: "comment.added", projectId: p, ticketId: t, commentId: "comment-1" },
     { type: "comment.added", projectId: null, documentId: "document-1", commentId: "comment-2" },
   ],
+  "comment.changed": [{ type: "comment.changed", projectId: null, documentId: "document-1", commentId: "comment-2" }],
   "report.added": [{ type: "report.added", projectId: p, ticketId: t, reportId: "report-1" }],
   "report.changed": [{ type: "report.changed", projectId: p, ticketId: t, reportId: "report-1" }],
   "attachments.changed": [
@@ -101,6 +102,13 @@ test("a Comment on a Document refreshes what is loaded of that Document, and no 
   expect(stale(onDocument, keys.comments(t))).toBe(false);
 });
 
+test("a thread on a Document resolved or unresolved refreshes that Document, and no Ticket's Comments", () => {
+  const resolved = samples["comment.changed"][0]!;
+  expect(stale(resolved, keys.documentAttachments("document-1"))).toBe(true);
+  expect(stale(resolved, keys.documentAttachments("document-2"))).toBe(false);
+  expect(stale(resolved, keys.comments(t))).toBe(false);
+});
+
 test("a Ticket's files changing refreshes its Attachments and its Comments, which carry theirs; a Report's, its Document's", () => {
   const [ticketFiles, documentFiles] = samples["attachments.changed"];
   expect(stale(ticketFiles!, keys.attachments(t))).toBe(true);
@@ -142,7 +150,8 @@ test("whatever an Agent may have done refreshes the Agent Records, and the rest 
   ] as const) {
     expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(true);
   }
-  for (const type of ["project.changed", "statuses.changed", "pull_requests.changed"] as const) {
+  // Only a User resolves a thread.
+  for (const type of ["project.changed", "statuses.changed", "pull_requests.changed", "comment.changed"] as const) {
     expect(stale(samples[type][0]!, keys.agentRecord("agent-1")), type).toBe(false);
   }
 });
