@@ -219,6 +219,8 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   page,
   cronk,
 }) => {
+  // Four native drags, each retried below, outlast the default timeout on a loaded CI runner (CRONK-128).
+  test.slow();
   await page.setViewportSize({ width: 1280, height: 800 });
   const { workspace } = await setUp(cronk);
   const cookie = await signIn(cronk);
@@ -243,39 +245,71 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   // draggable="true"; draggable="false" makes them select it always, user-select notwithstanding.
   await expect(link("Backlog"), "the card's link is explicitly draggable").toHaveAttribute("draggable", "true");
 
-  /** Presses at a point of the card, moves to the middle of a column and lets go there. */
-  const dragFrom = async (x: number, y: number, column: string) => {
-    await page.mouse.move(x, y);
-    await page.mouse.down();
-    const to = (await lane(column).boundingBox())!;
-    await page.mouse.move(to.x + to.width / 2, to.y + 200, { steps: 8 });
-    await page.mouse.up();
-    await expect(link(column), `the card dropped on ${column} is there`).toBeVisible();
+  /** The middle of a part of the card, once its box has stopped moving across two animation frames. */
+  const middleOf = (part: Locator) => async () => {
+    let box = await part.boundingBox({ timeout: 3_000 });
+    await expect(async () => {
+      const before = box;
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      box = await part.boundingBox({ timeout: 3_000 });
+      expect(box, "the card has settled").toEqual(before);
+    }).toPass({ timeout: 5_000 });
+    return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
+  };
+
+  /**
+   * Presses at a point of the card, moves to the middle of a column and lets go there. Retried: on a loaded CI
+   * runner the board may still be refetching or laying out after the previous drop, so the press can land off the
+   * card and Firefox starts no native drag (CRONK-128, as for the middle-click in CRONK-106). Each attempt measures
+   * the point afresh and stops at once if an earlier attempt's drop has landed after all.
+   */
+  const dragFrom = async (at: () => Promise<{ x: number; y: number }>, column: string) => {
+    await expect(async () => {
+      if (await link(column).isVisible()) return;
+      const { x, y } = await at();
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      try {
+        const to = (await lane(column).boundingBox())!;
+        await page.mouse.move(to.x + to.width / 2, to.y + 200, { steps: 8 });
+      } finally {
+        await page.mouse.up();
+      }
+      await expect(link(column), `the card dropped on ${column} is there`).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 20_000 });
     await expect.poll(async () => (await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status(column));
     expect(await selected(), "no text is selected by the drag").toBe("");
   };
 
   // The link's own box, at its top right, where there is no text: its padding, beside the key.
-  const ownBox = (await link("Backlog").boundingBox())!;
-  await dragFrom(ownBox.x + ownBox.width - 6, ownBox.y + 4, "Triage");
+  await dragFrom(async () => {
+    const ownBox = (await link("Backlog").boundingBox({ timeout: 3_000 }))!;
+    return { x: ownBox.x + ownBox.width - 6, y: ownBox.y + 4 };
+  }, "Triage");
 
   // A Label in the card's meta row.
-  const label = (await card("Triage").locator(".card-meta .chip").first().boundingBox())!;
-  await dragFrom(label.x + label.width / 2, label.y + label.height / 2, "Ready");
+  await dragFrom(middleOf(card("Triage").locator(".card-meta .chip").first()), "Ready");
 
   // The Assignee's avatar at the meta row's right end.
-  const avatar = (await card("Ready").locator(".card-meta .people").boundingBox())!;
-  await dragFrom(avatar.x + avatar.width / 2, avatar.y + avatar.height / 2, "Investigate");
+  await dragFrom(middleOf(card("Ready").locator(".card-meta .people")), "Investigate");
 
   // The card's own empty space, right of its Blocked chip and outside its link.
-  const box = (await card("Investigate").boundingBox())!;
-  const chip = (await card("Investigate").locator(".chip-blocked").boundingBox())!;
-  await dragFrom(box.x + box.width - 10, chip.y + chip.height / 2, "Backlog");
+  await dragFrom(async () => {
+    const box = (await card("Investigate").boundingBox({ timeout: 3_000 }))!;
+    const { y } = await middleOf(card("Investigate").locator(".chip-blocked"))();
+    return { x: box.x + box.width - 10, y };
+  }, "Backlog");
 
-  // A plain click on the link, away from its text, still opens the Ticket.
-  const again = (await link("Backlog").boundingBox())!;
-  await page.mouse.click(again.x + again.width - 6, again.y + 4);
-  await expect(page.getByRole("heading", { name: "CRONK-2 Ship it" })).toBeVisible();
+  // A plain click on the link, away from its text, still opens the Ticket. Retried, as for the drags: a click straight
+  // after a native drag is now and then swallowed on a loaded CI runner (CRONK-128, CRONK-106).
+  const heading = page.getByRole("heading", { name: "CRONK-2 Ship it" });
+  await expect(async () => {
+    if (await heading.isVisible()) return;
+    await middleOf(link("Backlog"))();
+    const again = (await link("Backlog").boundingBox({ timeout: 3_000 }))!;
+    await page.mouse.click(again.x + again.width - 6, again.y + 4);
+    await expect(heading).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 20_000 });
 });
 
 test("a blocked Ticket sits among the rest of its column and List Status by number, keeping its Blocked chip", async ({
