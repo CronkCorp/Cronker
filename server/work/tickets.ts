@@ -3,6 +3,8 @@ import type { Context } from "../context.js";
 import { transaction, type Db, type Tx } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { slugColumn } from "../http/readable.js";
+import { literals } from "../literals.js";
 import { accessOf, inReach, requireWrite, userViewer, type Viewer } from "../identity/viewers.js";
 import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
@@ -97,10 +99,31 @@ export const TicketSummary = Type.Object({
       Type.Object({
         id: Type.String({ format: "uuid" }),
         state: RunState,
+        statusId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
+          description: "The Status whose Step it ran, null once that Status was removed.",
+        }),
+        sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow it, such as its claude.ai session." }),
+        transcriptSlug: Type.Union([Type.String(), Type.Null()], {
+          description: "Its Transcript's readable form, once one was uploaded and while it isn't deleted; null otherwise.",
+        }),
       }),
       Type.Null(),
     ],
-    { description: "The Ticket's latest Run, for marking the board's card; its Runs list them all." },
+    { description: "The Ticket's latest Run, for marking the board's card and its context menu; its Runs list them all." },
+  ),
+  pullRequests: Type.Array(
+    Type.Object({
+      repository: Type.String({ description: "Its Repository's `owner/name`." }),
+      number: Type.Integer(),
+      url: Type.String({ description: "Where GitHub shows it." }),
+      state: literals(["open", "draft", "merged", "closed"] as const, { description: "As on its Pull Requests." }),
+      branch: Type.String({ description: "The branch it proposes to merge." }),
+    }),
+    {
+      description:
+        "The Pull Requests linked to it, by Repository and number, for the board card's context menu; its Pull Requests " +
+        "list them with their checks and reviews.",
+    },
   ),
   waiting: Waiting,
   blockedBy: Type.Array(TicketRef, {
@@ -239,8 +262,16 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
   tickets.autonomous_delegation as "autonomousDelegation", tickets.verification, tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
   tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
-  (select json_build_object('id', runs.id, 'state', runs.state) from runs
+  (select json_build_object('id', runs.id, 'state', runs.state, 'statusId', runs.status_id, 'sessionUrl', runs.session_url,
+     'transcriptSlug', (select ${slugColumn("transcript", "transcripts.id", "run_agents.name")} from transcripts
+       join agents run_agents on run_agents.id = runs.agent_id
+       where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)) from runs
    where runs.ticket_id = tickets.id order by runs.seq desc limit 1) as "lastRun",
+  coalesce((select json_agg(json_build_object('repository', linked.repository_full_name, 'number', linked.number,
+      'url', linked.url, 'state', linked.state, 'branch', linked.branch)
+      order by lower(linked.repository_full_name), linked.number)
+    from pull_request_links join pull_requests linked on linked.id = pull_request_links.pull_request_id
+    where pull_request_links.ticket_id = tickets.id), '[]'::json) as "pullRequests",
   ${waitingColumn("tickets")} as waiting,
   ${blockersColumns("tickets", reach)},
   array(select distinct pull_requests.conflict_branch from pull_request_links

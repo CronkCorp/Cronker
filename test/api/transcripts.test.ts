@@ -461,6 +461,9 @@ describe("a Run's Transcript", () => {
       transcriptSlug: `claude-max-${transcript.id.slice(0, 8)}`,
     });
     expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, ada)).toMatchObject([{ transcriptId: transcript.id }]);
+    // The board's card carries it too, for its menu's Open Transcript.
+    const [card] = await ok("GET", `/api/projects/${ticket.projectId}/tickets`, ada);
+    expect(card.lastRun).toMatchObject({ id: run.id, transcriptSlug: `claude-max-${transcript.id.slice(0, 8)}` });
   });
 
   test("the session of another Agent's Run is not that Run's Transcript", async () => {
