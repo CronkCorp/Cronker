@@ -56,6 +56,7 @@ import type { RunnerRecord as Runner, Trigger } from "../../server/runs/runners.
 import type { Run } from "../../server/runs/runs.js";
 import type { RunState } from "../../server/runs/states.js";
 import type { SearchKind, SearchResult } from "../../server/search/search.js";
+import type { KeyMention, MentionCandidate } from "../../server/work/draft-mentions.js";
 import type { TranscriptHook } from "../../server/transcripts/hook.js";
 import type { EntryPage, TicketTranscript, Transcript, TranscriptEntry } from "../../server/transcripts/transcripts.js";
 import type { AccessPreview, ListedUser, ProjectAccess } from "../../server/work/access.js";
@@ -103,6 +104,7 @@ import type { StatusAdd, StatusEdit } from "../../server/work/statuses.js";
 import type { StepPut } from "../../server/work/steps.js";
 import type { Webhook, WebhookCreate, WebhookDelivery, WebhookEdit, WebhookKind } from "../../server/webhooks/webhooks.js";
 
+export type { KeyMention, MentionCandidate };
 export type { ArtifactMention, Change, Comment, Cost, DecisionMention, Mention, MentioningText, TermMention, TicketMention, Priority, Relation, RelationKind, Report, RunState };
 export type { Ticket, TicketList, TicketRef, TicketRelations, TicketSummary };
 export type { CommentCreate, RelationCreate, TicketCreate, TicketEdit, TicketReopen };
@@ -463,6 +465,15 @@ export const api = {
     call<SearchResult[]>(
       "GET",
       `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${new URLSearchParams({ ...query })}`,
+    ),
+  /** What a draft mentions, as it would once saved in its place: a Project's text, or the Workspace's own. */
+  draftMentions: (workspaceId: string, input: { markdown: string; project?: string }) =>
+    call<KeyMention[]>("POST", `/api/workspaces/${encodeURIComponent(workspaceId)}/mentions`, input),
+  /** What the editor's Mention picker offers for the word typed before the cursor. */
+  mentionCandidates: (workspaceId: string, query: { q: string; project?: string }) =>
+    call<MentionCandidate[]>(
+      "GET",
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/mention-candidates?${new URLSearchParams({ ...query })}`,
     ),
   timeline: (ticketId: string) => call<Change[]>("GET", `/api/tickets/${encodeURIComponent(ticketId)}/timeline`),
 };

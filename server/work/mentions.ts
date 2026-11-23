@@ -97,7 +97,7 @@ const mentionedKey =
   /\b[A-Za-z][A-Za-z0-9]{1,9}-[1-9][0-9]{0,8}\b|(?<![\w-])(?:([A-Za-z][A-Za-z0-9]{1,9})-)?[Dd]([1-9][0-9]{0,8})(?!\w)/g;
 
 /** A key as written in a text, with what it names: a Ticket by Project key and number, a Decision also by none. */
-interface WrittenKey {
+export interface WrittenKey {
   kind: "ticket" | "decision";
   written: string;
   /** In upper case as Projects keep it; null for a Decision of the Workspace's own. */
@@ -261,7 +261,7 @@ const projectOf: Record<MentioningKind, string> = {
 };
 
 /** The Terms of a place's glossary, as `glossaryOf` layers them: a Project's own over the Workspace's, by name ignoring case. */
-async function glossaryNames(db: Db | Tx, workspaceId: string, projectId: string | null): Promise<NamedTerm[]> {
+export async function glossaryNames(db: Db | Tx, workspaceId: string, projectId: string | null): Promise<NamedTerm[]> {
   const { rows } = await db.query<NamedTerm>(
     `select terms.id, terms.name from terms
      where terms.workspace_id = $1
