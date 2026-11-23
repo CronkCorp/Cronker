@@ -16,7 +16,7 @@ import { lockTickets, writeTicket } from "./ticket-writes.js";
  * Releases: a Project's named sets of Tickets that ship together, such as `v0.3.0`. A Release goes from planned to cut
  * to released. A User with Write cuts a planned Release, and Cronk creates its release branch at the default branch's
  * head in each Repository the Project lists. A User with Write then releases the cut Release, and Cronk tags each
- * release branch's head `<name>` and creates a GitHub Release with notes listing its Tickets. Only a planned Release is renamed, deleted or has Tickets tagged with it. A Ticket has at most one Release, of its own Project.
+ * release branch's head `<name>` and creates a GitHub Release with notes listing its Tickets. Only a planned Release is renamed, deleted or has Tickets tagged with it, but for a completed Ticket, which may also be tagged with a cut one and is then backported if its merge came after the Cut. A Ticket has at most one Release, of its own Project.
  */
 
 export const releaseStates = ["planned", "cut", "released"] as const;
@@ -210,7 +210,8 @@ async function plannedRelease(tx: Tx, project: Project, releaseId: string, doing
 
 function notPlanned(name: string, state: ReleaseState, doing: string): ApiError {
   return new ApiError(409, "release_not_planned", `${name} is ${state}, so it can't be ${doing}.`, {
-    rule: "Only a planned Release is renamed, deleted, cut or has Tickets tagged with it or untagged from it.",
+    rule:
+      "Only a planned Release is renamed, deleted, cut or has Tickets tagged with it or untagged from it; a cut one also takes completed Tickets.",
     advice: "Tag the Ticket with a planned Release, or leave it as it is.",
   });
 }
@@ -282,7 +283,8 @@ export async function deleteRelease(context: Context, caller: Caller, projectId:
 
 /**
  * The Release a Ticket of the Project is to be tagged with, by name ignoring case: its id, or null to untag. Refused
- * for a name the Project has no Release by, and for a Release that isn't planned; untagging from one that isn't
+ * for a name the Project has no Release by, and for a Release that isn't planned, except a cut one for a `completed`
+ * Ticket, in a Done Status, which may then need a backport (`pipeline/backports.ts`); untagging from one that isn't
  * planned is refused too.
  */
 export async function releaseToTag(
@@ -290,6 +292,7 @@ export async function releaseToTag(
   projectId: string,
   name: string | null,
   currentReleaseId: string | null,
+  { completed = false }: { completed?: boolean } = {},
 ): Promise<string | null> {
   if (currentReleaseId !== null) {
     const { rows } = await tx.query<{ id: string; name: string; state: ReleaseState }>(
@@ -323,6 +326,8 @@ export async function releaseToTag(
     });
   }
   if (release.state === "released") throw notPlanned(release.name, release.state, "given more Tickets");
+  // A completed Ticket may still go into a cut Release: its fix is backported onto the release branch if need be.
+  if (release.state === "cut" && completed) return release.id;
   if (release.state !== "planned") throw notPlanned(release.name, release.state, "given more Tickets");
   return release.id;
 }

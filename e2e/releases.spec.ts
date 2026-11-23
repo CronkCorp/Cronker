@@ -157,3 +157,46 @@ test("Release lists open Tickets, goes ahead when confirmed and links each GitHu
     "## Upgrade notes\n\nRun the migration first.\n\n## Tickets\n\n- CRONK-1: Still going\n",
   ]);
 });
+
+/**
+ * Tagging a completed Ticket (CRONK-117): the Release field of a Ticket in a Done Status also offers cut Releases; an
+ * open Ticket's offers only planned ones.
+ */
+test("a completed Ticket's Release field offers cut Releases", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await createGitHubApp(cronk, cookie);
+  const installation = cronk.github.install(cronk.github.apps[0]!, "cronkcorp", ["cronker"]);
+  const asAda = (method: string, path: string, body?: unknown) =>
+    cronk.request(method, path, { cookie, body }).then(async (response) => {
+      expect(response.ok, await response.clone().text()).toBe(true);
+      return response.json();
+    });
+  const project = await asAda("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const done = project.statuses.find((s: { name: string }) => s.name === "Done").id;
+  await asAda("POST", `/api/projects/${project.id}/repositories`, { id: installation.repositories[0]!.id });
+  const cut = await asAda("POST", `/api/projects/${project.id}/releases`, { name: "v0.3.0" });
+  await asAda("POST", `/api/projects/${project.id}/releases/${cut.id}/cut`);
+  await asAda("POST", `/api/projects/${project.id}/releases`, { name: "v0.4.0" });
+  await asAda("POST", `/api/projects/${project.id}/tickets`, { title: "Still open" });
+  const completed = await asAda("POST", `/api/projects/${project.id}/tickets`, { title: "Already shipped" });
+  await asAda("PATCH", `/api/tickets/${completed.id}`, { statusId: done });
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const board = page.getByRole("region", { name: "Board" });
+  await board.getByRole("link", { name: /CRONK-1 Still open/ }).click();
+  await fieldPicker(page, "Release").click();
+  const offered = page.getByRole("listbox", { name: "Release" });
+  await expect(offered.getByRole("option", { name: "v0.4.0", exact: true })).toBeVisible();
+  await expect(offered.getByRole("option", { name: "v0.3.0", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.goBack();
+  // Done starts collapsed: open it to reach the completed Ticket's card.
+  await board.getByRole("button", { name: /Done/ }).first().click();
+  await board.getByRole("link", { name: /CRONK-2 Already shipped/ }).click();
+  // With no merged Pull Request, tagging it only tags it.
+  await pick(page, "Release", "v0.3.0");
+  await expect(fieldPicker(page, "Release")).toContainText("v0.3.0");
+});

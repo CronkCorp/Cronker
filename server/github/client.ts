@@ -300,6 +300,28 @@ export async function branchHead(config: Config, token: string, fullName: string
   return refTarget(config, token, fullName, "heads", branch);
 }
 
+/**
+ * How commit `head` of a repository, by `owner/name`, stands to commit `base`, as GitHub's compare answers: `identical`,
+ * `ahead` (`base` is an ancestor of `head`), `behind` or `diverged`; nothing when GitHub knows either commit by neither
+ * name nor sha.
+ */
+export async function compareCommits(
+  { github }: Config,
+  token: string,
+  fullName: string,
+  base: string,
+  head: string,
+): Promise<"identical" | "ahead" | "behind" | "diverged" | undefined> {
+  const range = `${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+  const response = await call(under(github.apiUrl, `${repoPath(fullName)}/compare/${range}`), {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (response.status === 404) return undefined;
+  const body = await jsonOf<{ status?: unknown }>(response, "The comparison");
+  const status = body.status;
+  return status === "identical" || status === "ahead" || status === "behind" || status === "diverged" ? status : undefined;
+}
+
 /** What a tag of a repository, by `owner/name`, points at; nothing if it has no such tag. */
 export async function tagTarget(config: Config, token: string, fullName: string, tag: string): Promise<string | undefined> {
   return refTarget(config, token, fullName, "tags", tag);

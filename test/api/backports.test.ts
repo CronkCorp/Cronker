@@ -35,7 +35,7 @@ async function ok(method: string, path: string, as: As, body?: unknown) {
  * claude-max on her fake Runner, its Pull Request #101 open on `main`, green and mergeable. The Release is then cut, and
  * the clock moves on an hour, so merges come after the Cut unless a test says otherwise.
  */
-async function setting({ autonomous = false, cut = true, opened = true } = {}) {
+async function setting({ autonomous = false, cut = true, opened = true, tagged = true } = {}) {
   const { workspace, user } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
@@ -52,7 +52,10 @@ async function setting({ autonomous = false, cut = true, opened = true } = {}) {
   const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "cloud", access: "full" });
   const asAgent = { headers: { authorization: `Bearer ${secret}` } };
   const release = await ok("POST", `/api/projects/${project.id}/releases`, ada, { name: "v0.3.0" });
-  const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so", release: "v0.3.0" });
+  const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, {
+    title: "Make it so",
+    ...(tagged ? { release: "v0.3.0" } : {}),
+  });
 
   const deliver = async (event: string, payload: Record<string, unknown>) => {
     const delivered = await cronk.github.deliver(app, event, {
@@ -283,5 +286,93 @@ describe("A Ticket of a cut Release", () => {
 
     expect(await read()).toMatchObject({ statusId: status("In Review"), backport: null });
     expect(await runs()).toEqual([]);
+  });
+});
+
+describe("Tagging a completed Ticket with a cut Release", () => {
+  /** The commit `release/v0.3.0` was cut at in cronker. */
+  const cutCommit = (cronker: { branches?: Map<string, string> }) => cronker.branches!.get("release/v0.3.0")!;
+  const compares = () => cronk.github.apiCalls.filter((c) => c.includes("/compare/"));
+
+  test("whose merge came after the Cut moves it into Merge as the User's, and a Run backports it", async () => {
+    const { ada, user, ticket, cronker, read, status, running, open, mergeOnGitHub, finish, cronkComments } = await setting({ tagged: false });
+    await mergeOnGitHub(101, "main", "2026-01-01T10:10:00Z");
+    expect(await read()).toMatchObject({ statusId: status("Done"), verification: "unverified", release: null });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { release: "v0.3.0" });
+
+    expect(compares()).toEqual([`GET /repos/${cronker.fullName}/compare/m101...${cutCommit(cronker)}`]);
+    expect(await read()).toMatchObject({
+      statusId: status("Merge"),
+      verification: null,
+      release: { name: "v0.3.0", state: "cut" },
+      backport: { state: "backporting", branch: "release/v0.3.0", mergeCommit: "m101" },
+    });
+    expect((await running())?.step.name).toBe("Merge");
+    expect(cronk.runner.starts.at(-1)!.brief).toContain("This Run backports CRONK-1 onto its Release v0.3.0");
+    expect((await cronkComments()).at(-1)).toContain("isn't in `release/v0.3.0`, so it waits in Merge");
+    // The timeline shows the tag and the move, both by the User who tagged it.
+    const timeline = await ok("GET", `/api/tickets/${ticket.id}/timeline`, ada);
+    const tagged = timeline.filter((c: { field: string }) => c.field === "release" || c.field === "status").slice(-2);
+    expect(tagged).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: "release", actor: expect.objectContaining({ id: user.id }), to: expect.objectContaining({ name: "v0.3.0" }) }),
+        expect.objectContaining({ field: "status", actor: expect.objectContaining({ id: user.id }), to: expect.objectContaining({ name: "Merge" }) }),
+      ]),
+    );
+
+    // Its backport joins the queue as the tagging User's, and merging it completes the Ticket Verified.
+    await open(102, "release/v0.3.0", "CRONK-1: backport make it so");
+    expect((await finish("backported")).status).toBe(200);
+    expect(await read()).toMatchObject({ statusId: status("Merge"), queue: { state: "queued", pullRequestId: 602 } });
+    await cronk.checkQueue();
+    expect(await read()).toMatchObject({ statusId: status("Done"), verification: "verified", backport: null });
+  });
+
+  test("whose merge came before the Cut only tags it", async () => {
+    const { ada, ticket, cronker, read, status, runs, mergeOnGitHub } = await setting({ tagged: false });
+    await mergeOnGitHub(101, "main", "2026-01-01T08:00:00Z");
+    cronker.ancestors = new Map([[cutCommit(cronker), new Set(["m101"])]]);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { release: "v0.3.0" });
+
+    expect(compares()).toHaveLength(1);
+    expect(await read()).toMatchObject({ statusId: status("Done"), verification: "unverified", release: { name: "v0.3.0" }, backport: null });
+    expect(await runs()).toEqual([]);
+  });
+
+  test("with no merged Pull Request only tags it", async () => {
+    const { ada, ticket, read, status, runs } = await setting({ tagged: false, opened: false });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Done") });
+    const before = (await runs()).length;
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { release: "v0.3.0" });
+
+    expect(compares()).toEqual([]);
+    expect(await read()).toMatchObject({ statusId: status("Done"), release: { name: "v0.3.0" }, backport: null });
+    expect(await runs()).toHaveLength(before);
+  });
+
+  test("with Pull Request automation off only tags it", async () => {
+    const { ada, project, ticket, read, status, runs, mergeOnGitHub } = await setting({ tagged: false });
+    await mergeOnGitHub(101, "main", "2026-01-01T10:10:00Z");
+    await ok("PATCH", `/api/projects/${project.id}`, ada, { pullRequestAutomation: false });
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { release: "v0.3.0" });
+
+    expect(compares()).toEqual([]);
+    expect(await read()).toMatchObject({ statusId: status("Done"), release: { name: "v0.3.0" }, backport: null });
+    expect(await runs()).toEqual([]);
+  });
+
+  test("is refused for a Ticket that isn't completed, and for a released Release", async () => {
+    const { ada, project, release, ticket, mergeOnGitHub } = await setting({ tagged: false });
+    const open = await call("PATCH", `/api/tickets/${ticket.id}`, ada, { release: "v0.3.0" });
+    expect([open.status, open.json.error.code]).toEqual([409, "release_not_planned"]);
+
+    await mergeOnGitHub(101, "main", "2026-01-01T10:10:00Z");
+    await ok("POST", `/api/projects/${project.id}/releases/${release.id}/release`, ada, { confirm: true });
+    const released = await call("PATCH", `/api/tickets/${ticket.id}`, ada, { release: "v0.3.0" });
+    expect([released.status, released.json.error.code]).toEqual([409, "release_not_planned"]);
   });
 });

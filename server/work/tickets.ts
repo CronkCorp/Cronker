@@ -10,7 +10,9 @@ import type { AgentCaller, Caller } from "../identity/callers.js";
 import { ownerName } from "../agents/tokens.js";
 import { recordChanges, type ChangeActor, type NewChange } from "./changes.js";
 import { lockTickets, writeTicket } from "./ticket-writes.js";
-import { findProject, projectNotFound, requireProjectWrite } from "./projects.js";
+import { findProject, projectNotFound, requireProjectWrite, statusesOf } from "./projects.js";
+import { insertComment } from "./comment-writes.js";
+import { awaitBackport, backportOnTagging } from "../pipeline/backports.js";
 import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.js";
 import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
@@ -481,7 +483,9 @@ export async function mentionsInEach(
 /** A Ticket's Release, as an edit or a new Ticket gives it. */
 const ReleaseField = nullable(
   Type.String({ minLength: 1, maxLength: 100 }),
-  "Tags the Ticket with a planned Release of its Project, by name such as `v0.3.0`, ignoring case; null for none.",
+  "Tags the Ticket with a planned Release of its Project, by name such as `v0.3.0`, ignoring case; null for none. A " +
+    "User may also tag a completed Ticket, in a Done Status, with a cut Release: if its default-branch merge isn't in " +
+    "the release branch, it moves to its Merge Status, where a Run of the Merge Step backports it.",
 );
 
 /** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. The create route's body. */
@@ -924,8 +928,22 @@ export async function editTicketIn(
     }
     if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
     if (edit.estimate !== undefined) next.estimate = edit.estimate;
+    // A User may tag a completed Ticket with a cut Release; if its merge isn't in the release branch, it moves to its
+    // Merge Status to be backported, as queued by that User (`pipeline/backports.ts`).
+    const statuses = await statusesOf(tx, ticket.projectId);
+    const completed = editor.kind === "user" && statuses.find((s) => s.id === ticket.statusId)?.kind === "done";
     const releaseId =
-      edit.release === undefined ? undefined : await releaseToTag(tx, ticket.projectId, edit.release, ticket.release?.id ?? null);
+      edit.release === undefined
+        ? undefined
+        : await releaseToTag(tx, ticket.projectId, edit.release, ticket.release?.id ?? null, { completed });
+    const backport =
+      releaseId && releaseId !== ticket.release?.id && completed && next.statusId === ticket.statusId
+        ? await backportOnTagging(context, tx, ticket, releaseId)
+        : null;
+    if (backport) {
+      next.statusId = backport.mergeStatus.id;
+      next.verification = null;
+    }
     // A `local-only` Ticket isn't delegated to a cloud Agent: refused when this edit delegates it or adds the Label.
     // Other routes to the same Delegation, such as a Project's default, meet the same rule when its Run would start.
     const localOnly = next.delegateId !== null && isLocalOnly(next.labels);
@@ -950,9 +968,24 @@ export async function editTicketIn(
       dueDate: next.dueDate,
       estimate: next.estimate,
       ...(releaseId !== undefined ? { releaseId } : {}),
+      ...(backport ? { completedFromStatusId: null } : {}),
       ...(takenUp ? { discoveryWaits: false } : {}),
     }, { at: now });
     if (!written) return fullTicket(tx, editor, ticket);
+    // Its move into the Merge Status dropped any earlier Backport record, so this one is kept.
+    if (backport) {
+      const { release, mergeStatus } = backport;
+      await awaitBackport(tx, ticket, release.id, mergeStatus.id, backport.pullRequestId, now, { userId });
+      await insertComment(
+        context,
+        tx,
+        ticket,
+        { kind: "cronk" },
+        `${ticket.key} was tagged with ${release.name} after it completed, and its merge \`${backport.mergeCommit}\` isn't in ` +
+          `\`${release.branch}\`, so it waits in ${mergeStatus.name}: a Run of ${mergeStatus.name} backports it.`,
+        null,
+      );
+    }
 
     if (next.description !== ticket.description) await indexMentions(tx, "ticket", ticket, next.description);
     if (takenUp) await settleDiscoveredSubTickets(context, tx, ticket, actor, now);
