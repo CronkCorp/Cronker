@@ -26,6 +26,7 @@ import {
   type TicketMention,
 } from "./mentions.js";
 import { TicketRef, ticketRefColumn } from "./ticket-refs.js";
+import { knowledgeOf, TicketKnowledge } from "../knowledge/ticket-knowledge.js";
 
 export { keysWritten, Mention, MentioningText, TicketRef, ticketRefColumn };
 
@@ -176,7 +177,10 @@ export type TicketSummary = Static<typeof TicketSummary>;
 export const TicketList = Type.Array(TicketSummary);
 export type TicketList = Static<typeof TicketList>;
 
-/** A Ticket with the Ticket and Decision keys and Term names its description mentions, the texts mentioning it and what its Runs cost. */
+/**
+ * A Ticket with the Ticket and Decision keys and Term names its description mentions, the texts mentioning it, the
+ * Terms and Decisions it and its Comments mention, and what its Runs cost.
+ */
 export const Ticket = Type.Object({
   ...TicketSummary.properties,
   mentions: Type.Array(Mention, {
@@ -188,6 +192,7 @@ export const Ticket = Type.Object({
       "Mentioned in: each other text whose Markdown mentions its key, outside code and links, that the caller may " +
       "read, most recently saved first; for knowledge, only its current Version counts.",
   }),
+  knowledge: TicketKnowledge,
   cost: Type.Array(Cost, {
     description:
       "What its Runs cost in all, one total per currency, counting the Runs whose Runner reported a cost; empty when " +
@@ -362,7 +367,7 @@ export async function findTicketByKey(
 
 /**
  * The Ticket as the API shows one alone: its summary, the Ticket and Decision keys its description mentions that the Viewer may
- * read, and its Runs' cost.
+ * read, the Terms and Decisions it and its Comments mention, and its Runs' cost.
  */
 async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket> {
   const { rows } = await db.query<{ cost: Cost[] }>(`select ${costTotalsSql("runs.ticket_id = $1")} as cost`, [row.id]);
@@ -376,6 +381,7 @@ async function fullTicket(db: Db | Tx, viewer: Viewer, row: Row): Promise<Ticket
       projectKey: row.key.split("-")[0]!,
       number: Number(row.key.split("-")[1]),
     }),
+    knowledge: await knowledgeOf(db, viewer, row.id),
     cost: rows[0]!.cost,
   };
 }

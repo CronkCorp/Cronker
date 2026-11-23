@@ -148,6 +148,8 @@ export function buildMcpServer(api: Api): McpServer {
       description:
         "A Ticket of your Workspace with its fields, the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
+        "as `knowledge`, the Terms (with their definitions and words to avoid) and Decisions (key, title and status; " +
+        "read one with `read_decision` for its reasoning) its description and Comments mention, each once; " +
         "its Comments (oldest first), with those on its Linked Artifacts, each naming its `artifact`; its Relations: " +
         "the Tickets it blocks, is blocked by and relates to, its parent and its Sub-Tickets; its Runs, oldest first; " +
         "the Reports its Runs wrote, oldest first, which a Run on the Ticket builds on; its Pull Requests, linked by key or by a User by hand (`manual`), each with its " +

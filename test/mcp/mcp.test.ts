@@ -142,6 +142,23 @@ describe("MCP with an Agent token", () => {
     ]);
   });
 
+  test("an Agent reads a Ticket with the Terms and Decisions it and its Comments mention", async () => {
+    const { cookie, workspace, ticket, secret } = await workspaceWithTicket();
+    await post(cookie, `/api/workspaces/${workspace.id}/terms`, { name: "Lane", definition: "A column.", avoid: ["Swimlane"] });
+    await post(cookie, `/api/projects/${ticket.projectId}/decisions`, { title: "One Lane", body: "Because." });
+    await cronk.jobsSettled();
+    await post(cookie, `/api/tickets/${ticket.id}/comments`, { body: "Each Lane, by CRONK-D1." });
+    const client = await connect(secret);
+
+    const { json } = await call(client, "read_ticket", { ticket: "CRONK-1" });
+
+    expect(json.ticket.knowledge).toEqual({
+      terms: [expect.objectContaining({ name: "Lane", definition: "A column.", avoid: ["Swimlane"], scope: "workspace" })],
+      decisions: [expect.objectContaining({ key: "CRONK-D1", title: "One Lane", status: "proposed", scope: "project" })],
+    });
+    expect(json.ticket.knowledge.decisions[0]).not.toHaveProperty("body");
+  });
+
   test("an Agent reads a Ticket with its Pull Requests, their state and checks", async () => {
     const { cookie, ticket, secret } = await workspaceWithTicket();
     await createGitHubApp(cronk, cookie);
