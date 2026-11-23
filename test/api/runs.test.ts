@@ -770,10 +770,13 @@ describe("Runs on the board", () => {
       Object.fromEntries(
         (await ok("GET", `/api/projects/${project.id}/tickets`, ada)).map((t: { key: string; lastRun: unknown }) => [t.key, t.lastRun]),
       );
-    expect(await lastRuns()).toEqual({ "CRONK-1": { id: run.id, state: "running" }, "CRONK-2": null });
+    // With the Status it ran in and its session, for the card's menu; no Transcript was uploaded.
+    const latest = { id: run.id, statusId: status("Triage"), sessionUrl: run.sessionUrl, transcriptSlug: null };
+    expect(run.sessionUrl).toMatch(/^https:\/\/claude\.ai\/code\//);
+    expect(await lastRuns()).toEqual({ "CRONK-1": { ...latest, state: "running" }, "CRONK-2": null });
 
     await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
-    expect(await lastRuns()).toEqual({ "CRONK-1": { id: run.id, state: "finished" }, "CRONK-2": null });
+    expect(await lastRuns()).toEqual({ "CRONK-1": { ...latest, state: "finished" }, "CRONK-2": null });
     expect(other.lastRun).toBeNull();
   });
 });
@@ -812,8 +815,10 @@ describe("answering with the Ticket as its edit or creation left it", () => {
     const delegated = await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
 
     const [run] = await runsOf(ticket.id, ada);
-    expect(delegated.lastRun).toEqual({ id: run.id, state: "running" });
-    expect(delegated).toEqual(await ok("GET", `/api/tickets/${ticket.id}`, ada));
+    expect(delegated.lastRun).toEqual({ id: run.id, state: "running", statusId: status("Triage"), sessionUrl: null, transcriptSlug: null });
+    // Its session is known once the Runner has started it, after the answer.
+    const shown = await ok("GET", `/api/tickets/${ticket.id}`, ada);
+    expect(delegated).toEqual({ ...shown, lastRun: { ...shown.lastRun, sessionUrl: null } });
   });
 
   test("moving a delegated Ticket with an unfinished Sub-Ticket into a Status with a Step answers that it waits, blocked", async () => {
@@ -843,7 +848,9 @@ describe("answering with the Ticket as its edit or creation left it", () => {
     const created = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Born delegated" });
 
     const [run] = await runsOf(created.id, ada);
-    expect(created.lastRun).toEqual({ id: run.id, state: "running" });
-    expect(created).toEqual(await ok("GET", `/api/tickets/${created.id}`, ada));
+    expect(created.lastRun).toEqual({ id: run.id, state: "running", statusId: status("Backlog"), sessionUrl: null, transcriptSlug: null });
+    // Its session is known once the Runner has started it, after the answer.
+    const shown = await ok("GET", `/api/tickets/${created.id}`, ada);
+    expect(created).toEqual({ ...shown, lastRun: { ...shown.lastRun, sessionUrl: null } });
   });
 });

@@ -66,7 +66,10 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
   await page.mouse.up();
   await expect(board.getByRole("region", { name: "Backlog" }).getByRole("link", { name: /CRONK-1/ })).toBeVisible();
   await expect(board.getByRole("region", { name: "Triage" }).getByRole("link", { name: /CRONK-1/ })).toHaveCount(0);
+  // Her card's menu offers only its links and copies, none of the changes.
   await card.click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("menuitem")).toHaveText(["Open in new tab", "Copy link", "Copy key"]);
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
 
   // Her Ticket page reads as anyone's, without the Comment box or Edit.

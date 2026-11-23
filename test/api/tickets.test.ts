@@ -70,6 +70,7 @@ describe("creating a Ticket", () => {
       createdBy: user.id,
       createdAt: "2026-01-01T09:00:00.000Z",
       lastRun: null,
+      pullRequests: [],
       waiting: null,
       blockedBy: [],
       conflicts: [],

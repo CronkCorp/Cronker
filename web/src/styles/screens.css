@@ -975,6 +975,22 @@
 }
 
 /* Inbox: the list on the left, the selected item on the right; stacked on a phone. */
+/* Its filters sit above the split; on a phone they fold into one Filter button. */
+.inbox-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.inbox-filter-toggle {
+  display: none !important;
+}
+.inbox-filter-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
 .inbox-split {
   display: grid;
   grid-template-columns: 360px minmax(0, 1fr);
@@ -1092,6 +1108,16 @@
   .inbox-detail-open .inbox-back {
     display: inline-flex !important;
     margin-bottom: var(--space-2);
+  }
+  .inbox-filter-toggle {
+    display: inline-flex !important;
+  }
+  .inbox-filter-bar .inbox-filters {
+    display: none;
+    flex-basis: 100%;
+  }
+  .inbox-filters-open .inbox-filters {
+    display: flex;
   }
 }
 
