@@ -58,6 +58,16 @@ export function Chip({ tone = "neutral", children, title }: { tone?: Tone; child
   );
 }
 
+/** The Release a Ticket is tagged with, as a neutral chip in the mono face, on its card and List row. */
+export function ReleaseChip({ release }: { release: { name: string } | null }) {
+  if (!release) return null;
+  return (
+    <Chip title={`Release ${release.name}`}>
+      <span className="mono">{release.name}</span>
+    </Chip>
+  );
+}
+
 /** What a Run state or a wait reads as. */
 const runStateWords: Record<RunStateName | "waiting", string> = {
   running: "running",

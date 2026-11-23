@@ -1593,6 +1593,8 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.applyAhead("0042_merge_conflicts.sql");
     await cronk.applyAhead("0061_merge_queue.sql");
     await cronk.applyAhead("0065_merge_queue_conflicts.sql");
+    // Reading a Ticket needs its Release.
+    await cronk.applyAhead("0075_releases.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

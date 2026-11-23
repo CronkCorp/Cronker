@@ -67,6 +67,7 @@ describe("creating a Ticket", () => {
       discovered: null,
       dueDate: null,
       estimate: null,
+      release: null,
       createdBy: user.id,
       createdAt: "2026-01-01T09:00:00.000Z",
       lastRun: null,

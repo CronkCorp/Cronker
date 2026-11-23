@@ -32,6 +32,7 @@ import { Link, navigate } from "./router.js";
 import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
 import { matchesText } from "./ticket-text.js";
 import { ProjectArtifacts } from "./artifacts.js";
+import { ProjectReleases } from "./releases.js";
 import { ProjectDecisions } from "./decisions.js";
 import { ProjectDocuments } from "./documents.js";
 import { ProjectGlossary } from "./terms.js";
@@ -40,7 +41,7 @@ import { BriefPreview, StepsSettings } from "./steps.js";
 import { SettingsLayout } from "./ui/settings.js";
 import { Actor, Avatar } from "./ui/actor.js";
 import { Actions, Banner, Button, buttonClass, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, Saved, Segmented, workspaceCrumb } from "./ui/controls.js";
-import { Chip, Key, ModelLabel, PriorityTag, RunState, StatusDot, StatusPill } from "./ui/labels.js";
+import { Chip, Key, ModelLabel, PriorityTag, ReleaseChip, RunState, StatusDot, StatusPill } from "./ui/labels.js";
 import {
   ConfirmDialog,
   ContextMenu,
@@ -134,7 +135,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
   );
 }
 
-type View = "board" | "list" | "settings" | "documents" | "glossary" | "decisions" | "artifacts";
+type View = "board" | "list" | "releases" | "settings" | "documents" | "glossary" | "decisions" | "artifacts";
 
 export const priorityLabel = (priority: Priority) => priorities.find((p) => p.priority === priority)!.label;
 
@@ -154,6 +155,7 @@ export function ProjectMenu({
   return (
     <>
       <Menu label="More of this Project">
+        <MenuLink to={`${base}/releases`}>Releases</MenuLink>
         <MenuLink to={`${base}/documents`}>Documents</MenuLink>
         <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
         <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
@@ -290,6 +292,7 @@ export function ProjectScreen({
   if (view === "glossary") return <ProjectGlossary workspace={workspace} project={project} />;
   if (view === "decisions") return <ProjectDecisions workspace={workspace} project={project} />;
   if (view === "artifacts") return <ProjectArtifacts workspace={workspace} project={project} />;
+  if (view === "releases") return <ProjectReleases workspace={workspace} project={project} onChange={setProject} />;
 
   const base = to.project(project);
   const home = workspaceCrumb(workspace);
@@ -449,6 +452,7 @@ function Filters({
   onText: (text: string) => void;
 }) {
   const set = (change: TicketFilter) => onChange({ ...filter, ...change });
+  const { data: releases } = useQuery({ queryKey: keys.releases(project.id), queryFn: () => api.releases(project.id) });
   return (
     <div className="filters" role="group" aria-label="Filters">
       <label className="filter">
@@ -505,6 +509,16 @@ function Filters({
         }))}
         value={filter.label}
         onChange={(label) => set({ label })}
+      />
+      <FilterPicker
+        label="Release"
+        anyLabel="Any Release"
+        options={[
+          { value: "none", label: "No Release" },
+          ...(releases ?? []).map((release) => ({ value: release.name, label: release.name, content: <span className="mono">{release.name}</span> })),
+        ]}
+        value={filter.release}
+        onChange={(release) => set({ release })}
       />
     </div>
   );
@@ -891,6 +905,7 @@ function Card({
           <PriorityTag priority={ticket.priority} />
         </span>
         <span className="card-meta">
+          <ReleaseChip release={ticket.release} />
           {ticket.labels.map((label) => (
             <Chip key={label}>{label}</Chip>
           ))}
@@ -1347,6 +1362,7 @@ function List({
                       <StatusDot kind={status.kind} name={status.name} alone />
                       <span className="ticket-key">{ticket.key}</span> <span className="row-title">{ticket.title}</span>
                       <span className="row-meta">
+                        <ReleaseChip release={ticket.release} />
                         {ticket.labels.map((label) => (
                           <Chip key={label}>{label}</Chip>
                         ))}

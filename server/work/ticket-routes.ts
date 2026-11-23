@@ -79,6 +79,9 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             ),
             priority: Type.Optional(Priority),
             label: Type.Optional(Type.String({ description: "Matched ignoring case." })),
+            release: Type.Optional(
+              Type.String({ description: "A Release's name, matched ignoring case, or `none` for Tickets without one." }),
+            ),
           }),
           response: { 200: TicketList, 401: ErrorBody, 404: ErrorBody },
         },

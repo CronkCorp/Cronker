@@ -11,6 +11,7 @@ export type LiveEvent =
   | { type: "project.gained"; projectId: string }
   | { type: "project.lost"; projectId: string }
   | { type: "statuses.changed"; projectId: string }
+  | { type: "releases.changed"; projectId: string }
   | { type: "ticket.created"; projectId: string; ticketId: string }
   | { type: "ticket.changed"; projectId: string; ticketId: string }
   | { type: "comment.added"; projectId: string; ticketId: string; commentId: string }
@@ -38,6 +39,8 @@ export const liveEventTypes: Record<LiveEvent["type"], string> = {
   "project.lost":
     "A change to a Project's Access took it away from you, so it and everything in it no longer shows; sent only to the Users who lost it, and the last event about it they get.",
   "statuses.changed": "A Project's Statuses were added, renamed, moved, given another kind or removed, or a Status's Step changed.",
+  "releases.changed":
+    "A Project's Release was created, renamed or deleted. Tagging a Ticket is told by `ticket.changed`, which also changes its Release's counts.",
   "ticket.created": "A Ticket was created.",
   "ticket.changed": "A Ticket's fields changed, its Status among them, or its Relations or Sub-Tickets, or one of its Runs started or ended.",
   "comment.added":

@@ -176,6 +176,22 @@ _Avoid_: Repo (in the product), codebase
 A proposed change to a Repository's code, linked to the Tickets whose keys its branch or title contains, and to those a User linked it to by hand, which only a User can unlink; either way it must be of a Repository the Ticket's Project lists, and links the same. A merge by a User of the Ticket's Workspace completes the Ticket as Verified, unless a Run is running on the Ticket: then it counts as that Run's Agent's. Any other merge, by an agent, an outsider or GitHub's automation, completes it as Unverified. A Project can turn this **Pull Request automation** off, so merges complete nothing.
 _Avoid_: PR (in the product), merge request, change
 
+**Release**:
+A Project's named set of Tickets that ship together, such as `v0.3.0`: its name is a semantic version, unique in the Project ignoring case. It goes from *planned* to *cut* to *released*; only a planned Release is renamed, deleted, or has Tickets tagged with it or untagged from it, and deleting one untags its Tickets. A Ticket has at most one Release, of its own Project. "Version" already means a Document's or Artifact's Version.
+_Avoid_: Milestone, version, cycle, sprint
+
+**Release branch**:
+`release/<name>` in each of a Release's Project's Repositories, such as `release/v0.3.0`.
+_Avoid_: Maintenance branch, stable branch
+
+**Cut**:
+Cronk creating a Release's release branches from each Repository's default branch, at a User's word.
+_Avoid_: Branch off, freeze
+
+**Backport**:
+The second Pull Request, which carries a Ticket's merged change onto its Release's release branch.
+_Avoid_: Cherry-pick (for the Pull Request), port
+
 ### Actors
 
 **User**:

@@ -25,6 +25,8 @@ export interface TicketPatch {
   parentId?: string | null;
   dueDate?: string | null;
   estimate?: number | null;
+  /** The Release the Ticket is tagged with, by id, or null for none. */
+  releaseId?: string | null;
   // Bookkeeping, with no Change kind: written and published, never recorded.
   /** Whether a Discovered Ticket still waits for a User. */
   discoveryWaits?: boolean;
@@ -77,6 +79,7 @@ export type LockedTicket = Pick<
   formerAssigneeId?: string | null;
   githubRepositoryId?: number | null;
   githubIssueNumber?: number | null;
+  releaseId?: string | null;
 };
 
 type Shown = (tx: Tx, workspaceId: string, value: unknown) => Promise<unknown>;
@@ -128,6 +131,7 @@ const columns: { [K in keyof Required<TicketPatch>]: Column } = {
   autonomousDelegation: { column: "autonomous_delegation", field: "autonomousDelegation" },
   dueDate: { column: "due_date", field: "dueDate" },
   estimate: { column: "estimate", field: "estimate" },
+  releaseId: { column: "release_id", field: "release", shown: named("select id, name from releases where id = $1") },
   discoveryWaits: { column: "discovery_waits" },
   waitsForRun: { column: "waits_for_run" },
   completedFromStatusId: { column: "completed_from_status_id" },
@@ -138,7 +142,7 @@ const columns: { [K in keyof Required<TicketPatch>]: Column } = {
   githubIssueNumber: { column: "github_issue_number" },
 };
 
-/** Bookkeeping a LockedTicket may lack, read when a patch gives it. */
+/** Bookkeeping, and the Release, that a LockedTicket may lack, read when a patch gives it. */
 const bookkeeping = {
   waitsForRun: `waits_for_run as "waitsForRun"`,
   completedFromStatusId: `completed_from_status_id as "completedFromStatusId"`,
@@ -148,6 +152,7 @@ const bookkeeping = {
   formerAssigneeId: `former_assignee_id as "formerAssigneeId"`,
   githubRepositoryId: `github_repository_id::float8 as "githubRepositoryId"`,
   githubIssueNumber: `github_issue_number as "githubIssueNumber"`,
+  releaseId: `release_id as "releaseId"`,
 } as const;
 
 /** What a write wrote and recorded. */

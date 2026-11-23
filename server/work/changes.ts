@@ -21,6 +21,8 @@ export const ChangedBy = ActorOrCronk;
  * requested changes or a merge conflict on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
  * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket. `runStopped` marks
  * Cronk stopping the Ticket's running Run when nothing else about the Ticket changed, as when its Project is archived.
+ * `release` shows the Ticket tagged with a Release (from null), untagged (to null) or moved between two, each as
+ * `{ id, name }` named then.
  */
 export const changeFields = [
   "created",
@@ -32,6 +34,7 @@ export const changeFields = [
   "assignee",
   "dueDate",
   "estimate",
+  "release",
   "parent",
   "subTicket",
   "blocks",
@@ -60,7 +63,7 @@ export const Change = Type.Object({
   field: literals(changeFields),
   from: Type.Unknown({
     description:
-      "The value before: a string, number, boolean, list of Labels, for a Status, Assignee or Delegate `{ id, name }` as named then, " +
+      "The value before: a string, number, boolean, list of Labels, for a Status, Assignee, Delegate or Release `{ id, name }` as named then, " +
       "or for another Ticket `{ id, projectId, key, title }` as it was then; null when empty. A `created` Change goes " +
       "from null to null, or for a Ticket imported from a GitHub issue to `{ source: \"github\", url, author }`, the issue's " +
       "address and who opened it: a User `{ id, name }` as named then, or `{ login }` for a GitHub account no User of the " +

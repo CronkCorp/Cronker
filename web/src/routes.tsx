@@ -13,7 +13,7 @@ export type Route =
   | { kind: "document" | "artifact" | "transcript"; slug: string };
 
 const workspacePages: WorkspacePage[] = ["inbox", "search", "documents", "glossary", "decisions", "artifacts", "agents", "members", "settings"];
-const projectViews: ProjectView[] = ["list", "settings", "documents", "glossary", "decisions", "artifacts"];
+const projectViews: ProjectView[] = ["list", "releases", "settings", "documents", "glossary", "decisions", "artifacts"];
 
 /** An address's parts, decoded; null for one that can't be decoded. */
 function partsOf(path: string): string[] | null {

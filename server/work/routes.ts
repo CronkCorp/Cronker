@@ -20,8 +20,14 @@ import {
 import { requireProjectCreator } from "./board-rights.js";
 import { changeStatuses, StatusAdd, StatusEdit } from "./statuses.js";
 import { changeStep } from "./step-changes.js";
+import { createRelease, deleteRelease, Release, ReleaseCreate, ReleaseEdit, releasesOf, renameRelease } from "./releases.js";
 import { defaultRoundLimit, StepPut } from "./steps.js";
 
+const ReleaseParams = Type.Object({ projectId: Type.String(), releaseId: Type.String() });
+const releaseRule =
+  "Needs Write in the Project. Only a planned Release is renamed or deleted (`release_not_planned`). A name is a " +
+  "semantic version such as `v0.3.0`, with or without a leading `v` (`invalid_release_name`), unique in the Project " +
+  "ignoring case (`release_name_taken`).";
 const StatusParams = Type.Object({ projectId: Type.String(), statusId: Type.String() });
 const statusRefusals = { 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody };
 const kindRule = "Refused if it would leave any Status kind without a Status.";
@@ -115,6 +121,76 @@ export function workRoutes(context: Context): FastifyPluginAsyncTypebox {
       async (request) => {
         const user = await requireUser(context, request);
         return editProject(context, user.id, request.params.projectId, request.body);
+      },
+    );
+
+    app.get(
+      "/api/projects/:projectId/releases",
+      {
+        schema: {
+          tags: ["Releases"],
+          summary: "The Project's Releases",
+          description: "Each with its state, release branch, open and done counts and Tickets; newest first.",
+          params: Type.Object({ projectId: Type.String() }),
+          response: { 200: Type.Array(Release), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request) => releasesOf(db, await requireCaller(context, request), request.params.projectId),
+    );
+
+    app.post(
+      "/api/projects/:projectId/releases",
+      {
+        schema: {
+          tags: ["Releases"],
+          summary: "Create a Release",
+          description: `Creates a planned Release. ${releaseRule}`,
+          params: Type.Object({ projectId: Type.String() }),
+          body: ReleaseCreate,
+          response: { 201: Release, ...statusRefusals },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        return reply.code(201).send(await createRelease(context, caller, request.params.projectId, request.body));
+      },
+    );
+
+    app.patch(
+      "/api/projects/:projectId/releases/:releaseId",
+      {
+        schema: {
+          tags: ["Releases"],
+          summary: "Rename a Release",
+          description: `Renames a planned Release; its Tickets stay tagged with it. ${releaseRule}`,
+          params: ReleaseParams,
+          body: ReleaseEdit,
+          response: { 200: Release, ...statusRefusals },
+        },
+      },
+      async (request) => {
+        const caller = await requireCaller(context, request);
+        const { projectId, releaseId } = request.params;
+        return renameRelease(context, caller, projectId, releaseId, request.body);
+      },
+    );
+
+    app.delete(
+      "/api/projects/:projectId/releases/:releaseId",
+      {
+        schema: {
+          tags: ["Releases"],
+          summary: "Delete a Release",
+          description: `Deletes a planned Release, untagging its Tickets, each recording the Change. ${releaseRule}`,
+          params: ReleaseParams,
+          response: { 204: Type.Null(), ...statusRefusals },
+        },
+      },
+      async (request, reply) => {
+        const caller = await requireCaller(context, request);
+        const { projectId, releaseId } = request.params;
+        await deleteRelease(context, caller, projectId, releaseId);
+        return reply.code(204).send(null);
       },
     );
 

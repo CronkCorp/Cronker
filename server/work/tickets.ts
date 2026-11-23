@@ -29,6 +29,7 @@ import {
 } from "./mentions.js";
 import { TicketRef, ticketRefColumn } from "./ticket-refs.js";
 import { knowledgeOf, TicketKnowledge } from "../knowledge/ticket-knowledge.js";
+import { releaseToTag, TicketRelease, ticketReleaseColumn } from "./releases.js";
 
 export { keysWritten, Mention, MentioningText, TicketRef, ticketRefColumn };
 
@@ -89,6 +90,9 @@ export const TicketSummary = Type.Object({
   }),
   dueDate: Type.Union([Type.String({ format: "date" }), Type.Null()]),
   estimate: Type.Union([Type.Number(), Type.Null()]),
+  release: Type.Union([TicketRelease, Type.Null()], {
+    description: "The Release the Ticket is tagged with, of its own Project, with its state and release branch; null for none.",
+  }),
   createdBy: Type.String({
     format: "uuid",
     description: "The User who created the Ticket, or whose Agent filed it; its timeline names the Agent and Run.",
@@ -261,7 +265,7 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
   tickets.assignee_id as "assigneeId", tickets.delegate_id as "delegateId",
   tickets.autonomous_delegation as "autonomousDelegation", tickets.verification, tickets.parent_id as "parentId",
   to_char(tickets.due_date, 'YYYY-MM-DD') as "dueDate",
-  tickets.estimate::float8 as estimate, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
+  tickets.estimate::float8 as estimate, ${ticketReleaseColumn("tickets")} as release, tickets.created_by as "createdBy", tickets.created_at as "createdAt",
   (select json_build_object('id', runs.id, 'state', runs.state, 'statusId', runs.status_id, 'sessionUrl', runs.session_url,
      'transcriptSlug', (select ${slugColumn("transcript", "transcripts.id", "run_agents.name")} from transcripts
        join agents run_agents on run_agents.id = runs.agent_id
@@ -450,6 +454,12 @@ export async function mentionsInEach(
   return written.map((keys) => keys.flatMap((text) => found.get(text) ?? []));
 }
 
+/** A Ticket's Release, as an edit or a new Ticket gives it. */
+const ReleaseField = nullable(
+  Type.String({ minLength: 1, maxLength: 100 }),
+  "Tags the Ticket with a planned Release of its Project, by name such as `v0.3.0`, ignoring case; null for none.",
+);
+
 /** What a new Ticket starts from: its title and description, and for a Sub-Ticket its parent. The create route's body. */
 export const TicketCreate = Type.Object({
   title: title("The Ticket's title."),
@@ -463,6 +473,7 @@ export const TicketCreate = Type.Object({
       description: "For an Agent filing a Discovered Ticket: its running Run, whose Ticket it records as the source.",
     }),
   ),
+  release: Type.Optional(ReleaseField),
 });
 export type TicketCreate = Static<typeof TicketCreate>;
 
@@ -577,9 +588,15 @@ export async function createTicket(
         discovery !== null,
       ],
     );
-    const ticket = (await findTicketRow(tx, creator, rows[0]!.id))!;
+    let ticket = (await findTicketRow(tx, creator, rows[0]!.id))!;
     await indexMentions(tx, "ticket", ticket, ticket.description);
     await recordChanges(tx, ticket, actor, now, [{ field: "created", from: null, to: null }]);
+    const releaseId = input.release == null ? null : await releaseToTag(tx, project.id, input.release, null);
+    if (releaseId !== null) {
+      // Tagged as it is made: its timeline shows the tagging after its creation.
+      await writeTicket(context, tx, ticket, actor, { releaseId }, { at: now });
+      ticket = (await findTicketRow(tx, creator, ticket.id))!;
+    }
     live.publish(tx, ticket.workspaceId, { type: "ticket.created", projectId: ticket.projectId, ticketId: ticket.id });
     if (parent) {
       // The parent's timeline shows the Sub-Ticket it gained.
@@ -658,6 +675,8 @@ export interface TicketFilter {
   priority?: Priority;
   /** Matched ignoring case. */
   label?: string;
+  /** A Release's name, ignoring case, or `none` for Tickets without one. */
+  release?: string;
 }
 
 export async function listTickets(
@@ -674,7 +693,7 @@ export async function listTickets(
     params.push(value);
     where.push(condition(`$${params.length}`));
   };
-  const { statusId, assigneeId, priority, label } = filter;
+  const { statusId, assigneeId, priority, label, release } = filter;
   // An id that can't be a record's id matches nothing, like one of another Project.
   const unknownStatus = statusId !== undefined && !isUuid(statusId);
   const unknownAssignee = assigneeId !== undefined && assigneeId !== "none" && !isUuid(assigneeId);
@@ -685,6 +704,10 @@ export async function listTickets(
   if (priority !== undefined) match((p) => `tickets.priority = ${p}`, priority);
   if (label !== undefined) {
     match((p) => `exists (select 1 from unnest(tickets.labels) as l where lower(l) = lower(${p}))`, label.trim());
+  }
+  if (release?.trim().toLowerCase() === "none") where.push("tickets.release_id is null");
+  else if (release !== undefined) {
+    match((p) => `exists (select 1 from releases where releases.id = tickets.release_id and lower(releases.name) = lower(${p}))`, release.trim());
   }
   const columns = ticketColumns(viewer, `$${params.length + 1}`);
   params.push(columns.value);
@@ -735,6 +758,7 @@ export const TicketEdit = Type.Object({
   statusId: Type.Optional(
     Type.String({ format: "uuid", description: "Moves the Ticket to this Status of its Project." }),
   ),
+  release: Type.Optional(ReleaseField),
   parentId: Type.Optional(
     nullable(
       Type.String({
@@ -751,10 +775,10 @@ export const TicketEdit = Type.Object({
 export type TicketEdit = Static<typeof TicketEdit>;
 
 /** The fields of a Ticket an Agent may edit: during its running Run on it, and the title only on a Discovered Ticket it filed. */
-export const AgentTicketEdit = Type.Pick(TicketEdit, ["title", "description", "priority", "labels", "dueDate", "estimate"]);
+export const AgentTicketEdit = Type.Pick(TicketEdit, ["title", "description", "priority", "labels", "dueDate", "estimate", "release"]);
 
 /** The fields of a Ticket an Agent may edit, during its running Run on it. */
-const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate"]);
+const agentEditable = new Set<keyof TicketEdit>(["description", "priority", "labels", "dueDate", "estimate", "release"]);
 
 /**
  * Changes whichever of a Ticket's fields are given, recording a Change for each that differs. A User may
@@ -876,6 +900,8 @@ export async function editTicketIn(
     }
     if (edit.dueDate !== undefined) next.dueDate = edit.dueDate;
     if (edit.estimate !== undefined) next.estimate = edit.estimate;
+    const releaseId =
+      edit.release === undefined ? undefined : await releaseToTag(tx, ticket.projectId, edit.release, ticket.release?.id ?? null);
     // A `local-only` Ticket isn't delegated to a cloud Agent: refused when this edit delegates it or adds the Label.
     // Other routes to the same Delegation, such as a Project's default, meet the same rule when its Run would start.
     const localOnly = next.delegateId !== null && isLocalOnly(next.labels);
@@ -899,6 +925,7 @@ export async function editTicketIn(
       autonomousDelegation: next.autonomousDelegation,
       dueDate: next.dueDate,
       estimate: next.estimate,
+      ...(releaseId !== undefined ? { releaseId } : {}),
       ...(takenUp ? { discoveryWaits: false } : {}),
     }, { at: now });
     if (!written) return fullTicket(tx, editor, ticket);
@@ -1197,7 +1224,7 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
     `${agent.name} is an Agent, and Agents don't edit a Ticket's ${refused.join(", ")}.`,
     {
       rule:
-        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, due date and estimate, " +
+        "During its running Run, an Agent may edit its Ticket's description, Priority, Labels, Release, due date and estimate, " +
         "and the title too of a Discovered Ticket it filed, until a User takes that up; " +
         "a Ticket's Assignee, Delegation, parent and Status are for Users to change.",
       advice:

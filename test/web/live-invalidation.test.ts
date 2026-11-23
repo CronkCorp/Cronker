@@ -16,6 +16,7 @@ const samples: { [type in StreamEvent["type"]]: Extract<StreamEvent, { type: typ
   "project.gained": [{ type: "project.gained", projectId: p }],
   "project.lost": [{ type: "project.lost", projectId: p }],
   "statuses.changed": [{ type: "statuses.changed", projectId: p }],
+  "releases.changed": [{ type: "releases.changed", projectId: p }],
   "ticket.created": [{ type: "ticket.created", projectId: p, ticketId: t }],
   "ticket.changed": [{ type: "ticket.changed", projectId: p, ticketId: t }],
   "comment.added": [
@@ -93,6 +94,10 @@ test("each event of a Ticket refreshes the part it names", () => {
   expect(stale(samples["transcripts.changed"][0]!, keys.transcripts(t))).toBe(true);
   expect(stale(samples["ticket.created"][0]!, keys.projectTickets(p))).toBe(true);
   expect(stale(samples["statuses.changed"][0]!, keys.project(p))).toBe(true);
+  expect(stale(samples["releases.changed"][0]!, keys.releases(p))).toBe(true);
+  expect(stale(samples["releases.changed"][0]!, keys.projectTickets(p))).toBe(true);
+  expect(stale(samples["ticket.changed"][0]!, keys.releases(p))).toBe(true);
+  expect(stale(samples["releases.changed"][0]!, keys.releases("project-2"))).toBe(false);
   expect(stale(samples["comment.added"][0]!, keys.ticket(t))).toBe(false);
 });
 
