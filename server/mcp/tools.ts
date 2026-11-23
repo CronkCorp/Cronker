@@ -358,7 +358,8 @@ export function buildMcpServer(api: Api): McpServer {
         "estimate are given; `null` clears a due date, estimate or Release (named like `v0.3.0`, a planned Release of its Project), and Labels replace the Ticket's Labels. Each Change " +
         "records your Run. A Discovered Ticket you filed you may also edit outside a Run, its title included, until a " +
         "User delegates, moves or dismisses it. Refused for any other Ticket, outside a running Run, and for any other " +
-        "field: a Ticket's Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`." + avoidedWordsNote,
+        "field: a Ticket's Assignee, Delegation and Status are for Users, a Run moves its Ticket with `finish`, and " +
+        "`set_parent` changes a parent." + avoidedWordsNote,
       inputSchema: {
         ticket: ticketArgument,
         ...bodyFields(AgentTicketEdit),
@@ -368,6 +369,35 @@ export function buildMcpServer(api: Api): McpServer {
       answer(async () => {
         const found = await ticketByKeyOrId(ticket);
         return send("PATCH", `/api/tickets/${found.id}`, edit);
+      }),
+  );
+
+  server.registerTool(
+    "set_parent",
+    {
+      title: "Set or clear a Ticket's parent",
+      description:
+        "Makes a Ticket a Sub-Ticket of another Ticket of the same Project, or with `parent` null takes it out from " +
+        "under its parent, for any Ticket of a Project you have a running Run in; the Change records that Run, your " +
+        "Run on the Ticket itself when you have one. A Discovered Ticket you filed you may also reparent outside a Run, " +
+        "until a User delegates, moves or dismisses it. The Ticket keeps its own Assignee, Delegation and Autonomous " +
+        "Delegation, and its running Run goes on; the parent gets no Runs while a Sub-Ticket is unfinished. Refused " +
+        "for a parent in another Project (`parent_in_other_project`), for the Ticket itself or one of its own " +
+        "Sub-Tickets (`parent_cycle`), and without a running Run in the Project (`no_running_run`).",
+      inputSchema: {
+        ticket: ticketArgument.describe("The Ticket to move: its key, such as `CRONK-12`, or its id."),
+        parent: z
+          .string()
+          .min(1)
+          .nullable()
+          .describe("The new parent: its key, such as `CRONK-12`, or its id; null to take the Ticket out from under its parent."),
+      },
+    },
+    ({ ticket, parent }) =>
+      answer(async () => {
+        const found = await ticketByKeyOrId(ticket);
+        const parentId = parent === null ? null : (await ticketByKeyOrId(parent)).id;
+        return send("PATCH", `/api/tickets/${found.id}`, { parentId });
       }),
   );
 

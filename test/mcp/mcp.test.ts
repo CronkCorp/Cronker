@@ -119,6 +119,7 @@ describe("MCP with an Agent token", () => {
       "replace_section",
       "save_artifact",
       "search",
+      "set_parent",
       "set_step",
       "unlink_artifact",
       "unlink_document",
@@ -993,6 +994,56 @@ describe("MCP with an Agent token", () => {
     }
     const noProject = await call(client, "file_ticket", { project: "NOPE", title: "Lost" });
     expect(noProject).toEqual({ isError: true, json: expect.objectContaining({ code: "unknown_project", advice: expect.stringContaining("CRONK") }) });
+  });
+
+  test("during a Run in its Project an Agent sets and clears any Ticket's parent, which keeps its own Delegation", async () => {
+    const { workspace, cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie,
+      body: { delegateId: agent.id, statusId: status("Investigate") },
+    });
+    // A delegated parent in Backlog, which a User's reparenting would pass its Delegation down from.
+    const umbrella = await post(cookie, `/api/projects/${project.id}/tickets`, { title: "Umbrella" });
+    await cronk.request("PATCH", `/api/tickets/${umbrella.id}`, { cookie, body: { delegateId: agent.id } });
+    const elsewhere = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Other", key: "OTHER" });
+    await post(cookie, `/api/projects/${elsewhere.id}/tickets`, { title: "Over there" });
+    const client = await connect(secret);
+
+    const set = await call(client, "set_parent", { ticket: "CRONK-2", parent: "CRONK-3" });
+    expect(set.isError).toBe(false);
+    expect(set.json).toEqual(
+      expect.objectContaining({ key: "CRONK-2", parentId: umbrella.id, delegateId: null, autonomousDelegation: null }),
+    );
+    const { json: parent } = await call(client, "read_ticket", { ticket: "CRONK-3" });
+    expect(parent.relations.subTickets).toEqual([expect.objectContaining({ key: "CRONK-2" })]);
+    // Its own Run's Ticket goes under a parent too, and the Run goes on.
+    const own = await call(client, "set_parent", { ticket: "CRONK-1", parent: umbrella.id });
+    expect(own.json).toEqual(expect.objectContaining({ parentId: umbrella.id, delegateId: agent.id }));
+    expect(own.json.lastRun).toEqual(expect.objectContaining({ state: "running" }));
+
+    for (const [args, code] of [
+      [{ ticket: "CRONK-2", parent: "OTHER-1" }, "parent_in_other_project"],
+      [{ ticket: "CRONK-2", parent: "CRONK-2" }, "parent_cycle"],
+      [{ ticket: "CRONK-3", parent: "CRONK-2" }, "parent_cycle"],
+      [{ ticket: "OTHER-1", parent: null }, "no_running_run"],
+    ] as const) {
+      const refused = await call(client, "set_parent", args);
+      expect(refused, JSON.stringify(args)).toEqual({ isError: true, json: expect.objectContaining({ code }) });
+    }
+
+    const cleared = await call(client, "set_parent", { ticket: "CRONK-2", parent: null });
+    expect(cleared.isError).toBe(false);
+    expect(cleared.json.parentId).toBeNull();
+
+    // Another Agent, with no Run in the Project, is refused.
+    const laptop = await post(cookie, `/api/workspaces/${workspace.id}/agents`, { name: "laptop-claude" });
+    const { secret: laptopSecret } = await post(cookie, `/api/agents/${laptop.id}/tokens`, { name: "laptop", access: "full" });
+    const noRun = await call(await connect(laptopSecret), "set_parent", { ticket: "CRONK-2", parent: "CRONK-3" });
+    expect(noRun).toEqual({ isError: true, json: expect.objectContaining({ code: "no_running_run", rule: expect.any(String) }) });
   });
 
   test("outside a Run an Agent files a ticket set: a Discovered Ticket split into Sub-Tickets, one blocking another", async () => {

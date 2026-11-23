@@ -10,7 +10,9 @@ export const agentRights =
   "a Project change its board, a Step's content only when its Owner is an Admin. During its running Run on a Ticket " +
   "an Agent may also edit the Ticket's description, Priority, Labels, Release, due date and estimate, attach files to it, " +
   "split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink them, and finish " +
-  "the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket an " +
+  "the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). While it has a " +
+  "running Run in a Project an Agent may also set or clear the parent of any Ticket there, which keeps its own " +
+  "Delegation. A Ticket an " +
   "Agent files outside its Ticket's Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User " +
   "delegates, moves or dismisses it the Agent may edit it, title included, add blocks from it, or make it blocked " +
   "by any Ticket of the Workspace, delegated or running included, link Documents and Artifacts to it and unlink " +
