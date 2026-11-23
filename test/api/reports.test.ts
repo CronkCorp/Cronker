@@ -82,6 +82,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0075_releases.sql");
     // And its Backport.
     await cronk.applyAhead("0078_backports.sql");
+    // Issuing a Write token needs token levels.
+    await cronk.applyAhead("0079_token_levels.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

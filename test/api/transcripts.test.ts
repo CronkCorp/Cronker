@@ -507,6 +507,8 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0075_releases.sql");
     // And its Backport.
     await cronk.applyAhead("0078_backports.sql");
+    // And a Write token.
+    await cronk.applyAhead("0079_token_levels.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

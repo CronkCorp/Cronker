@@ -213,8 +213,8 @@ describe.each(["open", "private"] as const)("a User with Read in a%s Project", (
     for (const as of [setting.grace.as, setting.gracesAgent]) {
       for (const [method, path, body] of writes(setting)) {
         const response = await call(method, path, as, body);
-        // An Agent meets the rules for Agents first wherever only a User may act; neither changes anything.
-        if (as === setting.gracesAgent && /^agent_/.test(response.json?.error?.code ?? "")) continue;
+        // An Agent meets the rules for Agents first wherever only a User, or a Full token, may act; neither changes anything.
+        if (as === setting.gracesAgent && /^(agent_|full_token_needed$)/.test(response.json?.error?.code ?? "")) continue;
         expect(response, `${method} ${path}`).toEqual({
           status: 403,
           json: {
