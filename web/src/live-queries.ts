@@ -20,6 +20,10 @@ export const keys = {
   pullRequests: (ticketId: string) => ["ticket", ticketId, "pullRequests"] as const,
   project: (projectId: string) => ["project", projectId, "fields"] as const,
   projectTickets: (projectId: string) => ["project", projectId, "tickets"] as const,
+  /** A Project's Releases, with their counts and Tickets. */
+  releases: (projectId: string) => ["project", projectId, "releases"] as const,
+  /** Every Ticket's fields: renaming a Release changes what each of its Tickets shows. */
+  allTickets: ["ticket"] as const,
   /** A Document's files, such as a Report's, since a Report is a Document. */
   documentAttachments: (documentId: string) => ["document", documentId, "attachments"] as const,
   members: (workspaceId: string) => ["workspace", workspaceId, "members"] as const,
@@ -53,7 +57,10 @@ export function invalidations(event: StreamEvent): QueryKey[] {
     case "statuses.changed":
       return [keys.project(event.projectId)];
     case "ticket.created":
-      return [keys.projectTickets(event.projectId)];
+      return [keys.projectTickets(event.projectId), keys.releases(event.projectId)];
+    case "releases.changed":
+      // A rename or deletion changes what the Release's Tickets show, on the board and on their pages.
+      return [keys.releases(event.projectId), keys.projectTickets(event.projectId), keys.allTickets];
     case "ticket.changed":
       // Its Runs and Relations change with it, and the Project's Tickets list its key, title and Labels.
       return [
@@ -67,6 +74,8 @@ export function invalidations(event: StreamEvent): QueryKey[] {
         // Linking or unlinking an Artifact brings its Comments onto the timeline, or takes them off.
         keys.comments(event.ticketId),
         keys.projectTickets(event.projectId),
+        // Its Release's counts and Tickets change with its Status and its tagging.
+        keys.releases(event.projectId),
         // A Run starting or ending, or a Change made, is an Agent's doing.
         keys.agentRecords,
       ];

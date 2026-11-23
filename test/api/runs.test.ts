@@ -113,7 +113,7 @@ describe("starting Runs", () => {
           "request: Cronk can't tell a session waiting from one that has gone, so a Run whose session stops without " +
           "`finish` becomes lost.",
         "- *needs you* takes a Question.",
-        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, due date and estimate, " +
+        "- While this Run is running you may edit CRONK-1's description, Priority, Labels, Release, due date and estimate, " +
           "write Reports on it and split it into Sub-Tickets with `create_sub_ticket`; leave everything else to its Users.",
         "- Before filing anything you find that isn't part of CRONK-1's work, `search` for an open Ticket that " +
           "already covers it and, for a fault in the code, check it still happens on the Repository's default branch. " +

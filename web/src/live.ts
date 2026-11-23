@@ -28,6 +28,7 @@ const eventTypes = Object.keys({
   "project.gained": true,
   "project.lost": true,
   "statuses.changed": true,
+  "releases.changed": true,
   "ticket.created": true,
   "ticket.changed": true,
   "comment.added": true,

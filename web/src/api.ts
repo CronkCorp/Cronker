@@ -103,6 +103,7 @@ import type { RunnerCreate, RunnerEdit, TriggerSave, TriggerToken, WebhookSecret
 import type { RedactionCreate } from "../../server/transcripts/transcripts.js";
 import type { ProjectCreate, ProjectEdit } from "../../server/work/projects.js";
 import type { StatusAdd, StatusEdit } from "../../server/work/statuses.js";
+import type { Release, ReleaseCreate, ReleaseEdit, TicketRelease } from "../../server/work/releases.js";
 import type { StepPut } from "../../server/work/steps.js";
 import type { Webhook, WebhookCreate, WebhookDelivery, WebhookEdit, WebhookKind } from "../../server/webhooks/webhooks.js";
 
@@ -124,6 +125,7 @@ export type { Artifact, ArtifactComparison, ArtifactFile, ArtifactSummary, Artif
 export type { Check, Completion, MovedOnDependent, GitHubApp, GitHubChecklist, GitHubImport, GitHubInstallation, PullRequest, Repository };
 export type { ConnectRequest, Inbox, InboxItem, SearchKind, SearchResult };
 export type { Webhook, WebhookDelivery, WebhookKind };
+export type { Release, TicketRelease };
 
 /** Who made a Change or wrote a Comment: a User, an Agent, or Cronk itself. */
 export type ChangeActor = ActorOrCronk;
@@ -158,6 +160,8 @@ export interface TicketFilter {
   assigneeId?: string;
   priority?: Priority;
   label?: string;
+  /** A Release's name, or `none`. */
+  release?: string;
 }
 
 /** Where an Attachment downloads from, which Markdown's `attachment:<id>` resolves to. */
@@ -307,6 +311,17 @@ export const api = {
     const search = query.size ? `?${query}` : "";
     return call<TicketList>("GET", `/api/projects/${encodeURIComponent(projectId)}/tickets${search}`);
   },
+  releases: (projectId: string) => call<Release[]>("GET", `/api/projects/${encodeURIComponent(projectId)}/releases`),
+  createRelease: (projectId: string, name: string) =>
+    call<Release>("POST", `/api/projects/${encodeURIComponent(projectId)}/releases`, { name } satisfies ReleaseCreate),
+  renameRelease: (projectId: string, releaseId: string, name: string) =>
+    call<Release>(
+      "PATCH",
+      `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}`,
+      { name } satisfies ReleaseEdit,
+    ),
+  deleteRelease: (projectId: string, releaseId: string) =>
+    call<void>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/releases/${encodeURIComponent(releaseId)}`),
   createTicket: (projectId: string, input: TicketCreate) =>
     call<Ticket>("POST", `/api/projects/${encodeURIComponent(projectId)}/tickets`, input),
   ticket: (id: string) => call<Ticket>("GET", `/api/tickets/${encodeURIComponent(id)}`),

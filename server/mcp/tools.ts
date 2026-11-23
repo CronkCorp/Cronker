@@ -240,6 +240,10 @@ export function buildMcpServer(api: Api): McpServer {
         status: z.string().optional().describe("A Status's name, such as `Backlog`, ignoring case."),
         priority: z.enum(["urgent", "high", "medium", "low", "none"]).optional(),
         label: z.string().optional().describe("A Label, ignoring case."),
+        release: z
+          .string()
+          .optional()
+          .describe("A Release's name, such as `v0.3.0`, ignoring case, or `none` for Tickets without one."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -267,16 +271,18 @@ export function buildMcpServer(api: Api): McpServer {
           if (status) query.set("statusId", status.id);
           if (filter.priority) query.set("priority", filter.priority);
           if (filter.label) query.set("label", filter.label);
+          if (filter.release) query.set("release", filter.release);
           const found = await get<TicketSummary[]>(`/api/projects/${project.id}/tickets?${query}`);
           const statusName = new Map(project.statuses.map((s) => [s.id, s.name]));
           tickets.push(
-            ...found.map(({ id, key, title, statusId, priority, labels, assigneeId, dueDate, estimate }) => ({
+            ...found.map(({ id, key, title, statusId, priority, labels, release, assigneeId, dueDate, estimate }) => ({
               id,
               key,
               title,
               status: statusName.get(statusId),
               priority,
               labels,
+              release: release?.name ?? null,
               assigneeId,
               dueDate,
               estimate,
@@ -348,8 +354,8 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Edit your Run's Ticket",
       description:
-        "During your running Run on a Ticket, changes whichever of its description, Priority, Labels, due date and " +
-        "estimate are given; `null` clears a due date or estimate, and Labels replace the Ticket's Labels. Each Change " +
+        "During your running Run on a Ticket, changes whichever of its description, Priority, Labels, Release, due date and " +
+        "estimate are given; `null` clears a due date, estimate or Release (named like `v0.3.0`, a planned Release of its Project), and Labels replace the Ticket's Labels. Each Change " +
         "records your Run. A Discovered Ticket you filed you may also edit outside a Run, its title included, until a " +
         "User delegates, moves or dismisses it. Refused for any other Ticket, outside a running Run, and for any other " +
         "field: a Ticket's Assignee, Delegation, parent and Status are for Users, and a Run moves its Ticket with `finish`." + avoidedWordsNote,
@@ -384,10 +390,10 @@ export function buildMcpServer(api: Api): McpServer {
         ...newTicketFields,
       },
     },
-    ({ ticket, title, description }) =>
+    ({ ticket, title, description, release }) =>
       answer(async () => {
         const parent = await ticketByKeyOrId(ticket);
-        return send("POST", `/api/projects/${parent.projectId}/tickets`, { title, description, parentId: parent.id });
+        return send("POST", `/api/projects/${parent.projectId}/tickets`, { title, description, release, parentId: parent.id });
       }),
   );
 
@@ -410,10 +416,10 @@ export function buildMcpServer(api: Api): McpServer {
         run: z.string().min(1).optional().describe("Your running Run's id, as your Brief gives it, recorded as the source."),
       },
     },
-    ({ project, title, description, run }) =>
+    ({ project, title, description, release, run }) =>
       answer(async () => {
         const { id } = await projectByKey(project);
-        return send("POST", `/api/projects/${id}/tickets`, { title, description, runId: run });
+        return send("POST", `/api/projects/${id}/tickets`, { title, description, release, runId: run });
       }),
   );
 

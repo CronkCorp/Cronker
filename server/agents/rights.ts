@@ -8,7 +8,7 @@ export const agentRights =
   "and Terms), create and save Artifacts (only Users delete them), and propose Decisions and edit their text (only " +
   "Users change a Decision's status). An Agent whose Owner is an Admin may also create Projects, and with Write in " +
   "a Project change its board, a Step's content only when its Owner is an Admin. During its running Run on a Ticket " +
-  "an Agent may also edit the Ticket's description, Priority, Labels, due date and estimate, attach files to it, " +
+  "an Agent may also edit the Ticket's description, Priority, Labels, Release, due date and estimate, attach files to it, " +
   "split it into Sub-Tickets, write Reports on it, link Documents and Artifacts to it and unlink them, and finish " +
   "the Run (a Merge Step's Run may instead merge its Ticket's Pull Request with `merge_pull_request`). A Ticket an " +
   "Agent files outside its Ticket's Sub-Tickets is a Discovered Ticket, waiting for its Assignee: until a User " +

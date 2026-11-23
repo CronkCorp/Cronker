@@ -594,7 +594,7 @@ describe("MCP with an Agent token", () => {
     const edit = input("edit_ticket");
     // The Agent is offered only the fields it may edit, and names its Ticket its own way.
     expect(Object.keys(edit.properties).sort()).toEqual(
-      ["description", "dueDate", "estimate", "labels", "priority", "ticket", "title"],
+      ["description", "dueDate", "estimate", "labels", "priority", "release", "ticket", "title"],
     );
     expect(edit.required).toEqual(["ticket"]);
     expect(edit.properties.title).toEqual(
@@ -606,10 +606,10 @@ describe("MCP with an Agent token", () => {
     expect(JSON.stringify(edit.properties.priority)).toContain("urgent");
 
     const filing = input("file_ticket");
-    expect(Object.keys(filing.properties).sort()).toEqual(["description", "project", "run", "title"]);
+    expect(Object.keys(filing.properties).sort()).toEqual(["description", "project", "release", "run", "title"]);
     expect(filing.properties.title).toEqual(expect.objectContaining({ maxLength: 300, pattern: "\\S" }));
     expect(filing.properties.description).toEqual(expect.objectContaining({ maxLength: 100_000, description: "Markdown." }));
-    expect(Object.keys(input("create_sub_ticket").properties).sort()).toEqual(["description", "ticket", "title"]);
+    expect(Object.keys(input("create_sub_ticket").properties).sort()).toEqual(["description", "release", "ticket", "title"]);
     expect(input("comment").properties.body).toEqual(expect.objectContaining({ maxLength: 100_000 }));
     expect(input("write_report").properties.title).toEqual(
       expect.objectContaining({ maxLength: 300, description: "A short title, such as `Findings`." }),

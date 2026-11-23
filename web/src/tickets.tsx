@@ -44,7 +44,7 @@ import { Link } from "./router.js";
 import { Actor, Avatar, type ActorRef } from "./ui/actor.js";
 import { fitWindow } from "./ui/fit-window.js";
 import { Actions, Button, CommentButton, daySeparator, ExternalLink, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
-import { Chip, KindLabel, ModelLabel, PriorityTag, RunState, StatusPill } from "./ui/labels.js";
+import { Chip, KindLabel, ModelLabel, PriorityTag, ReleaseChip, RunState, StatusPill } from "./ui/labels.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, Picker } from "./ui/picker.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
@@ -484,6 +484,9 @@ function Fields({
   };
   const offeredAgents = delegate && !own.some((a) => a.id === delegate.id) ? [...own, delegate] : own;
   const readOnly = !useCanWrite();
+  // The Release picker offers the Project's planned Releases, loaded when the Ticket is; the same events refresh them.
+  const releasesQuery = useQuery({ queryKey: keys.releases(project.id), queryFn: () => api.releases(project.id) });
+  const planned = (releasesQuery.data ?? []).filter((r) => r.state === "planned" || r.id === ticket.release?.id);
   return (
     <section aria-label="Fields" className="panel side-section fields">
       <FieldPicker
@@ -575,6 +578,18 @@ function Fields({
         multiple
         onPick={(label) => saveLabels(shownLabels.includes(label) ? shownLabels.filter((l) => l !== label) : [...shownLabels, label])}
         onCreate={(label) => !shownLabels.includes(label) && saveLabels([...shownLabels, label])}
+      />
+      <FieldPicker
+        label="Release"
+        // Only a planned Release's Tickets are tagged and untagged.
+        disabled={readOnly || (ticket.release !== null && ticket.release.state !== "planned")}
+        value={ticket.release ? <ReleaseChip release={ticket.release} /> : none}
+        options={[
+          { value: "", label: "None", content: <span className="muted">None</span> },
+          ...planned.map((release) => ({ value: release.name, label: release.name, content: <span className="mono">{release.name}</span> })),
+        ]}
+        selected={[ticket.release?.name ?? ""]}
+        onPick={(name) => (name || null) !== (ticket.release?.name ?? null) && void onSave({ release: name || null })}
       />
       {children}
       <FieldForm
@@ -1249,6 +1264,7 @@ const fieldNames: Record<
   assignee: "Assignee",
   dueDate: "Due date",
   estimate: "Estimate",
+  release: "Release",
   parent: "Parent",
   autonomousDelegation: "Autonomous Delegation",
   verification: "Verification",
@@ -1524,7 +1540,7 @@ function describedWithReason(change: Change, related: Change[]): ReactNode {
 function shown(change: Change, value: unknown): string {
   if (value === null || (Array.isArray(value) && value.length === 0)) return "none";
   if (change.field === "priority") return priorityLabel(value as Priority);
-  if (change.field === "status" || change.field === "assignee" || change.field === "delegate") {
+  if (change.field === "status" || change.field === "assignee" || change.field === "delegate" || change.field === "release") {
     return (value as { name: string }).name;
   }
   if (change.field === "parent") return ticketShown(value as TicketRef);

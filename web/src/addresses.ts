@@ -7,7 +7,7 @@ import { replace } from "./router.js";
  *
  * - `/<workspace>`, and its own pages: `inbox`, `search`, `documents`, `glossary`, `decisions`, `artifacts`,
  *   `agents`, `agents/<agent id>`, `members`, `settings`
- * - `/<workspace>/projects/<KEY>`, its board, and its pages: `list`, `settings`, `documents`, `glossary`,
+ * - `/<workspace>/projects/<KEY>`, its board, and its pages: `list`, `releases`, `settings`, `documents`, `glossary`,
  *   `decisions`, `artifacts`
  * - `/<workspace>/tickets/<KEY>-<n>`
  * - `/<workspace>/decisions/<n>` for the Workspace's own, `/<workspace>/projects/<KEY>/decisions/<n>` for a Project's
@@ -33,7 +33,7 @@ export type WorkspacePage =
   | "members"
   | "settings";
 
-export type ProjectView = "list" | "settings" | "documents" | "glossary" | "decisions" | "artifacts";
+export type ProjectView = "list" | "releases" | "settings" | "documents" | "glossary" | "decisions" | "artifacts";
 
 const part = encodeURIComponent;
 
