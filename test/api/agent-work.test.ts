@@ -181,9 +181,10 @@ describe("Reports", () => {
     };
     expect(written.json).toEqual({ ...findings, avoidedWords: [] });
     const reports = await ok("GET", `/api/tickets/${ticket.id}/reports`, ada);
+    // Listed with the Ticket, each carries its unresolved threads; none here.
     expect(reports).toEqual([
-      findings,
-      { ...findings, title: "Plan", slug: expect.stringMatching(/^plan-[0-9a-f]{8}$/), body: "Fix the parser.", createdAt: "2026-01-01T09:01:00.000Z" },
+      { ...findings, threads: [] },
+      { ...findings, threads: [], title: "Plan", slug: expect.stringMatching(/^plan-[0-9a-f]{8}$/), body: "Fix the parser.", createdAt: "2026-01-01T09:01:00.000Z" },
     ]);
     // Agents read them too, as later Runs on the Ticket do.
     expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, asAgent)).toEqual(reports);
@@ -224,6 +225,7 @@ describe("Reports", () => {
         body: "Clear enough to start.",
         createdAt: "2026-01-01T09:00:00.000Z",
         mentions: [],
+        threads: [],
       },
     ]);
   });
