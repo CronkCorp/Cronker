@@ -13,7 +13,7 @@ import { DocumentCreate, DocumentEdit, SectionReplace } from "../knowledge/docum
 import { ReportCreate } from "../knowledge/reports.js";
 import { TermCreate, TermEdit } from "../knowledge/terms.js";
 import { DocumentCommentCreate } from "../work/comments.js";
-import { AgentTicketEdit, TicketCreate, type TicketSummary } from "../work/tickets.js";
+import { AgentTicketEdit, TicketCreate, TicketEdit, type TicketSummary } from "../work/tickets.js";
 import { ProjectCreate, type Project, type ProjectSummary } from "../work/projects.js";
 import { ReleaseCreate, ReleaseEdit, ReleasePublish, type Release } from "../work/releases.js";
 import { StatusAdd, StatusEdit } from "../work/statuses.js";
@@ -150,6 +150,21 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
       message: `Your Workspace has no Project with the key ${key}.`,
       rule: "A Project is named by its key, among the Projects of your Workspace.",
       advice: `Use one of these keys${orElse}: ${all.map((p) => p.key).join(", ") || "(none yet)"}.`,
+    });
+  }
+
+  /** The id of the Agent of your Workspace with that name, ignoring case, or that id; refused naming the Agents there are. */
+  async function agentIdOf(nameOrId: string): Promise<string> {
+    if (isUuid(nameOrId)) return nameOrId;
+    const { id } = await ownWorkspace();
+    const all = await get<{ id: string; name: string; owner: { name: string } }[]>(`/api/workspaces/${id}/agents`);
+    const agent = all.find((a) => a.name.toLowerCase() === nameOrId.trim().toLowerCase());
+    if (agent) return agent.id;
+    throw new Refused({
+      code: "unknown_agent",
+      message: `Your Workspace has no Agent named ${nameOrId}.`,
+      rule: "An Agent is named by its name, among the Agents of your Workspace.",
+      advice: `Use one of these names: ${all.map((a) => `${a.name} (${a.owner.name}'s)`).join(", ") || "(none yet)"}.`,
     });
   }
 
@@ -352,28 +367,79 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
       }),
   );
 
-  server.registerTool(
-    "edit_ticket",
-    {
-      title: "Edit your Run's Ticket",
-      description:
-        "During your running Run on a Ticket, changes whichever of its description, Priority, Labels, Release, due date and " +
-        "estimate are given; `null` clears a due date, estimate or Release (named like `v0.3.0`, a planned Release of its Project), and Labels replace the Ticket's Labels. Each Change " +
-        "records your Run. A Discovered Ticket you filed you may also edit outside a Run, its title included, until a " +
-        "User delegates, moves or dismisses it. Refused for any other Ticket, outside a running Run, and for any other " +
-        "field: a Ticket's Assignee, Delegation and Status are for Users, a Run moves its Ticket with `finish`, and " +
-        "`set_parent` changes a parent." + avoidedWordsNote,
-      inputSchema: {
-        ticket: ticketArgument,
-        ...bodyFields(AgentTicketEdit),
+  if (level === "full") {
+    server.registerTool(
+      "edit_ticket",
+      {
+        title: "Edit a Ticket",
+        description:
+          "With a Full token: changes whichever fields are given of any Ticket you have Write on, delegated or running " +
+          "included, as your Owner would: title, description, Assignee, Delegation, Autonomous Delegation, Priority, " +
+          "Labels, Release, parent, due date and estimate. `null` clears an Assignee, Delegate, parent, due date, " +
+          "estimate or Release (named like `v0.3.0`, a planned Release of its Project), and Labels replace the " +
+          "Ticket's Labels. Each Change names you with no Run. Delegating goes only to your Owner's Agents with Write " +
+          "in the Ticket's Project (`not_your_agent`, `delegate_cannot_write`), and only on a Ticket your Owner is " +
+          "assigned or that is unassigned, which assigns your Owner (`delegate_not_assignees`); delegating starts the " +
+          "Ticket's Run where its Status has a Step, and undelegating or re-delegating stops a running one. Move it " +
+          "with `move_ticket`." + avoidedWordsNote,
+        inputSchema: {
+          ticket: ticketArgument,
+          ...bodyFields(AgentTicketEdit),
+          ...bodyFields(Type.Pick(TicketEdit, ["autonomousDelegation"])),
+          assignee: z
+            .string()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("The new Assignee: a User's id, as `read_ticket` gives `assigneeId`; null to unassign."),
+          delegate: z
+            .string()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("The Agent to delegate to, one of your Owner's: its name, ignoring case, or its id; null to undelegate."),
+          parent: z
+            .string()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("The new parent, a Ticket of the same Project: its key, such as `CRONK-12`, or its id; null for none."),
+        },
       },
-    },
-    ({ ticket, ...edit }) =>
-      answer(async () => {
-        const found = await ticketByKeyOrId(ticket);
-        return send("PATCH", `/api/tickets/${found.id}`, edit);
-      }),
-  );
+      ({ ticket, assignee, delegate, parent, ...edit }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          const body: Record<string, unknown> = { ...edit };
+          if (assignee !== undefined) body.assigneeId = assignee;
+          if (delegate !== undefined) body.delegateId = delegate === null ? null : await agentIdOf(delegate);
+          if (parent !== undefined) body.parentId = parent === null ? null : (await ticketByKeyOrId(parent)).id;
+          return send("PATCH", `/api/tickets/${found.id}`, body);
+        }),
+    );
+  } else {
+    server.registerTool(
+      "edit_ticket",
+      {
+        title: "Edit your Run's Ticket",
+        description:
+          "During your running Run on a Ticket, changes whichever of its description, Priority, Labels, Release, due date and " +
+          "estimate are given; `null` clears a due date, estimate or Release (named like `v0.3.0`, a planned Release of its Project), and Labels replace the Ticket's Labels. Each Change " +
+          "records your Run. A Discovered Ticket you filed you may also edit outside a Run, its title included, until a " +
+          "User delegates, moves or dismisses it. Refused for any other Ticket, outside a running Run, and for any other " +
+          "field: a Ticket's Assignee, Delegation and Status are for Users, a Run moves its Ticket with `finish`, and " +
+          "`set_parent` changes a parent." + avoidedWordsNote,
+        inputSchema: {
+          ticket: ticketArgument,
+          ...bodyFields(AgentTicketEdit),
+        },
+      },
+      ({ ticket, ...edit }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          return send("PATCH", `/api/tickets/${found.id}`, edit);
+        }),
+    );
+  }
 
   server.registerTool(
     "set_parent",
@@ -1450,6 +1516,69 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           const found = await ticketByKeyOrId(ticket);
           const project = await get<Project>(`/api/projects/${found.projectId}`);
           return send("PATCH", `/api/tickets/${found.id}`, { statusId: statusIdOf(project, status) });
+        }),
+    );
+
+    server.registerTool(
+      "dismiss_ticket",
+      {
+        title: "Dismiss a Discovered Ticket",
+        description:
+          "With a Full token: takes a Discovered Ticket waiting for a User out of its Assignee's Inbox, and out of the " +
+          "hands of the Agent that filed it, leaving it where it is, as your Owner would; its waiting Sub-Tickets are " +
+          "settled with it. The Change names you with no Run. Refused for any other Ticket (`not_waiting`).",
+        inputSchema: { ticket: ticketArgument },
+      },
+      ({ ticket }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          return send("POST", `/api/tickets/${found.id}/dismiss`);
+        }),
+    );
+
+    server.registerTool(
+      "add_relation",
+      {
+        title: "Relate two Tickets",
+        description:
+          "With a Full token: marks that a Ticket blocks, is blocked by, or relates to another Ticket of your " +
+          "Workspace, as your Owner would, on any two Tickets you have Write on. The Change names you with no Run. " +
+          "Refused for a Ticket and itself (`relation_to_itself`), a block that would form a cycle (`blocking_cycle`) " +
+          "and a Relation the two already have (`relation_exists`).",
+        inputSchema: {
+          ticket: ticketArgument,
+          kind: z
+            .enum(["blocks", "blockedBy", "relatesTo"])
+            .describe("`blocks`: `ticket` blocks `other`; `blockedBy`: `other` blocks `ticket`; `relatesTo`: they relate."),
+          other: ticketArgument.describe("The other Ticket: its key, such as `CRONK-12`, or its id."),
+        },
+      },
+      ({ ticket, kind, other }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          const named = isUuid(other) ? { ticketId: other } : { ticketKey: other };
+          return send("POST", `/api/tickets/${found.id}/relations`, { kind, ...named });
+        }),
+    );
+
+    server.registerTool(
+      "remove_relation",
+      {
+        title: "Remove a Relation",
+        description:
+          "With a Full token: removes a Relation of a Ticket, whichever of its two Tickets it was made from, as your " +
+          "Owner would, given its id as `read_ticket` lists its Relations. Needs Write on both Tickets. The Change " +
+          "names you with no Run; removing the last block on a Ticket lets it get Runs again.",
+        inputSchema: {
+          ticket: ticketArgument,
+          relation: z.string().min(1).describe("The Relation's id, as `read_ticket` lists it under `relations`."),
+        },
+      },
+      ({ ticket, relation }) =>
+        answer(async () => {
+          const found = await ticketByKeyOrId(ticket);
+          await send("DELETE", `/api/tickets/${found.id}/relations/${encodeURIComponent(relation)}`);
+          return { removed: relation };
         }),
     );
 

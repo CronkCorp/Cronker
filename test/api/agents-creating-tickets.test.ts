@@ -629,11 +629,11 @@ describe("waiting Discovered Tickets in the Inbox", () => {
     expect(again.json.error.code).toBe("not_waiting");
   });
 
-  test("only a User dismisses one, and only a waiting Discovered Ticket", async () => {
+  test("only a User or a Full token dismisses one, and only a waiting Discovered Ticket", async () => {
     const { ada, other, found, asAgent, inbox } = await discoveredInInbox();
 
     const byAgent = await call("POST", `/api/tickets/${found.id}/dismiss`, asAgent);
-    expect(byAgent.json.error.code).toBe("agent_not_allowed");
+    expect(byAgent.json.error.code).toBe("full_token_needed");
     const notDiscovered = await call("POST", `/api/tickets/${other.id}/dismiss`, ada);
     expect(notDiscovered.status).toBe(409);
     expect(notDiscovered.json.error.code).toBe("not_waiting");

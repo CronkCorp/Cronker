@@ -22,7 +22,10 @@ export const agentRights =
   "its slices under it. These are the rules for a Write token; a Read token may only read. A Full token, which " +
   "its Owner picks by hand and a Run never holds, may also move any Ticket it has Write on to any Status with " +
   "`move_ticket`, as its Owner's move: entering a Status with a Step starts its Run, and leaving a running one stops " +
-  "it, each a Change by the Agent with no Run. It may also queue a Ticket in the Merge Queue and remove it " +
+  "it; edit every field of any Ticket it has Write on with `edit_ticket`, delegated or running included, delegating " +
+  "only to its Owner's Agents and setting Autonomous Delegation; make Sub-Tickets of any Ticket and link Documents and " +
+  "Artifacts to it; dismiss Discovered Tickets with `dismiss_ticket`; and add any Relation with `add_relation` and " +
+  "remove one with `remove_relation`: each a Change by the Agent with no Run. It may also queue a Ticket in the Merge Queue and remove it " +
   "(`queue_merge`, `remove_from_queue`), Cronk's merge of what it queued completing the Ticket as Unverified; Cut " +
   "and Release a Release (`cut_release`, `publish_release`); answer a Run's Question (`answer_question`) and " +
   "dismiss one; and retry a Run gone wrong on a Ticket delegated to one of its Owner's Agents (`retry_run`). Accept and Reopen, Access and Admin settings, a Decision's status " +

@@ -548,7 +548,10 @@ export async function createTicket(
       if (parent.projectId !== project.id) {
         throw new ApiError(400, "parent_in_other_project", "A parent must be a Ticket of the same Project.");
       }
-      if (creator.kind === "agent" && holdsDiscoveredTicket(creator, parent)) {
+      if (creator.kind === "agent" && actsAsOwner(creator)) {
+        // A Full token splits any Ticket it has Write on, as its Owner would, outside any Run.
+        actor = { kind: "agent", id: creator.id, runId: null };
+      } else if (creator.kind === "agent" && holdsDiscoveredTicket(creator, parent)) {
         // The Agent splits a Discovered Ticket it filed, while it waits: its Sub-Tickets are Discovered Tickets of
         // the same Agent and source, settled with their parent.
         actor = await discoveringAgent(tx, creator, parent);
@@ -844,8 +847,9 @@ export async function editTicketIn(
     if (!ticket) throw ticketNotFound();
     await requireWrite(tx, editor, ticket);
     let actor: ChangeActor = editor.id;
-    if (editor.kind === "agent" && isFullMove(editor, edit)) {
-      // A Full token moves the Ticket as its Owner would, outside any Run: the Change names the Agent and no Run.
+    if (editor.kind === "agent" && actsAsOwner(editor)) {
+      // A Full token edits the Ticket as its Owner would, any field and outside any Run: each Change names the Agent
+      // and no Run.
       actor = { kind: "agent", id: editor.id, runId: null };
     } else if (editor.kind === "agent") {
       // The Agent that filed a Discovered Ticket edits it, outside any Run, until a User takes it up.
@@ -857,10 +861,14 @@ export async function editTicketIn(
           ? { kind: "agent", id: editor.id, runId: await runForParent(tx, editor, ticket) }
           : { kind: "agent", id: editor.id, runId: await runOfAgent(tx, editor, ticket) };
     }
-    /** Whether an Agent made the edit: its Ticket keeps its own Delegation under a new parent, and no Run is stopped. */
-    const byAgent = editor.kind === "agent";
-    // Only Users get this far with fields that name a User; a Full Agent's move names none.
-    const userId = editor.id;
+    /**
+     * Whether an Agent bound by the Agent rules made the edit: its Ticket keeps its own Delegation and Autonomous
+     * Delegation under a new parent. A Full token's edit is its Owner's.
+     */
+    const byAgent = !actsAsOwner(editor);
+    // The User the edit acts for: the editor, or a Full Agent's Owner, who delegates and is assigned in its place.
+    // Other Agents never get this far with fields that name a User.
+    const userId = editor.kind === "agent" ? editor.owner.id : editor.id;
     const next = { ...ticket };
     // `next` holds the Ticket as the edit leaves it; the write records a Change for each field that differs.
 
@@ -1024,14 +1032,16 @@ export async function editTicketIn(
     const delegationPassedDown = next.delegateId !== null && next.delegateId !== ticket.delegateId;
     const autonomousChanged = next.autonomousDelegation !== ticket.autonomousDelegation;
     if ((autonomousChanged || delegationPassedDown) && next.autonomousDelegation !== null) {
-      await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, userId, now);
+      await passAutonomousDelegationDown(context, tx, ticket, next.autonomousDelegation, actor, now);
     }
     // A User moving, undelegating or re-delegating the Ticket stops its running Run: their action wins. So does an
     // Agent with a Full token moving it; other Agents set neither a Status nor a Delegate.
     const entered = next.statusId !== ticket.statusId;
     const delegateChanged = next.delegateId !== ticket.delegateId;
+    /** Who the reasons for stopping Runs name: set when the Ticket moved or its Delegate changed. */
+    let who = "";
     if (entered || delegateChanged) {
-      const who = editor.kind === "agent" ? editor.name : await nameOfUser(tx, userId);
+      who = editor.kind === "agent" ? editor.name : await nameOfUser(tx, userId);
       const moved = changes.find((c) => c.field === "status")?.to as { name: string } | undefined;
       const delegate = changes.find((c) => c.field === "delegate")?.to as { name: string } | null | undefined;
       const reason = moved
@@ -1048,7 +1058,7 @@ export async function editTicketIn(
     // A User moving the Ticket by hand starts its rounds afresh at every Step.
     if (entered) await tx.query("delete from round_counts where ticket_id = $1", [ticket.id]);
     if (entered || delegateChanged) await startRunIfNeeded(context, tx, ticket.id, now);
-    if (delegateChanged) await passDelegationDown(context, tx, ticket, next, userId, now);
+    if (delegateChanged) await passDelegationDown(context, tx, ticket, next, actor, who, now);
     // Moving may finish what blocks other Tickets or the last Sub-Ticket of a parent; so may leaving a parent.
     const leftParent = next.parentId !== ticket.parentId && ticket.parentId !== null ? [ticket.parentId] : [];
     if (entered || leftParent.length > 0) await blockingChanged(context, tx, entered ? [ticket.id] : [], leftParent);
@@ -1098,11 +1108,11 @@ async function passAutonomousDelegationDown(
   tx: Tx,
   ticket: TicketRow,
   value: boolean,
-  userId: string,
+  actor: ChangeActor,
   now: Date,
 ): Promise<void> {
   for (const subTicket of await lockTickets(tx, await descendantsOf(tx, ticket.id))) {
-    await writeTicket(context, tx, subTicket, userId, { autonomousDelegation: value }, { at: now });
+    await writeTicket(context, tx, subTicket, actor, { autonomousDelegation: value }, { at: now });
   }
 }
 
@@ -1123,7 +1133,7 @@ async function descendantsOf(tx: Tx, ticketId: string): Promise<string[]> {
 /**
  * Gives the Ticket's Sub-Tickets, however deep, its new Delegation, as each Sub-Ticket inherits it. Delegated, they
  * take its Assignee and Delegate, even over a Delegation of their own; undelegated, those that held its Delegate
- * lose it and keep their Assignee, while any delegated to another Agent keep theirs. Each records the User's Changes,
+ * lose it and keep their Assignee, while any delegated to another Agent keep theirs. Each records the editor's Changes,
  * and a running Run on one whose Delegate changed stops, as on any re-delegation.
  */
 async function passDelegationDown(
@@ -1131,7 +1141,8 @@ async function passDelegationDown(
   tx: Tx,
   ticket: TicketRow,
   next: Row,
-  userId: string,
+  actor: ChangeActor,
+  who: string,
   now: Date,
 ): Promise<void> {
   const undelegated = next.delegateId === null;
@@ -1142,7 +1153,6 @@ async function passDelegationDown(
   );
   if (subTickets.length === 0) return;
   const delegate = await named(tx, "select id, name from agents where id = $1", next.delegateId);
-  const who = await nameOfUser(tx, userId);
   const keys = new Map(
     (
       await tx.query<{ id: string; key: string }>(
@@ -1158,7 +1168,7 @@ async function passDelegationDown(
       context,
       tx,
       subTicket,
-      userId,
+      actor,
       {
         assigneeId: undelegated ? subTicket.assigneeId : next.assigneeId,
         delegateId: next.delegateId,
@@ -1180,15 +1190,16 @@ async function passDelegationDown(
 }
 
 /**
- * A User dismisses a waiting Discovered Ticket: it leaves their Inbox and its Agent's hands, staying where it is.
- * Refused for any other Ticket.
+ * A User, or an Agent with a Full token as its Owner's act, dismisses a waiting Discovered Ticket: it leaves its
+ * Assignee's Inbox and its Agent's hands, staying where it is. Refused for any other Ticket.
  */
-export async function dismissTicket(context: Context, userId: string, ticketId: string): Promise<Ticket> {
+export async function dismissTicket(context: Context, caller: Caller, ticketId: string): Promise<Ticket> {
   const { db, clock } = context;
   return transaction(db, async (tx) => {
-    const ticket = await findTicketRow(tx, userViewer(userId), ticketId, { lock: true });
+    const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
     if (!ticket) throw ticketNotFound();
-    await requireWrite(tx, userViewer(userId), ticket);
+    await requireWrite(tx, caller, ticket);
+    const actor: ChangeActor = caller.kind === "user" ? caller.id : { kind: "agent", id: caller.id, runId: null };
     if (!ticket.discovered?.waiting) {
       throw new ApiError(
         409,
@@ -1197,12 +1208,12 @@ export async function dismissTicket(context: Context, userId: string, ticketId: 
       );
     }
     const now = clock.now();
-    await writeTicket(context, tx, ticket, userId, { discoveryWaits: false }, {
+    await writeTicket(context, tx, ticket, actor, { discoveryWaits: false }, {
       at: now,
       changes: [{ field: "dismissed", from: null, to: null }],
     });
-    await settleDiscoveredSubTickets(context, tx, ticket, userId, now);
-    return fullTicket(tx, userViewer(userId), { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
+    await settleDiscoveredSubTickets(context, tx, ticket, actor, now);
+    return fullTicket(tx, caller, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
   });
 }
 
@@ -1259,6 +1270,8 @@ export async function linkingActor(
 ): Promise<ChangeActor> {
   if (caller.kind === "user") return caller.id;
   const agent = caller;
+  // A Full token links to any Ticket it has Write on, as its Owner would, outside any Run.
+  if (actsAsOwner(agent)) return { kind: "agent", id: agent.id, runId: null };
   if (holdsDiscoveredTicket(agent, ticket)) return discoveringAgent(tx, agent, ticket);
   const runId = await findRunningRunOn(tx, agent, ticket);
   if (runId) return { kind: "agent", id: agent.id, runId };
@@ -1284,12 +1297,6 @@ export async function linkingActor(
   );
 }
 
-/** Whether the edit is an Agent with a Full token moving the Ticket, the Status alone in its edit. */
-function isFullMove(agent: AgentCaller, edit: TicketEdit): boolean {
-  if (!actsAsOwner(agent) || edit.statusId === undefined) return false;
-  return (Object.keys(edit) as (keyof TicketEdit)[]).every((field) => field === "statusId" || edit[field] === undefined);
-}
-
 /** Refuses an Agent's edit of a field only Users edit; the Agent that filed a waiting Discovered Ticket also edits its title. */
 function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean): void {
   const refused = (Object.keys(edit) as (keyof TicketEdit)[]).filter(
@@ -1307,7 +1314,7 @@ function checkAgentFields(agent: AgentCaller, edit: TicketEdit, filed: boolean):
         "any Ticket of a Project it has a running Run in; a Ticket's Assignee, Delegation and Status are for Users to change.",
       advice:
         `Edit only the fields you may, or leave a Comment asking ${ownerName(agent)}, ${agent.name}'s Owner, ` +
-        "to change the rest; a Run moves its Ticket with `finish`.",
+        "to change the rest, or to connect you with a Full token, which edits every field; a Run moves its Ticket with `finish`.",
     },
   );
 }
