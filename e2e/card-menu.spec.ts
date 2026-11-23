@@ -78,14 +78,21 @@ test("a focused card opens its menu with Shift+F10 or the ContextMenu key, and M
   await expect(statuses.getByRole("menuitemradio", { name: "Backlog" })).toBeFocused();
 
   // Triage has a Step: moving the delegated Ticket there starts a Run, as dropping the card there does.
+  // The move waits on its save, which starts the Run inside the request: on a busy CI runner that alone can take
+  // seconds, so the cards are given longer than the default to follow, and a save that fails says so here.
   await page.keyboard.press("ArrowDown");
+  await expect(statuses.getByRole("menuitemradio", { name: /^Triage/ })).toBeFocused();
+  const saved = page.waitForResponse(
+    (response) => response.request().method() === "PATCH" && response.url().endsWith(`/api/tickets/${shipIt.id}`),
+  );
   await page.keyboard.press("Enter");
+  expect((await saved).status()).toBe(200);
   await expect(menu).toBeHidden();
-  await expect(card("Triage", /CRONK-1 Ship it/)).toBeVisible();
-  await expect(card("Backlog", /CRONK-1 Ship it/)).toBeHidden();
   expect((await call("GET", `/api/tickets/${shipIt.id}`)).statusId).toBe(status("Triage"));
-  await expect.poll(() => cronk.runner.starts.length).toBe(1);
-  await expect(elsewhere.card("Triage", /CRONK-1 Ship it/)).toBeVisible();
+  await expect(card("Triage", /CRONK-1 Ship it/)).toBeVisible({ timeout: 15_000 });
+  await expect(card("Backlog", /CRONK-1 Ship it/)).toBeHidden({ timeout: 15_000 });
+  await expect.poll(() => cronk.runner.starts.length, { timeout: 15_000 }).toBe(1);
+  await expect(elsewhere.card("Triage", /CRONK-1 Ship it/)).toBeVisible({ timeout: 15_000 });
 
   // The ContextMenu key opens it too, the new Status now checked; Escape closes it and gives focus back to the card.
   await card("Triage", /CRONK-1 Ship it/).focus();
