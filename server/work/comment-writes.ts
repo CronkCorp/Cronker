@@ -109,5 +109,11 @@ export async function insertDocumentComment(
     documentId: document.id,
     commentId,
   });
+  // A Report's Comments show on its Ticket's timeline too, so its readers are told as well.
+  const { rows: report } = await tx.query<{ ticketId: string; projectId: string }>(
+    `select ticket_id as "ticketId", project_id as "projectId" from documents where id = $1 and ticket_id is not null`,
+    [document.id],
+  );
+  if (report[0]) context.live.publish(tx, document.workspaceId, { type: "comment.added", ...report[0], commentId });
   return commentId;
 }
