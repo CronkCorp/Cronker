@@ -143,7 +143,7 @@ describe("live updates", () => {
 });
 
 describe("the order of Tickets within a Status", () => {
-  test("running Tickets come first, then blocked ones, then the rest, each by number; running beats blocked", async () => {
+  test("running Tickets come first, then the rest, blocked or not, each by number", async () => {
     const { workspace, ada: as, project, status, ticket, blocks } = await ada();
     const runner = await ok("POST", "/api/runners", as, { name: "Fake", kind: "fake" });
     await ok("PATCH", `/api/runners/${runner.id}`, as, { limit: 3 });
@@ -176,8 +176,8 @@ describe("the order of Tickets within a Status", () => {
       ["CRONK-6", "running", 0],
       ["CRONK-7", "running", 1],
       ["CRONK-2", null, 1],
-      ["CRONK-5", null, 1],
       ["CRONK-3", null, 0],
+      ["CRONK-5", null, 1],
     ]);
     // The Statuses keep their order: Backlog's Ticket still comes before Triage's.
     expect(tickets[0].key).toBe("CRONK-1");
