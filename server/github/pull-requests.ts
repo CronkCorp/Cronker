@@ -4,6 +4,7 @@ import type { Db, Tx } from "../db.js";
 import type { Viewer } from "../identity/viewers.js";
 import { checkAfterMerge, checkAfterPush, markerChanged } from "../pipeline/conflicts.js";
 import { completeMergedTickets } from "../pipeline/merges.js";
+import { queueBackports, ticketsAwaitingBackport } from "../pipeline/backports.js";
 import { recordAskedMerge } from "../pipeline/pull-request-merging.js";
 import { dropFromQueue, queueDue } from "../pipeline/merge-queue.js";
 import { failingCheckOn, sendBackForFailure } from "../pipeline/sending-back.js";
@@ -390,8 +391,11 @@ export const onPullRequestEvent: EventHandler = async (context, tx, { payload })
       pullRequest: { id: pr.id, repository: repository.full_name, number: pr.number, title: pr.title, url: pr.html_url },
       mergedBy,
       autoMerged: pr.auto_merge !== null && pr.auto_merge !== undefined,
+      ...(pr.merged_at && !Number.isNaN(Date.parse(pr.merged_at)) ? { mergedAt: new Date(pr.merged_at) } : {}),
     });
   }
+  // A Backport opened, or one whose base branch Cronk now knows, joins its release branch's Merge Queue.
+  if (newest && state === "open") await queueBackports(context, tx, await ticketsAwaitingBackport(tx, pr.id));
   // A Pull Request merged or closed on GitHub leaves the Merge Queue; one whose merge completed its Ticket left already.
   if (newest && (state === "merged" || state === "closed")) await dropFromQueue(context, tx, pr.id);
   // GitHub sends nothing when the merge makes another Pull Request conflict, so Cronk asks, once it knows the merge's

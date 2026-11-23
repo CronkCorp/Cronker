@@ -211,6 +211,10 @@ export async function writeTicket(
   // Leaving the Merge Status its Pull Requests were queued in takes them out of the Merge Queue. Completing it for a
   // merge records the merge instead, so it shows no leaving.
   const left = statusChanged ? await leaveMergeQueue(tx, ticket.id, patch.statusId!) : [];
+  // Leaving the Merge Status it waits in for a Backport drops that wait too (`pipeline/backports.ts`).
+  if (statusChanged) {
+    await tx.query("delete from ticket_backports where ticket_id = $1 and status_id <> $2", [ticket.id, patch.statusId]);
+  }
 
   const changes = [...given, ...left];
   for (const key of unrecorded ? [] : differs) {

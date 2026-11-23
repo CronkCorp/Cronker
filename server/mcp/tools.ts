@@ -155,7 +155,7 @@ export function buildMcpServer(api: Api): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields, the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
+        "A Ticket of your Workspace with its fields (`backport` saying, while it waits in Merge for its change to reach its Release's release branch, whether a Run is backporting it or the backport was opened), the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
         "as `knowledge`, the Terms (with their definitions and words to avoid) and Decisions (key, title and status; " +
         "read one with `read_decision` for its reasoning) its description and Comments mention, each once; " +

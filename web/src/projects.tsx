@@ -910,6 +910,11 @@ function Card({
             <Chip key={label}>{label}</Chip>
           ))}
           {ticket.queue && <QueueChip queue={ticket.queue} />}
+          {ticket.backport && !ticket.queue && (
+            <Chip tone="info" title={`${ticket.key} waits in Merge for a backport onto ${ticket.backport.branch}`}>
+              Backporting
+            </Chip>
+          )}
           <ConflictChips ticket={ticket} />
           <TicketRunState ticket={ticket} />
           <People ticket={ticket} members={members} agents={agents} />

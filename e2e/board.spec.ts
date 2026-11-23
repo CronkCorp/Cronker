@@ -708,3 +708,68 @@ test("a queued head conflicting with its base branch shows Resolving conflict, t
   await cronk.request("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` }, body: { outcome: "resolved" } });
   await expect(cards).toHaveText([/CRONK-2.*Waiting for checks/]);
 });
+
+test("a Ticket of a cut Release merging after the Cut shows Backporting in Merge, live, until its backport joins the queue", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+  await createGitHubApp(cronk, cookie);
+  const app = cronk.github.apps[0]!;
+  const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
+  const cronker = installation.repositories[0]!;
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  await call("POST", `/api/projects/${project.id}/repositories`, { id: cronker.id });
+  const inReview = project.statuses.find((s: { name: string }) => s.name === "In Review").id;
+  const runner = await call("POST", "/api/runners", { name: "Fake", kind: "fake" });
+  const created = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "claude-max" });
+  const agent = await call("PATCH", `/api/agents/${created.id}`, { runnerId: runner.id });
+  const { secret } = await call("POST", `/api/agents/${agent.id}/tokens`, { name: "cloud", access: "full" });
+  const deliver = async (event: string, payload: Record<string, unknown>) => {
+    const delivered = await cronk.github.deliver(app, event, {
+      installation: { id: installation.id },
+      repository: { id: cronker.id, full_name: cronker.fullName },
+      ...payload,
+    });
+    expect(delivered.status).toBe(200);
+  };
+  const open = async (number: number, base: string) => {
+    await deliver("pull_request", {
+      action: "opened",
+      pull_request: {
+        id: 500 + number, number, title: `CRONK-1: change ${number}`, state: "open", draft: false, merged: false,
+        html_url: `https://github.com/cronkcorp/cronker/pull/${number}`, head: { ref: `cronk-${number}`, sha: `c${number}` },
+        base: { ref: base }, updated_at: "2026-01-01T09:00:00Z",
+      },
+    });
+    await deliver("check_run", {
+      action: "completed",
+      check_run: { id: number, name: "test", head_sha: `c${number}`, status: "completed", conclusion: "success", html_url: null },
+    });
+    cronk.github.pullRequest(cronker, number, { headSha: `c${number}`, mergeable: true, base });
+  };
+  // CRONK-1, tagged v0.3.0, in In Review with its Pull Request green; the Release is cut, then a User queues it.
+  const release = await call("POST", `/api/projects/${project.id}/releases`, { name: "v0.3.0" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Change 1", release: "v0.3.0" });
+  await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: inReview, delegateId: agent.id, autonomousDelegation: false });
+  await open(1, "main");
+  await call("POST", `/api/projects/${project.id}/releases/${release.id}/cut`);
+  cronk.clock.advance(60 * 60 * 1000);
+  await call("POST", `/api/tickets/${ticket.id}/merge`);
+
+  await signInInBrowser(page, cronk);
+  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  const cards = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "Merge", exact: true }).locator(".card-link");
+  await expect(cards).toHaveText([/CRONK-1.*#1 in queue/]);
+
+  // Merging into main after the Cut holds it in Merge while a Merge Run backports it.
+  await cronk.checkQueue();
+  await expect(cards).toHaveText([/CRONK-1.*Backporting/]);
+
+  // The Run opens the backport and finishes backported: it joins the release branch's queue as the User's.
+  await open(2, "release/v0.3.0");
+  const runs = await call("GET", `/api/tickets/${ticket.id}/runs`);
+  const run = runs.find((r: { state: string }) => r.state === "running");
+  await cronk.request("POST", `/api/runs/${run.id}/finish`, { headers: { authorization: `Bearer ${secret}` }, body: { outcome: "backported" } });
+  await expect(cards).toHaveText([/CRONK-1.*#1 in queue/]);
+  await expect(cards.first()).not.toContainText("Backporting");
+});
