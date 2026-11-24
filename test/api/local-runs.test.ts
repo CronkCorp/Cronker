@@ -383,3 +383,123 @@ describe("a local Run whose Machine slept", () => {
     await stream.expectQuiet();
   });
 });
+
+/** A Claude Code transcript of `count` user messages, its JSONL file as it is. */
+const jsonl = (count: number) =>
+  Array.from({ length: count }, (_, i) =>
+    JSON.stringify({ type: "user", uuid: `u-${i}`, timestamp: "2026-01-01T09:00:00.000Z", message: { role: "user", content: `Message ${i}.` } }),
+  ).join("\n") + "\n";
+
+/** Uploads a claimed Run's transcript with the Machine token, as the daemon does. */
+async function uploadTranscript(token: string, runId: string, body: string) {
+  const response = await fetch(`${cronk.url}/api/machine/runs/${runId}/transcript`, {
+    method: "PUT",
+    headers: { "content-type": "application/x-ndjson", authorization: `Bearer ${token}` },
+    body,
+  });
+  return { status: response.status, json: await response.json() };
+}
+
+describe("a local Run's transcript", () => {
+  test("uploaded by its Machine becomes the Run's Transcript, replaced by each later upload, even after the Run ended", async () => {
+    const { ada, agent, machineToken, delegate } = await localSetUp();
+    const { run } = await delegate("Transcribe me");
+    const { token } = (await claim(machineToken, run.id)).json;
+    await ok("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
+
+    const first = await uploadTranscript(machineToken, run.id, jsonl(1));
+    expect(first.status).toBe(201);
+    expect(first.json).toEqual(expect.objectContaining({ runId: run.id, entryCount: 1, agent: { id: agent.id, name: "laptop" } }));
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).transcriptId).toBe(first.json.id);
+
+    // The agent finishes: the Run's own token is revoked, but the Machine's last upload still lands.
+    await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+    await cronk.jobsSettled();
+    const last = await uploadTranscript(machineToken, run.id, jsonl(3));
+
+    expect(last.status).toBe(200);
+    expect(last.json).toEqual(expect.objectContaining({ id: first.json.id, runId: run.id, entryCount: 3 }));
+  });
+
+  test("is refused before the Run's session is reported, and for a Run the Machine doesn't hold", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp();
+    const other = await pair(ada, [runner.id]);
+    const { run } = await delegate("Too soon");
+    await claim(machineToken, run.id);
+
+    const early = await uploadTranscript(machineToken, run.id, jsonl(1));
+    expect(early.status).toBe(409);
+    expect(early.json.error.code).toBe("no_session");
+
+    await ok("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
+    expect((await uploadTranscript(other, run.id, jsonl(1))).status).toBe(404);
+  });
+
+  test("stops being kept once a User deleted it", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { run } = await delegate("Secret");
+    await claim(machineToken, run.id);
+    await ok("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
+    const { json: transcript } = await uploadTranscript(machineToken, run.id, jsonl(1));
+
+    await ok("DELETE", `/api/transcripts/${transcript.id}`, { cookie: ada });
+    const refused = await uploadTranscript(machineToken, run.id, jsonl(2));
+
+    expect(refused.status).toBe(410);
+    expect(refused.json.error.code).toBe("transcript_deleted");
+  });
+});
+
+describe("a local Run's cost", () => {
+  test("reported with its end is recorded as an estimate, on the Run, its Ticket's total and its Runner's month", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp();
+    const { ticket, run } = await delegate("Costly");
+    const { token } = (await claim(machineToken, run.id)).json;
+    await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0", costUsd: 1.234 },
+    });
+
+    const estimate = { amount: 123, currency: "USD", estimate: true };
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).cost).toEqual(estimate);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).cost).toEqual([estimate]);
+    const runners = await ok("GET", "/api/runners", { cookie: ada });
+    expect(runners.find((r: { id: string }) => r.id === runner.id).costThisMonth).toEqual([estimate]);
+  });
+
+  test("of a Run that failed is recorded too, and an end without one records none", async () => {
+    const { ada, machineToken, delegate } = await localSetUp({ runLimit: 2 });
+    const { run: failed } = await delegate("Failed");
+    const { run: silent } = await delegate("Silent");
+    await claim(machineToken, failed.id);
+    await claim(machineToken, silent.id);
+
+    await ok("POST", `/api/machine/runs/${failed.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1", costUsd: 0.5 } });
+    await ok("POST", `/api/machine/runs/${silent.id}/end`, { token: machineToken, body: { reason: "claude was killed by SIGKILL" } });
+
+    const failedRun = await ok("GET", `/api/runs/${failed.id}`, { cookie: ada });
+    expect(failedRun).toEqual(expect.objectContaining({ state: "failed", cost: { amount: 50, currency: "USD", estimate: true } }));
+    expect((await ok("GET", `/api/runs/${silent.id}`, { cookie: ada })).cost).toBeNull();
+  });
+
+  test("estimates stay apart from real costs in a Ticket's total", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { ticket, run } = await delegate("Mixed");
+    await claim(machineToken, run.id);
+    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1", costUsd: 0.25 } });
+    // A real cost on the same Ticket, as a Managed Agents session reports one.
+    await cronk.stage(
+      `insert into runs (id, workspace_id, ticket_id, agent_id, status_id, status_name, model, brief, state, started_at, ended_at, cost_amount, cost_currency)
+       select gen_random_uuid(), workspace_id, ticket_id, agent_id, status_id, status_name, model, brief, 'failed', started_at, ended_at, 300, 'USD'
+       from runs where id = $1`,
+      [run.id],
+    );
+
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).cost).toEqual([
+      { amount: 300, currency: "USD", estimate: false },
+      { amount: 25, currency: "USD", estimate: true },
+    ]);
+  });
+});

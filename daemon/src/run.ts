@@ -1,17 +1,18 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { call, CronkError, type ClaimedRun } from "./api.js";
+import { call, CronkError, upload, type ClaimedRun } from "./api.js";
 import { readConfig, type PairedCronk } from "./config.js";
 
 /**
  * `cronk-runner run`: the daemon's foreground service. For each paired Cronk it keeps the Machine's event stream open,
  * claims the Runs it announces while the Machine's limit has room, and runs each with `claude -p` in a fresh scratch
- * directory: reporting its session id, heartbeating it while it runs, and reporting how the process ended. A Run
- * stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory, so a
- * daemon starting again kills those it left behind and reports their Runs ended.
+ * directory: reporting its session id, heartbeating it while it runs, uploading its transcript as it goes, and
+ * reporting how the process ended, with the cost Claude Code estimated. A Run stopped in Cronk is killed and its stop
+ * confirmed. Each running process is recorded in the state directory, so a daemon starting again kills those it left
+ * behind and reports their Runs ended.
  */
 
 export interface RunOptions {
@@ -31,6 +32,8 @@ export interface RunOptions {
   stateDir?: string;
   /** How long a killed `claude` has to exit after SIGTERM before it gets SIGKILL: ten seconds when left out. */
   killGraceMs?: number;
+  /** How often a running Run's transcript is uploaded, when it changed: every 10 seconds when left out. */
+  transcriptMs?: number;
 }
 
 export interface RunningDaemon {
@@ -62,6 +65,21 @@ export function claudeArguments(claimed: ClaimedRun, mcpConfigPath: string): str
   ];
 }
 
+/**
+ * Where Claude Code writes a session's transcript: `<config dir>/projects/<encoded cwd>/<session id>.jsonl`, the config
+ * directory being `$CLAUDE_CONFIG_DIR` or `~/.claude`. The encoded cwd is looked up rather than computed, as a
+ * symlinked temporary directory (macOS's `/var`) makes it differ from the path the daemon knows.
+ */
+export async function findTranscript(env: NodeJS.ProcessEnv, sessionId: string): Promise<string | null> {
+  const projects = join(env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude"), "projects");
+  const directories = await readdir(projects).catch(() => [] as string[]);
+  for (const directory of directories) {
+    const path = join(projects, directory, `${sessionId}.jsonl`);
+    if (await stat(path).then((s) => s.isFile(), () => false)) return path;
+  }
+  return null;
+}
+
 /** One Run the daemon holds: its process, and how to stop it. */
 interface HeldRun {
   cronkUrl: string;
@@ -84,7 +102,7 @@ interface ProcessRecord {
 export const stateDirOf = (configPath: string): string => join(dirname(configPath), "runs");
 
 export function runDaemon(options: RunOptions): RunningDaemon {
-  const { print, heartbeatMs = 60_000, reconnectMs = 1_000 } = options;
+  const { print, heartbeatMs = 60_000, reconnectMs = 1_000, transcriptMs = 10_000 } = options;
   const env = options.env ?? process.env;
   const claude = options.claude ?? "claude";
   const scratchRoot = options.scratchRoot ?? tmpdir();
@@ -259,19 +277,58 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       const lines = chunk.trim().split("\n");
       lastError = lines.at(-1) ?? lastError;
     });
-    let sessionReported = false;
+    let sessionId: string | null = null;
+    let sessionReported: Promise<unknown> = Promise.resolve();
+    /** What Claude Code's `result` message said the session cost, in US dollars; none if it ended without one. */
+    let costUsd: number | undefined;
     createInterface({ input: child.stdout }).on("line", (line) => {
-      let message: { type?: unknown; subtype?: unknown; session_id?: unknown };
+      let message: { type?: unknown; subtype?: unknown; session_id?: unknown; total_cost_usd?: unknown };
       try {
         message = JSON.parse(line) as typeof message;
       } catch {
         return;
       }
-      if (!sessionReported && message.type === "system" && message.subtype === "init" && typeof message.session_id === "string") {
-        sessionReported = true;
-        report("session", { sessionId: message.session_id }).catch(() => {});
+      if (!sessionId && message.type === "system" && message.subtype === "init" && typeof message.session_id === "string") {
+        sessionId = message.session_id;
+        sessionReported = report("session", { sessionId }).catch(() => {});
+      }
+      if (message.type === "result" && typeof message.total_cost_usd === "number" && Number.isFinite(message.total_cost_usd)) {
+        costUsd = Math.max(0, message.total_cost_usd);
       }
     });
+
+    // The transcript follows the session: uploaded whole whenever its file changed, one upload at a time.
+    let transcriptPath: string | null = null;
+    let uploaded = "";
+    let uploads = true;
+    let uploading: Promise<void> = Promise.resolve();
+    const uploadTranscript = () =>
+      (uploading = uploading.then(async () => {
+        if (!uploads || !sessionId) return;
+        transcriptPath ??= await findTranscript(env, sessionId);
+        if (!transcriptPath) return;
+        const file = await stat(transcriptPath).catch(() => null);
+        const version = file ? `${file.size} ${file.mtimeMs}` : "";
+        if (!file || version === uploaded) return;
+        const body = await readFile(transcriptPath, "utf8");
+        await sessionReported;
+        try {
+          await upload(cronk.url, "PUT", `/api/machine/runs/${runId}/transcript`, {
+            body,
+            contentType: "application/x-ndjson",
+            token: cronk.token,
+          });
+          uploaded = version;
+        } catch (error) {
+          // A User deleted its Transcript, or the Machine no longer holds the Run: later uploads would be refused too.
+          if (error instanceof CronkError && (error.code === "transcript_deleted" || error.status === 404 || error.status === 401)) {
+            uploads = false;
+          } else {
+            print(`${claimed.ticketKey}: couldn't upload its transcript: ${(error as Error).message}`);
+          }
+        }
+      }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't read its transcript: ${(error as Error).message}`)));
+    const transcriptTimer = setInterval(() => void uploadTranscript(), transcriptMs);
 
     const heartbeat = setInterval(() => {
       report("heartbeat").catch((error: unknown) => {
@@ -298,8 +355,11 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       if (done) return;
       done = true;
       clearInterval(heartbeat);
-      // A Run its agent finished ended already in Cronk, which then leaves it as it is.
-      await report("end", { reason }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`));
+      clearInterval(transcriptTimer);
+      // Once more after the process ended, so the Transcript in Cronk is complete.
+      await uploadTranscript();
+      // A Run its agent finished ended already in Cronk, which then leaves it as it is; the cost is recorded either way.
+      await report("end", { reason, ...(costUsd === undefined ? {} : { costUsd }) }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`));
       await rm(directory, { recursive: true, force: true });
       await recorded;
       await rm(recordPath, { force: true });

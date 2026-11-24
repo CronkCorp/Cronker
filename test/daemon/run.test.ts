@@ -77,9 +77,16 @@ async function localSetUp() {
   const log = join(home, "claude.jsonl");
   await writeFile(log, "");
 
-  const claudeEnv = (mode: string) => ({ ...process.env, PATH: `${bin}:${process.env.PATH}`, STAND_IN_CLAUDE_LOG: log, STAND_IN_CLAUDE_MODE: mode });
+  const claudeConfig = join(home, "claude-config");
+  const claudeEnv = (mode: string) => ({
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    STAND_IN_CLAUDE_LOG: log,
+    STAND_IN_CLAUDE_MODE: mode,
+    CLAUDE_CONFIG_DIR: claudeConfig,
+  });
   const start = (mode: string, heartbeatMs?: number, killGraceMs?: number) => {
-    daemon = runDaemon({ configPath, print: () => {}, env: claudeEnv(mode), scratchRoot: scratch, heartbeatMs, killGraceMs });
+    daemon = runDaemon({ configPath, print: () => {}, env: claudeEnv(mode), scratchRoot: scratch, heartbeatMs, killGraceMs, transcriptMs: 50 });
     return daemon;
   };
   const delegate = async (title: string) => {
@@ -95,7 +102,9 @@ async function localSetUp() {
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   const runState = (runId: string) => ok("GET", `/api/runs/${runId}`, ada);
-  return { ada, machine, machineToken: paired.machineToken as string, configPath, claudeEnv, start, delegate, runs, runState, scratch };
+  /** Lets a `wait-finish` stand-in go on to finish. */
+  const go = () => writeFile(`${log}.go`, "");
+  return { ada, machine, machineToken: paired.machineToken as string, configPath, claudeEnv, start, delegate, runs, runState, scratch, go };
 }
 
 describe("cronk-runner run", () => {
@@ -237,6 +246,28 @@ describe("cronk-runner run", () => {
       last.kill("SIGKILL");
     }
   }, 30_000);
+
+  test("uploads the session's transcript as it goes and once more at the end, and reports Claude Code's cost as an estimate", async () => {
+    const { ada, start, delegate, runState, go } = await localSetUp();
+    start("wait-finish");
+    const { ticket, run } = await delegate("Show your work");
+
+    // While the stand-in still runs, its transcript so far is the Run's Transcript in Cronk.
+    const live = await eventually(async () => (await runState(run.id)).transcriptId as string | null);
+    expect(daemon!.held()).toEqual([run.id]);
+    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(1);
+
+    await go();
+    await eventually(async () => daemon!.held().length === 0);
+
+    const ended = await runState(run.id);
+    expect(ended).toEqual(
+      expect.objectContaining({ state: "finished", transcriptId: live, cost: { amount: 137, currency: "USD", estimate: true } }),
+    );
+    const transcript = await ok("GET", `/api/transcripts/${live}`, ada);
+    expect(transcript).toEqual(expect.objectContaining({ runId: run.id, entryCount: 2 }));
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([{ amount: 137, currency: "USD", estimate: true }]);
+  });
 });
 
 /** Whether a process with the pid still runs (a zombie, killed but not yet reaped, counts as gone). */

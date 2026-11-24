@@ -210,17 +210,17 @@ async function transcriptRow(db: Context["db"] | Tx, where: string, params: unkn
   return rows[0];
 }
 
-/**
- * Stores the Agent's upload of a session's transcript, converted into entries, in place of what Cronk held for
- * that session. Says whether the session's Transcript is new.
- */
 /** The upload route's body: a Claude Code transcript, its JSONL file as it is. */
 export const TranscriptUpload = Type.String();
 export type TranscriptUpload = Static<typeof TranscriptUpload>;
 
+/**
+ * Stores the Agent's upload of a session's transcript, converted into entries, in place of what Cronk held for
+ * that session. Says whether the session's Transcript is new.
+ */
 export async function uploadTranscript(
   context: Context,
-  agent: AgentCaller,
+  agent: Pick<AgentCaller, "id"> & { workspace: Pick<AgentCaller["workspace"], "id"> },
   named: string,
   converted: ConvertedEntry[],
 ): Promise<{ transcript: Transcript; created: boolean }> {

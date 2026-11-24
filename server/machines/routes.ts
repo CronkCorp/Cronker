@@ -29,7 +29,10 @@ import {
   reportEnd,
   reportSession,
   stopsToReplay,
+  uploadRunTranscript,
 } from "./local-runs.js";
+import { Transcript, TranscriptUpload } from "../transcripts/transcripts.js";
+import { uploadLimitBytes } from "../transcripts/routes.js";
 import { machineEventTypes, type MachineEvent } from "../live/live.js";
 
 /** Comments keep an idle stream open through proxies that close quiet connections. */
@@ -41,6 +44,11 @@ const machineEventList = Object.entries(machineEventTypes)
 
 export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
   return async (app) => {
+    // A Run's transcript arrives as the file it is: JSON Lines, read as text.
+    app.addContentTypeParser("application/x-ndjson", { parseAs: "string", bodyLimit: uploadLimitBytes }, (_request, body, done) =>
+      done(null, body),
+    );
+
     app.post(
       "/api/machines/pairings",
       {
@@ -291,7 +299,8 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Report that a claimed Run's process ended, as a Machine's daemon",
           description:
             "A Run whose agent didn't call `finish` fails with the reason given. A Run that ended already, as `finish` " +
-            "ends it, is left as it is. Also confirms any stop of the Run.",
+            "ends it, is left as it is. A `costUsd` given is recorded as the Run's cost, marked as an estimate. Also " +
+            "confirms any stop of the Run.",
           security: [{ machineToken: [] }],
           params: runParams,
           body: LocalRunEnd,
@@ -299,8 +308,36 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request, reply) => {
-        await reportEnd(context, await requireMachine(context, request), request.params.runId, request.body.reason);
+        await reportEnd(context, await requireMachine(context, request), request.params.runId, request.body);
         return reply.code(204).send(null);
+      },
+    );
+
+    app.put(
+      "/api/machine/runs/:runId/transcript",
+      {
+        bodyLimit: uploadLimitBytes,
+        schema: {
+          tags: ["Machines"],
+          summary: "Upload a claimed Run's transcript, as a Machine's daemon",
+          description:
+            "The daemon uploads the Run's whole Claude Code transcript, the JSONL file as it is " +
+            "(`content-type: application/x-ndjson`, up to 256 MB), as the Run goes and once more after its process " +
+            "ends. Like the Transcript hook's upload (`PUT /api/transcripts/sessions/{sessionId}`), it replaces what " +
+            "Cronk held for the Run's session, by the Run's Agent, but takes the Machine token, so it works after the " +
+            "Run ended and its own token was revoked. Answers 201 for a new Transcript and 200 for a replaced one; " +
+            "refused with `no_session` before the Run's session was reported and with 410 `transcript_deleted` once a " +
+            "User deleted its Transcript.",
+          security: [{ machineToken: [] }],
+          params: runParams,
+          body: TranscriptUpload,
+          response: { 200: Transcript, 201: Transcript, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody, 410: ErrorBody, 413: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        const machine = await requireMachine(context, request);
+        const { transcript, created } = await uploadRunTranscript(context, machine, request.params.runId, request.body);
+        return reply.code(created ? 201 : 200).send(transcript);
       },
     );
   };
