@@ -1,5 +1,5 @@
-import { useAddresses, useCanonicalAddress } from "./addresses.js";
-import { useCallback, useEffect, useState } from "react";
+import { useActiveProject, useAddresses, useCanonicalAddress } from "./addresses.js";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, ApiError, type Mention, type Place, type ProjectSummary, type Term, type TermComparison, type TermDetail, type TermVersion, type Workspace } from "./api.js";
 import { DocumentBody, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
@@ -7,7 +7,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { Markdown } from "./markdown.js";
 import { MentionedIn } from "./mentioned-in.js";
-import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
+import { knowledgeCrumbs } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead } from "./ui/controls.js";
@@ -17,7 +17,6 @@ import { ProjectNote } from "./write-access.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { RichEditor } from "./ui/lazy-rich-editor.js";
 
-/** Where a glossary is shown: a Project's Terms page, or the Workspace's. */
 
 /** Words to avoid as typed: separated by commas, each trimmed, blanks dropped. */
 const wordsToAvoid = (text: string) =>
@@ -44,56 +43,41 @@ function Avoid({ words }: { words: string[] }) {
 
 const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
+/** Whether a Term's name or one of its words to avoid holds the typed filter, already trimmed and lower-cased. */
+const matches = (term: Term, typed: string) =>
+  !typed || term.name.toLowerCase().includes(typed) || term.avoid.some((word) => word.toLowerCase().includes(typed));
+
 /**
- * Terms as a glossary: each with its scope and Version, its definition and the words to avoid. A Project's Term that
- * replaces a Workspace Term of the same name says so, and on the Workspace's page a Term says where it is replaced.
+ * Terms as a glossary, in stacked sections: on a Project's page its own Terms, then the Workspace's; on the
+ * Workspace's page only the Workspace's. A Project Term replacing a Workspace Term of the same name says so, and that
+ * Workspace Term stays listed, muted, saying where it is replaced. One filter box filters both sections.
  */
 function Glossary({
   workspace,
   project,
-  terms,
+  projectTerms,
   workspaceTerms,
-  replacedIn,
 }: {
   workspace: Workspace;
   project: ProjectSummary | null;
-  terms: Term[];
-  /** The Workspace's own Terms, which a Project's override. */
+  /** The Project's own Terms; empty on the Workspace's page. */
+  projectTerms: Term[];
+  /** The Workspace's own Terms. */
   workspaceTerms: Term[];
-  /** For the Workspace's page: each Project's own Terms, by Project. */
-  replacedIn: { project: ProjectSummary; terms: Term[] }[];
 }) {
-  const to = useAddresses();
   const [filter, setFilter] = useState("");
-  const [creating, setCreating] = useState(false);
-  const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
+  const [creating, setCreating] = useState<Place | null>(null);
+  const workspacePlace: Place = { kind: "workspace", id: workspace.id };
   const typed = filter.trim().toLowerCase();
-  const shown = typed
-    ? terms.filter((t) => t.name.toLowerCase().includes(typed) || t.avoid.some((word) => word.toLowerCase().includes(typed)))
-    : terms;
-  const own = terms.filter((t) => (project ? t.projectId === project.id : true)).length;
-  const arrived = useArrivals(terms.map((t) => t.id));
+  const arrived = useArrivals([...projectTerms, ...workspaceTerms].map((t) => t.id));
+  const section = { filter: filter.trim(), typed, arrived };
   return (
     <div className="page">
       <PageHead
         crumbs={knowledgeCrumbs(workspace, project, "Terms")}
         title="Terms"
-        switcher={
-          <>
-            <LiveIndicator workspaceId={workspace.id} />
-            <ScopeSwitch workspace={workspace} project={project} kind="glossary" />
-          </>
-        }
-        actions={
-          <>
-            <ExportLink place={place} />
-            {(!project || project.access === "write") && (
-              <Button variant="primary" onClick={() => setCreating(true)}>
-                New Term
-              </Button>
-            )}
-          </>
-        }
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
+        actions={<ExportLink place={project ? { kind: "project", id: project.id } : workspacePlace} />}
       />
       {project && <ProjectNote project={project} />}
       <div className="filter-bar">
@@ -104,32 +88,95 @@ function Glossary({
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <span className="muted small">
-          {terms.length} Term{terms.length === 1 ? "" : "s"}
-          {project && ` · ${own} from this Project, ${terms.length - own} from the Workspace`}
-        </span>
       </div>
+      {project && (
+        <TermSection
+          {...section}
+          id="project"
+          heading={
+            <>
+              <span className="mono">{project.key}</span> {project.name}
+            </>
+          }
+          terms={projectTerms}
+          overrides={(term) => workspaceTerms.some((w) => sameName(w.name, term.name))}
+          onNew={project.access === "write" ? () => setCreating({ kind: "project", id: project.id }) : null}
+          empty="No Project Terms yet."
+        />
+      )}
+      <TermSection
+        {...section}
+        id="workspace"
+        heading="Workspace"
+        terms={workspaceTerms}
+        replacedIn={project && ((term) => (projectTerms.some((p) => sameName(p.name, term.name)) ? project.key : null))}
+        onNew={() => setCreating(workspacePlace)}
+        empty="No Workspace Terms yet."
+      />
+      {creating && <NewTerm place={creating} open onOpenChange={(open) => !open && setCreating(null)} />}
+    </div>
+  );
+}
+
+/** One glossary's Terms under its heading, with its count, its New Term and its own empty state. */
+function TermSection({
+  id,
+  heading,
+  terms,
+  filter,
+  typed,
+  arrived,
+  overrides,
+  replacedIn,
+  onNew,
+  empty,
+}: {
+  id: string;
+  heading: ReactNode;
+  terms: Term[];
+  filter: string;
+  typed: string;
+  arrived: Set<string>;
+  /** Whether a Term replaces a Workspace Term of the same name. */
+  overrides?: (term: Term) => boolean;
+  /** The key of the Project replacing a Workspace Term, if it is replaced. */
+  replacedIn?: ((term: Term) => string | null) | null;
+  /** Opens New Term for this section; null where it is only read. */
+  onNew: (() => void) | null;
+  empty: string;
+}) {
+  const to = useAddresses();
+  const shown = terms.filter((t) => matches(t, typed));
+  const headingId = `glossary-${id}`;
+  return (
+    <section className="knowledge-section" aria-labelledby={headingId}>
+      <header className="knowledge-section-head">
+        <h2 id={headingId}>{heading}</h2>
+        <span className="muted small">
+          {typed ? `${shown.length} of ${terms.length}` : terms.length} Term{terms.length === 1 ? "" : "s"}
+        </span>
+        {onNew && (
+          <Button size="small" onClick={onNew}>
+            New Term
+          </Button>
+        )}
+      </header>
       {terms.length === 0 ? (
-        <EmptyState title="No Terms yet.">New Term names a concept, defines it and lists the words to avoid for it.</EmptyState>
+        <EmptyState title={empty}>New Term names a concept, defines it and lists the words to avoid for it.</EmptyState>
       ) : (
-        <section aria-label="Glossary" className="panel panel-flush glossary">
-          {shown.length === 0 && <p className="glossary-none muted">No Term matches “{filter.trim()}”.</p>}
+        <div className="panel panel-flush glossary">
+          {shown.length === 0 && <p className="glossary-none muted">No Term matches “{filter}”.</p>}
           {shown.map((term) => {
-            const overrides = project && term.projectId === project.id && workspaceTerms.some((w) => sameName(w.name, term.name));
-            const replaced = replacedIn.filter((p) => p.terms.some((t) => sameName(t.name, term.name)));
+            const replacing = replacedIn?.(term) ?? null;
+            const classes = ["term", arrived.has(term.id) && "arrived", replacing && "replaced"].filter(Boolean).join(" ");
             return (
-              <article key={term.id} className={`term${arrived.has(term.id) ? " arrived" : ""}`} aria-labelledby={`term-${term.id}`}>
+              <article key={term.id} className={classes} aria-labelledby={`term-${term.id}`}>
                 <header className="term-head">
-                  <h2 id={`term-${term.id}`}>
+                  <h3 id={`term-${term.id}`}>
                     <Link to={to.term(term)}>{term.name}</Link>
-                  </h2>
-                  {overrides && <Chip tone="info">Overrides the Workspace Term</Chip>}
-                  {replaced.map((p) => (
-                    <Chip key={p.project.id} tone="info">
-                      Replaced in {p.project.key}
-                    </Chip>
-                  ))}
-                  <span className="term-scope">{term.projectId === null ? "Workspace" : (project?.key ?? "Project")}</span>
+                  </h3>
+                  {overrides?.(term) && <Chip tone="info">Overrides the Workspace Term</Chip>}
+                  {replacing && <Chip tone="info">Replaced in {replacing}</Chip>}
                   <span className="term-version">Version {term.version.number}</span>
                 </header>
                 {term.definition.trim() && <Markdown text={term.definition} mentions={term.mentions} />}
@@ -137,10 +184,9 @@ function Glossary({
               </article>
             );
           })}
-        </section>
+        </div>
       )}
-      <NewTerm place={place} open={creating} onOpenChange={setCreating} />
-    </div>
+    </section>
   );
 }
 
@@ -183,14 +229,14 @@ function NewTerm({ place, open, onOpenChange }: { place: Place; open: boolean; o
 /** A Project's glossary: its Terms over the Workspace's, same-named ones replaced. */
 export function ProjectGlossary({ workspace, project }: { workspace: Workspace; project: ProjectSummary }) {
   usePlace("terms", project.id);
-  const [data, setData] = useState<{ terms: Term[]; workspaceTerms: Term[] } | null>(null);
+  const [data, setData] = useState<{ projectTerms: Term[]; workspaceTerms: Term[] } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const latest = useLatest();
   const load = useCallback(
     () =>
       latest(
-        Promise.all([api.glossary(project.id), api.terms({ kind: "workspace", id: workspace.id })]),
-        ([terms, workspaceTerms]) => setData({ terms, workspaceTerms }),
+        Promise.all([api.terms({ kind: "project", id: project.id }), api.terms({ kind: "workspace", id: workspace.id })]),
+        ([projectTerms, workspaceTerms]) => setData({ projectTerms, workspaceTerms }),
         (e) => setFailure(e.message),
       ),
     [project.id, workspace.id, latest],
@@ -202,36 +248,26 @@ export function ProjectGlossary({ workspace, project }: { workspace: Workspace; 
   });
   if (failure) return <FormError error={failure} />;
   if (!data) return <p className="muted">Loading…</p>;
-  return <Glossary workspace={workspace} project={project} terms={data.terms} workspaceTerms={data.workspaceTerms} replacedIn={[]} />;
+  return <Glossary workspace={workspace} project={project} projectTerms={data.projectTerms} workspaceTerms={data.workspaceTerms} />;
 }
 
-/** The Workspace's own Terms, under every Project's, each saying which Projects replace it. */
+/** The Workspace's own Terms, alone: a Project's page shows them under its own. */
 export function WorkspaceGlossary({ workspace }: { workspace: Workspace }) {
   usePlace("terms");
-  const [data, setData] = useState<{ terms: Term[]; replacedIn: { project: ProjectSummary; terms: Term[] }[] } | null>(null);
+  const [terms, setTerms] = useState<Term[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const latest = useLatest();
   const load = useCallback(
-    () =>
-      latest(
-        (async () => {
-          const [terms, projects] = await Promise.all([api.terms({ kind: "workspace", id: workspace.id }), api.projects(workspace.id)]);
-          const replacedIn = await Promise.all(projects.map(async (project) => ({ project, terms: await api.terms({ kind: "project", id: project.id }) })));
-          return { terms, replacedIn };
-        })(),
-        setData,
-        (e) => setFailure(e.message),
-      ),
+    () => latest(api.terms({ kind: "workspace", id: workspace.id }), setTerms, (e) => setFailure(e.message)),
     [workspace.id, latest],
   );
   useEffect(load, [load]);
-  // A Project's Term can replace one of the Workspace's, so every Term change is shown here, and each Project's key.
   useLiveEvents(workspace.id, (event) => {
-    if (event.type === "reconnected" || event.type === "term.changed" || event.type === "project.created" || event.type === "project.changed") load();
+    if (event.type === "reconnected" || (event.type === "term.changed" && event.projectId === null)) load();
   });
   if (failure) return <FormError error={failure} />;
-  if (!data) return <p className="muted">Loading…</p>;
-  return <Glossary workspace={workspace} project={null} terms={data.terms} workspaceTerms={data.terms} replacedIn={data.replacedIn} />;
+  if (!terms) return <p className="muted">Loading…</p>;
+  return <Glossary workspace={workspace} project={null} projectTerms={[]} workspaceTerms={terms} />;
 }
 
 /** A Term: read it, edit it, browse its Versions, and delete it. */
@@ -243,6 +279,7 @@ export function TermScreen({
   termId: string;
 }) {
   const to = useAddresses();
+  const activeProject = useActiveProject();
   const [term, setTerm] = useState<TermDetail | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -274,8 +311,9 @@ export function TermScreen({
 
   if (failure) return <FormError error={failure} />;
   if (!term) return <p className="muted">Loading…</p>;
-  const place: Place = term.projectId ? { kind: "project", id: term.projectId } : { kind: "workspace", id: term.workspaceId };
-  const crumbs = knowledgeCrumbs(workspace, project, <Link to={to.place(place, "glossary")}>Terms</Link>);
+  // A Workspace Term's list is the active Project's Terms page, which shows the Workspace's under the Project's.
+  const list = term.projectId ? to.place({ kind: "project", id: term.projectId }, "glossary") : to.knowledge(activeProject, "glossary");
+  const crumbs = knowledgeCrumbs(workspace, project, <Link to={list}>Terms</Link>);
   // With Read in its Project, the Term is only read: no Edit or Delete.
   const canWrite = !project || project.access === "write";
   return (
@@ -311,7 +349,7 @@ export function TermScreen({
       />
       {project && <ProjectNote project={project} />}
       {gone && (
-        <DeletedElsewhere back={{ to: to.place(place, "glossary"), label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
+        <DeletedElsewhere back={{ to: list, label: "Back to Terms" }}>this Term is no longer in its glossary.</DeletedElsewhere>
       )}
       {editing && canWrite ? (
         <Editor
@@ -339,7 +377,7 @@ export function TermScreen({
         confirm="Delete"
         onConfirm={async () => {
           await deleteHere(() => api.deleteTerm(term.id));
-          navigate(to.place(place, "glossary"));
+          navigate(list);
         }}
       >
         It goes with all its Versions{term.projectId ? ", and the Workspace's Term of the same name, if any, applies again" : ""}.
