@@ -82,3 +82,15 @@ export function storedEditorMode(): EditorMode {
 export function chooseEditorMode(mode: EditorMode): void {
   safely(() => (mode === "source" ? localStorage.setItem(editorModeKey, "source") : localStorage.removeItem(editorModeKey)));
 }
+
+const activeProjectKey = (workspaceId: string) => `cronk_active_project:${workspaceId}`;
+
+/** The id of the Project last active in a Workspace on this browser, if one was kept and storage can be read. */
+export function storedActiveProject(workspaceId: string): string | null {
+  return safely(() => localStorage.getItem(activeProjectKey(workspaceId))) ?? null;
+}
+
+/** Keeps the Project last active in a Workspace on this browser, so the sidebar leads back to it from a Workspace page. */
+export function keepActiveProject(workspaceId: string, projectId: string): void {
+  safely(() => localStorage.setItem(activeProjectKey(workspaceId), projectId));
+}

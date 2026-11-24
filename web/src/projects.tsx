@@ -28,7 +28,7 @@ import { usePlace } from "./frame.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { keys } from "./live-queries.js";
 import { keyBelongsElsewhere } from "./keys.js";
-import { Link, navigate } from "./router.js";
+import { Link, navigate, useFragmentTarget } from "./router.js";
 import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
 import { matchesText } from "./ticket-text.js";
 import { ProjectArtifacts } from "./artifacts.js";
@@ -84,6 +84,15 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
     const project = await api.createProject(workspace.id, { name: field(form, "name"), key: field(form, "key") });
     navigate(to.project(project));
   });
+  // The selector's New Project… leads here, to the form's first field.
+  const projectName = useRef<HTMLInputElement>(null);
+  useFragmentTarget(
+    "new-project",
+    useCallback(() => {
+      projectName.current?.scrollIntoView({ block: "center" });
+      projectName.current?.focus();
+    }, []),
+  );
 
   return (
     <div className="page">
@@ -110,7 +119,7 @@ export function WorkspaceHome({ workspace }: { workspace: Workspace }) {
         <form onSubmit={onSubmit}>
           <div className="form-row">
             <Field label="Project name">
-              <input name="name" required maxLength={200} />
+              <input ref={projectName} name="name" required maxLength={200} />
             </Field>
             <Field label="Key">
               <input

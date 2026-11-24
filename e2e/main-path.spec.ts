@@ -43,8 +43,8 @@ test("set up Cronk, delegate a Ticket, answer its Question, watch it move throug
   await tokens.getByRole("button", { name: "Close" }).click();
 
   // A Project and a Ticket on its board.
-  await page.getByRole("button", { name: "Workspace: Ada's Workspace" }).click();
-  await page.getByRole("menuitem", { name: "Ada's Workspace" }).click();
+  await page.getByRole("button", { name: "Workspace and Project: Ada's Workspace" }).click();
+  await page.getByRole("menuitem", { name: "New Project…" }).click();
   await page.getByLabel("Project name").fill("Cronker");
   await page.getByLabel("Key").fill("CRONK");
   await page.getByRole("button", { name: "Create Project" }).click();

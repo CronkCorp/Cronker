@@ -45,6 +45,26 @@ export function useQuery(): URLSearchParams {
   return new URLSearchParams(search);
 }
 
+/**
+ * Calls `onReach` whenever the address's fragment is `#<id>`: on first render and on each move to it, even to the
+ * same address again. A move within the client doesn't scroll to a fragment as a browser's load does, so a page
+ * scrolls to or focuses its own target, such as the New Project form.
+ */
+export function useFragmentTarget(id: string, onReach: () => void): void {
+  useEffect(() => {
+    const reach = () => {
+      if (window.location.hash === `#${id}`) onReach();
+    };
+    reach();
+    listeners.add(reach);
+    window.addEventListener("popstate", reach);
+    return () => {
+      listeners.delete(reach);
+      window.removeEventListener("popstate", reach);
+    };
+  }, [id, onReach]);
+}
+
 export function Link({
   to,
   current,

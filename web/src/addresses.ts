@@ -62,9 +62,19 @@ export interface AddressBook {
   projects: ProjectSummary[] | null;
   /** The Project the page on screen is in, as it tells the frame, or null. */
   projectId: string | null;
+  /**
+   * The Project the sidebar leads to: the page's, else the one last active in the Workspace on this browser, else its
+   * first unarchived one by key. Null only while the Projects load, or in a Workspace with none.
+   */
+  activeProject: ProjectSummary | null;
 }
 
-export const AddressContext = createContext<AddressBook>({ workspace: null, projects: null, projectId: null });
+export const AddressContext = createContext<AddressBook>({ workspace: null, projects: null, projectId: null, activeProject: null });
+
+/** The active Project, as the frame works it out; null only while the Projects load, or in a Workspace with none. */
+export function useActiveProject(): ProjectSummary | null {
+  return useContext(AddressContext).activeProject;
+}
 
 /**
  * Builds the addresses of the Workspace on screen's pages, from the records the page shows. A Decision or Term names
