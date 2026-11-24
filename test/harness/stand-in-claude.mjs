@@ -3,9 +3,9 @@
 // $STAND_IN_CLAUDE_MODE says: `finish`es the Run named in its Brief through Cronk's MCP server with the token from
 // its `--mcp-config` and exits 0; `wait-finish` does so once the file `$STAND_IN_CLAUDE_LOG.go` exists; `exit:<code>`
 // exits with that code without finishing; `denied:<command>` ends its turn on a Bash call to that command outside its
-// allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; or `hang`s until killed. With
-// $CLAUDE_CONFIG_DIR set it writes its session's transcript where Claude Code does, a line as it starts and another as
-// it finishes.
+// allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; `hang`s until killed; or
+// `hang-hard`s, ignoring SIGTERM, until SIGKILL. With $CLAUDE_CONFIG_DIR set it writes its session's transcript where
+// Claude Code does, a line as it starts and another as it finishes.
 // Run in a git worktree, it also records the branch and commit it is on and the password git's credential helpers give
 // for the URL in $STAND_IN_CLAUDE_CREDENTIAL_URL; with $STAND_IN_CLAUDE_PUSH set, it commits a file and pushes it to
 // that branch before finishing.
@@ -65,7 +65,8 @@ const mode = process.env.STAND_IN_CLAUDE_MODE ?? "finish";
 if (mode === "wait-finish") {
   while (!existsSync(`${process.env.STAND_IN_CLAUDE_LOG}.go`)) await new Promise((resolve) => setTimeout(resolve, 20));
 }
-if (mode === "hang") {
+if (mode === "hang" || mode === "hang-hard") {
+  if (mode === "hang-hard") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else if (mode.startsWith("denied:")) {
   const command = mode.slice(7);

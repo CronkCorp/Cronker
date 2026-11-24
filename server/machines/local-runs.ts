@@ -7,7 +7,8 @@ import { repositoryUrl, tokenRotationMarginMs, withFreshTokens } from "../github
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import type { Brief } from "../runs/brief.js";
-import { runReports } from "../runs/runs.js";
+import { revokeLocalRunToken } from "../runs/local.js";
+import { reviveLostRun, runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { convertClaudeCode } from "../transcripts/claude-code.js";
 import { uploadTranscript, type Transcript } from "../transcripts/transcripts.js";
@@ -217,16 +218,47 @@ async function repositoriesOf(db: Queryable, projectId: string, ticketId: string
 
 const earliest = (tokens: { expiresAt: Date }[]) => new Date(Math.min(...tokens.map((t) => t.expiresAt.getTime())));
 
-/** A Run this Machine claimed, and whether it still runs. */
-async function heldRun(context: Context, machine: MachineSelf, runId: string): Promise<{ running: boolean }> {
+/**
+ * The Runs this Machine holds that were stopped, or otherwise ended, in Cronk and whose stop it hasn't confirmed: its
+ * event stream tells them again on connecting, so a Machine that was offline, or asleep, at the stop still kills them.
+ */
+export async function stopsToReplay(context: Context, machine: MachineSelf): Promise<string[]> {
+  const { rows } = await context.db.query<{ id: string }>(
+    `select runs.id from local_runs join runs on runs.id = local_runs.run_id
+     where local_runs.machine_id = $1 and local_runs.stop_acked_at is null and runs.state not in ('running', 'lost')
+     order by local_runs.claimed_at, runs.id`,
+    [machine.id],
+  );
+  return rows.map((r) => r.id);
+}
+
+/** A Run this Machine claimed, and its state. */
+async function heldRun(context: Context, machine: MachineSelf, runId: string): Promise<{ state: string; agentId: string; workspaceId: string }> {
   if (!isUuid(runId)) throw noSuchRun();
-  const { rows } = await context.db.query<{ running: boolean }>(
-    `select runs.state = 'running' as running from local_runs join runs on runs.id = local_runs.run_id
+  const { rows } = await context.db.query<{ state: string; agentId: string; workspaceId: string }>(
+    `select runs.state, runs.agent_id as "agentId", runs.workspace_id as "workspaceId"
+     from local_runs join runs on runs.id = local_runs.run_id
      where local_runs.run_id = $1 and local_runs.machine_id = $2`,
     [runId, machine.id],
   );
   if (!rows[0]) throw noSuchRun();
   return rows[0];
+}
+
+/**
+ * Whether a Run this Machine holds still runs, after bringing it back if it was lost: a lost Run's Machine that calls
+ * again, as on waking from sleep, shows the Run wasn't gone. A lost Run that can't come back, its Ticket moved on, is
+ * over for good: its token is revoked and its stop counted as told, since the answer tells the daemon to stop it.
+ */
+async function stillRunning(context: Context, machine: MachineSelf, runId: string): Promise<boolean> {
+  const run = await heldRun(context, machine, runId);
+  if (run.state === "running") return true;
+  if (run.state !== "lost") return false;
+  await reviveLostRun(context, { id: run.agentId, workspace: { id: run.workspaceId } }, { runId });
+  if ((await heldRun(context, machine, runId)).state === "running") return true;
+  await revokeLocalRunToken(context, runId);
+  await acknowledgeStop(context, machine, runId);
+  return false;
 }
 
 const runStopped = () =>
@@ -240,13 +272,13 @@ export const HeartbeatAnswer = Type.Object({
 export type HeartbeatAnswer = Static<typeof HeartbeatAnswer>;
 
 /**
- * Records a heartbeat of a Run the Machine holds, counted as a call naming the Run, so a working Run isn't lost, and
- * answers fresh GitHub tokens for its Repositories once theirs near their expiry. A Run no longer running is refused
- * with `run_stopped`, telling the daemon to kill its process.
+ * Records a heartbeat of a Run the Machine holds, counted as a call naming the Run, so a working Run isn't lost; a lost
+ * Run comes back if its Ticket hasn't moved on, as when its Machine wakes from sleep. Answers fresh GitHub tokens for
+ * its Repositories once theirs near their expiry. A Run no longer running is refused with `run_stopped`, telling the
+ * daemon to kill its process.
  */
 export async function heartbeat(context: Context, machine: MachineSelf, runId: string): Promise<HeartbeatAnswer> {
-  const { running } = await heldRun(context, machine, runId);
-  if (!running) throw runStopped();
+  if (!(await stillRunning(context, machine, runId))) throw runStopped();
   const now = context.clock.now();
   const { rows } = await context.db.query<{ projectId: string; ticketId: string; tokensExpireAt: Date | null }>(
     `update runs set last_call_at = $2 from tickets, local_runs
@@ -270,6 +302,19 @@ export async function heartbeat(context: Context, machine: MachineSelf, runId: s
   return { repositories: repositories.map((r) => ({ fullName: r.fullName, token: r.token, expiresAt: r.expiresAt.toISOString() })) };
 }
 
+/**
+ * Records that the Machine killed the process of a Run it holds and cleaned up after it, so the stop isn't told again.
+ * Idempotent, and accepted whatever the Run's state.
+ */
+export async function acknowledgeStop(context: Context, machine: MachineSelf, runId: string): Promise<void> {
+  await heldRun(context, machine, runId);
+  await context.db.query("update local_runs set stop_acked_at = $3 where run_id = $1 and machine_id = $2 and stop_acked_at is null", [
+    runId,
+    machine.id,
+    context.clock.now(),
+  ]);
+}
+
 export const LocalSession = Type.Object({
   sessionId: Type.String({ minLength: 1, maxLength: 200, description: "Claude Code's session id, from its stream's `system` `init` message." }),
 });
@@ -277,8 +322,7 @@ export type LocalSession = Static<typeof LocalSession>;
 
 /** Records the Claude Code session of a Run the Machine holds as its session reference. */
 export async function reportSession(context: Context, machine: MachineSelf, runId: string, sessionId: string): Promise<void> {
-  const { running } = await heldRun(context, machine, runId);
-  if (!running) throw runStopped();
+  if (!(await stillRunning(context, machine, runId))) throw runStopped();
   await context.db.query("update runs set session_id = $2, last_call_at = $3 where id = $1 and state = 'running'", [
     runId,
     sessionIdOf(sessionId.trim()),
@@ -323,13 +367,14 @@ export const LocalRunEnded = Type.Object({
 export type LocalRunEnded = Static<typeof LocalRunEnded>;
 
 /**
- * Reports that the `claude` process of a Run the Machine holds ended. A Run its agent didn't finish fails with the
- * reason, naming any tools outside its Runner's allowlist it was denied; one that ended already, as `finish` ends it,
- * is left as it is. A cost given is recorded as the Run's estimated cost, whichever way it ended. Answers whether the
- * Run may yet come back.
+ * Reports that the `claude` process of a Run the Machine holds ended, which also confirms any stop. A Run its agent
+ * didn't finish fails with the reason, naming any tools outside its Runner's allowlist it was denied; one that ended
+ * already, as `finish` ends it, is left as it is. A cost given is recorded as the Run's estimated cost, whichever way it
+ * ended. Answers whether the Run may yet come back; a lost Run that can't has its token revoked.
  */
 export async function reportEnd(context: Context, machine: MachineSelf, runId: string, end: LocalRunEnd): Promise<LocalRunEnded> {
-  const { running } = await heldRun(context, machine, runId);
+  const running = (await heldRun(context, machine, runId)).state === "running";
+  await acknowledgeStop(context, machine, runId);
   const reports = runReports(context);
   if (running) {
     let reason = `The session ended without calling \`finish\`: ${end.reason.trim()}`;
@@ -346,6 +391,9 @@ export async function reportEnd(context: Context, machine: MachineSelf, runId: s
      where runs.id = $1 and runs.state = 'lost' and tickets.status_id = runs.status_id and tickets.delegate_id = runs.agent_id`,
     [runId],
   );
+  const lost = (await heldRun(context, machine, runId)).state === "lost";
+  // A lost Run whose Ticket moved on is over for good: its token goes.
+  if (lost && !rowCount) await revokeLocalRunToken(context, runId);
   return { mayComeBack: Boolean(rowCount) };
 }
 
