@@ -2,9 +2,10 @@
 // to the JSON-lines file in $STAND_IN_CLAUDE_LOG, prints a `stream-json` session start, and then, as
 // $STAND_IN_CLAUDE_MODE says: `finish`es the Run named in its Brief through Cronk's MCP server with the token from
 // its `--mcp-config` and exits 0; `wait-finish` does so once the file `$STAND_IN_CLAUDE_LOG.go` exists; `exit:<code>`
-// exits with that code without finishing; `hang`s until killed; or `hang-hard`s, ignoring SIGTERM, until SIGKILL.
-// With $CLAUDE_CONFIG_DIR set it writes its session's transcript where Claude Code does, a line as it starts and
-// another as it finishes.
+// exits with that code without finishing; `denied:<command>` ends its turn on a Bash call to that command outside its
+// allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; `hang`s until killed; or
+// `hang-hard`s, ignoring SIGTERM, until SIGKILL. With $CLAUDE_CONFIG_DIR set it writes its session's transcript where
+// Claude Code does, a line as it starts and another as it finishes.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -41,6 +42,16 @@ if (mode === "wait-finish") {
 if (mode === "hang" || mode === "hang-hard") {
   if (mode === "hang-hard") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
+} else if (mode.startsWith("denied:")) {
+  const command = mode.slice(7);
+  say({
+    type: "result",
+    subtype: "success",
+    session_id: sessionId,
+    is_error: false,
+    permission_denials: [{ tool_name: "Bash", tool_use_id: "toolu_stand_in", tool_input: { command } }],
+  });
+  process.exit(0);
 } else if (mode.startsWith("exit:")) {
   process.stderr.write("stand-in claude gave up\n");
   process.exit(Number(mode.slice(5)));

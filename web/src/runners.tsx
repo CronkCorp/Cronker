@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   api,
   type Agent,
@@ -12,7 +12,7 @@ import {
   type WorkspaceSummary,
 } from "./api.js";
 import { costsText } from "./costs.js";
-import { field, useSubmit } from "./forms.js";
+import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
 import { Actions, Banner, Button, Check, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
@@ -275,6 +275,7 @@ function RunnerSettings({
         <Saved shown={limitSaved} />
         <FormError error={limit.error} />
       </form>
+      {runner.kind === "local" && <AllowedTools runner={runner} onChanged={onChanged} />}
       {runner.kind === "subscription" && (
         <div className="runner-triggers">
           <h3>Triggers</h3>
@@ -450,6 +451,56 @@ function RunnerSettings({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * A `local` Runner's allowlist: the Claude Code permission rules for the tools its Runs may use without asking, one
+ * per line, saved for Runs claimed from then on, or reset to the default.
+ */
+function AllowedTools({ runner, onChanged }: { runner: Runner; onChanged: (runner: Runner) => void }) {
+  const shown = (runner.allowedTools ?? []).join("\n");
+  const [text, setText] = useState(shown);
+  // A save here or elsewhere, as another tab's, shows the list as saved.
+  useEffect(() => setText(shown), [shown]);
+  const { save, busy, error, saved } = useSave();
+  const saveRules = (rules: string[] | null) => save(async () => onChanged(await api.setAllowedTools(runner.id, rules)));
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void saveRules(text.split("\n").map((line) => line.trim()).filter(Boolean));
+  };
+  return (
+    <div className="runner-allowlist" role="group" aria-label="Allowed tools">
+      <h3>Allowed tools</h3>
+      <p className="muted small">
+        The tools its Runs may use without asking, one Claude Code permission rule per line, such as{" "}
+        <code>Bash(git:*)</code>. Edits are accepted. A Run that needs a tool outside the list fails, naming it: widen the
+        list and Retry. Cronk's own tools (<code>mcp__cronk</code>) are always allowed, and a Repository's committed Claude
+        Code settings add their own rules.
+      </p>
+      <form onSubmit={onSubmit}>
+        <Field label="Allowed tools">
+          <textarea
+            name="allowedTools"
+            className="mono"
+            rows={Math.min(Math.max(text.split("\n").length, 4), 14)}
+            spellCheck={false}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </Field>
+        <Actions>
+          <Saved shown={saved} />
+          <FormError error={error} />
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => void saveRules(null)}>
+            Reset to default
+          </Button>
+          <Button type="submit" disabled={busy}>
+            Save allowed tools
+          </Button>
+        </Actions>
+      </form>
+    </div>
   );
 }
 
