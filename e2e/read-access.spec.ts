@@ -49,7 +49,7 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
 
   // Grace sees the board and its card, but no New Ticket, and the card doesn't drag or offer changes.
   await signInAs(page, cronk.url, "grace@example.com", grace.password);
-  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /CRONK/ }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await expect(page.getByRole("heading", { name: "Cronker" })).toBeVisible();
   await expect(page.getByRole("note")).toHaveText("You have Read in this Project: you follow its work, but don't change it.");
   const board = page.getByRole("region", { name: "Board" });
@@ -92,7 +92,8 @@ test("an Admin makes a Project private and lists a User with Read, who sees its 
 
   // Linus, unlisted, doesn't see the Project at all.
   await signInAs(page, cronk.url, "linus@example.com", linus.password);
-  await expect(page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: /CRONK/ })).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Sidebar" }).getByRole("button", { name: /^Workspace and Project/ })).not.toContainText("CRONK");
+  await expect(page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" })).toHaveCount(0);
   await page.goto(`${cronk.url}/projects/${project.id}`);
   await expect(page.getByText("Nothing is here.")).toBeVisible();
 });

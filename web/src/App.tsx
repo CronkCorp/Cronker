@@ -15,7 +15,7 @@ import {
 import { AgentScreen, Agents } from "./agents.js";
 import { field, useSubmit } from "./forms.js";
 import { ConnectError, ConnectScreen } from "./connect.js";
-import { Centered, Frame, usePlace } from "./frame.js";
+import { Centered, Frame, usePlace, workspaceLanding } from "./frame.js";
 import { AccountSettingsPage } from "./account.js";
 import { GitHubPage, GitHubSetupStep, GitHubSignIn, githubErrorMessage, takeQueryParameter } from "./github.js";
 import { DecisionScreen, WorkspaceDecisions } from "./decisions.js";
@@ -301,9 +301,6 @@ function SignedIn({
   // What screens load through queries follows the stream of the Workspace whose page is shown.
   useLiveInvalidation(routed?.id ?? "");
 
-  useEffect(() => {
-    if (path === "/" && workspaces[0]) replace(addresses.workspace(workspaces[0]));
-  }, [path, workspaces]);
   // The password page became a section of the User's settings: an old link to it opens that section.
   useEffect(() => {
     if (path === "/password") replace(`/account${window.location.search}#password`);
@@ -410,8 +407,8 @@ function SignedIn({
       default:
         page = <WorkspaceHome key={workspace.id} workspace={workspace} />;
     }
-  } else if (current && path === "/") {
-    page = <WorkspaceHome key={current.id} workspace={current} />;
+  } else if (workspaces[0] && path === "/") {
+    page = <Landing key={workspaces[0].id} workspace={workspaces[0]} />;
   } else if (workspaces.length === 0 && path === "/") {
     page = <PlacelessEmptyState title="You don't belong to any Workspace yet.">Create one from the Workspace menu, or ask an Admin to add you.</PlacelessEmptyState>;
   } else {
@@ -431,6 +428,21 @@ function SignedIn({
       {page}
     </Frame>
   );
+}
+
+/** `/`, while it finds where it leads: the first Workspace's active Project's board, or its Projects overview. */
+function Landing({ workspace }: { workspace: WorkspaceSummary }) {
+  usePlace(null);
+  useEffect(() => {
+    let left = false;
+    void workspaceLanding(workspace).then((to) => {
+      if (!left && window.location.pathname === "/") replace(to);
+    });
+    return () => {
+      left = true;
+    };
+  }, [workspace]);
+  return null;
 }
 
 /** An empty page that belongs to no sidebar item, such as one that isn't there; the sidebar marks none. */
