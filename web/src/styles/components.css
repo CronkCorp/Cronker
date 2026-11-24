@@ -862,6 +862,14 @@ textarea.markdown-source {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+/* A Project's key before its name in a menu, such as the sidebar's selector: a column, so the names line up. */
+.menu-key {
+  flex: none;
+  min-width: 52px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
 .menu-label {
   padding: 6px 10px 2px;
   color: var(--muted);

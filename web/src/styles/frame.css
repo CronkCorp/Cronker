@@ -172,10 +172,30 @@
   font-size: 12px;
   font-weight: 600;
 }
-.workspace-name {
+/* The Workspace's name over the active Project's key and name, each cut short with an ellipsis. */
+.workspace-switcher-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+.workspace-name,
+.workspace-project {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.workspace-switcher-text .workspace-name {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.workspace-project {
+  font-size: 13px;
+}
+.workspace-project-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 .workspace-caret {
   margin-left: auto;
@@ -251,6 +271,7 @@
   }
   .workspace-switcher {
     width: auto;
+    max-width: 220px;
     margin: 0 var(--space-2) 0 0;
   }
   .sidebar-strip .side-link {

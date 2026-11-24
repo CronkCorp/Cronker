@@ -4,11 +4,11 @@ import { AddressContext, addresses, useAddresses } from "./addresses.js";
 import { InboxLink } from "./inbox.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { useLatest, useLiveEvents } from "./live.js";
-import { Link } from "./router.js";
+import { Link, navigate } from "./router.js";
 import { SearchBox } from "./search.js";
 import { Avatar } from "./ui/actor.js";
-import { keepSidebarHidden, storedSidebarHidden } from "./storage.js";
-import { Menu, MenuItem, MenuLabel, MenuLink, MenuSeparator } from "./ui/overlays.js";
+import { keepActiveProject, keepSidebarHidden, storedActiveProject, storedSidebarHidden } from "./storage.js";
+import { Menu, MenuItem, MenuLabel, MenuLink, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuSub } from "./ui/overlays.js";
 
 /** Which item of the sidebar a page belongs to. */
 export type Area =
@@ -62,9 +62,10 @@ export function Frame({
   }, []);
   const sidebar = useSidebarHiding();
   const projects = useProjects(current?.id ?? null);
+  const activeProject = useActiveProjectOf(current?.id ?? null, projects, place.projectId);
   const book = useMemo(
-    () => ({ workspace: current ?? null, projects, projectId: place.projectId }),
-    [current, projects, place.projectId],
+    () => ({ workspace: current ?? null, projects, projectId: place.projectId, activeProject }),
+    [current, projects, place.projectId, activeProject],
   );
   return (
     <AddressContext.Provider value={book}>
@@ -75,6 +76,7 @@ export function Frame({
             workspaces={workspaces}
             current={current}
             projects={projects}
+            activeProject={activeProject}
             place={place}
             onSignOut={onSignOut}
             hideToggle={<SidebarToggle sidebarHidden={false} buttonRef={sidebar.hideButton} onToggle={sidebar.toggle} />}
@@ -87,6 +89,37 @@ export function Frame({
       </PlaceContext.Provider>
     </AddressContext.Provider>
   );
+}
+
+/**
+ * The active Project: the page's, else the one last active in the Workspace on this browser while it is still among
+ * the User's Projects, else the first unarchived one by key. A page reporting a Project makes it the one remembered.
+ * Null while the Projects load, and in a Workspace with none.
+ */
+function useActiveProjectOf(
+  workspaceId: string | null,
+  projects: ProjectSummary[] | null,
+  pageProjectId: string | null,
+): ProjectSummary | null {
+  // Only the Workspace's own: the list of the Workspace left behind lingers until the new one loads.
+  const own = useMemo(
+    () => (workspaceId === null ? null : (projects?.filter((p) => p.workspaceId === workspaceId) ?? null)),
+    [workspaceId, projects],
+  );
+  const pageProject = own?.find((p) => p.id === pageProjectId) ?? null;
+  useEffect(() => {
+    if (workspaceId !== null && pageProject) keepActiveProject(workspaceId, pageProject.id);
+  }, [workspaceId, pageProject]);
+  return useMemo(() => {
+    if (workspaceId === null || own === null) return null;
+    if (pageProject) return pageProject;
+    const remembered = storedActiveProject(workspaceId);
+    return (
+      own.find((p) => p.id === remembered) ??
+      own.filter((p) => p.archivedAt === null).sort((a, b) => a.key.localeCompare(b.key))[0] ??
+      null
+    );
+  }, [workspaceId, own, pageProject]);
 }
 
 /** Below this width the sidebar is a strip with a menu, which neither hides nor shows; as in `frame.css`. */
@@ -163,6 +196,7 @@ function Sidebar({
   workspaces,
   current,
   projects,
+  activeProject,
   place,
   onSignOut,
   hideToggle,
@@ -171,6 +205,7 @@ function Sidebar({
   workspaces: WorkspaceSummary[];
   current: WorkspaceSummary | undefined;
   projects: ProjectSummary[] | null;
+  activeProject: ProjectSummary | null;
   place: Place;
   onSignOut: () => Promise<void>;
   hideToggle: ReactNode;
@@ -195,7 +230,7 @@ function Sidebar({
     <nav aria-label="Sidebar" className={`sidebar${menuOpen ? " sidebar-open" : ""}`}>
       <div className="sidebar-strip">
         <div className="sidebar-top">
-          <WorkspaceSwitcher workspaces={workspaces} current={current} />
+          <WorkspaceProjectSwitcher workspaces={workspaces} current={current} projects={projects} active={activeProject} />
           {hideToggle}
         </div>
         {current && (
@@ -310,31 +345,102 @@ function SideLink({ to, current, children }: { to: string; current: boolean; chi
   );
 }
 
-/** The Workspace's name and mark, which switches Workspace or creates one. */
-function WorkspaceSwitcher({ workspaces, current }: { workspaces: WorkspaceSummary[]; current: WorkspaceSummary | undefined }) {
+/**
+ * The Workspace and the active Project, under the Workspace's mark: its menu opens another Project's board, the
+ * Projects overview or a New Project, and switches Workspace or creates one.
+ */
+function WorkspaceProjectSwitcher({
+  workspaces,
+  current,
+  projects,
+  active,
+}: {
+  workspaces: WorkspaceSummary[];
+  current: WorkspaceSummary | undefined;
+  projects: ProjectSummary[] | null;
+  active: ProjectSummary | null;
+}) {
   const name = current?.name ?? "Cronk";
+  const own = (projects ?? []).filter((p) => p.workspaceId === current?.id).sort((a, b) => a.key.localeCompare(b.key));
+  const unarchived = own.filter((p) => p.archivedAt === null);
+  const archived = own.filter((p) => p.archivedAt !== null);
+  const openBoard = (id: string) => {
+    const project = own.find((p) => p.id === id);
+    if (current && project) navigate(addresses.project(current, project.key));
+  };
+  const projectItem = (p: ProjectSummary) => (
+    <MenuRadioItem key={p.id} value={p.id}>
+      <span className="menu-key">{p.key}</span> {p.name}
+    </MenuRadioItem>
+  );
   return (
     <Menu
-      label="Workspace"
+      label="Workspace and Project"
       align="start"
       trigger={
-        <button type="button" className="workspace-switcher" aria-label={`Workspace: ${name}`}>
+        <button
+          type="button"
+          className="workspace-switcher"
+          aria-label={`Workspace and Project: ${name}${active ? `, ${active.key} ${active.name}` : ""}`}
+        >
           <span className="workspace-mark" aria-hidden="true">
             {name.slice(0, 1).toUpperCase()}
           </span>
-          <span className="workspace-name">{name}</span>
+          <span className="workspace-switcher-text">
+            <span className="workspace-name">{name}</span>
+            {active && (
+              <span className="workspace-project">
+                <span className="workspace-project-key">{active.key}</span> {active.name}
+              </span>
+            )}
+          </span>
           <span className="workspace-caret" aria-hidden="true">
             ▾
           </span>
         </button>
       }
     >
-      {workspaces.length > 0 && <MenuLabel>Workspaces</MenuLabel>}
-      {workspaces.map((w) => (
-        <MenuLink key={w.id} to={addresses.workspace(w)} current={w.id === current?.id}>
-          {w.name}
-        </MenuLink>
-      ))}
+      {current && (
+        <>
+          {unarchived.length > 0 && (
+            <>
+              <MenuLabel>Projects</MenuLabel>
+              <MenuRadioGroup label="Projects" value={active?.id ?? ""} onChange={openBoard}>
+                {unarchived.map(projectItem)}
+              </MenuRadioGroup>
+            </>
+          )}
+          {archived.length > 0 && (
+            <MenuSub label="Archived">
+              <MenuRadioGroup label="Archived Projects" value={active?.id ?? ""} onChange={openBoard}>
+                {archived.map(projectItem)}
+              </MenuRadioGroup>
+            </MenuSub>
+          )}
+          <MenuLink to={addresses.workspace(current)}>All Projects</MenuLink>
+          <MenuLink to={`${addresses.workspace(current)}#new-project`}>New Project…</MenuLink>
+          <MenuSeparator />
+        </>
+      )}
+      {workspaces.length > 0 && (
+        <>
+          <MenuLabel>Workspaces</MenuLabel>
+          <MenuRadioGroup
+            label="Workspaces"
+            value={current?.id ?? ""}
+            onChange={(id) => {
+              const workspace = workspaces.find((w) => w.id === id);
+              if (workspace) navigate(addresses.workspace(workspace));
+            }}
+          >
+            {workspaces.map((w) => (
+              <MenuRadioItem key={w.id} value={w.id}>
+                {w.name}
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </>
+      )}
       <MenuSeparator />
       <MenuLink to="/workspaces/new">New Workspace</MenuLink>
     </Menu>
