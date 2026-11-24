@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { minutes } from "../harness/clock.js";
-import { setUp, signIn } from "../harness/flows.js";
+import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openMachineStream, type OpenStream } from "../harness/stream.js";
 
@@ -89,8 +89,11 @@ describe("claiming a local Run", () => {
       modelId: "claude-haiku-5-5",
       token: expect.stringMatching(/^cronk_agent_/),
       mcpUrl: `${cronk.url}/mcp`,
+      repositories: [],
       allowedTools: [...defaultAllowedTools],
     });
+    // A Project listing no Repositories needs no GitHub App.
+    expect(cronk.github.apiCalls).toEqual([]);
   });
 
   test("a Machine connecting later is told of the Runs already waiting", async () => {
@@ -192,6 +195,22 @@ describe("a claimed Run", () => {
     expect((await report()).status).toBe(204);
     await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1" } });
     expect((await report()).json.error.code).toBe("run_stopped");
+  });
+
+  test("whose Machine reports its end while it is lost is told it may yet come back, until its Ticket moves on", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { ticket, run } = await delegate("Napping");
+    await claim(machineToken, run.id);
+    cronk.clock.advance(minutes(40));
+    await cronk.checkForLostRuns();
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("lost");
+    const end = () => ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 0" } });
+
+    expect(await end()).toEqual({ mayComeBack: true });
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("lost");
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    expect(await end()).toEqual({ mayComeBack: false });
   });
 
   test("heartbeats keep it running past the lost-Run threshold; without them it is lost", async () => {
@@ -360,7 +379,7 @@ describe("a local Run whose Machine slept", () => {
     streams.push(stream);
     await stream.expectQuiet();
 
-    expect((await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken })).status).toBe(204);
+    expect((await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken })).status).toBe(200);
 
     const back = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
     expect(back.state).toBe("running");
@@ -383,6 +402,123 @@ describe("a local Run whose Machine slept", () => {
     const stream = await openMachineStream(cronk, machineToken);
     streams.push(stream);
     await stream.expectQuiet();
+  });
+});
+
+describe("a local Run's Repositories", () => {
+  /** The local set-up, with the GitHub App installed on cronkcorp's cronker and website, both listed by the Project. */
+  async function withRepositories() {
+    const setup = await localSetUp();
+    await createGitHubApp(cronk, setup.ada);
+    const app = cronk.github.apps[0]!;
+    const installation = cronk.github.install(app, "cronkcorp", ["cronker", "website"]);
+    for (const repository of installation.repositories) {
+      await ok("POST", `/api/projects/${setup.project.id}/repositories`, { cookie: setup.ada, body: { id: repository.id } });
+    }
+    /** Opens a Pull Request on the Repository for the Ticket, by its key in the title, as GitHub tells Cronk of it. */
+    const openPullRequest = async (repository: (typeof installation.repositories)[number], number: number, title: string, branch: string, updatedAt: string) => {
+      const delivered = await cronk.github.deliver(app, "pull_request", {
+        action: "opened",
+        installation: { id: installation.id },
+        repository: { id: repository.id, full_name: repository.fullName },
+        pull_request: {
+          id: repository.id * 1000 + number,
+          number,
+          title,
+          state: "open",
+          draft: false,
+          merged: false,
+          merged_by: null,
+          auto_merge: null,
+          html_url: `https://github.com/${repository.fullName}/pull/${number}`,
+          head: { ref: branch, sha: "aaaa" },
+          updated_at: updatedAt,
+        },
+      });
+      expect(delivered.status, await delivered.clone().text()).toBe(200);
+    };
+    return { ...setup, installation, openPullRequest };
+  }
+
+  /** The installation tokens GitHub issued that are still good, by the test's clock. */
+  const goodTokens = () =>
+    cronk.github.tokensIssued.filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime()).map((t) => t.token);
+
+  test("come with the claim, each with its clone URL, a fresh App token, and no start branch for a Ticket without one", async () => {
+    const { machineToken, delegate, installation } = await withRepositories();
+    const { run } = await delegate("Change the code");
+
+    const { repositories } = (await claim(machineToken, run.id)).json;
+
+    expect(repositories).toEqual([
+      { fullName: "cronkcorp/cronker", cloneUrl: `${cronk.github.url}/cronkcorp/cronker`, startBranch: null, token: expect.any(String), expiresAt: expect.any(String) },
+      { fullName: "cronkcorp/website", cloneUrl: `${cronk.github.url}/cronkcorp/website`, startBranch: null, token: expect.any(String), expiresAt: expect.any(String) },
+    ]);
+    for (const { token, expiresAt } of repositories) {
+      const issued = cronk.github.tokensIssued.find((t) => t.token === token);
+      expect(issued?.installationId).toBe(installation.id);
+      expect(issued?.expiresAt.toISOString()).toBe(expiresAt);
+      expect(goodTokens()).toContain(token);
+    }
+  });
+
+  test("start on the branch of the Ticket's open Pull Request in each, the most recently updated", async () => {
+    const { machineToken, delegate, installation, openPullRequest } = await withRepositories();
+    const [cronker, website] = installation.repositories;
+    const { run } = await delegate("Carry on");
+    await openPullRequest(cronker!, 7, "CRONK-1: first go", "feat/CRONK-1-first", "2026-01-01T09:00:00Z");
+    await openPullRequest(cronker!, 8, "CRONK-1: second go", "feat/CRONK-1-second", "2026-01-02T09:00:00Z");
+    await openPullRequest(website!, 3, "CRONK-2: another Ticket's", "feat/CRONK-2-other", "2026-01-03T09:00:00Z");
+
+    const { repositories } = (await claim(machineToken, run.id)).json;
+
+    expect(repositories.map((r: { fullName: string; startBranch: string | null }) => [r.fullName, r.startBranch])).toEqual([
+      ["cronkcorp/cronker", "feat/CRONK-1-second"],
+      ["cronkcorp/website", null],
+    ]);
+  });
+
+  test("get fresh tokens from a heartbeat once theirs near their expiry, and none before", async () => {
+    const { machineToken, delegate } = await withRepositories();
+    const { run } = await delegate("Long work");
+    const claimed = (await claim(machineToken, run.id)).json;
+    const first = claimed.repositories.map((r: { token: string }) => r.token);
+    const beat = () => ok("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken });
+
+    cronk.clock.advance(minutes(30));
+    expect(await beat()).toEqual({ repositories: [] });
+
+    cronk.clock.advance(minutes(21));
+    const { repositories } = await beat();
+    expect(repositories.map((r: { fullName: string }) => r.fullName)).toEqual(["cronkcorp/cronker", "cronkcorp/website"]);
+    for (const { token } of repositories) {
+      expect(first).not.toContain(token);
+      expect(goodTokens()).toContain(token);
+    }
+    expect(await beat()).toEqual({ repositories: [] });
+
+    // The fresh tokens are still good once the first expire, and keep being renewed.
+    cronk.clock.advance(minutes(50));
+    const again = await beat();
+    expect(again.repositories).toHaveLength(2);
+    cronk.clock.advance(minutes(15));
+    for (const { token } of again.repositories) expect(goodTokens()).toContain(token);
+  });
+
+  test("that the GitHub App no longer covers fail the Run on its claim, saying which", async () => {
+    const { ada, machineToken, delegate, installation } = await withRepositories();
+    installation.repositories.splice(0, 1);
+    // What GitHub said the installation covers is kept for five minutes.
+    cronk.clock.advance(minutes(6));
+    const { run } = await delegate("Can't reach it");
+
+    const refused = await claim(machineToken, run.id);
+
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("repositories_unavailable");
+    const failed = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
+    expect(failed.state).toBe("failed");
+    expect(failed.endReason).toContain("cronkcorp/cronker");
   });
 });
 

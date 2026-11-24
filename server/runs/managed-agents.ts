@@ -5,9 +5,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import { transaction } from "../db.js";
-import { appToken } from "../github/app.js";
-import { installationToken } from "../github/client.js";
-import { installationCovering } from "../github/installations.js";
+import { freshTokens, repositoryUrl, tokenRotationMarginMs, withFreshTokens, type RepositoryWithToken } from "../github/repository-tokens.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import type { Cost } from "./costs.js";
 import { convertManagedAgentsEvents } from "../transcripts/managed-agents.js";
@@ -123,47 +121,7 @@ interface Created {
   body: Record<string, unknown>;
 }
 
-/** A Repository a session mounts, with a fresh installation token of the GitHub App's for it. */
-interface RepositoryToMount {
-  id: number;
-  fullName: string;
-  token: string;
-  expiresAt: Date;
-}
-
-/** The address a session clones the Repository from, under GitHub's web address. */
-function repositoryUrl(context: Context, fullName: string): string {
-  const base = context.config.github.url.href;
-  return new URL(fullName, base.endsWith("/") ? base : `${base}/`).toString();
-}
-
-/**
- * Gives fresh installation tokens for Repositories, one per installation covering them however many it is asked for.
- * Fresh, rather than the tokens Cronk holds for its own calls, so each lasts the hour GitHub gives it; Cronk sets a new
- * one on the session before it expires. Throws when GitHub can't be asked or the App covers a Repository no longer.
- */
-function freshTokens(context: Context): (repository: { id: number; fullName: string }) => Promise<{ token: string; expiresAt: Date }> {
-  const tokens = new Map<number, Promise<{ token: string; expiresAt: Date }>>();
-  return async (repository) => {
-    const installationId = await installationCovering(context, repository.id);
-    if (installationId === undefined) throw new Error(`The GitHub App isn't installed on ${repository.fullName} any more.`);
-    if (!tokens.has(installationId)) {
-      const fetching = appToken(context).then((jwt) => installationToken(context.config, jwt, installationId));
-      // A failed fetch is reported to each Repository that awaits it; none is left unhandled.
-      fetching.catch(() => {});
-      tokens.set(installationId, fetching);
-    }
-    return tokens.get(installationId)!;
-  };
-}
-
-/** The Repositories with fresh installation tokens for a session to mount. */
-async function repositoriesToMount(context: Context, repositories: { id: number; fullName: string }[]): Promise<RepositoryToMount[]> {
-  const tokenFor = freshTokens(context);
-  const mounted: RepositoryToMount[] = [];
-  for (const repository of repositories) mounted.push({ ...repository, ...(await tokenFor(repository)) });
-  return mounted;
-}
+type RepositoryToMount = RepositoryWithToken;
 
 /** The model the agent definition names; every session overrides it with its Step's. */
 const defaultModel = "claude-sonnet-5-5";
@@ -234,7 +192,7 @@ export function managedAgentsRunner(context: Context, reports: RunReports): Runn
     const refuse = (refusal: RunnerRefusal): StartResult => ({ started: false, refusal });
     let repositories: RepositoryToMount[];
     try {
-      repositories = await repositoriesToMount(context, run.repositories);
+      repositories = await withFreshTokens(context, run.repositories);
     } catch (error) {
       return refuse({
         kind: "unavailable",
@@ -694,9 +652,6 @@ async function whySessionStopped(context: Context, apiKey: string, sessionId: st
   return `Its session went idle without calling finish (stop reason: ${stopReason}).`;
 }
 
-/** How long before an installation token expires Cronk sets a fresh one on the session: GitHub's last an hour. */
-const rotationMarginMs = 10 * 60 * 1000;
-
 /**
  * Sets a fresh installation token on each Repository resource of a running Managed Agents Run's session whose token
  * expires within ten minutes, so a long Run keeps pushing: one fresh token per installation per pass. Ended Runs get
@@ -721,7 +676,7 @@ export async function rotateRepositoryTokens(context: Context): Promise<void> {
      left join repositories on repositories.id = r.repository_id
      where runs.state = 'running' and m.session_id is not null and r.token_expires_at <= $1
      order by r.run_id, r.resource_id`,
-    [new Date(clock.now().getTime() + rotationMarginMs)],
+    [new Date(clock.now().getTime() + tokenRotationMarginMs)],
   );
   if (rows.length === 0) return;
   // One Run's failure doesn't hold up the others; the first is thrown at the end for the server to log.

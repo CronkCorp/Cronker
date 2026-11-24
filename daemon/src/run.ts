@@ -3,16 +3,19 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { call, CronkError, upload, type ClaimedRun } from "./api.js";
+import { call, CronkError, upload, type ClaimedRepository, type ClaimedRun, type HeartbeatAnswer, type RunEnded } from "./api.js";
 import { readConfig, type PairedCronk } from "./config.js";
+import { repositoryCache, type RunWorkspace } from "./repositories.js";
 
 /**
  * `cronk-runner run`: the daemon's foreground service. For each paired Cronk it keeps the Machine's event stream open,
  * claims the Runs it announces while the Machine's limit has room, and runs each with `claude -p` in a fresh scratch
- * directory: reporting its session id, heartbeating it while it runs, uploading its transcript as it goes, and
- * reporting how the process ended, with the cost Claude Code estimated. A Run stopped in Cronk is killed and its stop
- * confirmed. Each running process is recorded in the state directory, so a daemon starting again kills those it left
- * behind and reports their Runs ended.
+ * directory holding a fresh worktree of each of its Repositories: reporting its session id, heartbeating it while it
+ * runs, uploading its transcript as it goes, and reporting how the process ended, with the cost Claude Code estimated.
+ * The worktrees are removed once the Run ended, unless it is lost and may yet come back: then they are kept until
+ * Cronk says otherwise.
+ * A Run stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory,
+ * so a daemon starting again kills those it left behind and reports their Runs ended.
  */
 
 export interface RunOptions {
@@ -32,8 +35,22 @@ export interface RunOptions {
   stateDir?: string;
   /** How long a killed `claude` has to exit after SIGTERM before it gets SIGKILL: ten seconds when left out. */
   killGraceMs?: number;
+  /**
+   * Where the bare clones of the Repositories live: `cronk-runner/repositories` under `$XDG_CACHE_HOME`, else under
+   * `~/.cache`, when left out.
+   */
+  cacheDir?: string;
+  /** The remote a Repository is fetched from and pushed to; its clone URL when left out. Tests point it elsewhere. */
+  remoteFor?: (repository: ClaimedRepository) => string;
+  /** How often a lost Run's kept worktree is checked on; as often as heartbeats when left out. */
+  lostCheckMs?: number;
   /** How often a running Run's transcript is uploaded, when it changed: every 10 seconds when left out. */
   transcriptMs?: number;
+}
+
+/** Where the bare clones live unless the options say otherwise. */
+export function defaultCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "cronk-runner", "repositories");
 }
 
 export interface RunningDaemon {
@@ -137,7 +154,11 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   const scratchRoot = options.scratchRoot ?? tmpdir();
   const stateDir = options.stateDir ?? stateDirOf(options.configPath);
   const killGraceMs = options.killGraceMs ?? 10_000;
+  const lostCheckMs = options.lostCheckMs ?? heartbeatMs;
+  const repositories = repositoryCache({ directory: options.cacheDir ?? defaultCacheDir(env), remoteFor: options.remoteFor });
   const held = new Map<string, HeldRun>();
+  /** Lost Runs' kept worktrees, checked on until Cronk says the Run won't come back. */
+  const kept = new Set<NodeJS.Timeout>();
   /** Runs announced but not claimed yet, waiting for room under the Machine's limit, by Cronk and Run. */
   const pending = new Map<string, { cronk: PairedCronk; runId: string }>();
   const aborts = new Set<AbortController>();
@@ -220,7 +241,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         }
         pending.delete(key);
         await start(cronk, claimed).catch(async (error: unknown) => {
-          const reason = `the Machine couldn't start claude: ${(error as Error).message}`;
+          const reason = `the Machine couldn't start the Run: ${(error as Error).message}`;
           await call(cronk.url, "POST", `/api/machine/runs/${runId}/end`, { token: cronk.token, body: { reason } }).catch(() => {});
           print(`${claimed.ticketKey}: ${reason}`);
         });
@@ -272,14 +293,23 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     }
   }
 
-  /** Runs a claimed Run's `claude` process in a fresh scratch directory, until it exits. */
+  /** Runs a claimed Run's `claude` process in a fresh scratch directory with its worktrees, until it exits. */
   async function start(cronk: PairedCronk, claimed: ClaimedRun): Promise<void> {
     const { runId } = claimed;
-    const report = (path: string, body?: unknown) =>
-      call(cronk.url, "POST", `/api/machine/runs/${runId}/${path}`, { token: cronk.token, body });
+    const report = <T = unknown>(path: string, body?: unknown) =>
+      call<T>(cronk.url, "POST", `/api/machine/runs/${runId}/${path}`, { token: cronk.token, body });
     const directory = await mkdtemp(join(scratchRoot, "cronk-run-"));
-    const work = join(directory, "work");
-    await mkdir(work);
+    let workspace: RunWorkspace;
+    try {
+      workspace = await repositories.prepare(directory, claimed.repositories ?? [], env);
+    } catch (error) {
+      await rm(directory, { recursive: true, force: true });
+      throw error;
+    }
+    const cleanUp = async () => {
+      await workspace.remove();
+      await rm(directory, { recursive: true, force: true });
+    };
     // The Run's token goes in a file only its User reads, outside the directory the agent works in, never in argv.
     const mcpConfigPath = join(directory, "mcp.json");
     const mcpConfig = {
@@ -290,7 +320,11 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     await writeFile(mcpConfigPath, JSON.stringify(mcpConfig), { mode: 0o600 });
     print(`${claimed.ticketKey}: running Run ${runId} with ${claimed.modelId}.`);
 
-    const child = spawn(claude, claudeArguments(claimed, mcpConfigPath), { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(claude, claudeArguments(claimed, mcpConfigPath), {
+      cwd: workspace.cwd,
+      env: { ...env, ...workspace.env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const recordPath = join(stateDir, `${runId}.json`);
     const recorded =
       child.pid === undefined
@@ -362,10 +396,13 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     const transcriptTimer = setInterval(() => void uploadTranscript(), transcriptMs);
 
     const heartbeat = setInterval(() => {
-      report("heartbeat").catch((error: unknown) => {
-        // Cronk no longer runs the Run, as when a User took its Ticket away: its process stops too.
-        if (error instanceof CronkError && (error.code === "run_stopped" || error.status === 404)) void stopRun(cronk, runId);
-      });
+      report<HeartbeatAnswer>("heartbeat").then(
+        (answer) => workspace.refresh(answer.repositories ?? []),
+        (error: unknown) => {
+          // Cronk no longer runs the Run, as when a User took its Ticket away: its process stops too.
+          if (error instanceof CronkError && (error.code === "run_stopped" || error.status === 404)) void stopRun(cronk, runId);
+        },
+      ).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't write fresh GitHub tokens: ${(error as Error).message}`));
     }, heartbeatMs);
 
     let resolveEnded!: () => void;
@@ -390,10 +427,23 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       // Once more after the process ended, so the Transcript in Cronk is complete.
       await uploadTranscript();
       // A Run its agent finished ended already in Cronk, which then leaves it as it is; the cost is recorded either way.
-      await report("end", { reason, ...(costUsd === undefined ? {} : { costUsd }), ...(denied.length ? { deniedTools: denied } : {}) }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`));
-      await rm(directory, { recursive: true, force: true });
+      const ended = await report<RunEnded>("end", {
+        reason,
+        ...(costUsd === undefined ? {} : { costUsd }),
+        ...(denied.length ? { deniedTools: denied } : {}),
+      }).catch((error: unknown) => {
+        print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`);
+        return undefined;
+      });
+      // The process is gone, whatever happens to its worktree: a daemon starting again has nothing of it to kill.
       await recorded;
       await rm(recordPath, { force: true });
+      if (ended?.mayComeBack) {
+        print(`${claimed.ticketKey}: Run ${runId} is lost in Cronk; keeping its worktree until it is stopped or ended.`);
+        keepWhileLost(report, cleanUp);
+      } else {
+        await cleanUp();
+      }
       held.delete(runId);
       print(`${claimed.ticketKey}: Run ${runId} ended: ${reason}.`);
       resolveEnded();
@@ -406,10 +456,35 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     });
   }
 
+  /** Asks Cronk about a lost Run until it says the Run won't come back, then cleans up. */
+  function keepWhileLost(report: <T>(path: string, body?: unknown) => Promise<T>, cleanUp: () => Promise<void>): void {
+    const check = setInterval(() => {
+      report<RunEnded>("end", { reason: "claude had exited" }).then(
+        async (ended) => {
+          if (ended.mayComeBack || !kept.has(check)) return;
+          kept.delete(check);
+          clearInterval(check);
+          await cleanUp();
+        },
+        async (error: unknown) => {
+          // Unpaired, or the Run is gone: nothing will come back for it.
+          if (error instanceof CronkError && (error.status === 401 || error.status === 404) && kept.delete(check)) {
+            clearInterval(check);
+            await cleanUp();
+          }
+        },
+      );
+    }, lostCheckMs);
+    kept.add(check);
+  }
+
   return {
     held: () => [...held.keys()],
     async stop() {
       stopped = true;
+      // Kept worktrees stay on disk, as the Runs may yet come back.
+      for (const check of kept) clearInterval(check);
+      kept.clear();
       for (const abort of aborts) abort.abort();
       await connections.catch(() => {});
       await claiming;
