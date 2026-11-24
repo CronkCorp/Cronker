@@ -439,6 +439,7 @@ describe("Runners and Agents", () => {
         triggers: [],
         managedAgents: null,
         budgetPerRun: null,
+        allowedTools: null,
         costThisMonth: [],
         createdAt: expect.any(String),
       },

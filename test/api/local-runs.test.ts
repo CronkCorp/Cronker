@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { minutes } from "../harness/clock.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
@@ -89,6 +90,7 @@ describe("claiming a local Run", () => {
       token: expect.stringMatching(/^cronk_agent_/),
       mcpUrl: `${cronk.url}/mcp`,
       repositories: [],
+      allowedTools: [...defaultAllowedTools],
     });
     // A Project listing no Repositories needs no GitHub App.
     expect(cronk.github.apiCalls).toEqual([]);
@@ -370,6 +372,66 @@ describe("a local Run's Repositories", () => {
     const failed = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
     expect(failed.state).toBe("failed");
     expect(failed.endReason).toContain("cronkcorp/cronker");
+  });
+});
+
+describe("a local Runner's allowlist", () => {
+  test("a new local Runner has the default, which includes git, package managers, test runners and Cronk's tools", async () => {
+    const { runner } = await localSetUp();
+
+    expect(runner.allowedTools).toEqual([...defaultAllowedTools]);
+    expect(runner.allowedTools).toEqual(expect.arrayContaining(["Bash(git:*)", "Bash(npm:*)", "Bash(pytest:*)", "mcp__cronk"]));
+  });
+
+  test("its User edits it, trimmed and without repeats, and it applies to the Runs claimed from then on", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp({ runLimit: 2, machineLimit: 2 });
+    const { run: before } = await delegate("Before");
+    const beforeClaim = await claim(machineToken, before.id);
+
+    const { run: after } = await delegate("After");
+    const edited = await ok("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: { allowedTools: [" Bash(git:*) ", "Bash(cargo test:*)", "Bash(git:*)"] },
+    });
+
+    expect(edited.allowedTools).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
+    expect((await ok("GET", "/api/runners", { cookie: ada }))[0].allowedTools).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
+    expect(beforeClaim.json.allowedTools).toEqual([...defaultAllowedTools]);
+    expect((await claim(machineToken, after.id)).json.allowedTools).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
+
+    const reset = await ok("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { allowedTools: null } });
+    expect(reset.allowedTools).toEqual([...defaultAllowedTools]);
+  });
+
+  test("an empty or overlong rule is refused, and a Runner of another kind has none", async () => {
+    const { ada, runner } = await localSetUp();
+    for (const allowedTools of [[" "], ["x".repeat(201)], Array.from({ length: 201 }, (_, i) => `Bash(tool${i}:*)`)]) {
+      const refused = await call("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { allowedTools } });
+      expect(refused.status).toBe(400);
+    }
+
+    const cloud = await ok("POST", "/api/runners", { cookie: ada, body: { name: "Max", kind: "subscription" } });
+    expect(cloud.allowedTools).toBeNull();
+    const refused = await call("PATCH", `/api/runners/${cloud.id}`, { cookie: ada, body: { allowedTools: ["Bash(git:*)"] } });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("runner_has_no_allowlist");
+  });
+
+  test("a Run whose process ended on tools outside the list fails naming them", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { run } = await delegate("Publish");
+    await claim(machineToken, run.id);
+
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0", deniedTools: ["Bash(npm publish)", "WebFetch"] },
+    });
+    await cronk.jobsSettled();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 0. It needed tools outside the Runner's " +
+        "allowlist: Bash(npm publish), WebFetch; widen the allowlist and Retry.",
+    );
   });
 });
 

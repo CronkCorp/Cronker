@@ -61,6 +61,11 @@ export const ClaimedRun = Type.Object({
   token: Type.String({ description: "An Agent token of the Run's Agent, minted for this Run and revoked once it ends." }),
   mcpUrl: Type.String({ format: "uri", description: "Cronk's MCP server, which the Run reaches with the token." }),
   repositories: Type.Array(ClaimedRepository, { description: "The Project's Repositories, which the Run works in." }),
+  allowedTools: Type.Array(Type.String(), {
+    description:
+      "The Runner's allowlist as it stood at the claim: the tools the Run may use without asking, for `claude " +
+      "--allowedTools` with `--permission-mode acceptEdits`.",
+  }),
 });
 export type ClaimedRun = Static<typeof ClaimedRun>;
 
@@ -91,11 +96,12 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       ticketKey: string;
       ticketId: string;
       projectId: string;
+      allowedTools: string[] | null;
     }>(
-      `select runs.state, runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
+      `select runs.state, runners.allowed_tools as "allowedTools", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
          projects.key || '-' || tickets.number as "ticketKey", tickets.id as "ticketId", tickets.project_id as "projectId"
        from runs join tickets on tickets.id = runs.ticket_id join projects on projects.id = tickets.project_id
-         join workspaces on workspaces.id = runs.workspace_id
+         join workspaces on workspaces.id = runs.workspace_id join runners on runners.id = runs.runner_id
        where runs.id = $1 and runs.runner_id = any($2::uuid[])
        for update of runs`,
       [runId, machine.runners.map((r) => r.id)],
@@ -132,7 +138,15 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
     await tx.query("update runs set last_call_at = $2 where id = $1", [runId, now]);
     return {
       unmapped: null,
-      claimed: { runId, ticketKey: run.ticketKey, brief: run.brief.text, modelId, token, mcpUrl: mcpResource(context) },
+      claimed: {
+        runId,
+        ticketKey: run.ticketKey,
+        brief: run.brief.text,
+        modelId,
+        token,
+        mcpUrl: mcpResource(context),
+        allowedTools: run.allowedTools ?? [],
+      },
       repositories: await repositoriesOf(tx, run.projectId, run.ticketId),
     };
   });
@@ -266,6 +280,14 @@ export const LocalRunEnd = Type.Object({
     maxLength: 2000,
     description: "How the `claude` process ended, such as `claude exited with code 1`.",
   }),
+  deniedTools: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 200 }), {
+      maxItems: 20,
+      description:
+        "The tool calls Claude Code denied because they were outside the Runner's allowlist, such as `Bash(npm publish)`, " +
+        "from its `result` message's `permission_denials`.",
+    }),
+  ),
   costUsd: Type.Optional(
     Type.Number({
       minimum: 0,
@@ -290,13 +312,21 @@ export type LocalRunEnded = Static<typeof LocalRunEnded>;
 
 /**
  * Reports that the `claude` process of a Run the Machine holds ended. A Run its agent didn't finish fails with the
- * reason; one that ended already, as `finish` ends it, is left as it is. A cost given is recorded as the Run's
- * estimated cost, whichever way it ended. Answers whether the Run may yet come back.
+ * reason, naming any tools outside its Runner's allowlist it was denied; one that ended already, as `finish` ends it,
+ * is left as it is. A cost given is recorded as the Run's estimated cost, whichever way it ended. Answers whether the
+ * Run may yet come back.
  */
 export async function reportEnd(context: Context, machine: MachineSelf, runId: string, end: LocalRunEnd): Promise<LocalRunEnded> {
   const { running } = await heldRun(context, machine, runId);
   const reports = runReports(context);
-  if (running) await reports.endedWithoutFinishing(runId, `The session ended without calling \`finish\`: ${end.reason.trim()}`);
+  if (running) {
+    let reason = `The session ended without calling \`finish\`: ${end.reason.trim()}`;
+    const denied = [...new Set((end.deniedTools ?? []).map((tool) => tool.trim()).filter(Boolean))];
+    if (denied.length) {
+      reason += `. It needed ${denied.length === 1 ? "a tool" : "tools"} outside the Runner's allowlist: ${denied.join(", ")}; widen the allowlist and Retry.`;
+    }
+    await reports.endedWithoutFinishing(runId, reason);
+  }
   if (end.costUsd !== undefined) await reports.cost(runId, { amount: Math.round(end.costUsd * 100), currency: "USD", estimate: true });
   if (running) return { mayComeBack: false };
   const { rowCount } = await context.db.query(

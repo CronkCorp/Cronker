@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig } from "../../daemon/src/config.js";
+import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { minutes } from "../harness/clock.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
@@ -119,7 +120,7 @@ async function localSetUp({ runLimit = 1 }: { runLimit?: number } = {}) {
   const runState = (runId: string) => ok("GET", `/api/runs/${runId}`, ada);
   /** Lets a `wait-finish` stand-in go on to finish. */
   const go = () => writeFile(`${log}.go`, "");
-  return { ada, workspace, project, start, delegate, runs, runState, scratch, cache, go };
+  return { ada, runner, workspace, project, start, delegate, runs, runState, scratch, cache, go };
 }
 
 const git = async (cwd: string, ...args: string[]) => (await promisify(execFile)("git", args, { cwd })).stdout.trim();
@@ -185,7 +186,7 @@ async function withRepository(options: { runLimit?: number } = {}) {
 const exists = (path: string) => access(path).then(() => true, () => false);
 
 describe("cronk-runner run", () => {
-  test("claims a delegated Run and runs claude with the Brief, model, stream-json and Cronk's MCP server; finish finishes the Run", async () => {
+  test("claims a delegated Run and runs claude with the Brief, model, stream-json, Cronk's MCP server, edits accepted and the Runner's allowlist; finish finishes the Run", async () => {
     const { ada, start, delegate, runs, runState, scratch } = await localSetUp();
     start("finish");
 
@@ -209,8 +210,10 @@ describe("cronk-runner run", () => {
       "--verbose",
       "--mcp-config",
       mcpConfigPath,
+      "--permission-mode",
+      "acceptEdits",
       "--allowedTools",
-      "mcp__cronk",
+      ...defaultAllowedTools,
     ]);
     expect(ran.args).not.toContain("--strict-mcp-config");
     expect(ran.mcpConfig).toEqual({
@@ -234,6 +237,41 @@ describe("cronk-runner run", () => {
       return state.state === "failed" && state;
     });
     expect(failed.endReason).toBe("The session ended without calling `finish`: claude exited with code 3: stand-in claude gave up");
+  });
+
+  test("the edited allowlist is passed, Cronk's own tools always with it", async () => {
+    const { ada, runner, start, delegate, runs, runState } = await localSetUp();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { allowedTools: ["Bash(git:*)", "Bash(cargo test:*)"] });
+    start("finish");
+
+    const { run } = await delegate("Narrow");
+
+    await eventually(async () => (await runState(run.id)).state === "finished");
+    const [ran] = await runs();
+    expect(ran.args.slice(ran.args.indexOf("--permission-mode"))).toEqual([
+      "--permission-mode",
+      "acceptEdits",
+      "--allowedTools",
+      "Bash(git:*)",
+      "Bash(cargo test:*)",
+      "mcp__cronk",
+    ]);
+  });
+
+  test("a claude that ends on a tool outside the allowlist fails the Run naming it", async () => {
+    const { start, delegate, runState } = await localSetUp();
+    start("denied:npm publish");
+
+    const { run } = await delegate("Publish it");
+
+    const failed = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 0. It needed a tool outside the Runner's " +
+        "allowlist: Bash(npm publish); widen the allowlist and Retry.",
+    );
   });
 
   test("heartbeats keep a working Run running past the lost-Run threshold, and a Run stopped in Cronk is killed", async () => {

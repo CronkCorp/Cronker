@@ -43,6 +43,8 @@ export interface ClaimedRun {
   token: string;
   mcpUrl: string;
   repositories: ClaimedRepository[];
+  /** The Runner's allowlist: Claude Code permission rules for the tools the Run may use without asking. */
+  allowedTools: string[];
 }
 
 /** What a heartbeat answers: fresh tokens for the Run's Repositories once theirs near their expiry. */
