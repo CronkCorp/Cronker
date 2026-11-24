@@ -46,15 +46,6 @@
   padding: 0 var(--space-2) var(--space-1);
   color: var(--muted);
 }
-.sidebar-archived > summary {
-  cursor: pointer;
-  list-style-position: inside;
-}
-.sidebar-note {
-  padding: 0 var(--space-2);
-  color: var(--muted);
-  font-size: 13px;
-}
 .side-link {
   display: flex;
   align-items: center;
@@ -85,16 +76,6 @@
   font-weight: 600;
   line-height: 18px;
   text-align: center;
-}
-.sidebar-key {
-  flex: none;
-  width: 52px;
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 400;
-  text-overflow: ellipsis;
 }
 .sidebar-top {
   display: flex;

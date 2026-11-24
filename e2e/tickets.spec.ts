@@ -96,7 +96,7 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await page.getByRole("region", { name: "Description" }).getByRole("link", { name: "CRONK-1" }).click();
   await expect(page.getByRole("heading", { name: "CRONK-1 Drag me" })).toBeVisible();
 
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await pickFilter(page, "Priority", "High");
   await expect(board.getByRole("link", { name: /CRONK-/ })).toHaveText([/CRONK-2 Read me/]);
   await pickFilter(page, "Priority", "Any Priority");
