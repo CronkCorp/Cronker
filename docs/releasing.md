@@ -12,7 +12,7 @@ How a new version of Cronk is cut. Installations upgrade by following **Upgradin
 ## Checklist
 
 1. **Main is green.** CI passed on the commit you'll tag, and no Ticket you want in the release is still open.
-2. **Bump the version** on a branch: set `version` in `package.json` (and `package-lock.json`) with `npm version 0.2.0 --no-git-tag-version`, and the same in `daemon/package.json` (run the same `npm version` in `daemon/`), since the `cronk-runner` daemon is released with Cronk; commit as `chore: release v0.2.0`, open a PR and merge it.
+2. **Bump the version** on a branch: set `version` in `package.json` (and `package-lock.json`) with `npm version 0.2.0 --no-git-tag-version`, and the same in `daemon/package.json` (run the same `npm version` in `daemon/`), since the `cronk-runner` daemon is released with Cronk; commit as `chore: release v0.2.0`, open a PR and merge it. If the daemon protocol changed in a way an older daemon gets wrong, also raise `minDaemonVersion` in `server/machines/machines.ts` to the new version, so Cronk refuses older daemons with `daemon_too_old`, and say under the notes' **Upgrade notes** that every Machine must upgrade `cronk-runner`.
 3. **Tag the merge commit and publish the release:**
 
    ```sh

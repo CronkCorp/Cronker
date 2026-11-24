@@ -45,7 +45,8 @@ const noSuchRun = () => new ApiError(404, "not_found", "No such Run waits for th
 /**
  * Claims a Run for the Machine. Granted once: a Run claimed already, by this Machine or another, or no longer running
  * is refused with `run_not_claimable`. A Run of a Runner the Machine doesn't serve answers as not found. A Machine
- * already running as many Runs as its limit is refused with `machine_limit_reached`.
+ * already running as many Runs as its limit is refused with `machine_limit_reached`, and a Run whose Runner has as
+ * many claimed Runs as its limit with `runner_limit_reached`.
  */
 export async function claimRun(context: Context, machine: MachineSelf, runId: string): Promise<ClaimedRun> {
   if (!isUuid(runId)) throw noSuchRun();
@@ -88,6 +89,17 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
     );
     if (Number(held[0]!.count) >= machines[0].limit) {
       throw new ApiError(409, "machine_limit_reached", `This Machine already runs ${machines[0].limit} Runs, its limit.`);
+    }
+    // A Run waiting to be claimed already counts against its Runner's limit, so this holds only once the limit was
+    // lowered below its running Runs: those claimed run on, and the rest wait for them to end.
+    const { rows: runner } = await tx.query<{ limit: number; claimed: string }>(
+      `select runners.run_limit as limit, (select count(*) from local_runs join runs claimed on claimed.id = local_runs.run_id
+         where claimed.runner_id = runners.id and claimed.state = 'running') as claimed
+       from runs join runners on runners.id = runs.runner_id where runs.id = $1`,
+      [runId],
+    );
+    if (runner[0] && Number(runner[0].claimed) >= runner[0].limit) {
+      throw new ApiError(409, "runner_limit_reached", `This Run's Runner already runs ${runner[0].limit} Runs, its limit.`);
     }
     const modelId = modelIdOf(run, run.model.trim());
     if (!modelId) return { unmapped: run.model, claimed: null };

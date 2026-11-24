@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { call, CronkError, type ClaimedRun } from "./api.js";
+import { call, CronkError, machineHeaders, type ClaimedRun } from "./api.js";
 import { readConfig, type PairedCronk } from "./config.js";
 
 /**
@@ -75,6 +75,9 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   let limit = 2;
   let claiming = Promise.resolve();
 
+  /** A call's headers for the Cronk: the Machine token, the daemon's version and the Machine's limit. */
+  const headers = (cronk: PairedCronk) => machineHeaders(cronk.token, limit);
+
   const configRead = readConfig(options.configPath).then((config) => {
     limit = config.limit;
     if (config.cronks.length === 0) print("This Machine isn't paired with any Cronk yet: run `cronk-runner login <url>`.");
@@ -91,11 +94,17 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       aborts.add(abort);
       try {
         const response = await fetch(`${cronk.url}/api/machine/events`, {
-          headers: { authorization: `Bearer ${cronk.token}`, accept: "text/event-stream" },
+          headers: { ...machineHeaders(cronk.token, limit), accept: "text/event-stream" },
           signal: abort.signal,
         });
         if (response.status === 401) {
           print(`${cronk.url}: this Machine was unpaired: run \`cronk-runner login ${cronk.url}\` again.`);
+          return;
+        }
+        if (response.status === 426) {
+          // Connecting again won't help until the daemon is upgraded.
+          const refusal = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+          print(`${cronk.url}: refused: ${refusal.error?.message ?? "this cronk-runner is too old for it; upgrade it."}`);
           return;
         }
         if (!response.ok || !response.body) throw new Error(`Cronk answered ${response.status}.`);
@@ -126,10 +135,12 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         if (stopped || held.size >= limit) return;
         let claimed: ClaimedRun;
         try {
-          claimed = await call<ClaimedRun>(cronk.url, "POST", `/api/machine/runs/${runId}/claim`, { token: cronk.token });
+          claimed = await call<ClaimedRun>(cronk.url, "POST", `/api/machine/runs/${runId}/claim`, { headers: headers(cronk) });
         } catch (error) {
           // Full on Cronk's count (it counts Runs of every daemon of this Machine): it waits for room here.
           if (error instanceof CronkError && error.code === "machine_limit_reached") return;
+          // Its Runner is full, as when its limit was lowered: it waits here, while other Runners' Runs may go.
+          if (error instanceof CronkError && error.code === "runner_limit_reached") continue;
           // Claimed by another Machine, ended meanwhile, or Cronk unreachable: the stream tells it again if it still waits.
           pending.delete(key);
           if (!(error instanceof CronkError && error.code === "run_not_claimable")) {
@@ -140,7 +151,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         pending.delete(key);
         await start(cronk, claimed).catch(async (error: unknown) => {
           const reason = `the Machine couldn't start claude: ${(error as Error).message}`;
-          await call(cronk.url, "POST", `/api/machine/runs/${runId}/end`, { token: cronk.token, body: { reason } }).catch(() => {});
+          await call(cronk.url, "POST", `/api/machine/runs/${runId}/end`, { headers: headers(cronk), body: { reason } }).catch(() => {});
           print(`${claimed.ticketKey}: ${reason}`);
         });
       }
@@ -151,7 +162,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   async function start(cronk: PairedCronk, claimed: ClaimedRun): Promise<void> {
     const { runId } = claimed;
     const report = (path: string, body?: unknown) =>
-      call(cronk.url, "POST", `/api/machine/runs/${runId}/${path}`, { token: cronk.token, body });
+      call(cronk.url, "POST", `/api/machine/runs/${runId}/${path}`, { headers: headers(cronk), body });
     const directory = await mkdtemp(join(scratchRoot, "cronk-run-"));
     const work = join(directory, "work");
     await mkdir(work);

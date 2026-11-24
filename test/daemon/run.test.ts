@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig } from "../../daemon/src/config.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { minutes } from "../harness/clock.js";
+import { refusingCronk, tooOldMessage } from "../harness/refusing-cronk.js";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
@@ -49,10 +50,11 @@ async function eventually<T>(check: () => Promise<T | undefined | false>, timeou
  * Ada with a `local` Runner and an Agent on it, the daemon's config pairing this Machine with Cronk to serve it, and
  * the stand-in `claude` on a PATH of its own; `delegate` files a Ticket and delegates it into Triage.
  */
-async function localSetUp() {
+async function localSetUp({ limit = 2, runLimit = 1 }: { limit?: number; runLimit?: number } = {}) {
   const { workspace } = await setUp(cronk);
   const ada = await signIn(cronk);
   const runner = await ok("POST", "/api/runners", ada, { name: "Laptop", kind: "local" });
+  if (runLimit !== 1) await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: runLimit });
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "laptop" });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
@@ -62,7 +64,7 @@ async function localSetUp() {
   const machine = await ok("POST", "/api/machines/pairings/approve", ada, { userCode: started.userCode, runnerIds: [runner.id] });
   const paired = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
   const configPath = join(home, "config.json");
-  await writeConfig(configPath, { limit: 2, cronks: [{ url: cronk.url, machineId: machine.id, machineName: "ada-laptop", token: paired.machineToken }] });
+  await writeConfig(configPath, { limit, cronks: [{ url: cronk.url, machineId: machine.id, machineName: "ada-laptop", token: paired.machineToken }] });
 
   const bin = join(home, "bin");
   await mkdir(bin);
@@ -74,20 +76,22 @@ async function localSetUp() {
   const log = join(home, "claude.jsonl");
   await writeFile(log, "");
 
+  const printed: string[] = [];
   const start = (mode: string, heartbeatMs?: number) => {
     daemon = runDaemon({
       configPath,
-      print: () => {},
+      print: (line) => printed.push(line),
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STAND_IN_CLAUDE_LOG: log, STAND_IN_CLAUDE_MODE: mode },
       scratchRoot: scratch,
       heartbeatMs,
     });
     return daemon;
   };
+  /** Files a Ticket and delegates it into Triage, answering its Run once it has one: the daemon connects on its own time. */
   const delegate = async (title: string) => {
     const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
-    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
+    const run = await eventually(async () => (await ok("GET", `/api/tickets/${ticket.id}/runs`, ada))[0]);
     return { ticket, run };
   };
   /** How the stand-in was run, once per run. */
@@ -97,7 +101,7 @@ async function localSetUp() {
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   const runState = (runId: string) => ok("GET", `/api/runs/${runId}`, ada);
-  return { ada, start, delegate, runs, runState, scratch };
+  return { ada, start, delegate, runs, runState, scratch, printed, configPath };
 }
 
 describe("cronk-runner run", () => {
@@ -171,5 +175,52 @@ describe("cronk-runner run", () => {
     await eventually(async () => daemon!.held().length === 0);
     expect((await runState(run.id)).state).toBe("stopped");
     expect(await readdir(scratch)).toEqual([]);
+  });
+
+  test("holds a second Run beyond the Machine's limit until the first ends", async () => {
+    const { ada, start, delegate, runState } = await localSetUp({ limit: 1, runLimit: 2 });
+    start("hang", 50);
+    const { ticket, run: first } = await delegate("First");
+    await eventually(async () => daemon!.held().includes(first.id));
+
+    const { run: second } = await delegate("Second");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(daemon!.held()).toEqual([first.id]);
+    expect((await runState(second.id)).state).toBe("running");
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+
+    await eventually(async () => daemon!.held().includes(second.id));
+    expect(daemon!.held()).toEqual([second.id]);
+  });
+
+  test("sends its version and the Machine's limit, which Cronk records", async () => {
+    const { ada, start } = await localSetUp({ limit: 3 });
+    start("finish");
+
+    const machine = await eventually(async () => {
+      const [shown] = await ok("GET", "/api/machines", ada);
+      return shown.connected && shown;
+    });
+    expect(machine.limit).toBe(3);
+    expect(machine.upgradeTo).toBeNull();
+  });
+});
+
+describe("a daemon too old for Cronk", () => {
+  test("stops connecting to it and says what to upgrade to", async () => {
+    const tooOld = await refusingCronk();
+    const configPath = join(home, "old.json");
+    await writeConfig(configPath, { limit: 2, cronks: [{ url: tooOld.url, machineId: "m", machineName: "ada-laptop", token: "cronk_machine_x" }] });
+    const printed: string[] = [];
+
+    daemon = runDaemon({ configPath, print: (line) => printed.push(line), reconnectMs: 10 });
+
+    await eventually(async () => printed.some((line) => line.includes("refused")));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(printed).toEqual([`${tooOld.url}: refused: ${tooOldMessage}`]);
+    expect(tooOld.calls()).toEqual(1);
+    expect(tooOld.headers()).toEqual(expect.objectContaining({ "x-cronk-runner-version": "0.3.0", "x-cronk-runner-limit": "2" }));
+    await tooOld.close();
   });
 });

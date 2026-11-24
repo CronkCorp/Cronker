@@ -11,6 +11,7 @@ import { Cost, costTotalsSql } from "./costs.js";
 import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
+import { runnerOffline } from "./waiting.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -61,6 +62,12 @@ export const RunnerRecord = Type.Object({
       "While its Runs' service rate limits it: until when its queue is paused, so none of its waiting Tickets start. " +
       "Cronk resumes it at the first check (every minute) at or after this time.",
   }),
+  offlineSince: Type.Union([Type.String({ format: "date-time" }), Type.Null()], {
+    description:
+      "For a `local` Runner while no Machine serving it is connected: since when, the moment its last Machine's " +
+      "stream closed, or when it was set up if none ever connected. Its Tickets wait meanwhile, refusing nothing, " +
+      "and start, highest Priority first, once one connects. Null while one is connected, and for other kinds.",
+  }),
   triggers: Type.Array(Trigger, {
     description:
       "For a `subscription` Runner, the trigger it fires per model label, the Runner's own first, then each Project's " +
@@ -94,10 +101,11 @@ export const RunnerRecord = Type.Object({
 export type RunnerRecord = Static<typeof RunnerRecord>;
 
 type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
-type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "triggers" | "managedAgents" | "cloud"> & {
+type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "offlineSince" | "triggers" | "managedAgents" | "cloud"> & {
   managedAgents: Omit<NonNullable<RunnerRecord["managedAgents"]>, "webhookUrl"> | null;
   createdAt: Date;
   pausedUntil: Date | null;
+  offlineSince: Date | null;
   triggers: TriggerRow[];
 };
 const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId', t.project_id, 'triggerId', t.trigger_id,
@@ -106,6 +114,9 @@ const triggerJson = `json_build_object('id', t.id, 'model', t.model, 'projectId'
 const columns = (now: string) => `id, name, kind, run_limit as limit,
   (select count(*)::int from runs where runs.runner_id = runners.id and runs.state = 'running') as running,
   paused_until as "pausedUntil", created_at as "createdAt",
+  case when ${runnerOffline("runners")} then greatest(runners.created_at, (select max(machines.disconnected_at)
+    from machine_runners join machines on machines.id = machine_runners.machine_id where machine_runners.runner_id = runners.id))
+  end as "offlineSince",
   case when kind = 'managed_agents' then json_build_object('agentId', managed_agent_id, 'environmentId', managed_environment_id,
     'webhookSecretSaved', webhook_secret_sealed is not null)
   end as "managedAgents",
@@ -120,6 +131,7 @@ const present = (context: Context, row: Row): RunnerRecord => ({
   cloud: runsInCloud(context.runners, row.kind),
   managedAgents: row.managedAgents && { ...row.managedAgents, webhookUrl: managedAgentsWebhookUrl(context, row.id) },
   pausedUntil: row.pausedUntil?.toISOString() ?? null,
+  offlineSince: row.offlineSince?.toISOString() ?? null,
   triggers: row.triggers.map(presentTrigger),
   createdAt: row.createdAt.toISOString(),
 });

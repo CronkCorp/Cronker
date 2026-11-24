@@ -20,7 +20,7 @@ import { Cost } from "./costs.js";
 import { isLocalOnly, type RunReports, type RunToStart, type StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
-import { inArchivedProject, isBlocked, queueOrder } from "./waiting.js";
+import { inArchivedProject, isBlocked, queueOrder, runnerOffline } from "./waiting.js";
 import { userName } from "../identity/user.js";
 import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
 import { backported, backportingOutcome, backportOf, queueBackports, type Backport } from "../pipeline/backports.js";
@@ -475,11 +475,16 @@ function runnerChanged(context: Context, tx: Tx, { runnerId, ownerId }: { runner
 
 /**
  * Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue:
- * none while its queue is paused by a rate limit.
+ * none while its queue is paused by a rate limit, or while it is a `local` Runner with no Machine connected.
  */
 async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<boolean> {
   const { limit, paused } = await lockRunner(tx, runnerId);
   if (paused) return false;
+  // Read once the Runner is locked: a Machine connecting locks it too, so this sees a connection that committed.
+  const { rows: offline } = await tx.query<{ offline: boolean }>(`select ${runnerOffline("runners")} as offline from runners where id = $1`, [
+    runnerId,
+  ]);
+  if (offline[0]?.offline) return false;
   const { rows } = await tx.query<{ taken: number }>(
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
