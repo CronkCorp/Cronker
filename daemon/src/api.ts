@@ -22,6 +22,20 @@ export interface MachineSelf {
   runners: { id: string; name: string }[];
 }
 
+/** A fresh GitHub App installation token for one of a Run's Repositories. */
+export interface RepositoryToken {
+  /** `owner/name`. */
+  fullName: string;
+  token: string;
+  expiresAt: string;
+}
+
+/** One of a Run's Repositories, with where it is cloned from and the branch to start on, if the remote has it. */
+export interface ClaimedRepository extends RepositoryToken {
+  cloneUrl: string;
+  startBranch: string | null;
+}
+
 /** What claiming a Run answers: what the daemon needs to run `claude` for it. */
 export interface ClaimedRun {
   runId: string;
@@ -30,8 +44,19 @@ export interface ClaimedRun {
   modelId: string;
   token: string;
   mcpUrl: string;
+  repositories: ClaimedRepository[];
   /** The Runner's allowlist: Claude Code permission rules for the tools the Run may use without asking. */
   allowedTools: string[];
+}
+
+/** What a heartbeat answers: fresh tokens for the Run's Repositories once theirs near their expiry. */
+export interface HeartbeatAnswer {
+  repositories: RepositoryToken[];
+}
+
+/** What reporting a Run's end answers: whether it is lost and may yet come back, so its worktree is kept. */
+export interface RunEnded {
+  mayComeBack: boolean;
 }
 
 /** A refusal from Cronk, with its error code. */

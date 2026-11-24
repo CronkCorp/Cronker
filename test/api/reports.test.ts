@@ -90,7 +90,7 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0085_runner_allowlists.sql");
     // Reading whether a `local` Runner is offline needs its Machines' connections.
     await cronk.applyAhead("0082_machines.sql");
-    await cronk.applyAhead("0086_machine_connections.sql");
+    await cronk.applyAhead("0087_machine_connections.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

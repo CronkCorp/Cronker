@@ -25,7 +25,9 @@ import {
   claimRun,
   ClaimedRun,
   heartbeat,
+  HeartbeatAnswer,
   LocalRunEnd,
+  LocalRunEnded,
   LocalSession,
   reportEnd,
   reportSession,
@@ -242,11 +244,13 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Claim a Run, as a Machine's daemon",
           description:
             "Claims a Run of a Runner the Machine serves, answering what the daemon needs to run `claude`: the Brief, the " +
-            "model id, an Agent token minted for the Run (revoked once the Run ends) and Cronk's MCP URL. A Run is granted " +
+            "model id, an Agent token minted for the Run (revoked once the Run ends), Cronk's MCP URL, and the Project's " +
+            "Repositories with the branch to start from and fresh GitHub App installation tokens. A Run is granted " +
             "once: a Run claimed already or no longer running is refused with `run_not_claimable`, a Machine running " +
             "as many Runs as its limit with `machine_limit_reached`, and a Run whose Runner has as many claimed Runs as " +
-            "its limit, as after its limit was lowered, with `runner_limit_reached`. A Run whose model label lost its model id fails, " +
-            "refused with `no_model_id`.",
+            "its limit, as after its limit was lowered, with `runner_limit_reached`. A Run whose model label lost its " +
+            "model id fails, refused with `no_model_id`, and one whose Repositories Cronk can't get GitHub tokens for with " +
+            "`repositories_unavailable`.",
           security: [{ machineToken: [] }],
           params: runParams,
           response: { 200: ClaimedRun, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody, 426: ErrorBody },
@@ -262,17 +266,15 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Machines"],
           summary: "Heartbeat a claimed Run, as a Machine's daemon",
           description:
-            "Counts as a call naming the Run, so a working Run isn't lost. Refused with `run_stopped` once the Run no " +
-            "longer runs in Cronk: the daemon then kills its process.",
+            "Counts as a call naming the Run, so a working Run isn't lost, and answers fresh GitHub tokens for the Run's " +
+            "Repositories once theirs expire within ten minutes. Refused with `run_stopped` once the Run no longer runs " +
+            "in Cronk: the daemon then kills its process.",
           security: [{ machineToken: [] }],
           params: runParams,
-          response: { 204: Type.Null(), 401: ErrorBody, 404: ErrorBody, 409: ErrorBody, 426: ErrorBody },
+          response: { 200: HeartbeatAnswer, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody, 426: ErrorBody },
         },
       },
-      async (request, reply) => {
-        await heartbeat(context, await requireMachine(context, request), request.params.runId);
-        return reply.code(204).send(null);
-      },
+      async (request) => heartbeat(context, await requireMachine(context, request), request.params.runId),
     );
 
     app.post(
@@ -303,17 +305,15 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "A Run whose agent didn't call `finish` fails with the reason given, naming any `deniedTools` as outside its " +
             "Runner's allowlist. A Run that ended already, as `finish` ends it, is left as it is. A `costUsd` given is " +
-            "recorded as the Run's cost, marked as an estimate.",
+            "recorded as the Run's cost, marked as an estimate. Answers whether the Run is lost and may yet come back, " +
+            "while its Ticket hasn't moved on: the daemon keeps its worktree until then.",
           security: [{ machineToken: [] }],
           params: runParams,
           body: LocalRunEnd,
-          response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 426: ErrorBody },
+          response: { 200: LocalRunEnded, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 426: ErrorBody },
         },
       },
-      async (request, reply) => {
-        await reportEnd(context, await requireMachine(context, request), request.params.runId, request.body);
-        return reply.code(204).send(null);
-      },
+      async (request) => reportEnd(context, await requireMachine(context, request), request.params.runId, request.body),
     );
 
     app.put(
