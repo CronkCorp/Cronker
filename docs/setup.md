@@ -183,7 +183,32 @@ Saving checks only that the secret starts with `whsec_`. With a wrong one, or no
 
 Each Run records what its session cost at Anthropic's list prices once it ends: the Run shows it on the Ticket's timeline, the Ticket's side panel totals its Runs, and the Runner's card totals its Runs that ended this calendar month (in UTC). List prices are not what a discounted contract bills, so your invoice may be lower. Subscription Runs report no cost. To cap what one Run may spend, set the card's **Budget per Run** (in US dollars; empty, the default, is none): each session started from then on gets it as its budget, and a Run whose session reaches it fails with *budget reached* and waits in your Inbox with **Retry**. A session may pass its budget by up to one model request before Anthropic stops it.
 
-## 11. Get your Inbox on your phone (optional)
+## 11. Run on your own computer (optional)
+
+A local Runner runs your Agents' Runs with Claude Code on a Machine of your own, such as your laptop, on your Claude subscription. The `cronk-runner` daemon on that Machine keeps a connection to Cronk open, claims the Runs of the local Runners it serves and runs each with `claude -p`; Tickets labelled `local-only` only ever run there. It runs on macOS and Linux, not Windows.
+
+1. On **Runners**, under **Set up a Runner**, give it a name such as `My laptop`, choose the kind **Local (your own Machine)** and set it up. On the Agent's page, set **Runner** to it.
+2. On the Machine, with Node 22 or later, install the daemon:
+
+   ```sh
+   npm install -g cronk-runner
+   ```
+
+3. Pair the Machine with Cronk: `cronk-runner login https://cronk.example.com` prints a link and a code: open the link signed in as yourself, approve the code and pick the local Runners this Machine serves.
+4. Install it as a service, so it starts at login and comes back if it crashes:
+
+   ```sh
+   cronk-runner install
+   ```
+
+   On macOS that is a launchd agent (`~/Library/LaunchAgents/net.cronk.runner.plist`, logging to `~/Library/Logs/cronk-runner.log`); on Linux a systemd user service (`systemctl --user status cronk-runner`, its log with `journalctl --user -u cronk-runner`). On Linux, run `loginctl enable-linger` once to keep it running while you're logged out.
+5. Check it: `cronk-runner status` lists the Cronks the Machine is paired with and the Runners it serves.
+
+`install`, `run` and `status` first check that `claude` and `git` are on the `PATH` and that Claude Code is signed in (`claude auth login`), and name whatever is missing; `install` installs nothing until they are. The service keeps the `PATH` and the Node that `install` ran with, so run `cronk-runner install` again from your usual shell after installing new tools or another Node. `cronk-runner uninstall` stops the service and removes it. To run the daemon in a terminal instead, use `cronk-runner run`.
+
+To upgrade it, run `npm install -g cronk-runner@latest`, then `cronk-runner install` again.
+
+## 12. Get your Inbox on your phone (optional)
 
 Each User can add **webhooks** for a Workspace under **Account settings → Webhooks**: a name, an `https` URL and the Inbox kinds it gets. A new webhook gets Questions, *needs you* and Runs gone wrong (failed, lost and unstarted Runs); To review, Unverified, Discovered, Undelegated, New knowledge (Decisions, Terms, Documents and Artifacts an Agent created) and, for Admins, To reassign can be added. Plain `http` is accepted only to `localhost`, `127.0.0.1` or `[::1]`, and only when Cronk itself runs on `http://localhost`. So that a webhook can't be used to probe the network Cronk runs in, a URL whose host is or resolves to a private, loopback, link-local or otherwise non-public address, such as `10.0.0.5`, `192.168.1.10`, `169.254.169.254` or `fd00::1`, is refused, and each delivery checks the address it connects to again, so a host whose DNS changes to one later isn't contacted; redirects aren't followed. The exception is `localhost`, `127.0.0.1` and `[::1]` on a Cronk running on `http://localhost`. To deliver to a receiver on your own network, such as Home Assistant, start Cronk with `CRONK_WEBHOOKS_ALLOW_PRIVATE=true`: only whoever runs the server can set it, and it lets every User's webhooks reach private addresses (still over `https`). A webhook saved with a private address before Cronk refused them gets no deliveries until it is set. Webhooks need `CRONK_SECRET_KEY`, since Cronk keeps each one's secret encrypted to sign with.
 
@@ -277,6 +302,8 @@ Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releas
    Without Docker: check out the release the same way, then `npm ci && npm run build` and restart `npm start`.
 
 3. **Check it came up.** Cronk applies new migrations itself when it starts, one start at a time; `docker compose logs cronk` shows them, and then Cronk listening. Upgrade when no Runs are running if you can: a Run whose session can't reach Cronk while it restarts may fail or be lost, and then waits in your Inbox with Retry.
+
+4. **Upgrade the daemon** on each Machine with a local Runner (step 11): `npm install -g cronk-runner@latest`, then `cronk-runner install`.
 
 To go back, restore the backup into an empty database and check out the release you came from: a newer database can't be used by an older Cronk.
 
