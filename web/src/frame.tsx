@@ -34,8 +34,8 @@ interface Place {
 const PlaceContext = createContext<(place: Place) => void>(() => {});
 
 /**
- * Tells the sidebar where the page is: its item, and the Project whose Documents, Terms, Decisions and Artifacts the
- * sidebar then leads to. A Ticket marks its Project; a Document marks Documents.
+ * Tells the sidebar where the page is: its item, and the Project, which becomes the active one whose Tickets,
+ * Documents, Terms, Decisions and Artifacts the sidebar leads to. A Ticket marks Tickets; a Document marks Documents.
  */
 export function usePlace(area: Area, projectId: string | null = null): void {
   const set = useContext(PlaceContext);
@@ -112,14 +112,28 @@ function useActiveProjectOf(
   }, [workspaceId, pageProject]);
   return useMemo(() => {
     if (workspaceId === null || own === null) return null;
-    if (pageProject) return pageProject;
-    const remembered = storedActiveProject(workspaceId);
-    return (
-      own.find((p) => p.id === remembered) ??
-      own.filter((p) => p.archivedAt === null).sort((a, b) => a.key.localeCompare(b.key))[0] ??
-      null
-    );
+    return pageProject ?? landingProject(workspaceId, own);
   }, [workspaceId, own, pageProject]);
+}
+
+/**
+ * The Project a Workspace opens on when no page names one: the one last active there on this browser while it is
+ * still among its Projects, else the first unarchived one by key, else none.
+ */
+export function landingProject(workspaceId: string, projects: ProjectSummary[]): ProjectSummary | null {
+  const remembered = storedActiveProject(workspaceId);
+  return (
+    projects.find((p) => p.id === remembered) ??
+    projects.filter((p) => p.archivedAt === null).sort((a, b) => a.key.localeCompare(b.key))[0] ??
+    null
+  );
+}
+
+/** Where opening a Workspace leads: its active Project's board, or its Projects overview when it has no Project. */
+export async function workspaceLanding(workspace: WorkspaceSummary): Promise<string> {
+  const projects = await api.projects(workspace.id).catch((): ProjectSummary[] => []);
+  const project = landingProject(workspace.id, projects);
+  return project ? addresses.project(workspace, project.key) : addresses.workspace(workspace);
 }
 
 /** Below this width the sidebar is a strip with a menu, which neither hides nor shows; as in `frame.css`. */
@@ -213,18 +227,10 @@ function Sidebar({
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const to = useAddresses();
-  const project = projects?.find((p) => p.id === place.projectId) ?? null;
-  const active = projects?.filter((p) => p.archivedAt === null) ?? null;
-  const archived = projects?.filter((p) => p.archivedAt !== null) ?? [];
-  const projectLink = (p: ProjectSummary) => (
-    <SideLink key={p.id} to={to.project(p)} current={area === "project" && place.projectId === p.id}>
-      <span className="sidebar-key">{p.key}</span> {p.name}
-    </SideLink>
-  );
   // On a phone, following a link out of the menu closes it.
   const closing = () => setMenuOpen(false);
   const area = place.area;
-  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") => to.knowledge(project, kind);
+  const knowledge = (kind: "documents" | "glossary" | "decisions" | "artifacts") => to.knowledge(activeProject, kind);
 
   return (
     <nav aria-label="Sidebar" className={`sidebar${menuOpen ? " sidebar-open" : ""}`}>
@@ -237,6 +243,12 @@ function Sidebar({
           <>
             <SearchBox key={`search ${current.id}`} />
             <InboxLink key={current.id} workspaceId={current.id} current={area === "inbox"} />
+            {activeProject && (
+              // The board, the List, a Ticket and Project settings are all the Project's Tickets' pages.
+              <SideLink to={to.project(activeProject)} current={area === "project"}>
+                Tickets
+              </SideLink>
+            )}
             <SideLink to={knowledge("documents")} current={area === "documents"}>
               Documents
             </SideLink>
@@ -262,24 +274,6 @@ function Sidebar({
         </button>
       </div>
       <div id="sidebar-more" className="sidebar-more" onClick={(event) => (event.target as HTMLElement).closest("a") && closing()}>
-        {current && (
-          <div className="sidebar-group">
-            <h2 className="sidebar-group-label">Projects</h2>
-            {active?.length === 0 && <p className="sidebar-note">{archived.length > 0 ? "None but archived ones." : "None yet."}</p>}
-            {active?.map(projectLink)}
-          </div>
-        )}
-        {current && archived.length > 0 && (
-          // Folded unless the page on screen is in an archived Project, so it is out of the way but the current item shows.
-          <details
-            key={archived.some((p) => p.id === place.projectId) ? "open" : "folded"}
-            className="sidebar-group sidebar-archived"
-            open={archived.some((p) => p.id === place.projectId)}
-          >
-            <summary className="sidebar-group-label">Archived</summary>
-            {archived.map(projectLink)}
-          </details>
-        )}
         <div className="sidebar-group">
           <h2 className="sidebar-group-label">Workspace</h2>
           {current && (
@@ -347,7 +341,7 @@ function SideLink({ to, current, children }: { to: string; current: boolean; chi
 
 /**
  * The Workspace and the active Project, under the Workspace's mark: its menu opens another Project's board, the
- * Projects overview or a New Project, and switches Workspace or creates one.
+ * Projects overview or a New Project, and opens another Workspace's active Project or creates a Workspace.
  */
 function WorkspaceProjectSwitcher({
   workspaces,
@@ -430,7 +424,7 @@ function WorkspaceProjectSwitcher({
             value={current?.id ?? ""}
             onChange={(id) => {
               const workspace = workspaces.find((w) => w.id === id);
-              if (workspace) navigate(addresses.workspace(workspace));
+              if (workspace) void workspaceLanding(workspace).then(navigate);
             }}
           >
             {workspaces.map((w) => (

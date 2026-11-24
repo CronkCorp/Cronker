@@ -17,7 +17,7 @@ async function crowdedBoard(page: Page, cronk: StartedCronk) {
   const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
   const open = async () => {
     await signInInBrowser(page, cronk);
-    await page.getByRole("link", { name: "CRONK Cronker" }).click();
+    await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
     const board = page.getByRole("region", { name: "Board" });
     await expect(board.getByRole("region", { name: "Backlog", exact: true })).toBeVisible();
     return { board, lane: (name: string) => board.getByRole("region", { name, exact: true }) };
@@ -122,7 +122,7 @@ test("a card dragged onto another column moves its Ticket there, onto its own co
     if (request.method() === "PATCH" && request.url().includes("/api/tickets/")) moves.push(request.url());
   });
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
   const shipItCard = (name: string) => lane(name).getByRole("link", { name: /CRONK-1 Ship it/ });
@@ -168,7 +168,7 @@ test("a card picked up by its title or key drags without selecting text, while a
   const shipIt = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
   const card = (name: string) => lane(name).getByRole("link", { name: /CRONK-1 Ship it/ });
@@ -234,7 +234,7 @@ test("a card drags from anywhere on it: its link's own box, its Labels, its avat
   await call("POST", `/api/tickets/${shipIt.id}/relations`, { kind: "blockedBy", ticketId: blocker.id });
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
   const link = (name: string) => lane(name).getByRole("link", { name: /CRONK-2 Ship it/ });
@@ -353,7 +353,7 @@ test("Group Sub-Tickets folds them under their parent in their own column with a
   await call("PATCH", `/api/tickets/${columns.id}`, { statusId: status("Done") });
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
   const backlog = lane("Backlog");
@@ -490,7 +490,7 @@ test("a merge making a Ticket's Pull Request conflict marks its In Review card a
   const other = { id: 609, number: 9, title: "Speed up the board", html_url: "https://github.com/cronkcorp/cronker/pull/9", head: { ref: "o", sha: "o1" } };
   await pullRequest("opened", other);
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const card = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "In Review", exact: true }).getByRole("link", { name: /CRONK-1 Make it so/ });
   await expect(card).toBeVisible();
   await expect(card).not.toContainText("Conflicts with");
@@ -555,7 +555,7 @@ test("Merge queues Tickets: the Merge column lists them in queue order with thei
     cronk.github.pullRequest(cronker, n, { headSha: `c${n}`, mergeable: true });
   }
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const mergeColumn = board.getByRole("region", { name: "Merge", exact: true });
 
@@ -622,7 +622,7 @@ test("a Ticket with two queued Pull Requests stays in Merge after the first merg
   // The website's Pull Request is held back, so only cronker's merges on the first pass.
   const website = cronk.github.pullRequest(installation.repositories[1]!, 2, { headSha: "c1", mergeable: null });
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await page.getByRole("region", { name: "Board" }).getByRole("link", { name: /CRONK-1/ }).click();
   const queue = page.getByRole("region", { name: "Merge Queue" });
   await queue.getByRole("button", { name: "Merge" }).click();
@@ -680,7 +680,7 @@ test("a queued head behind its base branch shows Updating branch, then Waiting f
   await call("POST", `/api/tickets/${ticket.id}/merge`);
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const cards = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "Merge", exact: true }).locator(".card-link");
   await expect(cards).toHaveText([/CRONK-1.*#1 in queue/]);
 
@@ -751,7 +751,7 @@ test("a queued head conflicting with its base branch shows Resolving conflict, t
   onGitHub[0]!.conflicts = [onGitHub[1]!];
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const cards = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "Merge", exact: true }).locator(".card-link");
   await expect(cards).toHaveText([/CRONK-1.*#1 in queue/, /CRONK-2.*#2 in queue/]);
 
@@ -814,7 +814,7 @@ test("a Ticket of a cut Release merging after the Cut shows Backporting in Merge
   await call("POST", `/api/tickets/${ticket.id}/merge`);
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const cards = page.getByRole("region", { name: "Board" }).getByRole("region", { name: "Merge", exact: true }).locator(".card-link");
   await expect(cards).toHaveText([/CRONK-1.*#1 in queue/]);
 

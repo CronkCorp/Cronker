@@ -20,12 +20,14 @@ async function withProjects(page: Page, cronk: StartedCronk) {
   const cookie = await signIn(cronk);
   for (const body of projects) await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body });
   await signInInBrowser(page, cronk);
+  return workspace;
 }
 
 test("the scope dropdown lists the Workspace, then the Projects by key, and choosing one goes to its page", async ({ page, cronk }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  await withProjects(page, cronk);
-  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Terms" }).click();
+  const workspace = await withProjects(page, cronk);
+  // The sidebar leads to the active Project's Terms; the Workspace's own page is kept for old links.
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/glossary`);
   await expect(page.getByRole("heading", { name: "Terms", level: 1 })).toBeVisible();
   const workspacePage = page.url();
 

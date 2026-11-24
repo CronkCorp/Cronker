@@ -23,7 +23,7 @@ test("the Releases page, a Ticket's Release field and its card's chip follow liv
   const ticket = await asBob("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await page.getByRole("button", { name: "More of this Project" }).click();
   await page.getByRole("menuitem", { name: "Releases" }).click();
   await expect(page.getByRole("heading", { name: "Releases", level: 1 })).toBeVisible();
@@ -86,7 +86,7 @@ test("Cut creates the release branches and shows each Repository's commit", asyn
   const [cronker, website] = installation.repositories.map((r) => branchesOf(r).get("main")!);
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await page.getByRole("button", { name: "More of this Project" }).click();
   await page.getByRole("menuitem", { name: "Releases" }).click();
   const release = page.getByRole("region", { name: "Release v0.3.0" });
@@ -127,7 +127,7 @@ test("Release lists open Tickets, goes ahead when confirmed and links each GitHu
   await asAda("POST", `/api/projects/${project.id}/releases/${created.id}/cut`, {});
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await page.getByRole("button", { name: "More of this Project" }).click();
   await page.getByRole("menuitem", { name: "Releases" }).click();
   const release = page.getByRole("region", { name: "Release v0.3.0" });
@@ -183,7 +183,7 @@ test("a completed Ticket's Release field offers cut Releases", async ({ page, cr
   await asAda("PATCH", `/api/tickets/${completed.id}`, { statusId: done });
 
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   await board.getByRole("link", { name: /CRONK-1 Still open/ }).click();
   await fieldPicker(page, "Release").click();

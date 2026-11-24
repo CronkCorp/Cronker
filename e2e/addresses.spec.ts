@@ -17,7 +17,7 @@ test("a Ticket opens at its key's address, any letter case leading to the canoni
   await withTicket(cronk);
   await signInInBrowser(page, cronk);
 
-  await page.getByRole("link", { name: /RP Roadmap/ }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   await expect(page).toHaveURL(`${cronk.url}/adas-workspace/projects/RP`);
   await page.getByRole("link", { name: /RP-1 Readable addresses/ }).click();
   await expect(page).toHaveURL(`${cronk.url}/adas-workspace/tickets/RP-1`);
