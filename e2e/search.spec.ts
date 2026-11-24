@@ -33,7 +33,7 @@ test("search from the sidebar, see results grouped by kind with highlighted snip
   await expect(labelsVanish.locator("mark")).toHaveText("Merging");
   await expect(page.getByRole("region", { name: "Documents" }).locator("mark")).toHaveText("merge");
 
-  await page.getByLabel("Project").selectOption({ label: "CRONK Cronker" });
+  await page.getByRole("combobox", { name: "Project" }).selectOption({ label: "CRONK Cronker" });
   await expect(page).toHaveURL(/\/search\?q=merged&project=/);
   await expect(results.getByRole("heading", { level: 2 })).toHaveText(["Tickets 1", "Terms 1"]);
 
