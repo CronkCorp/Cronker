@@ -25,7 +25,7 @@ import {
 } from "./transcripts.js";
 
 /** The largest upload Cronk reads; what it keeps of one is capped further (ADR 0006). */
-const uploadLimitBytes = 256 * 1024 * 1024;
+export const uploadLimitBytes = 256 * 1024 * 1024;
 
 /** The Agent whose token the request carries; a User, or a request with no token, is refused. */
 async function requireAgent(context: Context, request: FastifyRequest): Promise<AgentCaller> {

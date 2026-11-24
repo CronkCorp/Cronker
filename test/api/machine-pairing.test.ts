@@ -45,7 +45,7 @@ async function pair(ada: string, runnerIds: string[]) {
 }
 
 describe("a local Runner", () => {
-  test("can be set up, isn't cloud, and takes a local-only Ticket's Delegation and its Run", async () => {
+  test("can be set up, isn't cloud, and takes a local-only Ticket's Delegation, which waits while no Machine is connected", async () => {
     const { workspace, ada, runner } = await adaWithLocalRunner();
     expect(runner).toEqual(expect.objectContaining({ kind: "local", cloud: false }));
 
@@ -58,8 +58,8 @@ describe("a local Runner", () => {
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: agent.id, statusId: triage } });
 
-    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, { cookie: ada });
-    expect(run.state).toBe("running");
+    expect(await ok("GET", `/api/tickets/${ticket.id}/runs`, { cookie: ada })).toEqual([]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).waiting).toBe("runnerOffline");
   });
 });
 

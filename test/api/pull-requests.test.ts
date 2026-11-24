@@ -1607,6 +1607,11 @@ describe("Send-back Comments written before they were marked", () => {
     await cronk.applyAhead("0075_releases.sql");
     // And its Backport.
     await cronk.applyAhead("0078_backports.sql");
+    // And its Runs' costs, estimates apart.
+    await cronk.applyAhead("0084_cost_estimates.sql");
+    // Reading whether a `local` Runner is offline needs its Machines' connections.
+    await cronk.applyAhead("0082_machines.sql");
+    await cronk.applyAhead("0088_machine_connections.sql");
     const { workspace, user } = await setUp(cronk);
     const cookie = await signIn(cronk);
     const project = await post(cookie, `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });

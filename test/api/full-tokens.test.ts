@@ -90,14 +90,17 @@ const moves = async (ticketId: string, as: Request) =>
 describe("the upgrade", () => {
   test("a token stored as full before it is Write after it, acting exactly as before", async () => {
     cronk = await startCronk({ migrateBefore: "0079_token_levels.sql" });
+    // Reading a Ticket needs its Runs' costs, estimates apart.
+    await cronk.applyAhead("0084_cost_estimates.sql");
     const { workspace } = await setUp(cronk);
     const ada = { cookie: await signIn(cronk) };
     const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
-    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
     const agent = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "claude-max" });
     const { secret } = await ok("POST", `/api/agents/${agent.id}/tokens`, ada, { name: "laptop", access: "full" });
 
     await cronk.upgrade();
+    // Made after the upgrade: Tickets read what later migrations add, such as whether a Machine is connected.
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title: "Make it so" });
 
     const listed = await ok("GET", `/api/agents/${agent.id}/tokens`, ada);
     expect(listed.map((t: { name: string; access: string }) => [t.name, t.access])).toEqual([["laptop", "write"]]);

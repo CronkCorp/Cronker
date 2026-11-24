@@ -377,7 +377,7 @@ describe("cost", () => {
 
     await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready" });
 
-    expect((await ok("GET", `/api/runs/${run.id}`, ada)).cost).toEqual({ amount: 137, currency: "USD" });
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).cost).toEqual({ amount: 137, currency: "USD", estimate: false });
   });
 
   test("a cost reported once the Run ended tells its Owner's Runner stream again, for the month's total", async () => {
@@ -392,7 +392,7 @@ describe("cost", () => {
       // The Run ending frees its slot; its cost, reported after, changes the month's total.
       expect(await stream.next()).toEqual({ type: "runner.changed", data: { runnerId: runner.id } });
       expect(await stream.next()).toEqual({ type: "runner.changed", data: { runnerId: runner.id } });
-      expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([{ amount: 137, currency: "USD" }]);
+      expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([{ amount: 137, currency: "USD", estimate: false }]);
     } finally {
       stream.close();
     }
@@ -407,7 +407,7 @@ describe("cost", () => {
 
     const stopped = await ok("GET", `/api/runs/${run.id}`, ada);
     expect(stopped.state).toBe("stopped");
-    expect(stopped.cost).toEqual({ amount: 42, currency: "USD" });
+    expect(stopped.cost).toEqual({ amount: 42, currency: "USD", estimate: false });
   });
 
   test("the Ticket totals what its Runs cost", async () => {
@@ -424,10 +424,10 @@ describe("cost", () => {
     await cronk.pollManagedAgentsSessions();
 
     expect((await runsOf(ticket.id, ada)).map((r: { cost: unknown }) => r.cost)).toEqual([
-      { amount: 100, currency: "USD" },
-      { amount: 250, currency: "USD" },
+      { amount: 100, currency: "USD", estimate: false },
+      { amount: 250, currency: "USD", estimate: false },
     ]);
-    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([{ amount: 350, currency: "USD" }]);
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([{ amount: 350, currency: "USD", estimate: false }]);
   });
 
   test("the Runner totals what its Runs that ended this calendar month cost", async () => {
@@ -442,7 +442,7 @@ describe("cost", () => {
     cronk.managedAgents.charge(second.session.id, 30);
     cronk.managedAgents.terminate(second.session.id);
     await cronk.pollManagedAgentsSessions();
-    expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([{ amount: 130, currency: "USD" }]);
+    expect((await ok("GET", "/api/runners", ada))[0].costThisMonth).toEqual([{ amount: 130, currency: "USD", estimate: false }]);
 
     const now = cronk.clock.now();
     cronk.clock.advance(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) - now.getTime());
@@ -454,7 +454,7 @@ describe("cost", () => {
     cronk.managedAgents.idle(third.id, "end_turn");
     await cronk.pollManagedAgentsSessions();
 
-    expect((await ok("GET", "/api/runners", nextMonth))[0].costThisMonth).toEqual([{ amount: 45, currency: "USD" }]);
+    expect((await ok("GET", "/api/runners", nextMonth))[0].costThisMonth).toEqual([{ amount: 45, currency: "USD", estimate: false }]);
   });
 });
 
@@ -499,7 +499,7 @@ describe("budget per Run", () => {
     expect(failed.state).toBe("failed");
     expect(failed.endReason).toMatch(/^Budget reached/);
     expect(failed.endReason).toContain("$5.00");
-    expect(failed.cost).toEqual({ amount: 503, currency: "USD" });
+    expect(failed.cost).toEqual({ amount: 503, currency: "USD", estimate: false });
     expect(cronk.managedAgents.session(session.id).archived).toBe(true);
     expect(JSON.stringify(await inbox())).toContain(ticket.id);
     await ok("POST", `/api/tickets/${ticket.id}/retry`, ada);

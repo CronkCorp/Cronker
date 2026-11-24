@@ -5,12 +5,20 @@ import { Type } from "typebox";
  * Tickets build their schema and columns from it as they load, before `runs.ts` would have finished loading.
  */
 export const Waiting = Type.Union(
-  [Type.Literal("runnerSlot"), Type.Literal("runnerPaused"), Type.Literal("blocked"), Type.Literal("archived"), Type.Null()],
+  [
+    Type.Literal("runnerSlot"),
+    Type.Literal("runnerPaused"),
+    Type.Literal("runnerOffline"),
+    Type.Literal("blocked"),
+    Type.Literal("archived"),
+    Type.Null(),
+  ],
   {
     description:
       "What the Ticket waits for before it gets the Run it needs: `runnerSlot` while its Runner already has as many " +
       "Runs as its limit, `runnerPaused` while its Runner's queue is paused by a rate limit (see the Runner's " +
-      "`pausedUntil`), `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished, `archived` while " +
+      "`pausedUntil`), `runnerOffline` while its Runner is a `local` one with no " +
+      "Machine serving it connected (see the Runner's `offlineSince`), `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished, `archived` while " +
       "its Project is archived: nothing starts for it, and the Runner's queue passes it by, until an Admin unarchives it. " +
       "Null when it needs no Run, or has one.",
   },
@@ -39,10 +47,21 @@ export const isBlocked = (alias: string) =>
 export const inArchivedProject = (alias: string) =>
   `exists (select 1 from projects archived where archived.id = ${alias}.project_id and archived.archived_at is not null)`;
 
+/**
+ * SQL that holds while the Runner `alias` is a `local` Runner with no Machine serving it connected: offline, so its
+ * Tickets wait rather than start, until one connects.
+ */
+export const runnerOffline = (alias: string) =>
+  `(${alias}.kind = 'local' and not exists (select 1 from machine_runners
+     join machines on machines.id = machine_runners.machine_id
+     where machine_runners.runner_id = ${alias}.id and machines.revoked_at is null and machines.connections > 0))`;
+
 /** SQL for what the Ticket `alias` waits for, as `Waiting`. */
 export const waitingColumn = (alias: string) =>
   `case when not ${alias}.waits_for_run then null when ${inArchivedProject(alias)} then 'archived'
      when ${isBlocked(alias)} then 'blocked'
+     when exists (select 1 from agents join runners on runners.id = agents.runner_id
+       where agents.id = ${alias}.delegate_id and ${runnerOffline("runners")}) then 'runnerOffline'
      when exists (select 1 from agents join runners on runners.id = agents.runner_id
        where agents.id = ${alias}.delegate_id and runners.paused_until is not null) then 'runnerPaused'
      else 'runnerSlot' end`;

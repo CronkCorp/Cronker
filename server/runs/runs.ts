@@ -20,7 +20,7 @@ import { Cost } from "./costs.js";
 import { isLocalOnly, type RunReports, type RunToStart, type StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
-import { inArchivedProject, isBlocked, queueOrder } from "./waiting.js";
+import { inArchivedProject, isBlocked, queueOrder, runnerOffline } from "./waiting.js";
 import { userName } from "../identity/user.js";
 import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
 import { backported, backportingOutcome, backportOf, queueBackports, type Backport } from "../pipeline/backports.js";
@@ -67,8 +67,9 @@ export const Run = Type.Object({
   sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow the Run, such as its claude.ai session." }),
   cost: Type.Union([Cost, Type.Null()], {
     description:
-      "What it cost, once it ended, where its Runner reports it: a Managed Agents session's cost at list prices. " +
-      "Null while it runs and for Runners that report none, such as a subscription.",
+      "What it cost, once it ended, where its Runner reports it: a Managed Agents session's cost at list prices, or, " +
+      "marked as an `estimate`, what Claude Code reported for a local Run. Null while it runs and for Runners that " +
+      "report none, such as a cloud subscription's.",
   }),
   transcriptId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Transcript, once one was uploaded for the session its Runner returned when starting it.",
@@ -100,7 +101,7 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
   case when runs.cost_amount is not null
-    then json_build_object('amount', runs.cost_amount, 'currency', runs.cost_currency) end as cost,
+    then json_build_object('amount', runs.cost_amount, 'currency', runs.cost_currency, 'estimate', runs.cost_estimate) end as cost,
   (select transcripts.id from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)
     as "transcriptId",
   (select ${slugColumn("transcript", "transcripts.id", "agents.name")} from transcripts
@@ -475,11 +476,16 @@ function runnerChanged(context: Context, tx: Tx, { runnerId, ownerId }: { runner
 
 /**
  * Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue:
- * none while its queue is paused by a rate limit.
+ * none while its queue is paused by a rate limit, or while it is a `local` Runner with no Machine connected.
  */
 async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<boolean> {
   const { limit, paused } = await lockRunner(tx, runnerId);
   if (paused) return false;
+  // Read once the Runner is locked: a Machine connecting locks it too, so this sees a connection that committed.
+  const { rows: offline } = await tx.query<{ offline: boolean }>(`select ${runnerOffline("runners")} as offline from runners where id = $1`, [
+    runnerId,
+  ]);
+  if (offline[0]?.offline) return false;
   const { rows } = await tx.query<{ taken: number }>(
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
@@ -1068,9 +1074,14 @@ export async function noteRunCall(
  * Brings a lost Run back to running when its Agent calls naming it or its Ticket: Cronk only guessed the
  * session was gone, and a call shows it wasn't. Only the Ticket's latest Run comes back, and only while
  * nothing has moved on since: the Ticket is still in the Run's Status, still delegated to its Agent, and
- * has no other running Run. Runs before the call is handled, so a late `finish` is accepted.
+ * has no other running Run. Runs before the call is handled, so a late `finish` is accepted. A local Run's Machine
+ * heartbeating it brings it back the same way.
  */
-export async function reviveLostRun(context: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
+export async function reviveLostRun(
+  context: Context,
+  agent: Pick<AgentCaller, "id"> & { workspace: Pick<AgentCaller["workspace"], "id"> },
+  named: NamedInCall,
+): Promise<void> {
   const { db, clock } = context;
   const { runId, ticketId, ticketKey } = named;
   const ticket = ticketId && isUuid(ticketId)
@@ -1139,12 +1150,12 @@ export function runReports(context: Context): RunReports {
           runnerId: string | null;
           ownerId: string | null;
         }>(
-          `update runs set cost_amount = $2, cost_currency = $3
+          `update runs set cost_amount = $2, cost_currency = $3, cost_estimate = $4
            from tickets where runs.id = $1 and runs.state <> 'running' and tickets.id = runs.ticket_id
-             and (runs.cost_amount, runs.cost_currency) is distinct from ($2, $3)
+             and (runs.cost_amount, runs.cost_currency, runs.cost_estimate) is distinct from ($2, $3, $4)
            returning runs.workspace_id as "workspaceId", tickets.project_id as "projectId", runs.ticket_id as "ticketId",
              runs.runner_id as "runnerId", (select owner_id from runners where runners.id = runs.runner_id) as "ownerId"`,
-          [runId, cost.amount, cost.currency],
+          [runId, cost.amount, cost.currency, cost.estimate ?? false],
         );
         for (const { workspaceId, projectId, ticketId, runnerId, ownerId } of rows) {
           context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });

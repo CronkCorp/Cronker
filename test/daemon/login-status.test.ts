@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { login } from "../../daemon/src/login.js";
 import { status } from "../../daemon/src/status.js";
 import { setUp, signIn } from "../harness/flows.js";
+import { writeConfig } from "../../daemon/src/config.js";
+import { refusingCronk, tooOldMessage } from "../harness/refusing-cronk.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
 let cronk: StartedCronk;
@@ -148,6 +150,18 @@ describe("cronk-runner status", () => {
     const message = `unpaired: run \`cronk-runner login ${cronk.url}\` again`;
     expect(statuses).toEqual([{ url: cronk.url, error: message }]);
     expect(printed.at(-1)).toBe(`${cronk.url}: ${message}`);
+  });
+
+  test("says when a Cronk refuses the daemon as too old, naming the version to upgrade to", async () => {
+    const tooOld = await refusingCronk();
+    await writeConfig(configPath, { limit: 2, cronks: [{ url: tooOld.url, machineId: "m", machineName: "ada-laptop", token: "cronk_machine_x" }] });
+    const printed: string[] = [];
+
+    const statuses = await status({ configPath, print: (line) => printed.push(line) });
+    await tooOld.close();
+
+    expect(statuses).toEqual([{ url: tooOld.url, error: `refused: ${tooOldMessage}` }]);
+    expect(printed).toContain(`${tooOld.url}: refused: ${tooOldMessage}`);
   });
 
   test("says when the Machine isn't paired with any Cronk", async () => {

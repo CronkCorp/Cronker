@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   api,
   type Agent,
@@ -12,7 +12,7 @@ import {
   type WorkspaceSummary,
 } from "./api.js";
 import { costsText } from "./costs.js";
-import { field, useSubmit } from "./forms.js";
+import { field, useSave, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
 import { Actions, Banner, Button, Check, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
@@ -24,7 +24,8 @@ import { Chip, ModelLabel } from "./ui/labels.js";
  * A subscription Runner fires one claude.ai scheduled task per model label, optionally per Project.
  * Each card's count of running Runs and its pause stay current from the User's Runners stream, and a removed
  * Runner's card drops out of every open Runners page. A subscription Runner's card also says how to install the
- * Transcript hook, and makes its token for each Agent pointed at the Runner.
+ * Transcript hook, and makes its token for each Agent pointed at the Runner. A local Runner's card lists the Machines
+ * serving it, says since when it is offline while none is connected, and names a Machine whose daemon is too old.
  */
 export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }) {
   usePlace("runners");
@@ -33,12 +34,16 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
   const [agents, setAgents] = useState<Agent[]>([]);
   const [hook, setHook] = useState<TranscriptHook | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [machines, setMachines] = useState<Machine[] | null>(null);
   const latest = useLatest();
+  const latestMachines = useLatest();
   const refresh = useCallback(() => {
     latest(api.runners(), setRunners, (e) => setError(e.message));
-  }, [latest]);
+    latestMachines(api.machines(), setMachines, (e) => setError(e.message));
+  }, [latest, latestMachines]);
   useEffect(refresh, [refresh]);
-  // A Run starting or ending on a Runner, or its queue pausing or resuming, changes its card; so may events missed while away.
+  // A Run starting or ending on a Runner, its queue pausing or resuming, or a Machine serving it connecting or going,
+  // changes its card; so may events missed while away.
   useRunnerEvents(refresh);
   useEffect(() => {
     Promise.all(workspaces.map((w) => api.projects(w.id))).then(
@@ -97,6 +102,7 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
             projects={projects}
             workspaces={workspaces}
             agents={agents.filter((a) => a.runnerId === runner.id)}
+            machines={(machines ?? []).filter((m) => m.runners.some((r) => r.id === runner.id))}
             hook={hook}
             onChanged={replace}
             onRemoved={drop}
@@ -142,7 +148,7 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
           </Actions>
         </form>
       </Panel>
-      <Machines localRunners={(runners ?? []).filter((r) => r.kind === "local")} />
+      <Machines localRunners={(runners ?? []).filter((r) => r.kind === "local")} machines={machines} onChanged={refresh} />
     </div>
   );
 }
@@ -152,6 +158,7 @@ function RunnerSettings({
   projects,
   workspaces,
   agents: agentsOnIt,
+  machines,
   hook,
   onChanged,
   onRemoved,
@@ -161,6 +168,8 @@ function RunnerSettings({
   workspaces: WorkspaceSummary[];
   /** The Agents pointed at it, as the page loaded them. */
   agents: Agent[];
+  /** The Machines serving it, for a `local` Runner. */
+  machines: Machine[];
   hook: TranscriptHook | null;
   onChanged: (runner: Runner) => void;
   onRemoved: (runner: Runner) => void;
@@ -215,6 +224,7 @@ function RunnerSettings({
   const projectName = (id: string | null) =>
     id === null ? "All Projects" : (projects.find((p) => p.id === id)?.name ?? "A Project you no longer see");
   const pausedUntil = runner.pausedUntil ? new Date(runner.pausedUntil) : null;
+  const offlineSince = runner.offlineSince ? new Date(runner.offlineSince) : null;
 
   return (
     <section aria-label={runner.name} className="panel runner-card">
@@ -265,6 +275,44 @@ function RunnerSettings({
           </p>
         </Banner>
       )}
+      {offlineSince && (
+        <Banner tone="warn" label="Offline">
+          <p role="status">
+            Offline since{" "}
+            <time dateTime={offlineSince.toISOString()} title={offlineSince.toLocaleString()}>
+              {dayShown(offlineSince, new Date())} {clockTime(offlineSince)}
+            </time>
+            : no Machine serving it is connected. Tickets waiting for it start once one runs <code>cronk-runner run</code>.
+          </p>
+        </Banner>
+      )}
+      {machines
+        .filter((m) => m.upgradeTo)
+        .map((m) => (
+          <Banner key={m.id} tone="warn" label="Daemon too old">
+            <p>
+              {m.name} runs <code>cronk-runner</code> {m.daemonVersion}, older than this Cronk works with: upgrade it to{" "}
+              {m.upgradeTo} or later. Cronk refuses it until then.
+            </p>
+          </Banner>
+        ))}
+      {runner.kind === "local" && (
+        <p className="small runner-machines">
+          {machines.length === 0 ? (
+            <span className="muted">No Machine serves it yet: pair one below.</span>
+          ) : (
+            <>
+              <span className="muted">Served by</span>{" "}
+              {machines.map((m, i) => (
+                <span key={m.id}>
+                  {i > 0 && ", "}
+                  {m.name} <span className="muted">({m.connected ? "connected" : "offline"})</span>
+                </span>
+              ))}
+            </>
+          )}
+        </p>
+      )}
       <form onSubmit={limit.onSubmit} className="form-row runner-limit">
         <Field label="Runs at once">
           <input name="limit" type="number" min={1} max={100} required defaultValue={runner.limit} />
@@ -275,6 +323,7 @@ function RunnerSettings({
         <Saved shown={limitSaved} />
         <FormError error={limit.error} />
       </form>
+      {runner.kind === "local" && <AllowedTools runner={runner} onChanged={onChanged} />}
       {runner.kind === "subscription" && (
         <div className="runner-triggers">
           <h3>Triggers</h3>
@@ -450,6 +499,56 @@ function RunnerSettings({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * A `local` Runner's allowlist: the Claude Code permission rules for the tools its Runs may use without asking, one
+ * per line, saved for Runs claimed from then on, or reset to the default.
+ */
+function AllowedTools({ runner, onChanged }: { runner: Runner; onChanged: (runner: Runner) => void }) {
+  const shown = (runner.allowedTools ?? []).join("\n");
+  const [text, setText] = useState(shown);
+  // A save here or elsewhere, as another tab's, shows the list as saved.
+  useEffect(() => setText(shown), [shown]);
+  const { save, busy, error, saved } = useSave();
+  const saveRules = (rules: string[] | null) => save(async () => onChanged(await api.setAllowedTools(runner.id, rules)));
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void saveRules(text.split("\n").map((line) => line.trim()).filter(Boolean));
+  };
+  return (
+    <div className="runner-allowlist" role="group" aria-label="Allowed tools">
+      <h3>Allowed tools</h3>
+      <p className="muted small">
+        The tools its Runs may use without asking, one Claude Code permission rule per line, such as{" "}
+        <code>Bash(git:*)</code>. Edits are accepted. A Run that needs a tool outside the list fails, naming it: widen the
+        list and Retry. Cronk's own tools (<code>mcp__cronk</code>) are always allowed, and a Repository's committed Claude
+        Code settings add their own rules.
+      </p>
+      <form onSubmit={onSubmit}>
+        <Field label="Allowed tools">
+          <textarea
+            name="allowedTools"
+            className="mono"
+            rows={Math.min(Math.max(text.split("\n").length, 4), 14)}
+            spellCheck={false}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+        </Field>
+        <Actions>
+          <Saved shown={saved} />
+          <FormError error={error} />
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => void saveRules(null)}>
+            Reset to default
+          </Button>
+          <Button type="submit" disabled={busy}>
+            Save allowed tools
+          </Button>
+        </Actions>
+      </form>
+    </div>
   );
 }
 
@@ -798,18 +897,14 @@ function listed(names: string[]): string {
 }
 
 /**
- * The User's paired Machines, each with its name, OS, daemon version, last contact and the `local` Runners it
- * serves, with unpairing; and the form approving a pairing code `cronk-runner login` shows, onto the Runners picked.
+ * The User's paired Machines, each with its name, OS, daemon version, whether it is connected or else its last
+ * contact, and the `local` Runners it serves, with unpairing; and the form approving a pairing code
+ * `cronk-runner login` shows, onto the Runners picked.
  */
-function Machines({ localRunners }: { localRunners: Runner[] }) {
-  const [machines, setMachines] = useState<Machine[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+function Machines({ localRunners, machines, onChanged }: { localRunners: Runner[]; machines: Machine[] | null; onChanged: () => void }) {
   const [unpairing, setUnpairing] = useState<Machine | null>(null);
   const [approved, setApproved] = useState<Machine | null>(null);
-  const refresh = useCallback(() => {
-    api.machines().then(setMachines, (e: Error) => setError(e.message));
-  }, []);
-  useEffect(refresh, [refresh]);
+  const refresh = onChanged;
   const approve = useSubmit(async (form, element) => {
     setApproved(null);
     const machine = await api.approvePairing({ userCode: field(form, "userCode"), runnerIds: form.getAll("runnerId").map(String) });
@@ -830,7 +925,6 @@ function Machines({ localRunners }: { localRunners: Runner[] }) {
         </>
       }
     >
-      <FormError error={error} />
       {machines === null ? (
         <p className="muted">Loading…</p>
       ) : machines.length === 0 ? (
@@ -842,7 +936,7 @@ function Machines({ localRunners }: { localRunners: Runner[] }) {
               <th>Machine</th>
               <th>Daemon</th>
               <th>Serves</th>
-              <th>Last contact</th>
+              <th>Connection</th>
               <th>
                 <span className="sr-only">Actions</span>
               </th>
@@ -854,9 +948,20 @@ function Machines({ localRunners }: { localRunners: Runner[] }) {
                 <td>
                   {machine.name} <span className="muted small">{machine.os}</span>
                 </td>
-                <td className="mono">{machine.daemonVersion}</td>
+                <td>
+                  <span className="mono">{machine.daemonVersion}</span>
+                  {machine.upgradeTo && <span className="small machine-upgrade"> Upgrade to {machine.upgradeTo}</span>}
+                </td>
                 <td>{machine.runners.length ? machine.runners.map((r) => r.name).join(", ") : <span className="muted">No Runners</span>}</td>
-                <td>{machine.lastContactAt ? <RelativeTime at={machine.lastContactAt} /> : <span className="muted">Never</span>}</td>
+                <td>
+                  {machine.connected ? (
+                    "Connected"
+                  ) : machine.lastContactAt ? (
+                    <RelativeTime at={machine.lastContactAt} />
+                  ) : (
+                    <span className="muted">Never</span>
+                  )}
+                </td>
                 <td className="cell-actions">
                   <div>
                     <Button variant="ghost" size="small" onClick={() => setUnpairing(machine)}>
@@ -880,7 +985,8 @@ function Machines({ localRunners }: { localRunners: Runner[] }) {
           refresh();
         }}
       >
-        Its token is revoked, so its daemon can no longer reach Cronk. Pair it again with <code>cronk-runner login</code>.
+        Its token is revoked, so its daemon can no longer reach Cronk, and the Runs it is running stop. Pair it again with{" "}
+        <code>cronk-runner login</code>.
       </ConfirmDialog>
       <form onSubmit={approve.onSubmit} className="machine-approve">
         <h3>Approve a pairing code</h3>

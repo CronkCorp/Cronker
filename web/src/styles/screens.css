@@ -1422,6 +1422,13 @@
     padding-inline: var(--space-1);
   }
 }
+.runner-machines {
+  margin: 0;
+}
+/* A daemon too old for this Cronk: what to upgrade it to, beside its version. */
+.machine-upgrade {
+  color: var(--warn);
+}
 .machine-approve,
 .machine-runners {
   display: grid;
@@ -1466,11 +1473,19 @@
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
-.runner-managed {
+.runner-managed,
+.runner-allowlist {
   display: grid;
   gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
+}
+.runner-allowlist form {
+  display: grid;
+  gap: var(--space-3);
+}
+.runner-allowlist textarea {
+  width: 100%;
 }
 .runner-managed-ids {
   display: grid;

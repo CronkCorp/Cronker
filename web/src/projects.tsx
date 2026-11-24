@@ -538,6 +538,7 @@ export function labelsOf(tickets: { labels: string[] }[]): string[] {
 const waitingReasons = {
   runnerSlot: "Runner full",
   runnerPaused: "Runner rate-limited",
+  runnerOffline: "Runner offline: no Machine connected",
   blocked: "Blocked by another Ticket",
   archived: "Project archived",
 } as const;
