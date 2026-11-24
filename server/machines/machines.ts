@@ -6,7 +6,9 @@ import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
+import { revokeLocalRunToken } from "../runs/local.js";
 import { noSuchRunner } from "../runs/runners.js";
+import { stopRunningRun } from "../runs/runs.js";
 
 /**
  * Machines: a User's own computers running the `cronk-runner` daemon, each serving some of that User's `local`
@@ -227,15 +229,43 @@ export async function approvePairing(context: Context, userId: string, input: Pa
   });
 }
 
-/** Unpairs one of the User's Machines: its token is revoked, so its daemon's later calls are refused. */
+/**
+ * Unpairs one of the User's Machines: its token is revoked, so its daemon's later calls are refused, and the Runs it
+ * holds stop, freeing their Runners' slots, as when a User takes their Tickets away. Its daemon can't confirm the stops,
+ * so none is told again; it kills its Runs itself once Cronk refuses its token.
+ */
 export async function unpairMachine(context: Context, userId: string, machineId: string): Promise<void> {
-  const { rowCount } = isUuid(machineId)
-    ? await context.db.query(
-        "update machines set revoked_at = $3, token_hash = null where id = $1 and owner_id = $2 and revoked_at is null",
-        [machineId, userId, context.clock.now()],
-      )
-    : { rowCount: 0 };
-  if (!rowCount) throw new ApiError(404, "not_found", "You have no such Machine.");
+  if (!isUuid(machineId)) throw new ApiError(404, "not_found", "You have no such Machine.");
+  const lost = await transaction(context.db, async (tx) => {
+    // The Tickets of its running Runs are locked first, in the order everything that ends a Run locks them.
+    const { rows: held } = await tx.query<{ id: string; workspaceId: string; projectId: string }>(
+      `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"
+       from local_runs join runs on runs.id = local_runs.run_id and runs.state = 'running'
+       join tickets on tickets.id = runs.ticket_id
+       join machines on machines.id = local_runs.machine_id and machines.owner_id = $2
+       where local_runs.machine_id = $1 order by tickets.id for update of tickets`,
+      [machineId, userId],
+    );
+    const now = context.clock.now();
+    const { rows } = await tx.query<{ name: string }>(
+      "update machines set revoked_at = $3, token_hash = null where id = $1 and owner_id = $2 and revoked_at is null returning name",
+      [machineId, userId, now],
+    );
+    if (!rows[0]) throw new ApiError(404, "not_found", "You have no such Machine.");
+    for (const ticket of held) {
+      await stopRunningRun(context, tx, ticket.id, `${rows[0].name}, the Machine running it, was unpaired.`, now);
+      context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
+    await tx.query("update local_runs set stop_acked_at = $2 where machine_id = $1 and stop_acked_at is null", [machineId, now]);
+    // Its lost Runs can't come back without it: their tokens go too.
+    const { rows: lostRuns } = await tx.query<{ runId: string }>(
+      `select local_runs.run_id as "runId" from local_runs join runs on runs.id = local_runs.run_id
+       where local_runs.machine_id = $1 and runs.state = 'lost' and local_runs.revoked_at is null`,
+      [machineId],
+    );
+    return lostRuns;
+  });
+  for (const { runId } of lost) await revokeLocalRunToken(context, runId);
   context.live.endMachines((stream) => stream.machineId === machineId);
 }
 

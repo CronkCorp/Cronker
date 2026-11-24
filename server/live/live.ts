@@ -80,14 +80,17 @@ export const runnerEventTypes: Record<RunnerEvent["type"], string> = {
 };
 
 /**
- * What a Machine's event stream tells its daemon: a Run of a Runner it serves is waiting for a Machine to claim it.
- * It goes to every connected Machine serving the Run's Runner; the first claim wins.
+ * What a Machine's event stream tells its daemon: a Run of a Runner it serves is waiting for a Machine to claim it,
+ * which goes to every connected Machine serving the Run's Runner (the first claim wins); or a Run the Machine holds was
+ * stopped in Cronk, which goes to that Machine alone.
  */
-export type MachineEvent = { type: "run.claimable"; runId: string };
+export type MachineEvent = { type: "run.claimable"; runId: string } | { type: "run.stop"; runId: string };
 
 export const machineEventTypes: Record<MachineEvent["type"], string> = {
   "run.claimable":
     "A Run of a `local` Runner this Machine serves waits for a Machine to claim it, by `runId`. Every Machine serving the Runner hears it; the first claim wins.",
+  "run.stop":
+    "A Run this Machine holds, by `runId`, no longer runs in Cronk, as when a User took its Ticket away: kill its process, clean up and confirm with `POST /api/machine/runs/{runId}/stopped`. Told again on every connect until confirmed.",
 };
 
 /** One Machine's open event stream: the Machine, the Runners it serves, and how to write to it. */
@@ -239,6 +242,18 @@ export class Live {
   sendToMachines(runnerId: string, event: MachineEvent): void {
     for (const subscriber of this.machines) {
       if (!subscriber.runnerIds.has(runnerId)) continue;
+      try {
+        subscriber.send(event);
+      } catch {
+        this.endMachines((other) => other === subscriber);
+      }
+    }
+  }
+
+  /** Tells the Machine's own streams about the event, now: call it once what it tells committed. */
+  sendToMachine(machineId: string, event: MachineEvent): void {
+    for (const subscriber of this.machines) {
+      if (subscriber.machineId !== machineId) continue;
       try {
         subscriber.send(event);
       } catch {

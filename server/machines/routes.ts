@@ -19,6 +19,7 @@ import {
   unpairMachine,
 } from "./machines.js";
 import {
+  acknowledgeStop,
   claimableRuns,
   claimRun,
   ClaimedRun,
@@ -29,6 +30,7 @@ import {
   LocalSession,
   reportEnd,
   reportSession,
+  stopsToReplay,
   uploadRunTranscript,
 } from "./local-runs.js";
 import { Transcript, TranscriptUpload } from "../transcripts/transcripts.js";
@@ -121,7 +123,9 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Machines"],
           summary: "Unpair your Machine",
-          description: "Revokes its Machine token, so its daemon's later calls are refused with `invalid_machine_token`.",
+          description:
+            "Revokes its Machine token, so its daemon's later calls are refused with `invalid_machine_token`, and stops " +
+            "the Runs it holds.",
           params: Type.Object({ machineId: Type.String() }),
           response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
         },
@@ -158,7 +162,9 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "A `text/event-stream` of server-sent events for a Machine's daemon, with its Machine token. On connecting it " +
             "first tells of every Run of the Runners the Machine serves that waits to be claimed, then of each one as it " +
-            "starts. The event's data is JSON naming the Run by `runId`. The stream ends when the Machine is unpaired.\n\n" +
+            "starts. It also tells again of every Run the Machine holds that was stopped in Cronk and whose stop it hasn't " +
+            "confirmed, then of each one as it is stopped. The event's data is JSON naming the Run by `runId`. The stream " +
+            "ends when the Machine is unpaired.\n\n" +
             machineEventList,
           security: [{ machineToken: [] }],
           produces: ["text/event-stream"],
@@ -199,6 +205,7 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
         const keepAlive = setInterval(() => write(": keep-alive\n\n"), keepAliveMs);
         keepAlive.unref();
         raw.on("close", close);
+        for (const runId of await stopsToReplay(context, machine)) send({ type: "run.stop", runId });
         for (const runId of await claimableRuns(context, machine)) send({ type: "run.claimable", runId });
         if (request.socket.destroyed) close();
       },
@@ -235,7 +242,8 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Machines"],
           summary: "Heartbeat a claimed Run, as a Machine's daemon",
           description:
-            "Counts as a call naming the Run, so a working Run isn't lost, and answers fresh GitHub tokens for the Run's " +
+            "Counts as a call naming the Run, so a working Run isn't lost; a lost Run comes back to running if its Ticket " +
+            "hasn't moved on, as when its Machine wakes from sleep. Answers fresh GitHub tokens for the Run's " +
             "Repositories once theirs expire within ten minutes. Refused with `run_stopped` once the Run no longer runs " +
             "in Cronk: the daemon then kills its process.",
           security: [{ machineToken: [] }],
@@ -266,6 +274,26 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
     );
 
     app.post(
+      "/api/machine/runs/:runId/stopped",
+      {
+        schema: {
+          tags: ["Machines"],
+          summary: "Confirm a claimed Run's stop, as a Machine's daemon",
+          description:
+            "Confirms that the daemon killed the process of a Run stopped in Cronk and cleaned up after it, so the " +
+            "Machine's event stream stops telling of it. Accepted whatever the Run's state, as often as it is sent.",
+          security: [{ machineToken: [] }],
+          params: runParams,
+          response: { 204: Type.Null(), 401: ErrorBody, 404: ErrorBody },
+        },
+      },
+      async (request, reply) => {
+        await acknowledgeStop(context, await requireMachine(context, request), request.params.runId);
+        return reply.code(204).send(null);
+      },
+    );
+
+    app.post(
       "/api/machine/runs/:runId/end",
       {
         schema: {
@@ -274,8 +302,8 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           description:
             "A Run whose agent didn't call `finish` fails with the reason given, naming any `deniedTools` as outside its " +
             "Runner's allowlist. A Run that ended already, as `finish` ends it, is left as it is. A `costUsd` given is " +
-            "recorded as the Run's cost, marked as an estimate. Answers whether the Run is lost and may yet come back, " +
-            "while its Ticket hasn't moved on: the daemon keeps its worktree until then.",
+            "recorded as the Run's cost, marked as an estimate. Also confirms any stop of the Run. Answers whether the " +
+            "Run is lost and may yet come back, while its Ticket hasn't moved on: the daemon keeps its worktree until then.",
           security: [{ machineToken: [] }],
           params: runParams,
           body: LocalRunEnd,
