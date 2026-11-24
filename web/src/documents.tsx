@@ -23,6 +23,7 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown, type Slot } from "./markdown.js";
+import { KnowledgeSection } from "./knowledge-section.js";
 import { knowledgeCrumbs } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
@@ -131,7 +132,6 @@ function DocumentsSection({ workspace, project }: { workspace: Workspace; projec
   // With Read in the Project, or with it archived, its page tree offers no New Document; the Workspace's always does.
   const canCreate = !project || (project.access === "write" && project.archivedAt === null);
   const name = project ? project.key : "Workspace";
-  const headingId = `documents-${tree.kind}-${tree.id}`;
   const children = documents ? childrenOf(documents) : new Map<string | null, DocumentSummary[]>();
   const branch = (parentId: string | null, depth: number): ReactNode =>
     (children.get(parentId) ?? []).map((document) => (
@@ -147,23 +147,16 @@ function DocumentsSection({ workspace, project }: { workspace: Workspace; projec
       </li>
     ));
   return (
-    <section className="knowledge-section" aria-labelledby={headingId}>
-      <div className="knowledge-section-head">
-        <h2 id={headingId}>
-          {project ? (
-            <>
-              <span className="mono">{project.key}</span> {project.name}
-            </>
-          ) : (
-            "Workspace"
-          )}
-        </h2>
-        {canCreate && (
+    <KnowledgeSection
+      project={project}
+      actions={
+        canCreate && (
           <Button size="small" onClick={() => setCreating(true)}>
             New Document
           </Button>
-        )}
-      </div>
+        )
+      }
+    >
       {project && <ProjectNote project={project} />}
       <FormError error={failure} />
       {documents &&
@@ -192,7 +185,7 @@ function DocumentsSection({ workspace, project }: { workspace: Workspace; projec
           </DialogActions>
         </form>
       </Dialog>
-    </section>
+    </KnowledgeSection>
   );
 }
 

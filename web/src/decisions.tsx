@@ -1,4 +1,4 @@
-import { useAddresses } from "./addresses.js";
+import { useActiveProject, useAddresses } from "./addresses.js";
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
@@ -16,7 +16,8 @@ import { DocumentBody, Editor, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
-import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
+import { knowledgeCrumbs } from "./projects.js";
+import { KnowledgeSection } from "./knowledge-section.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { useArrivals, useLatest, useLiveEvents } from "./live.js";
@@ -29,16 +30,21 @@ import { MentionedIn } from "./mentioned-in.js";
 /** A Decision's number as it is written, such as 0007. */
 const numbered = (number: number) => String(number).padStart(4, "0");
 
-/** Where a Project's or the Workspace's Decisions are listed. */
+/** A register's Decisions as loaded, kept current as they change. */
+interface Register {
+  place: Place;
+  project: ProjectSummary | null;
+  decisions: DecisionSummary[] | null;
+  failure: string | null;
+  load: () => void;
+  replace: (next: DecisionSummary) => void;
+}
 
-/** A Project's Decisions, or the Workspace's own: a register with status filters, and New Decision. */
-function Register({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
-  const to = useAddresses();
+/** Loads a Project's register, or the Workspace's own, and loads it again as its Decisions change. */
+function useRegister(workspace: Workspace, project: ProjectSummary | null): Register {
   const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
   const [decisions, setDecisions] = useState<DecisionSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [only, setOnly] = useState<DecisionStatus | null>(null);
-  const [creating, setCreating] = useState(false);
   const latest = useLatest();
   const load = useCallback(
     () => latest(api.decisions(place), setDecisions, (e) => setFailure(e.message)),
@@ -48,115 +54,137 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
   useLiveEvents(workspace.id, (event) => {
     if (event.type === "reconnected" || (event.type === "decision.changed" && event.projectId === (project?.id ?? null))) load();
   });
-  const arrived = useArrivals(decisions?.map((d) => d.id) ?? [], decisions !== null);
+  const replace = useCallback(
+    (next: DecisionSummary) => setDecisions((all) => all?.map((d) => (d.id === next.id ? next : d)) ?? null),
+    [],
+  );
+  return { place, project, decisions, failure, load, replace };
+}
 
-  const { error, busy, onSubmit } = useSubmit(async (form) => {
-    const created = await api.createDecision(place, { title: field(form, "title") });
-    navigate(to.decision(created));
-  });
-
-  // With Read in the Project, its register offers no New Decision, Accept or Reject.
-  const canWrite = !project || project.access === "write";
-  const count = (status: DecisionStatus) => decisions?.filter((d) => d.status === status).length ?? 0;
-  const shown = decisions?.filter((d) => only === null || d.status === only) ?? [];
+/**
+ * The Decisions page: the status filter chips in its head, which filter and count every register shown, then each
+ * register as its own section, the Project's before the Workspace's.
+ */
+function DecisionsPage({ workspace, project, registers }: { workspace: Workspace; project: ProjectSummary | null; registers: Register[] }) {
+  const [only, setOnly] = useState<DecisionStatus | null>(null);
+  const all = registers.flatMap((r) => r.decisions ?? []);
+  const count = (status: DecisionStatus) => all.filter((d) => d.status === status).length;
   return (
     <div className="page">
       <PageHead
         crumbs={knowledgeCrumbs(workspace, project, "Decisions")}
         title="Decisions"
-        switcher={
-          <>
-            <LiveIndicator workspaceId={workspace.id} />
-            <ScopeSwitch workspace={workspace} project={project} kind="decisions" />
-          </>
-        }
-        actions={
-          <>
-            <ExportLink place={place} />
-            {canWrite && (
-              <Button variant="primary" onClick={() => setCreating(true)}>
-                New Decision
-              </Button>
-            )}
-          </>
-        }
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
       />
+      {all.length > 0 && (
+        <div className="filter-chips" role="group" aria-label="Filter by status">
+          <button type="button" className="filter-chip" aria-pressed={only === null} onClick={() => setOnly(null)}>
+            All <span className="filter-count">{all.length}</span>
+          </button>
+          {decisionStatuses.map((status) => (
+            <button
+              key={status}
+              type="button"
+              className="filter-chip"
+              aria-pressed={only === status}
+              disabled={count(status) === 0}
+              onClick={() => setOnly(only === status ? null : status)}
+            >
+              {decisionStatusLabel(status)} <span className="filter-count">{count(status)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {registers.map((register) => (
+        <RegisterSection key={register.place.id} register={register} only={only} />
+      ))}
+    </div>
+  );
+}
+
+/** One register as a section: its heading, Export and New Decision, then its table of Decisions or its empty state. */
+function RegisterSection({ register, only }: { register: Register; only: DecisionStatus | null }) {
+  const to = useAddresses();
+  const { place, project, decisions, failure, load, replace } = register;
+  const [creating, setCreating] = useState(false);
+  const arrived = useArrivals(decisions?.map((d) => d.id) ?? [], decisions !== null);
+  const { error, busy, onSubmit } = useSubmit(async (form) => {
+    const created = await api.createDecision(place, { title: field(form, "title") });
+    navigate(to.decision(created));
+  });
+
+  // With Read in the Project, its register offers no New Decision, Accept or Reject; the Workspace's stays Write.
+  const canWrite = !project || project.access === "write";
+  const shown = decisions?.filter((d) => only === null || d.status === only) ?? [];
+  return (
+    <KnowledgeSection
+      project={project}
+      actions={
+        <>
+          <ExportLink place={place} />
+          {canWrite && (
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              New Decision
+            </Button>
+          )}
+        </>
+      }
+    >
       {project && <ProjectNote project={project} />}
       <FormError error={failure} />
       {decisions &&
         (decisions.length === 0 ? (
-          <EmptyState title="No Decisions yet.">New Decision records one: what was decided and why, proposed until accepted.</EmptyState>
+          <EmptyState title="No Decisions yet.">
+            {canWrite ? "New Decision records one: what was decided and why, proposed until accepted." : null}
+          </EmptyState>
+        ) : shown.length === 0 ? (
+          <p className="muted">None {only ? decisionStatusLabel(only).toLowerCase() : ""} here.</p>
         ) : (
-          <>
-            <div className="filter-chips" role="group" aria-label="Filter by status">
-              <button type="button" className="filter-chip" aria-pressed={only === null} onClick={() => setOnly(null)}>
-                All <span className="filter-count">{decisions.length}</span>
-              </button>
-              {decisionStatuses.map((status) => (
-                <button
-                  key={status}
-                  type="button"
-                  className="filter-chip"
-                  aria-pressed={only === status}
-                  disabled={count(status) === 0}
-                  onClick={() => setOnly(only === status ? null : status)}
-                >
-                  {decisionStatusLabel(status)} <span className="filter-count">{count(status)}</span>
-                </button>
-              ))}
-            </div>
-            <section aria-label="Decisions" className="panel panel-flush">
-              <table className="register">
-                <thead>
-                  <tr>
-                    <th>Number</th>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Changed</th>
-                    <th>
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((decision) => {
-                    const replacement = decisions.find((d) => d.id === decision.supersededById);
-                    return (
-                      <tr key={decision.id} className={arrived.has(decision.id) ? "arrived" : undefined}>
-                        <td className="mono muted">{numbered(decision.number)}</td>
-                        <td>
-                          <Link to={to.decision(decision)}>{decision.title}</Link>
-                          {replacement && (
-                            <>
-                              {" "}
-                              <Link to={to.decision(replacement)} className="superseded-by" title={`Superseded by ${replacement.title}`}>
-                                → {numbered(replacement.number)}
-                              </Link>
-                            </>
-                          )}
-                        </td>
-                        <td>
-                          <DecisionStatusPill status={decision.status} />
-                        </td>
-                        <td>
-                          <RelativeTime at={decision.version.savedAt} />
-                        </td>
-                        <td className="register-actions">
-                          {canWrite && (
-                            <RowActions
-                              decision={decision}
-                              onChanged={(next) => setDecisions((all) => all?.map((d) => (d.id === next.id ? next : d)) ?? null)}
-                              onOutdated={load}
-                            />
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </section>
-          </>
+          <div className="panel panel-flush">
+            <table className="register">
+              <thead>
+                <tr>
+                  <th>Number</th>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Changed</th>
+                  <th>
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((decision) => {
+                  const replacement = decisions.find((d) => d.id === decision.supersededById);
+                  return (
+                    <tr key={decision.id} className={arrived.has(decision.id) ? "arrived" : undefined}>
+                      <td className="mono muted">{numbered(decision.number)}</td>
+                      <td>
+                        <Link to={to.decision(decision)}>{decision.title}</Link>
+                        {replacement && (
+                          <>
+                            {" "}
+                            <Link to={to.decision(replacement)} className="superseded-by" title={`Superseded by ${replacement.title}`}>
+                              → {numbered(replacement.number)}
+                            </Link>
+                          </>
+                        )}
+                      </td>
+                      <td>
+                        <DecisionStatusPill status={decision.status} />
+                      </td>
+                      <td>
+                        <RelativeTime at={decision.version.savedAt} />
+                      </td>
+                      <td className="register-actions">
+                        {canWrite && <RowActions decision={decision} onChanged={replace} onOutdated={load} />}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ))}
       <Dialog open={creating} onOpenChange={setCreating} title="New Decision" description="It starts as Proposed.">
         <form onSubmit={onSubmit}>
@@ -174,20 +202,23 @@ function Register({ workspace, project }: { workspace: Workspace; project: Proje
           </DialogActions>
         </form>
       </Dialog>
-    </div>
+    </KnowledgeSection>
   );
 }
 
-/** The Workspace's own Decisions, separate from its Projects'. */
+/** The Workspace's own Decisions, separate from its Projects': its register alone. */
 export function WorkspaceDecisions({ workspace }: { workspace: Workspace }) {
   usePlace("decisions");
-  return <Register workspace={workspace} project={null} />;
+  const register = useRegister(workspace, null);
+  return <DecisionsPage workspace={workspace} project={null} registers={[register]} />;
 }
 
-/** A Project's Decisions. */
+/** A Project's Decisions: its register, then the Workspace's. */
 export function ProjectDecisions({ workspace, project }: { workspace: Workspace; project: ProjectSummary }) {
   usePlace("decisions", project.id);
-  return <Register workspace={workspace} project={project} />;
+  const own = useRegister(workspace, project);
+  const workspaces = useRegister(workspace, null);
+  return <DecisionsPage workspace={workspace} project={project} registers={[own, workspaces]} />;
 }
 
 /** A Decision: read it, edit its text as Markdown with a preview, change its status, and browse its Versions. */
@@ -199,6 +230,7 @@ export function DecisionScreen({
   decisionId: string;
 }) {
   const to = useAddresses();
+  const activeProject = useActiveProject();
   const [decision, setDecision] = useState<Decision | null>(null);
   const [others, setOthers] = useState<DecisionSummary[]>([]);
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -267,10 +299,13 @@ export function DecisionScreen({
   const replaced = others.filter((d) => d.supersededById === decision.id);
   // With Read in its Project, the Decision is only read: no Edit, and no change of status.
   const canWrite = !project || project.access === "write";
+  // A Workspace Decision's list is the active Project's page, which shows the Workspace's register too.
+  const listOf = (at: Place) =>
+    at.kind === "workspace" && activeProject ? to.knowledge(activeProject, "decisions") : to.place(at, "decisions");
   return (
     <div className="page">
       <PageHead
-        crumbs={knowledgeCrumbs(workspace, project, <Link to={to.place(place, "decisions")}>Decisions</Link>)}
+        crumbs={knowledgeCrumbs(workspace, project, <Link to={listOf(place)}>Decisions</Link>)}
         title={decision.title}
         large
         eyebrow={
