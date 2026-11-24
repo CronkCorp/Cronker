@@ -22,6 +22,13 @@ import {
   type RunEnded,
 } from "./api.js";
 import { readConfig, type PairedCronk } from "./config.js";
+import {
+  endRunRecord,
+  historyDirOf,
+  pruneRunRecords,
+  writeRunRecord,
+  type RunRecord,
+} from "./history.js";
 import { repositoryCache, type RunWorkspace } from "./repositories.js";
 
 /**
@@ -32,7 +39,8 @@ import { repositoryCache, type RunWorkspace } from "./repositories.js";
  * The worktrees are removed once the Run ended, unless it is lost and may yet come back: then they are kept until
  * Cronk says otherwise.
  * A Run stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory,
- * so a daemon starting again kills those it left behind and reports their Runs ended.
+ * so a daemon starting again kills those it left behind and reports their Runs ended. Each Run is also remembered in
+ * the state directory's `history/` for a week after it ends, for `cronk-runner logs`.
  */
 
 export interface RunOptions {
@@ -207,6 +215,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   const claude = options.claude ?? "claude";
   const scratchRoot = options.scratchRoot ?? tmpdir();
   const stateDir = options.stateDir ?? stateDirOf(options.configPath);
+  const historyDir = historyDirOf(stateDir);
   const killGraceMs = options.killGraceMs ?? 10_000;
   const lostCheckMs = options.lostCheckMs ?? heartbeatMs;
   const repositories = repositoryCache({
@@ -235,6 +244,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     return config;
   });
   const connections = configRead.then(async (config) => {
+    await pruneRunRecords(historyDir).catch(() => {});
     await killLeftovers(config.cronks);
     await Promise.all(config.cronks.map((cronk) => connect(cronk)));
   });
@@ -402,6 +412,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         }).catch(() => {});
       }
       await rm(path, { force: true });
+      await endRunRecord(historyDir, record.runId).catch(() => {});
       print(
         `Run ${record.runId}: killed what the last daemon left running; its Run ended (runner restarted).`,
       );
@@ -475,6 +486,28 @@ export function runDaemon(options: RunOptions): RunningDaemon {
                 `${claimed.ticketKey}: couldn't record its process: ${(error as Error).message}`,
               ),
             );
+    // What `cronk-runner logs` reads of the Run, saved whole at each change, one write at a time.
+    let history: RunRecord = {
+      runId,
+      ticketKey: claimed.ticketKey,
+      cronkUrl: cronk.url,
+      pid: child.pid ?? null,
+      sessionId: null,
+      transcriptPath: null,
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+    };
+    let historySaved: Promise<void> = Promise.resolve();
+    const saveHistory = (changes: Partial<RunRecord>) =>
+      (historySaved = historySaved.then(() => {
+        history = { ...history, ...changes };
+        return writeRunRecord(historyDir, history).catch((error: unknown) =>
+          print(
+            `${claimed.ticketKey}: couldn't record it for \`cronk-runner logs\`: ${(error as Error).message}`,
+          ),
+        );
+      }));
+    void saveHistory({});
     let lastError = "";
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       const lines = chunk.trim().split("\n");
@@ -506,6 +539,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       ) {
         sessionId = message.session_id;
         sessionReported = report("session", { sessionId }).catch(() => {});
+        void saveHistory({ sessionId });
       }
       if (
         message.type === "result" &&
@@ -526,8 +560,11 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       (uploading = uploading
         .then(async () => {
           if (!uploads || !sessionId) return;
-          transcriptPath ??= await findTranscript(env, sessionId);
-          if (!transcriptPath) return;
+          if (!transcriptPath) {
+            transcriptPath = await findTranscript(env, sessionId);
+            if (!transcriptPath) return;
+            void saveHistory({ transcriptPath });
+          }
           const file = await stat(transcriptPath).catch(() => null);
           const version = file ? `${file.size} ${file.mtimeMs}` : "";
           if (!file || version === uploaded) return;
@@ -628,6 +665,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       // The process is gone, whatever happens to its worktree: a daemon starting again has nothing of it to kill.
       await recorded;
       await rm(recordPath, { force: true });
+      await saveHistory({ endedAt: new Date().toISOString() });
+      await pruneRunRecords(historyDir).catch(() => {});
       if (ended?.mayComeBack) {
         print(
           `${claimed.ticketKey}: Run ${runId} is lost in Cronk; keeping its worktree until it is stopped or ended.`,
