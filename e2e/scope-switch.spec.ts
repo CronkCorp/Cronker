@@ -26,9 +26,9 @@ async function withProjects(page: Page, cronk: StartedCronk) {
 test("the scope dropdown lists the Workspace, then the Projects by key, and choosing one goes to its page", async ({ page, cronk }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const workspace = await withProjects(page, cronk);
-  // The sidebar leads to the active Project's Decisions; the Workspace's own page is kept for old links.
-  await page.goto(`${cronk.url}/workspaces/${workspace.id}/decisions`);
-  await expect(page.getByRole("heading", { name: "Decisions", level: 1 })).toBeVisible();
+  // The sidebar leads to the active Project's Artifacts; the Workspace's own page is kept for old links.
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/artifacts`);
+  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
   const workspacePage = page.url();
 
   await page.getByRole("button", { name: "Scope: Workspace" }).click();
@@ -45,20 +45,20 @@ test("the scope dropdown lists the Workspace, then the Projects by key, and choo
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("menuitemradio", { name: /^API / })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/projects\/API\/decisions$/);
+  await expect(page).toHaveURL(/\/projects\/API\/artifacts$/);
 
   await page.getByRole("button", { name: "Scope: API Server and its API" }).click();
   await expect(page.getByRole("menuitemradio", { name: /^API / })).toBeChecked();
   await page.getByRole("menuitemradio", { name: /^CRONK / }).click();
-  await expect(page).toHaveURL(/\/projects\/CRONK\/decisions$/);
+  await expect(page).toHaveURL(/\/projects\/CRONK\/artifacts$/);
 
   // Each choice is an address, so Back and Forward move between them.
   await page.goBack();
-  await expect(page).toHaveURL(/\/projects\/API\/decisions$/);
+  await expect(page).toHaveURL(/\/projects\/API\/artifacts$/);
   await expect(page.getByRole("button", { name: "Scope: API Server and its API" })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(workspacePage);
   await page.goForward();
-  await expect(page).toHaveURL(/\/projects\/API\/decisions$/);
+  await expect(page).toHaveURL(/\/projects\/API\/artifacts$/);
 });
 

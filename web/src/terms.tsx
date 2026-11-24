@@ -5,6 +5,7 @@ import { DocumentBody, VersionMeta, Versions } from "./documents.js";
 import { ExportLink } from "./export.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
+import { KnowledgeSection } from "./knowledge-section.js";
 import { Markdown } from "./markdown.js";
 import { MentionedIn } from "./mentioned-in.js";
 import { knowledgeCrumbs } from "./projects.js";
@@ -92,12 +93,7 @@ function Glossary({
       {project && (
         <TermSection
           {...section}
-          id="project"
-          heading={
-            <>
-              <span className="mono">{project.key}</span> {project.name}
-            </>
-          }
+          project={project}
           terms={projectTerms}
           overrides={(term) => workspaceTerms.some((w) => sameName(w.name, term.name))}
           onNew={project.access === "write" ? () => setCreating({ kind: "project", id: project.id }) : null}
@@ -106,8 +102,7 @@ function Glossary({
       )}
       <TermSection
         {...section}
-        id="workspace"
-        heading="Workspace"
+        project={null}
         terms={workspaceTerms}
         replacedIn={project && ((term) => (projectTerms.some((p) => sameName(p.name, term.name)) ? project.key : null))}
         onNew={() => setCreating(workspacePlace)}
@@ -120,8 +115,7 @@ function Glossary({
 
 /** One glossary's Terms under its heading, with its count, its New Term and its own empty state. */
 function TermSection({
-  id,
-  heading,
+  project,
   terms,
   filter,
   typed,
@@ -131,8 +125,8 @@ function TermSection({
   onNew,
   empty,
 }: {
-  id: string;
-  heading: ReactNode;
+  /** The Project whose glossary it is, or null for the Workspace's. */
+  project: ProjectSummary | null;
   terms: Term[];
   filter: string;
   typed: string;
@@ -147,20 +141,22 @@ function TermSection({
 }) {
   const to = useAddresses();
   const shown = terms.filter((t) => matches(t, typed));
-  const headingId = `glossary-${id}`;
   return (
-    <section className="knowledge-section" aria-labelledby={headingId}>
-      <header className="knowledge-section-head">
-        <h2 id={headingId}>{heading}</h2>
-        <span className="muted small">
-          {typed ? `${shown.length} of ${terms.length}` : terms.length} Term{terms.length === 1 ? "" : "s"}
-        </span>
-        {onNew && (
-          <Button size="small" onClick={onNew}>
-            New Term
-          </Button>
-        )}
-      </header>
+    <KnowledgeSection
+      project={project}
+      actions={
+        <>
+          <span className="muted small">
+            {typed ? `${shown.length} of ${terms.length}` : terms.length} Term{terms.length === 1 ? "" : "s"}
+          </span>
+          {onNew && (
+            <Button size="small" onClick={onNew}>
+              New Term
+            </Button>
+          )}
+        </>
+      }
+    >
       {terms.length === 0 ? (
         <EmptyState title={empty}>New Term names a concept, defines it and lists the words to avoid for it.</EmptyState>
       ) : (
@@ -186,7 +182,7 @@ function TermSection({
           })}
         </div>
       )}
-    </section>
+    </KnowledgeSection>
   );
 }
 
