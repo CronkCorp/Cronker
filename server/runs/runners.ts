@@ -8,6 +8,7 @@ import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
 import { ModelLabel } from "../workspaces/model-ids.js";
 import { Cost, costTotalsSql } from "./costs.js";
+import { defaultAllowedTools } from "./allowlist.js";
 import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
@@ -84,6 +85,12 @@ export const RunnerRecord = Type.Object({
     { description: "For a `managed_agents` Runner, what Cronk created with its API key; null for other kinds." },
   ),
   budgetPerRun: BudgetPerRunField,
+  allowedTools: Type.Union([Type.Array(Type.String()), Type.Null()], {
+    description:
+      "For a `local` Runner, its allowlist: the Claude Code permission rules, such as `Bash(git:*)`, for the tools its " +
+      "Runs may use without asking, passed to `claude` as `--allowedTools` with `--permission-mode acceptEdits`. Cronk's " +
+      "own MCP tools (`mcp__cronk`) are always allowed. Null for other kinds.",
+  }),
   costThisMonth: Type.Array(Cost, {
     description:
       "What its Runs that ended this calendar month (in UTC) cost, one total per currency; empty when none reported a " +
@@ -111,6 +118,7 @@ const columns = (now: string) => `id, name, kind, run_limit as limit,
   end as "managedAgents",
   case when budget_per_run is not null then json_build_object('amount', budget_per_run, 'currency', 'USD') end
     as "budgetPerRun",
+  allowed_tools as "allowedTools",
   ${costTotalsSql(`runs.runner_id = runners.id and runs.ended_at >= date_trunc('month', ${now}::timestamptz, 'UTC')`)}
     as "costThisMonth",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
@@ -174,9 +182,18 @@ export async function createRunner(
     managed = await setUpManagedAgents(context, { name: input.name, apiKey: input.apiKey });
   }
   const { rows } = await db.query<Row>(
-    `insert into runners (owner_id, kind, name, created_at, api_key_sealed, managed_agent_id, managed_environment_id)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
-    [userId, input.kind, input.name.trim(), clock.now(), managed?.apiKeySealed ?? null, managed?.agentId ?? null, managed?.environmentId ?? null],
+    `insert into runners (owner_id, kind, name, created_at, api_key_sealed, managed_agent_id, managed_environment_id, allowed_tools)
+     values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
+    [
+      userId,
+      input.kind,
+      input.name.trim(),
+      clock.now(),
+      managed?.apiKeySealed ?? null,
+      managed?.agentId ?? null,
+      managed?.environmentId ?? null,
+      input.kind === "local" ? [...defaultAllowedTools] : null,
+    ],
   );
   return (await findRunner(context, userId, rows[0]!.id))!;
 }
@@ -452,16 +469,32 @@ export const BudgetPerRun = Type.Union(
 );
 export type BudgetPerRun = Static<typeof BudgetPerRun>;
 
-/** The change-a-Runner route's body: whichever of its limit and budget per Run are given, at least one. */
+/** A `local` Runner's allowlist as the API takes it. */
+export const AllowedTools = Type.Union(
+  [Type.Array(Type.String({ minLength: 1, maxLength: 200, pattern: "\\S" }), { maxItems: 200 }), Type.Null()],
+  {
+    description:
+      "For a `local` Runner, the Claude Code permission rules, such as `Bash(git:*)`, for the tools its Runs may use " +
+      "without asking; trimmed, with repeats dropped. Null resets it to the default a new `local` Runner gets. It " +
+      "applies to Runs claimed from then on.",
+  },
+);
+
+/** The change-a-Runner route's body: whichever of its limit, budget per Run and allowlist are given, at least one. */
 export const RunnerEdit = Type.Object(
-  { limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), budgetPerRun: Type.Optional(BudgetPerRun) },
+  {
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    budgetPerRun: Type.Optional(BudgetPerRun),
+    allowedTools: Type.Optional(AllowedTools),
+  },
   { minProperties: 1 },
 );
 export type RunnerEdit = Static<typeof RunnerEdit>;
 
 /**
  * Changes one of the User's own Runners: how many Runs it keeps running at once, where a higher limit starts waiting
- * Tickets, and for a `managed_agents` Runner its budget per Run, which Runs started from then on get.
+ * Tickets, for a `managed_agents` Runner its budget per Run, which Runs started from then on get, and for a `local`
+ * Runner its allowlist, which Runs claimed from then on get.
  */
 export async function updateRunner(
   context: Context,
@@ -485,11 +518,29 @@ export async function updateRunner(
         `${runner.name} is a Runner of the kind ${runner.kind}, which reports no cost to budget: only a Managed Agents Runner has a budget per Run.`,
       );
     }
+    if (input.allowedTools !== undefined && runner.kind !== "local") {
+      throw new ApiError(
+        409,
+        "runner_has_no_allowlist",
+        `${runner.name} is a Runner of the kind ${runner.kind}, whose Runs don't run on your Machines: only a local Runner has an allowlist.`,
+      );
+    }
+    const allowedTools =
+      input.allowedTools === null ? [...defaultAllowedTools] : input.allowedTools && [...new Set(input.allowedTools.map((rule) => rule.trim()))];
     const { rows } = await tx.query<Row>(
       `update runners set run_limit = coalesce($3, run_limit),
-         budget_per_run = case when $4::boolean then $5::integer else budget_per_run end
+         budget_per_run = case when $4::boolean then $5::integer else budget_per_run end,
+         allowed_tools = coalesce($7::text[], allowed_tools)
        where id = $1 and owner_id = $2 returning ${columns("$6")}`,
-      [runnerId, userId, input.limit ?? null, input.budgetPerRun !== undefined, input.budgetPerRun?.amount ?? null, context.clock.now()],
+      [
+        runnerId,
+        userId,
+        input.limit ?? null,
+        input.budgetPerRun !== undefined,
+        input.budgetPerRun?.amount ?? null,
+        context.clock.now(),
+        allowedTools ?? null,
+      ],
     );
     if (input.limit !== undefined) afterCommit(tx, () => startWaitingRuns(context, runnerId));
     return present(context, rows[0]!);

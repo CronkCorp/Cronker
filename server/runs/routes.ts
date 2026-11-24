@@ -231,12 +231,13 @@ export function runRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Runs"],
-          summary: "Set your Runner's limit on Runs at once or its budget per Run",
+          summary: "Set your Runner's limit on Runs at once, its budget per Run or its allowlist",
           description:
             "Changes what the body names. Tickets needing a Run beyond the limit wait for a slot, highest Priority " +
             "first, then the one that entered its Status first. Raising the limit starts waiting Tickets at once; " +
             "lowering it stops no running Run. A `managed_agents` Runner's budget per Run applies to Runs started from " +
-            "then on; other kinds are refused one with `runner_has_no_budget`.",
+            "then on; other kinds are refused one with `runner_has_no_budget`. A `local` Runner's allowlist applies to " +
+            "Runs claimed from then on; other kinds are refused one with `runner_has_no_allowlist`.",
           params: Type.Object({ runnerId: Type.String() }),
           body: RunnerEdit,
           response: { 200: RunnerRecord, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },

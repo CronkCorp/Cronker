@@ -37,8 +37,16 @@ export interface RunningDaemon {
 /** The name Cronk's MCP server goes by in a Run's `--mcp-config`, so `mcp__cronk` allows its tools. */
 const mcpServerName = "cronk";
 
-/** The arguments `claude` runs a claimed Run with. */
+/** Cronk's own MCP tools, always allowed: without them the agent can't call `finish`. */
+const cronkTools = `mcp__${mcpServerName}`;
+
+/**
+ * The arguments `claude` runs a claimed Run with: edits accepted, and the Runner's allowlist, with Cronk's own tools
+ * always in it, as the tools it may use without asking. In `-p` mode a tool call outside them is denied. A
+ * Repository's committed Claude Code settings add their own allow rules, as Claude Code merges them.
+ */
 export function claudeArguments(claimed: ClaimedRun, mcpConfigPath: string): string[] {
+  const allowed = [...new Set([...claimed.allowedTools, cronkTools])];
   return [
     "-p",
     claimed.brief,
@@ -50,10 +58,31 @@ export function claudeArguments(claimed: ClaimedRun, mcpConfigPath: string): str
     "--verbose",
     "--mcp-config",
     mcpConfigPath,
-    // In `-p` mode a tool not allowed is denied, so Cronk's own must be, for the agent to call `finish`.
+    "--permission-mode",
+    "acceptEdits",
+    // Last, one rule per argument: the flag takes every argument after it.
     "--allowedTools",
-    `mcp__${mcpServerName}`,
+    ...allowed,
   ];
+}
+
+/** At most this many denied tools are reported with a Run's end, each at most `deniedToolLength` characters. */
+const deniedToolsMax = 20;
+const deniedToolLength = 200;
+
+/**
+ * The tool calls Claude Code denied, from its `result` message's `permission_denials`, as a person reads them: a
+ * Bash call as `Bash(<command>)`, any other by its tool name.
+ */
+export function deniedTools(message: { permission_denials?: unknown }): string[] {
+  if (!Array.isArray(message.permission_denials)) return [];
+  const names = message.permission_denials.flatMap((denial: { tool_name?: unknown; tool_input?: { command?: unknown } }) => {
+    if (typeof denial?.tool_name !== "string" || !denial.tool_name.trim()) return [];
+    const command = denial.tool_input?.command;
+    const name = denial.tool_name === "Bash" && typeof command === "string" ? `Bash(${command.trim()})` : denial.tool_name.trim();
+    return [name.length > deniedToolLength ? `${name.slice(0, deniedToolLength - 1)}…` : name];
+  });
+  return [...new Set(names)].slice(0, deniedToolsMax);
 }
 
 /** One Run the daemon holds: its process, and how to stop it. */
@@ -172,8 +201,9 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       lastError = lines.at(-1) ?? lastError;
     });
     let sessionReported = false;
+    let denied: string[] = [];
     createInterface({ input: child.stdout }).on("line", (line) => {
-      let message: { type?: unknown; subtype?: unknown; session_id?: unknown };
+      let message: { type?: unknown; subtype?: unknown; session_id?: unknown; permission_denials?: unknown };
       try {
         message = JSON.parse(line) as typeof message;
       } catch {
@@ -183,6 +213,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         sessionReported = true;
         report("session", { sessionId: message.session_id }).catch(() => {});
       }
+      if (message.type === "result") denied = deniedTools(message);
     });
 
     const heartbeat = setInterval(() => {
@@ -204,7 +235,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       done = true;
       clearInterval(heartbeat);
       // A Run its agent finished ended already in Cronk, which then leaves it as it is.
-      await report("end", { reason }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`));
+      await report("end", denied.length ? { reason, deniedTools: denied } : { reason }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`));
       await rm(directory, { recursive: true, force: true });
       held.delete(runId);
       print(`${claimed.ticketKey}: Run ${runId} ended: ${reason}.`);

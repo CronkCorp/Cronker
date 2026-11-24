@@ -262,7 +262,8 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Machines"],
           summary: "Report that a claimed Run's process ended, as a Machine's daemon",
           description:
-            "A Run whose agent didn't call `finish` fails with the reason given. A Run that ended already, as `finish` " +
+            "A Run whose agent didn't call `finish` fails with the reason given, naming any `deniedTools` as outside its " +
+            "Runner's allowlist. A Run that ended already, as `finish` " +
             "ends it, is left as it is.",
           security: [{ machineToken: [] }],
           params: runParams,
@@ -271,7 +272,7 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request, reply) => {
-        await reportEnd(context, await requireMachine(context, request), request.params.runId, request.body.reason);
+        await reportEnd(context, await requireMachine(context, request), request.params.runId, request.body);
         return reply.code(204).send(null);
       },
     );
