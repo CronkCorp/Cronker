@@ -9,6 +9,10 @@ How a new version of Cronk is cut. Installations upgrade by following **Upgradin
 - **Patch** (`v0.2.1`): fixes only, nothing to do by hand.
 - Every release is a GitHub Release on that tag. There are no release branches: a fix for an older release is released from `main` as the next patch.
 
+## Once: npm
+
+The daemon is published as `cronk-runner` on npm. Before the first release, create an npm automation token (or a granular token that may publish `cronk-runner`) and add it to the Repository's Actions secrets as `NPM_TOKEN`.
+
 ## Checklist
 
 1. **Main is green.** CI passed on the commit you'll tag, and no Ticket you want in the release is still open.
@@ -21,5 +25,6 @@ How a new version of Cronk is cut. Installations upgrade by following **Upgradin
    ```
 
    `--generate-notes` lists the pull requests merged since the previous tag, by their titles, so keep PR titles in the `feat:` / `fix:` / `docs:` form and written for people running Cronk.
+   Publishing the release runs `.github/workflows/release.yml`, which publishes the `cronk-runner` daemon to npm at the same version (a prerelease under the `next` dist-tag), and fails if `daemon/package.json` doesn't match the tag. Check its run on the Actions tab.
 4. **Edit the notes** on GitHub: put anything an installation must do by hand under an **Upgrade notes** heading at the top (new environment variables, GitHub App permissions or events to add, anything else the migrations can't do), and say "Nothing to do by hand" when there is none.
 5. **Upgrade your own installation** with `docs/setup.md`'s **Upgrading**, so every release has been through that path once before anyone else follows it.

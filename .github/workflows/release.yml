@@ -1,0 +1,35 @@
+name: Release
+
+# Publishes the `cronk-runner` daemon to npm whenever a Release of Cronk is published, at the same version.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-runner:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run build:daemon
+      - name: Check daemon/package.json matches the tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(node -p 'require("./daemon/package.json").version')"
+          if [ "v${version#v}" != "v${TAG#v}" ]; then
+            echo "::error::daemon/package.json is $version but the Release is $TAG: bump it as docs/releasing.md says."
+            exit 1
+          fi
+      - name: Publish cronk-runner
+        working-directory: daemon
+        run: npm publish --access public $([ "${{ github.event.release.prerelease }}" = "true" ] && echo "--tag next")
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

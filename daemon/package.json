@@ -3,7 +3,7 @@
   "version": "0.3.0",
   "description": "The daemon that pairs a Machine with Cronk and runs the Runs of its User's local Runners.",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "engines": {
     "node": ">=22"
   },
@@ -12,5 +12,13 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CronkCorp/Cronker.git",
+    "directory": "daemon"
+  }
 }
