@@ -437,6 +437,35 @@
   padding-left: var(--space-3);
 }
 
+/* Knowledge sections: a Project's knowledge, then the Workspace's, on one page */
+.knowledge-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.knowledge-section + .knowledge-section {
+  margin-top: var(--space-4);
+}
+.knowledge-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+}
+.knowledge-section-head h2 {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledge-section-tools {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
 /* List */
 .list {
   display: grid;
