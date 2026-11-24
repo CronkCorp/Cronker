@@ -1068,9 +1068,14 @@ export async function noteRunCall(
  * Brings a lost Run back to running when its Agent calls naming it or its Ticket: Cronk only guessed the
  * session was gone, and a call shows it wasn't. Only the Ticket's latest Run comes back, and only while
  * nothing has moved on since: the Ticket is still in the Run's Status, still delegated to its Agent, and
- * has no other running Run. Runs before the call is handled, so a late `finish` is accepted.
+ * has no other running Run. Runs before the call is handled, so a late `finish` is accepted. A local Run's Machine
+ * heartbeating it brings it back the same way.
  */
-export async function reviveLostRun(context: Context, agent: AgentCaller, named: NamedInCall): Promise<void> {
+export async function reviveLostRun(
+  context: Context,
+  agent: Pick<AgentCaller, "id"> & { workspace: Pick<AgentCaller["workspace"], "id"> },
+  named: NamedInCall,
+): Promise<void> {
   const { db, clock } = context;
   const { runId, ticketId, ticketKey } = named;
   const ticket = ticketId && isUuid(ticketId)

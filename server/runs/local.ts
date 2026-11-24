@@ -33,9 +33,16 @@ export function localRunner(context: Context): Runner {
       context.live.sendToMachines(run.runner.id, { type: "run.claimable", runId: run.runId });
       return { started: true, reference: {} };
     },
-    // Cronk stopped the Run. A lost Run may yet come back (CRONK-142), so its token is kept until it is stopped for good.
+    // Cronk stopped the Run: the Machine holding it is told to kill its process, now if it is connected, else when it
+    // connects again (`stopsToReplay`). A lost Run may yet come back, so it keeps its token and its process until a
+    // heartbeat finds its Ticket moved on (`server/machines/local-runs.ts`).
     async stop(run) {
-      await revokeLocalRunToken(context, run.runId, { unlessLost: true });
+      if (!(await revokeLocalRunToken(context, run.runId, { unlessLost: true }))) return;
+      const { rows } = await context.db.query<{ machineId: string }>(
+        `select machine_id as "machineId" from local_runs where run_id = $1 and stop_acked_at is null`,
+        [run.runId],
+      );
+      for (const { machineId } of rows) context.live.sendToMachine(machineId, { type: "run.stop", runId: run.runId });
     },
     async ended(run) {
       await revokeLocalRunToken(context, run.runId);
@@ -45,14 +52,20 @@ export function localRunner(context: Context): Runner {
   };
 }
 
-/** Revokes the Agent token minted for a claimed local Run, once; `unlessLost` leaves a lost Run's token working. */
-export async function revokeLocalRunToken(context: Context, runId: string, { unlessLost = false } = {}): Promise<void> {
+/**
+ * Revokes the Agent token minted for a claimed local Run, once; `unlessLost` leaves a lost Run's token working, and a
+ * Run that came back from lost meanwhile. Answers false only when it left the Run alone.
+ */
+export async function revokeLocalRunToken(context: Context, runId: string, { unlessLost = false } = {}): Promise<boolean> {
+  if (unlessLost) {
+    const { rowCount } = await context.db.query("select 1 from runs where id = $1 and state in ('lost', 'running')", [runId]);
+    if (rowCount) return false;
+  }
   const { rows } = await context.db.query<{ tokenId: string | null }>(
-    `update local_runs set revoked_at = $2 where run_id = $1 and revoked_at is null
-       and not ($3::boolean and exists (select 1 from runs where runs.id = $1 and runs.state = 'lost'))
-     returning token_id as "tokenId"`,
-    [runId, context.clock.now(), unlessLost],
+    `update local_runs set revoked_at = $2 where run_id = $1 and revoked_at is null returning token_id as "tokenId"`,
+    [runId, context.clock.now()],
   );
   const tokenId = rows[0]?.tokenId;
   if (tokenId) await context.db.query("delete from agent_tokens where id = $1", [tokenId]);
+  return true;
 }

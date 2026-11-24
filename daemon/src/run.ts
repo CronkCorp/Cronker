@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { call, CronkError, type ClaimedRun } from "./api.js";
 import { readConfig, type PairedCronk } from "./config.js";
@@ -9,7 +9,9 @@ import { readConfig, type PairedCronk } from "./config.js";
 /**
  * `cronk-runner run`: the daemon's foreground service. For each paired Cronk it keeps the Machine's event stream open,
  * claims the Runs it announces while the Machine's limit has room, and runs each with `claude -p` in a fresh scratch
- * directory: reporting its session id, heartbeating it while it runs, and reporting how the process ended.
+ * directory: reporting its session id, heartbeating it while it runs, and reporting how the process ended. A Run
+ * stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory, so a
+ * daemon starting again kills those it left behind and reports their Runs ended.
  */
 
 export interface RunOptions {
@@ -25,6 +27,10 @@ export interface RunOptions {
   reconnectMs?: number;
   /** Where each Run's scratch directory is made; the OS's temporary directory when left out. */
   scratchRoot?: string;
+  /** Where the running processes are recorded; `runs/` next to the config when left out. */
+  stateDir?: string;
+  /** How long a killed `claude` has to exit after SIGTERM before it gets SIGKILL: ten seconds when left out. */
+  killGraceMs?: number;
 }
 
 export interface RunningDaemon {
@@ -58,15 +64,32 @@ export function claudeArguments(claimed: ClaimedRun, mcpConfigPath: string): str
 
 /** One Run the daemon holds: its process, and how to stop it. */
 interface HeldRun {
+  cronkUrl: string;
   kill(): void;
   ended: Promise<void>;
 }
+
+/** What the state directory records of a running process, in `<runId>.json`. */
+interface ProcessRecord {
+  runId: string;
+  cronkUrl: string;
+  pid: number;
+  /** The Run's scratch directory. */
+  directory: string;
+  /** The `--mcp-config` path, unique to the Run, which the process's command line must carry to be killed. */
+  mcpConfigPath: string;
+}
+
+/** The state directory, next to the config at the path. */
+export const stateDirOf = (configPath: string): string => join(dirname(configPath), "runs");
 
 export function runDaemon(options: RunOptions): RunningDaemon {
   const { print, heartbeatMs = 60_000, reconnectMs = 1_000 } = options;
   const env = options.env ?? process.env;
   const claude = options.claude ?? "claude";
   const scratchRoot = options.scratchRoot ?? tmpdir();
+  const stateDir = options.stateDir ?? stateDirOf(options.configPath);
+  const killGraceMs = options.killGraceMs ?? 10_000;
   const held = new Map<string, HeldRun>();
   /** Runs announced but not claimed yet, waiting for room under the Machine's limit, by Cronk and Run. */
   const pending = new Map<string, { cronk: PairedCronk; runId: string }>();
@@ -80,7 +103,10 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     if (config.cronks.length === 0) print("This Machine isn't paired with any Cronk yet: run `cronk-runner login <url>`.");
     return config;
   });
-  const connections = configRead.then((config) => Promise.all(config.cronks.map((cronk) => connect(cronk))));
+  const connections = configRead.then(async (config) => {
+    await killLeftovers(config.cronks);
+    await Promise.all(config.cronks.map((cronk) => connect(cronk)));
+  });
   connections.catch((error: unknown) => print(`Couldn't start: ${(error as Error).message}`));
 
   /** Keeps the Cronk's event stream open until the daemon stops or the Machine is unpaired, reconnecting with backoff. */
@@ -96,16 +122,24 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         });
         if (response.status === 401) {
           print(`${cronk.url}: this Machine was unpaired: run \`cronk-runner login ${cronk.url}\` again.`);
+          // Cronk stopped the Runs it held; nothing keeps running for a Cronk it can no longer reach.
+          const ending = [...held.values()].filter((run) => run.cronkUrl === cronk.url);
+          for (const run of ending) run.kill();
+          await Promise.all(ending.map((run) => run.ended));
           return;
         }
         if (!response.ok || !response.body) throw new Error(`Cronk answered ${response.status}.`);
         print(`${cronk.url}: connected.`);
         wait = reconnectMs;
         for await (const event of serverSentEvents(response.body)) {
-          if (event.type !== "run.claimable") continue;
-          const { runId } = JSON.parse(event.data) as { runId: string };
-          pending.set(`${cronk.url} ${runId}`, { cronk, runId });
-          claimWaiting();
+          if (event.type === "run.claimable") {
+            const { runId } = JSON.parse(event.data) as { runId: string };
+            pending.set(`${cronk.url} ${runId}`, { cronk, runId });
+            claimWaiting();
+          } else if (event.type === "run.stop") {
+            const { runId } = JSON.parse(event.data) as { runId: string };
+            void stopRun(cronk, runId);
+          }
         }
       } catch (error) {
         if (stopped) return;
@@ -147,6 +181,50 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     });
   }
 
+  /** Kills a Run Cronk stopped, if it still runs here, waits for it to end and be cleaned up, and confirms the stop. */
+  async function stopRun(cronk: PairedCronk, runId: string): Promise<void> {
+    pending.delete(`${cronk.url} ${runId}`);
+    const run = held.get(runId);
+    if (run) {
+      print(`Run ${runId} was stopped in Cronk; stopping claude.`);
+      run.kill();
+      await run.ended;
+    }
+    await call(cronk.url, "POST", `/api/machine/runs/${runId}/stopped`, { token: cronk.token }).catch(() => {});
+  }
+
+  /** Kills the `claude` processes a daemon before this one left running, and reports their Runs ended. */
+  async function killLeftovers(cronks: PairedCronk[]): Promise<void> {
+    let names: string[];
+    try {
+      names = (await readdir(stateDir)).filter((name) => name.endsWith(".json"));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const path = join(stateDir, name);
+      let record: ProcessRecord;
+      try {
+        record = JSON.parse(await readFile(path, "utf8")) as ProcessRecord;
+      } catch {
+        await rm(path, { force: true });
+        continue;
+      }
+      // A pid is reused once its process is gone: only a process still running this Run's command is killed.
+      if ((await commandLineOf(record.pid))?.includes(record.mcpConfigPath)) await killProcess(record.pid, killGraceMs);
+      await rm(record.directory, { recursive: true, force: true });
+      const cronk = cronks.find((c) => c.url === record.cronkUrl);
+      if (cronk) {
+        // A Run that ended meanwhile, or isn't this Machine's any more, is left as it is.
+        await call(cronk.url, "POST", `/api/machine/runs/${record.runId}/end`, { token: cronk.token, body: { reason: "runner restarted" } }).catch(
+          () => {},
+        );
+      }
+      await rm(path, { force: true });
+      print(`Run ${record.runId}: killed what the last daemon left running; its Run ended (runner restarted).`);
+    }
+  }
+
   /** Runs a claimed Run's `claude` process in a fresh scratch directory, until it exits. */
   async function start(cronk: PairedCronk, claimed: ClaimedRun): Promise<void> {
     const { runId } = claimed;
@@ -166,6 +244,16 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     print(`${claimed.ticketKey}: running Run ${runId} with ${claimed.modelId}.`);
 
     const child = spawn(claude, claudeArguments(claimed, mcpConfigPath), { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] });
+    const recordPath = join(stateDir, `${runId}.json`);
+    const recorded =
+      child.pid === undefined
+        ? Promise.resolve()
+        : mkdir(stateDir, { recursive: true, mode: 0o700 })
+            .then(() => {
+              const record: ProcessRecord = { runId, cronkUrl: cronk.url, pid: child.pid!, directory, mcpConfigPath };
+              return writeFile(recordPath, JSON.stringify(record), { mode: 0o600 });
+            })
+            .catch((error: unknown) => print(`${claimed.ticketKey}: couldn't record its process: ${(error as Error).message}`));
     let lastError = "";
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       const lines = chunk.trim().split("\n");
@@ -188,16 +276,23 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     const heartbeat = setInterval(() => {
       report("heartbeat").catch((error: unknown) => {
         // Cronk no longer runs the Run, as when a User took its Ticket away: its process stops too.
-        if (error instanceof CronkError && (error.code === "run_stopped" || error.status === 404)) {
-          print(`${claimed.ticketKey}: Run ${runId} was stopped in Cronk; stopping claude.`);
-          child.kill("SIGTERM");
-        }
+        if (error instanceof CronkError && (error.code === "run_stopped" || error.status === 404)) void stopRun(cronk, runId);
       });
     }, heartbeatMs);
 
     let resolveEnded!: () => void;
     const ended = new Promise<void>((resolve) => (resolveEnded = resolve));
-    held.set(runId, { kill: () => child.kill("SIGTERM"), ended });
+    let killed = false;
+    const kill = () => {
+      if (killed || child.exitCode !== null || child.signalCode !== null) return;
+      killed = true;
+      child.kill("SIGTERM");
+      // A process that ignores SIGTERM, or hangs on it, doesn't outlive the grace.
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      }, killGraceMs).unref();
+    };
+    held.set(runId, { cronkUrl: cronk.url, kill, ended });
     let done = false;
     const end = async (reason: string) => {
       if (done) return;
@@ -206,6 +301,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       // A Run its agent finished ended already in Cronk, which then leaves it as it is.
       await report("end", { reason }).catch((error: unknown) => print(`${claimed.ticketKey}: couldn't report its end: ${(error as Error).message}`));
       await rm(directory, { recursive: true, force: true });
+      await recorded;
+      await rm(recordPath, { force: true });
       held.delete(runId);
       print(`${claimed.ticketKey}: Run ${runId} ended: ${reason}.`);
       resolveEnded();
@@ -249,6 +346,46 @@ async function* serverSentEvents(body: ReadableStream<Uint8Array>): AsyncGenerat
         else if (line.startsWith("data: ")) data.push(line.slice(6));
       }
       if (data.length) yield { type, data: data.join("\n") };
+    }
+  }
+}
+
+/** The command line of the process with the pid, or undefined once it is gone. */
+async function commandLineOf(pid: number): Promise<string | undefined> {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try {
+    // Linux: the arguments, separated by NULs.
+    return (await readFile(`/proc/${pid}/cmdline`, "utf8")).replaceAll("\0", " ");
+  } catch {
+    // macOS has no /proc: `ps` tells it, and prints nothing for a process that is gone.
+    return new Promise((resolve) =>
+      execFile("ps", ["-o", "args=", "-p", String(pid)], (error, stdout) => resolve(error || !stdout.trim() ? undefined : stdout)),
+    );
+  }
+}
+
+/** Sends the process SIGTERM, then SIGKILL if it hasn't exited within the grace. */
+async function killProcess(pid: number, graceMs: number): Promise<void> {
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  const until = Date.now() + graceMs;
+  while (alive() && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 50));
+  if (alive()) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Gone meanwhile.
     }
   }
 }

@@ -236,3 +236,150 @@ describe("a claimed Run", () => {
     expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("running");
   });
 });
+
+describe("stopping a local Run", () => {
+  const stopped = (machineToken: string, runId: string) => call("POST", `/api/machine/runs/${runId}/stopped`, { token: machineToken });
+
+  test("a stop while the Machine is connected is told on its stream, and its confirmation is taken once or more", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const stream = await openMachineStream(cronk, machineToken);
+    streams.push(stream);
+    const { ticket, run } = await delegate("Stop me");
+    expect(await stream.next()).toEqual({ type: "run.claimable", data: { runId: run.id } });
+    await claim(machineToken, run.id);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+
+    expect(await stream.next()).toEqual({ type: "run.stop", data: { runId: run.id } });
+    expect((await stopped(machineToken, run.id)).status).toBe(204);
+    expect((await stopped(machineToken, run.id)).status).toBe(204);
+    // Confirmed, it isn't told again.
+    const again = await openMachineStream(cronk, machineToken);
+    streams.push(again);
+    await again.expectQuiet();
+  });
+
+  test("a stop while the Machine is offline shows at once, and is told again on every connect until confirmed", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { ticket, run } = await delegate("Stop me offline");
+    const { token } = (await claim(machineToken, run.id)).json;
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await cronk.jobsSettled();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("stopped");
+    expect((await call("GET", "/api/agent", { token })).status).toBe(401);
+    for (let i = 0; i < 2; i++) {
+      const stream = await openMachineStream(cronk, machineToken);
+      streams.push(stream);
+      expect(await stream.next()).toEqual({ type: "run.stop", data: { runId: run.id } });
+      stream.close();
+    }
+    await stopped(machineToken, run.id);
+    const after = await openMachineStream(cronk, machineToken);
+    streams.push(after);
+    await after.expectQuiet();
+  });
+
+  test("a process reported ended confirms its stop", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { ticket, run } = await delegate("Ended");
+    await claim(machineToken, run.id);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+
+    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude was killed by SIGTERM" } });
+
+    const stream = await openMachineStream(cronk, machineToken);
+    streams.push(stream);
+    await stream.expectQuiet();
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("stopped");
+  });
+
+  test("another Machine can't confirm a Run's stop", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp();
+    const other = await pair(ada, [runner.id]);
+    const { run } = await delegate("Not yours to stop");
+    await claim(machineToken, run.id);
+
+    expect((await stopped(other, run.id)).status).toBe(404);
+  });
+
+  test("unpairing a Machine stops the Runs it holds and revokes their tokens", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp();
+    const { run } = await delegate("Unpair me");
+    const { token } = (await claim(machineToken, run.id)).json;
+    const [machine] = await ok("GET", "/api/machines", { cookie: ada });
+
+    await ok("DELETE", `/api/machines/${machine.id}`, { cookie: ada });
+    await cronk.jobsSettled();
+
+    const ended = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
+    expect(ended.state).toBe("stopped");
+    expect(ended.endReason).toBe("ada-laptop, the Machine running it, was unpaired.");
+    expect((await call("GET", "/api/agent", { token })).status).toBe(401);
+    // Its slot is free again.
+    const [listed] = (await ok("GET", "/api/runners", { cookie: ada })).filter((r: { id: string }) => r.id === runner.id);
+    expect(listed.running).toBe(0);
+  });
+
+  test("removing a local Runner stops its running Runs and tells the Machine", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp();
+    const stream = await openMachineStream(cronk, machineToken);
+    streams.push(stream);
+    const { run } = await delegate("Remove my Runner");
+    await stream.next();
+    const { token } = (await claim(machineToken, run.id)).json;
+
+    await ok("DELETE", `/api/runners/${runner.id}`, { cookie: ada });
+
+    expect(await stream.next()).toEqual({ type: "run.stop", data: { runId: run.id } });
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("stopped");
+    expect((await call("GET", "/api/agent", { token })).status).toBe(401);
+  });
+});
+
+describe("a local Run whose Machine slept", () => {
+  async function lostRun() {
+    const set = await localSetUp();
+    const { ticket, run } = await set.delegate("Asleep");
+    const { token } = (await claim(set.machineToken, run.id)).json;
+    cronk.clock.advance(minutes(120));
+    await cronk.checkForLostRuns();
+    await cronk.jobsSettled();
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: set.ada })).state).toBe("lost");
+    return { ...set, ticket, run, token };
+  }
+
+  test("goes lost without heartbeats, keeping its token, and a later heartbeat brings it back", async () => {
+    const { ada, machineToken, run, token } = await lostRun();
+    expect((await call("GET", "/api/agent", { token })).status).toBe(200);
+    // A lost Run isn't told to stop: it may yet come back.
+    const stream = await openMachineStream(cronk, machineToken);
+    streams.push(stream);
+    await stream.expectQuiet();
+
+    expect((await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken })).status).toBe(204);
+
+    const back = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
+    expect(back.state).toBe("running");
+    expect(back.endReason).toBeNull();
+    const finished = await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+    expect(finished.state).toBe("finished");
+  });
+
+  test("whose Ticket moved on meanwhile is told to stop on waking, and its token is revoked", async () => {
+    const { ada, machineToken, ticket, run, token } = await lostRun();
+    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+
+    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken });
+
+    expect(beat.status).toBe(409);
+    expect(beat.json.error.code).toBe("run_stopped");
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("lost");
+    expect((await call("GET", "/api/agent", { token })).status).toBe(401);
+    // Told by the answer, it isn't told again on the stream.
+    const stream = await openMachineStream(cronk, machineToken);
+    streams.push(stream);
+    await stream.expectQuiet();
+  });
+});

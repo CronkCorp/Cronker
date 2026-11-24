@@ -880,7 +880,8 @@ function Machines({ localRunners }: { localRunners: Runner[] }) {
           refresh();
         }}
       >
-        Its token is revoked, so its daemon can no longer reach Cronk. Pair it again with <code>cronk-runner login</code>.
+        Its token is revoked, so its daemon can no longer reach Cronk, and the Runs it is running stop. Pair it again with{" "}
+        <code>cronk-runner login</code>.
       </ConfirmDialog>
       <form onSubmit={approve.onSubmit} className="machine-approve">
         <h3>Approve a pairing code</h3>

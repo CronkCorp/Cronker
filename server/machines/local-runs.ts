@@ -6,7 +6,8 @@ import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import type { Brief } from "../runs/brief.js";
-import { runReports } from "../runs/runs.js";
+import { revokeLocalRunToken } from "../runs/local.js";
+import { reviveLostRun, runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { modelIdOf, type ModelId } from "../workspaces/workspaces.js";
 import type { MachineSelf } from "./machines.js";
@@ -118,11 +119,26 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
   throw new ApiError(409, "no_model_id", reason);
 }
 
-/** A Run this Machine claimed, and whether it still runs. */
-async function heldRun(context: Context, machine: MachineSelf, runId: string): Promise<{ running: boolean }> {
+/**
+ * The Runs this Machine holds that were stopped, or otherwise ended, in Cronk and whose stop it hasn't confirmed: its
+ * event stream tells them again on connecting, so a Machine that was offline, or asleep, at the stop still kills them.
+ */
+export async function stopsToReplay(context: Context, machine: MachineSelf): Promise<string[]> {
+  const { rows } = await context.db.query<{ id: string }>(
+    `select runs.id from local_runs join runs on runs.id = local_runs.run_id
+     where local_runs.machine_id = $1 and local_runs.stop_acked_at is null and runs.state not in ('running', 'lost')
+     order by local_runs.claimed_at, runs.id`,
+    [machine.id],
+  );
+  return rows.map((r) => r.id);
+}
+
+/** A Run this Machine claimed, and its state. */
+async function heldRun(context: Context, machine: MachineSelf, runId: string): Promise<{ state: string; agentId: string; workspaceId: string }> {
   if (!isUuid(runId)) throw noSuchRun();
-  const { rows } = await context.db.query<{ running: boolean }>(
-    `select runs.state = 'running' as running from local_runs join runs on runs.id = local_runs.run_id
+  const { rows } = await context.db.query<{ state: string; agentId: string; workspaceId: string }>(
+    `select runs.state, runs.agent_id as "agentId", runs.workspace_id as "workspaceId"
+     from local_runs join runs on runs.id = local_runs.run_id
      where local_runs.run_id = $1 and local_runs.machine_id = $2`,
     [runId, machine.id],
   );
@@ -130,21 +146,50 @@ async function heldRun(context: Context, machine: MachineSelf, runId: string): P
   return rows[0];
 }
 
+/**
+ * Whether a Run this Machine holds still runs, after bringing it back if it was lost: a lost Run's Machine that calls
+ * again, as on waking from sleep, shows the Run wasn't gone. A lost Run that can't come back, its Ticket moved on, is
+ * over for good: its token is revoked and its stop counted as told, since the answer tells the daemon to stop it.
+ */
+async function stillRunning(context: Context, machine: MachineSelf, runId: string): Promise<boolean> {
+  const run = await heldRun(context, machine, runId);
+  if (run.state === "running") return true;
+  if (run.state !== "lost") return false;
+  await reviveLostRun(context, { id: run.agentId, workspace: { id: run.workspaceId } }, { runId });
+  if ((await heldRun(context, machine, runId)).state === "running") return true;
+  await revokeLocalRunToken(context, runId);
+  await acknowledgeStop(context, machine, runId);
+  return false;
+}
+
 const runStopped = () =>
   new ApiError(409, "run_stopped", "This Run is no longer running in Cronk: stop its process and let go of what it holds.");
 
 /**
- * Records a heartbeat of a Run the Machine holds, counted as a call naming the Run, so a working Run isn't lost. A Run
- * no longer running is refused with `run_stopped`, telling the daemon to kill its process.
+ * Records a heartbeat of a Run the Machine holds, counted as a call naming the Run, so a working Run isn't lost; a lost
+ * Run comes back if its Ticket hasn't moved on. A Run no longer running is refused with `run_stopped`, telling the
+ * daemon to kill its process.
  */
 export async function heartbeat(context: Context, machine: MachineSelf, runId: string): Promise<void> {
-  const { running } = await heldRun(context, machine, runId);
-  if (!running) throw runStopped();
+  if (!(await stillRunning(context, machine, runId))) throw runStopped();
   const { rowCount } = await context.db.query("update runs set last_call_at = $2 where id = $1 and state = 'running'", [
     runId,
     context.clock.now(),
   ]);
   if (!rowCount) throw runStopped();
+}
+
+/**
+ * Records that the Machine killed the process of a Run it holds and cleaned up after it, so the stop isn't told again.
+ * Idempotent, and accepted whatever the Run's state.
+ */
+export async function acknowledgeStop(context: Context, machine: MachineSelf, runId: string): Promise<void> {
+  await heldRun(context, machine, runId);
+  await context.db.query("update local_runs set stop_acked_at = $3 where run_id = $1 and machine_id = $2 and stop_acked_at is null", [
+    runId,
+    machine.id,
+    context.clock.now(),
+  ]);
 }
 
 export const LocalSession = Type.Object({
@@ -154,8 +199,7 @@ export type LocalSession = Static<typeof LocalSession>;
 
 /** Records the Claude Code session of a Run the Machine holds as its session reference. */
 export async function reportSession(context: Context, machine: MachineSelf, runId: string, sessionId: string): Promise<void> {
-  const { running } = await heldRun(context, machine, runId);
-  if (!running) throw runStopped();
+  if (!(await stillRunning(context, machine, runId))) throw runStopped();
   await context.db.query("update runs set session_id = $2, last_call_at = $3 where id = $1 and state = 'running'", [
     runId,
     sessionIdOf(sessionId.trim()),
@@ -173,11 +217,13 @@ export const LocalRunEnd = Type.Object({
 export type LocalRunEnd = Static<typeof LocalRunEnd>;
 
 /**
- * Reports that the `claude` process of a Run the Machine holds ended. A Run its agent didn't finish fails with the
- * reason; one that ended already, as `finish` ends it, is left as it is.
+ * Reports that the `claude` process of a Run the Machine holds ended, which also confirms any stop. A Run its agent
+ * didn't finish fails with the reason, a lost one too if its Ticket hasn't moved on; one that ended already, as
+ * `finish` ends it, is left as it is.
  */
 export async function reportEnd(context: Context, machine: MachineSelf, runId: string, reason: string): Promise<void> {
-  const { running } = await heldRun(context, machine, runId);
+  const running = await stillRunning(context, machine, runId);
+  await acknowledgeStop(context, machine, runId);
   if (!running) return;
   await runReports(context).endedWithoutFinishing(runId, `The session ended without calling \`finish\`: ${reason.trim()}`);
 }

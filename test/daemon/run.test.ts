@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -8,6 +10,7 @@ import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { minutes } from "../harness/clock.js";
 import { setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
+import { openMachineStream } from "../harness/stream.js";
 
 /**
  * Seam 2: `cronk-runner run` in-process against a real Cronk, with a scripted stand-in `claude` on its PATH that
@@ -74,14 +77,9 @@ async function localSetUp() {
   const log = join(home, "claude.jsonl");
   await writeFile(log, "");
 
-  const start = (mode: string, heartbeatMs?: number) => {
-    daemon = runDaemon({
-      configPath,
-      print: () => {},
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STAND_IN_CLAUDE_LOG: log, STAND_IN_CLAUDE_MODE: mode },
-      scratchRoot: scratch,
-      heartbeatMs,
-    });
+  const claudeEnv = (mode: string) => ({ ...process.env, PATH: `${bin}:${process.env.PATH}`, STAND_IN_CLAUDE_LOG: log, STAND_IN_CLAUDE_MODE: mode });
+  const start = (mode: string, heartbeatMs?: number, killGraceMs?: number) => {
+    daemon = runDaemon({ configPath, print: () => {}, env: claudeEnv(mode), scratchRoot: scratch, heartbeatMs, killGraceMs });
     return daemon;
   };
   const delegate = async (title: string) => {
@@ -97,7 +95,7 @@ async function localSetUp() {
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   const runState = (runId: string) => ok("GET", `/api/runs/${runId}`, ada);
-  return { ada, start, delegate, runs, runState, scratch };
+  return { ada, machine, machineToken: paired.machineToken as string, configPath, claudeEnv, start, delegate, runs, runState, scratch };
 }
 
 describe("cronk-runner run", () => {
@@ -172,4 +170,85 @@ describe("cronk-runner run", () => {
     expect((await runState(run.id)).state).toBe("stopped");
     expect(await readdir(scratch)).toEqual([]);
   });
+
+  test("a Run stopped in Cronk is killed at once on the stream's word, even a claude ignoring SIGTERM, and its stop confirmed", async () => {
+    const { ada, machineToken, start, delegate, runs, runState, scratch } = await localSetUp();
+    // Heartbeats far apart: only the stream tells the daemon of the stop.
+    start("hang-hard", 60_000, 200);
+    const { ticket, run } = await delegate("Stubborn");
+    const [{ pid }] = await eventually(async () => (await runs()).length > 0 && runs());
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+
+    await eventually(async () => daemon!.held().length === 0);
+    expect(alive(pid)).toBe(false);
+    expect((await runState(run.id)).state).toBe("stopped");
+    expect(await readdir(scratch)).toEqual([]);
+    // Confirmed, Cronk doesn't tell of the stop again.
+    const stream = await openMachineStream(cronk, machineToken);
+    await stream.expectQuiet();
+    stream.close();
+  });
+
+  test("unpairing the Machine kills the Runs it holds", async () => {
+    const { ada, machine, start, delegate, runs, runState, scratch } = await localSetUp();
+    start("hang", 60_000);
+    const { run } = await delegate("Unpaired");
+    const [{ pid }] = await eventually(async () => (await runs()).length > 0 && runs());
+
+    await ok("DELETE", `/api/machines/${machine.id}`, ada);
+
+    await eventually(async () => daemon!.held().length === 0);
+    expect(alive(pid)).toBe(false);
+    expect((await runState(run.id)).state).toBe("stopped");
+    expect(await readdir(scratch)).toEqual([]);
+  });
+
+  test("a daemon starting again kills the claude processes the last one left behind and fails their Runs: runner restarted", async () => {
+    const { configPath, claudeEnv, start, delegate, runs, runState, scratch } = await localSetUp();
+    // The last daemon, as its own process, killed without a chance to clean up.
+    // Node itself, loading TypeScript through tsx, so SIGKILL reaches the daemon rather than a wrapper.
+    const main = fileURLToPath(new URL("../../daemon/src/main.ts", import.meta.url));
+    const last = spawn(process.execPath, ["--import", "tsx", main, "run"], {
+      env: { ...claudeEnv("hang-hard"), CRONK_RUNNER_CONFIG: configPath, TMPDIR: scratch },
+      stdio: "ignore",
+    });
+    try {
+      const { run } = await delegate("Left behind");
+      const [{ pid }] = await eventually(async () => (await runs()).length > 0 && runs(), 20_000);
+      // The last daemon records its process once it has started it.
+      await eventually(async () => (await readdir(join(home, "runs")).catch(() => [])).length > 0);
+      last.kill("SIGKILL");
+      await new Promise((resolve) => last.once("exit", resolve));
+      expect(alive(pid)).toBe(true);
+
+      start("hang", 60_000, 200);
+
+      const failed = await eventually(async () => {
+        const state = await runState(run.id);
+        return state.state === "failed" && state;
+      });
+      expect(failed.endReason).toBe("The session ended without calling `finish`: runner restarted");
+      await eventually(async () => !alive(pid));
+      // tsx keeps its own cache in the last daemon's TMPDIR.
+      expect((await readdir(scratch)).filter((name) => name.startsWith("cronk-run-"))).toEqual([]);
+      await eventually(async () => (await readdir(join(home, "runs"))).length === 0);
+    } finally {
+      last.kill("SIGKILL");
+    }
+  }, 30_000);
 });
+
+/** Whether a process with the pid still runs (a zombie, killed but not yet reaped, counts as gone). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    return !/^\S+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+}

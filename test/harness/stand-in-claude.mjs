@@ -1,7 +1,8 @@
 // A stand-in for Claude Code's `claude` CLI, put on the daemon's PATH by tests (seam 2). It records how it was run
 // to the JSON-lines file in $STAND_IN_CLAUDE_LOG, prints a `stream-json` session start, and then, as
 // $STAND_IN_CLAUDE_MODE says: `finish`es the Run named in its Brief through Cronk's MCP server with the token from
-// its `--mcp-config` and exits 0; `exit:<code>` exits with that code without finishing; or `hang`s until killed.
+// its `--mcp-config` and exits 0; `exit:<code>` exits with that code without finishing; `hang`s until killed; or
+// `hang-hard`s, ignoring SIGTERM, until SIGKILL.
 import { appendFileSync, readFileSync, statSync } from "node:fs";
 
 const args = process.argv.slice(2);
@@ -10,7 +11,7 @@ const mcpConfigPath = after("--mcp-config");
 const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, "utf8"));
 appendFileSync(
   process.env.STAND_IN_CLAUDE_LOG,
-  `${JSON.stringify({ args, cwd: process.cwd(), mcpConfig, mcpConfigMode: statSync(mcpConfigPath).mode & 0o777 })}\n`,
+  `${JSON.stringify({ pid: process.pid, args, cwd: process.cwd(), mcpConfig, mcpConfigMode: statSync(mcpConfigPath).mode & 0o777 })}\n`,
 );
 
 const sessionId = `stand-in-${process.pid}`;
@@ -18,7 +19,8 @@ const say = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 say({ type: "system", subtype: "init", session_id: sessionId, model: after("--model") });
 
 const mode = process.env.STAND_IN_CLAUDE_MODE ?? "finish";
-if (mode === "hang") {
+if (mode === "hang" || mode === "hang-hard") {
+  if (mode === "hang-hard") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else if (mode.startsWith("exit:")) {
   process.stderr.write("stand-in claude gave up\n");
