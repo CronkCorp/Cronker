@@ -236,6 +236,7 @@ export async function unpairMachine(context: Context, userId: string, machineId:
       )
     : { rowCount: 0 };
   if (!rowCount) throw new ApiError(404, "not_found", "You have no such Machine.");
+  context.live.endMachines((stream) => stream.machineId === machineId);
 }
 
 /** What a Machine's daemon learns about itself from its token. */

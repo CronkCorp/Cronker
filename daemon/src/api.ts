@@ -20,6 +20,16 @@ export interface MachineSelf {
   runners: { id: string; name: string }[];
 }
 
+/** What claiming a Run answers: what the daemon needs to run `claude` for it. */
+export interface ClaimedRun {
+  runId: string;
+  ticketKey: string;
+  brief: string;
+  modelId: string;
+  token: string;
+  mcpUrl: string;
+}
+
 /** A refusal from Cronk, with its error code. */
 export class CronkError extends Error {
   constructor(

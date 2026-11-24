@@ -79,6 +79,25 @@ export const runnerEventTypes: Record<RunnerEvent["type"], string> = {
     "A Run started or ended on one of your Runners, changing its count of running Runs, its queue was paused for a rate limit or resumed, or you removed it.",
 };
 
+/**
+ * What a Machine's event stream tells its daemon: a Run of a Runner it serves is waiting for a Machine to claim it.
+ * It goes to every connected Machine serving the Run's Runner; the first claim wins.
+ */
+export type MachineEvent = { type: "run.claimable"; runId: string };
+
+export const machineEventTypes: Record<MachineEvent["type"], string> = {
+  "run.claimable":
+    "A Run of a `local` Runner this Machine serves waits for a Machine to claim it, by `runId`. Every Machine serving the Runner hears it; the first claim wins.",
+};
+
+/** One Machine's open event stream: the Machine, the Runners it serves, and how to write to it. */
+export interface MachineSubscriber {
+  machineId: string;
+  runnerIds: ReadonlySet<string>;
+  send(event: MachineEvent): void;
+  end(): void;
+}
+
 /** An event that names its Project, or null for the Workspace's own knowledge, and so goes to those who can read it. */
 export type PlacedEvent = Extract<LiveEvent, { projectId: string | null }>;
 
@@ -109,6 +128,7 @@ export interface Subscriber {
  */
 export class Live {
   private readonly subscribers = new Set<Subscriber>();
+  private readonly machines = new Set<MachineSubscriber>();
   private readonly listeners = new Set<(workspaceId: string, event: LiveEvent) => void>();
   private isClosed = false;
 
@@ -143,6 +163,7 @@ export class Live {
   close(): void {
     this.isClosed = true;
     this.end(() => true);
+    this.endMachines(() => true);
   }
 
   /**
@@ -202,6 +223,38 @@ export class Live {
         }
       }
     });
+  }
+
+  /** Adds a Machine's stream; once closed, ends it as `subscribe` does. */
+  subscribeMachine(subscriber: MachineSubscriber): () => void {
+    if (this.isClosed) {
+      queueMicrotask(() => subscriber.end());
+      return () => {};
+    }
+    this.machines.add(subscriber);
+    return () => this.machines.delete(subscriber);
+  }
+
+  /** Tells the streams of the Machines serving the Runner about the event, now: call it once what it tells committed. */
+  sendToMachines(runnerId: string, event: MachineEvent): void {
+    for (const subscriber of this.machines) {
+      if (!subscriber.runnerIds.has(runnerId)) continue;
+      try {
+        subscriber.send(event);
+      } catch {
+        this.endMachines((other) => other === subscriber);
+      }
+    }
+  }
+
+  /** Ends the Machines' streams that match, such as an unpaired Machine's. */
+  endMachines(matches: (subscriber: MachineSubscriber) => boolean): void {
+    for (const subscriber of [...this.machines]) {
+      if (matches(subscriber)) {
+        this.machines.delete(subscriber);
+        subscriber.end();
+      }
+    }
   }
 
   /** Ends the streams that match, such as those of a member who was removed. */

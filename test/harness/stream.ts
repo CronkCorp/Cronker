@@ -22,18 +22,23 @@ export interface OpenStream {
  * test makes from then on are seen.
  */
 export function openStream(cronk: StartedCronk, cookie: string, workspaceId: string): Promise<OpenStream> {
-  return openEvents(cronk, cookie, `/api/workspaces/${workspaceId}/events`);
+  return openEvents(cronk, { cookie }, `/api/workspaces/${workspaceId}/events`);
 }
 
 /** Opens the signed-in User's own Runners' event stream, as `openStream` opens a Workspace's. */
 export function openRunnerStream(cronk: StartedCronk, cookie: string): Promise<OpenStream> {
-  return openEvents(cronk, cookie, "/api/runners/events");
+  return openEvents(cronk, { cookie }, "/api/runners/events");
 }
 
-async function openEvents(cronk: StartedCronk, cookie: string, path: string): Promise<OpenStream> {
+/** Opens a Machine's event stream with its Machine token, as its daemon does. */
+export function openMachineStream(cronk: StartedCronk, machineToken: string): Promise<OpenStream> {
+  return openEvents(cronk, { authorization: `Bearer ${machineToken}` }, "/api/machine/events");
+}
+
+async function openEvents(cronk: StartedCronk, headers: Record<string, string>, path: string): Promise<OpenStream> {
   const abort = new AbortController();
   const response = await fetch(new URL(path, cronk.url), {
-    headers: { cookie, accept: "text/event-stream" },
+    headers: { ...headers, accept: "text/event-stream" },
     signal: abort.signal,
   });
   if (response.status !== 200) throw new Error(`the stream answered ${response.status}: ${await response.text()}`);
