@@ -244,6 +244,8 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ![Document, edit](ui/document-edit.png)
 
+- **Documents page:** a page head with the title and the live dot, then a section per page tree, stacked: on a Project's page (`/<ws>/projects/KEY/documents`) the Project's, then the Workspace's; on the Workspace's own page (`/<ws>/documents`, for old links and Workspaces with no Project) only the Workspace's. Each section has an `h2` (the Project's key in mono and its name, or "Workspace") with a small **New Document** beside it, whose dialog creates the Document in that section's tree; under it the tree, nested, in a flush panel, or its own empty state. Each section loads its own tree and follows its own tree's changes live. With Read in the Project, or with it archived, the Project's section has no New Document and shows the Read line under its heading; the Workspace's section still offers New Document. There is no scope dropdown.
+- **List crumb:** a Workspace Document's "Documents" crumb leads to the active Project's Documents page, which shows the Workspace's tree too; with no Project, to the Workspace's page. A Project Document's leads to its Project's page.
 - **Read:** the body in a panel with a 720px measure, the Document's Attachments under it, then its Comments, and its Versions in a side list; picking two shows their Diff.
 - **Comments** under the Attachments, under their own heading, as an Artifact's are: oldest first, each as a Comment on a Ticket's timeline reads (avatar, author, time, the body in a bordered bubble with its Attachments, replies indented under it, Reply), then the Comment box. With none yet, "No Comments yet." They update live and show only here, not on any Ticket's timeline, a Report's included. Nobody is notified of them. With Read in the Document's Project there is no Comment box or Reply; the Workspace's own Documents take Comments from every User. Hidden while editing.
 
@@ -261,7 +263,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 |---|---|---|
 | ![Terms](ui/terms.png) | ![Term](ui/term.png) | ![Terms, dark](ui/terms-dark.png) |
 
-- **Terms page:** reads like a glossary. The page head holds the scope dropdown, then Export and **New Term**. The scope dropdown, shared by Documents, Terms, Decisions and Artifacts, is a `Menu` whose button shows the current scope (Workspace, or the Project's key in mono and its name, cut short with an ellipsis so the head stays on one line) and whose `MenuRadioGroup` lists Workspace first, then the Projects by key, the current one checked; choosing one goes to that scope's page, so Back and Forward move between them. A filter box matches names and words to avoid.
+- **Terms page:** reads like a glossary. The page head holds the scope dropdown, then Export and **New Term**. The scope dropdown, shared by Terms, Decisions and Artifacts, is a `Menu` whose button shows the current scope (Workspace, or the Project's key in mono and its name, cut short with an ellipsis so the head stays on one line) and whose `MenuRadioGroup` lists Workspace first, then the Projects by key, the current one checked; choosing one goes to that scope's page, so Back and Forward move between them. A filter box matches names and words to avoid.
 - **Each Term:** the name, "Overrides the Workspace Term" in `--info` where it does (on a Workspace Term, "Replaced in CRONK"), its scope and Version. Then the definition, and "Avoid:" with the words struck through.
 - **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside **Mentioned in** (as on a Ticket, the texts mentioning the Term's name, its own definition left out) and the Term's Versions, each of which opens to what it said; picking two shows their Diff, the definition's lines and then, under "Avoid:", the words to avoid. The editor holds the Name, the definition in the [rich editor](#component-conventions), with no separate preview, and the words to avoid, with "Save as Version N" first.
 
@@ -277,7 +279,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Artifacts
 
-- **List** (`/projects/<id>/artifacts`, `/workspaces/<id>/artifacts`): the page head holds the same scope dropdown as Documents, Terms and Decisions, and no action, since Artifacts are created over the API and MCP. Below it, a table of title (its description under it in 12px `--muted`), who saved its current Version and when, last change first. An empty list says how Artifacts get there.
+- **List** (`/projects/<id>/artifacts`, `/workspaces/<id>/artifacts`): the page head holds the same scope dropdown as Terms and Decisions, and no action, since Artifacts are created over the API and MCP. Below it, a table of title (its description under it in 12px `--muted`), who saved its current Version and when, last change first. An empty list says how Artifacts get there.
 
 ### Artifact
 
