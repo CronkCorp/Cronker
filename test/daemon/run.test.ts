@@ -17,6 +17,8 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
+import { readRunRecord } from "../../daemon/src/history.js";
+import { followRun } from "../../daemon/src/logs.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { daemonVersion } from "../../daemon/src/version.js";
 import { minutes } from "../harness/clock.js";
@@ -610,10 +612,11 @@ describe("cronk-runner run", () => {
         20_000,
       );
       // The last daemon records its process once it has started it.
-      await eventually(
-        async () =>
-          (await readdir(join(home, "runs")).catch(() => [])).length > 0,
-      );
+      const processRecords = async () =>
+        (await readdir(join(home, "runs")).catch(() => [] as string[])).filter(
+          (name) => name.endsWith(".json"),
+        );
+      await eventually(async () => (await processRecords()).length > 0);
       last.kill("SIGKILL");
       await new Promise((resolve) => last.once("exit", resolve));
       expect(alive(pid)).toBe(true);
@@ -634,9 +637,11 @@ describe("cronk-runner run", () => {
           name.startsWith("cronk-run-"),
         ),
       ).toEqual([]);
-      await eventually(
-        async () => (await readdir(join(home, "runs"))).length === 0,
-      );
+      await eventually(async () => (await processRecords()).length === 0);
+      // `cronk-runner logs` sees it ended, rather than running on.
+      expect(
+        (await readRunRecord(join(home, "runs", "history"), run.id))?.endedAt,
+      ).toEqual(expect.any(String));
     } finally {
       last.kill("SIGKILL");
     }
@@ -674,6 +679,39 @@ describe("cronk-runner run", () => {
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([
       { amount: 137, currency: "USD", estimate: true },
     ]);
+  });
+});
+
+describe("cronk-runner logs", () => {
+  test("follows a Run the daemon runs from a second reader, by its Ticket's key, until it ends; its record is kept after", async () => {
+    const { start, delegate, go, configPath } = await localSetUp();
+    start("wait-finish");
+    const { ticket, run } = await delegate("Show your work");
+    const historyDir = join(home, "runs", "history");
+    const recorded = await eventually(async () => {
+      const record = await readRunRecord(historyDir, run.id);
+      return record?.transcriptPath ? record : undefined;
+    });
+    expect(recorded).toEqual(
+      expect.objectContaining({ ticketKey: ticket.key, cronkUrl: cronk.url, sessionId: expect.stringMatching(/^stand-in-/), endedAt: null }),
+    );
+    expect(configPath.startsWith(home)).toBe(true);
+
+    const printed: string[] = [];
+    const notes: string[] = [];
+    const following = followRun(ticket.key.toLowerCase(), {
+      historyDir,
+      env: { CLAUDE_CONFIG_DIR: join(home, "claude-config") },
+      print: (line) => printed.push(line),
+      note: (line) => notes.push(line),
+      pollMs: 20,
+    });
+    await go();
+    expect(await following).toBe(0);
+    expect(printed).toEqual([`${ticket.key}  Finished.`]);
+    expect(notes.at(-1)).toBe(`${ticket.key}: Run ${run.id} ended.`);
+    await eventually(async () => daemon!.held().length === 0);
+    expect((await readRunRecord(historyDir, run.id))?.endedAt).toEqual(expect.any(String));
   });
 });
 

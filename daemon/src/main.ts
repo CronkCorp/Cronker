@@ -3,9 +3,11 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { configPath } from "./config.js";
+import { historyDirOf } from "./history.js";
 import { login } from "./login.js";
+import { followDaemonLog, followRun, followRunning } from "./logs.js";
 import { preflight } from "./preflight.js";
-import { runDaemon } from "./run.js";
+import { runDaemon, stateDirOf } from "./run.js";
 import { install, uninstall } from "./service.js";
 import { status } from "./status.js";
 import { daemonVersion } from "./version.js";
@@ -17,7 +19,10 @@ Usage:
   cronk-runner status              List the Cronks this Machine is paired with and the Runners it serves
   cronk-runner run                 Claim and run the Runs of the Runners this Machine serves, until stopped
   cronk-runner install             Run \`cronk-runner run\` as a service that starts at login (macOS and Linux)
-  cronk-runner uninstall           Stop that service and remove it`;
+  cronk-runner uninstall           Stop that service and remove it
+  cronk-runner logs [<key|run id>] Follow the Runs running now, or one Run (also one that ended this past week)
+      --raw                        Print Claude Code's JSONL as it is, instead of readable lines
+      --daemon                     Follow the daemon's own log as a service instead`;
 
 /** Prints the preflight's problems, if any; whether there were none. */
 async function ready(print: (line: string) => void): Promise<boolean> {
@@ -67,6 +72,29 @@ async function main(args: string[]): Promise<number> {
         process.once("SIGTERM", stop);
       });
       return 0;
+    }
+    case "logs": {
+      const flags = new Set(rest.filter((arg) => arg.startsWith("-")));
+      const [target, ...extra] = rest.filter((arg) => !arg.startsWith("-"));
+      const unknown = [...flags].filter((flag) => flag !== "--raw" && flag !== "--daemon");
+      if (unknown.length || extra.length) {
+        console.error(usage);
+        return 2;
+      }
+      const note = (line: string) => console.error(line);
+      if (flags.has("--daemon")) return followDaemonLog(homedir(), note);
+      const abort = new AbortController();
+      process.once("SIGINT", () => abort.abort());
+      process.once("SIGTERM", () => abort.abort());
+      const options = {
+        historyDir: historyDirOf(stateDirOf(configPath())),
+        env: process.env,
+        print,
+        note,
+        raw: flags.has("--raw"),
+        signal: abort.signal,
+      };
+      return target ? followRun(target, options) : followRunning(options);
     }
     case "--version":
     case "-v":

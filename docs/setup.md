@@ -201,8 +201,15 @@ A local Runner runs your Agents' Runs with Claude Code on a Machine of your own,
    cronk-runner install
    ```
 
-   On macOS that is a launchd agent (`~/Library/LaunchAgents/net.cronk.runner.plist`, logging to `~/Library/Logs/cronk-runner.log`); on Linux a systemd user service (`systemctl --user status cronk-runner`, its log with `journalctl --user -u cronk-runner`). On Linux, run `loginctl enable-linger` once to keep it running while you're logged out.
+   On macOS that is a launchd agent (`~/Library/LaunchAgents/net.cronk.runner.plist`, logging to `~/Library/Logs/cronk-runner.log`); on Linux a systemd user service (`systemctl --user status cronk-runner`, its log with `journalctl --user -u cronk-runner`). `cronk-runner logs --daemon` follows that log on either. On Linux, run `loginctl enable-linger` once to keep it running while you're logged out.
 5. Check it: `cronk-runner status` lists the Cronks the Machine is paired with and the Runners it serves.
+6. Follow its Runs from any terminal with `cronk-runner logs`, while the daemon runs as a service or in another terminal:
+
+   - `cronk-runner logs` follows the Runs running now, and those that start while it runs, each line led by its Ticket's key: the agent's messages, and each tool call on one line with its tool and what it was called with, as a Transcript shows them. Ctrl-C stops it.
+   - `cronk-runner logs CRONK-12`, or a Run's id, prints that Run from its start and follows it until it ends; it shows the latest Run of the Ticket, also one that ended in the past week.
+   - `--raw` prints Claude Code's JSONL as it is, such as to pipe into `jq`; `--daemon` follows the daemon's own log as a service instead.
+
+   It only reads: Claude Code's session files under `~/.claude/projects`, and the record the daemon keeps of each Run for a week after it ends, next to its config. Unlike a Transcript in Cronk, what it prints isn't scrubbed for secrets, as it stays on your Machine, in files that hold the same text.
 
 `install`, `run` and `status` first check that `claude` and `git` are on the `PATH` and that Claude Code is signed in (`claude auth login`), and name whatever is missing; `install` installs nothing until they are. The service keeps the `PATH` and the Node that `install` ran with, so run `cronk-runner install` again from your usual shell after installing new tools or another Node. `cronk-runner uninstall` stops the service and removes it. To run the daemon in a terminal instead, use `cronk-runner run`.
 
