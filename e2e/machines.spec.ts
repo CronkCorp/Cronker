@@ -1,4 +1,5 @@
-import { setUp } from "../test/harness/flows.js";
+import { setUp, signIn } from "../test/harness/flows.js";
+import { openMachineStream } from "../test/harness/stream.js";
 import { expect, signInInBrowser, test } from "./fixtures.js";
 
 test("a local Runner is set up, a Machine's code approved onto it, listed and unpaired", async ({ page, cronk }) => {
@@ -50,6 +51,40 @@ test("approving a code that expired or was mistyped says so", async ({ page, cro
   await expect(machines.getByText(/No Machine is waiting with that code/)).toBeVisible();
 });
 
+test("a local Runner's card shows it offline until its Machine connects, and a daemon too old to work with", async ({ page, cronk }) => {
+  await setUp(cronk);
+  const ada = await signIn(cronk);
+  const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
+  const started = await (
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" } })
+  ).json();
+  await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
+  const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/runners`);
+
+  const card = page.getByRole("region", { name: "Laptop" });
+  await expect(card.getByRole("status")).toContainText("Offline since");
+  await expect(card).toContainText("Served by ada-laptop (offline)");
+
+  // The daemon connects, as `cronk-runner run` does: the card hears of it from the Runners stream.
+  const stream = await openMachineStream(cronk, machineToken);
+  await expect(card.getByText("Offline since")).toBeHidden();
+  await expect(card).toContainText("Served by ada-laptop (connected)");
+  await expect(page.getByRole("region", { name: "Machines" }).getByRole("row").filter({ hasText: "ada-laptop" })).toContainText("Connected");
+  stream.close();
+  await expect(card.getByRole("status")).toContainText("Offline since");
+
+  // An old daemon calls: Cronk refuses it, and the card says what to upgrade to.
+  const refused = await cronk.request("GET", "/api/machine", {
+    headers: { authorization: `Bearer ${machineToken}`, "x-cronk-runner-version": "0.2.0" },
+  });
+  expect(refused.status).toBe(426);
+  await page.reload();
+  await expect(card).toContainText("ada-laptop runs cronk-runner 0.2.0, older than this Cronk works with: upgrade it to 0.3.0 or later.");
+  await expect(page.getByRole("region", { name: "Machines" }).getByRole("row").filter({ hasText: "ada-laptop" })).toContainText("Upgrade to 0.3.0");
+});
+
 test("a local Runner's allowed tools are edited on its card, kept on reload and reset to the default", async ({ page, cronk }) => {
   await setUp(cronk);
   await signInInBrowser(page, cronk);
@@ -94,6 +129,8 @@ test("a local Run's cost shows as an estimate on its Ticket and its Runner's car
   const started = await call("POST", "/api/machines/pairings", { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" });
   await call("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
   const { machineToken } = await call("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode });
+  // It connects, as `cronk-runner run` does: until then the Ticket would wait for a Machine.
+  const stream = await openMachineStream(cronk, machineToken);
   await call("PATCH", `/api/tickets/${ticket.id}`, {
     delegateId: agent.id,
     statusId: project.statuses.find((s: { name: string }) => s.name === "Triage").id,
@@ -109,4 +146,5 @@ test("a local Run's cost shows as an estimate on its Ticket and its Runner's car
 
   await page.goto(`${cronk.url}/runners`);
   await expect(page.getByRole("region", { name: "Laptop" }).locator(".runner-cost")).toHaveText("≈ $1.37 estimated this month");
+  stream.close();
 });

@@ -1,5 +1,14 @@
 import { execFile, spawn } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -10,6 +19,7 @@ import { writeConfig } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { minutes } from "../harness/clock.js";
+import { refusingCronk, tooOldMessage } from "../harness/refusing-cronk.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openMachineStream } from "../harness/stream.js";
@@ -33,14 +43,22 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function ok(method: string, path: string, cookie: string, body?: unknown) {
+async function ok(
+  method: string,
+  path: string,
+  cookie: string,
+  body?: unknown,
+) {
   const response = await cronk.request(method, path, { cookie, body });
   expect(response.status, `${method} ${path}`).toBeLessThan(300);
   return response.status === 204 ? null : response.json();
 }
 
 /** Waits until the check passes, as the daemon works on its own time. */
-async function eventually<T>(check: () => Promise<T | undefined | false>, timeoutMs = 10_000): Promise<T> {
+async function eventually<T>(
+  check: () => Promise<T | undefined | false>,
+  timeoutMs = 10_000,
+): Promise<T> {
   const until = Date.now() + timeoutMs;
   for (;;) {
     const value = await check();
@@ -54,32 +72,80 @@ async function eventually<T>(check: () => Promise<T | undefined | false>, timeou
  * Ada with a `local` Runner and an Agent on it, the daemon's config pairing this Machine with Cronk to serve it, and
  * the stand-in `claude` on a PATH of its own; `delegate` files a Ticket and delegates it into Triage.
  */
-async function localSetUp({ runLimit = 1 }: { runLimit?: number } = {}) {
+async function localSetUp({
+  limit = 2,
+  runLimit = 1,
+}: { limit?: number; runLimit?: number } = {}) {
   const { workspace } = await setUp(cronk);
   const ada = await signIn(cronk);
-  const runner = await ok("POST", "/api/runners", ada, { name: "Laptop", kind: "local" });
-  if (runLimit !== 1) await ok("PATCH", `/api/runners/${runner.id}`, ada, { runLimit });
-  const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, ada, { name: "laptop" });
-  const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, { runnerId: runner.id });
-  const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
-  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
+  const runner = await ok("POST", "/api/runners", ada, {
+    name: "Laptop",
+    kind: "local",
+  });
+  if (runLimit !== 1)
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { limit: runLimit });
+  const created = await ok(
+    "POST",
+    `/api/workspaces/${workspace.id}/agents`,
+    ada,
+    { name: "laptop" },
+  );
+  const agent = await ok("PATCH", `/api/agents/${created.id}`, ada, {
+    runnerId: runner.id,
+  });
+  const project = await ok(
+    "POST",
+    `/api/workspaces/${workspace.id}/projects`,
+    ada,
+    { name: "Cronker", key: "CRONK" },
+  );
+  const triage = project.statuses.find(
+    (s: { name: string }) => s.name === "Triage",
+  ).id as string;
 
-  const started = await (await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" } })).json();
-  const machine = await ok("POST", "/api/machines/pairings/approve", ada, { userCode: started.userCode, runnerIds: [runner.id] });
-  const paired = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
+  const started = await (
+    await cronk.request("POST", "/api/machines/pairings", {
+      body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" },
+    })
+  ).json();
+  const machine = await ok("POST", "/api/machines/pairings/approve", ada, {
+    userCode: started.userCode,
+    runnerIds: [runner.id],
+  });
+  const paired = await (
+    await cronk.request("POST", "/api/machines/pairings/poll", {
+      body: { deviceCode: started.deviceCode },
+    })
+  ).json();
   const configPath = join(home, "config.json");
-  await writeConfig(configPath, { limit: 2, cronks: [{ url: cronk.url, machineId: machine.id, machineName: "ada-laptop", token: paired.machineToken }] });
+  await writeConfig(configPath, {
+    limit,
+    cronks: [
+      {
+        url: cronk.url,
+        machineId: machine.id,
+        machineName: "ada-laptop",
+        token: paired.machineToken,
+      },
+    ],
+  });
 
   const bin = join(home, "bin");
   await mkdir(bin);
-  const standIn = fileURLToPath(new URL("../harness/stand-in-claude.mjs", import.meta.url));
-  await writeFile(join(bin, "claude"), `#!/bin/sh\nexec "${process.execPath}" "${standIn}" "$@"\n`);
+  const standIn = fileURLToPath(
+    new URL("../harness/stand-in-claude.mjs", import.meta.url),
+  );
+  await writeFile(
+    join(bin, "claude"),
+    `#!/bin/sh\nexec "${process.execPath}" "${standIn}" "$@"\n`,
+  );
   await chmod(join(bin, "claude"), 0o755);
   const scratch = join(home, "scratch");
   await mkdir(scratch);
   const log = join(home, "claude.jsonl");
   await writeFile(log, "");
 
+  const printed: string[] = [];
   const cache = join(home, "cache");
   const claudeConfig = join(home, "claude-config");
   const claudeEnv = (mode: string, more: NodeJS.ProcessEnv = {}) => ({
@@ -93,11 +159,16 @@ async function localSetUp({ runLimit = 1 }: { runLimit?: number } = {}) {
   const start = (
     mode: string,
     heartbeatMs?: number,
-    more: { env?: NodeJS.ProcessEnv; remote?: string; lostCheckMs?: number; killGraceMs?: number } = {},
+    more: {
+      env?: NodeJS.ProcessEnv;
+      remote?: string;
+      lostCheckMs?: number;
+      killGraceMs?: number;
+    } = {},
   ) => {
     daemon = runDaemon({
       configPath,
-      print: () => {},
+      print: (line) => printed.push(line),
       env: claudeEnv(mode, more.env),
       scratchRoot: scratch,
       cacheDir: cache,
@@ -109,11 +180,38 @@ async function localSetUp({ runLimit = 1 }: { runLimit?: number } = {}) {
     });
     return daemon;
   };
+  /** The Ticket's first Run, once it has one: a `local` Runner's Tickets wait until a Machine serving it connects. */
+  const runOf = (ticketId: string) =>
+    eventually(
+      async () => (await ok("GET", `/api/tickets/${ticketId}/runs`, ada))[0],
+    );
+  /** Files a Ticket and delegates it into Triage, answering its Run once it has one: the daemon connects on its own time. */
   const delegate = async (title: string) => {
-    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, ada, { title });
-    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id, statusId: triage });
-    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, ada);
-    return { ticket, run };
+    const ticket = await ok(
+      "POST",
+      `/api/projects/${project.id}/tickets`,
+      ada,
+      { title },
+    );
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, {
+      delegateId: agent.id,
+      statusId: triage,
+    });
+    return { ticket, run: await runOf(ticket.id) };
+  };
+  /** Files a Ticket and delegates it into Triage without waiting for its Run, as while no Machine is connected. */
+  const delegateOffline = async (title: string) => {
+    const ticket = await ok(
+      "POST",
+      `/api/projects/${project.id}/tickets`,
+      ada,
+      { title },
+    );
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, {
+      delegateId: agent.id,
+      statusId: triage,
+    });
+    return ticket;
   };
   /** How the stand-in was run, once per run. */
   const runs = async () =>
@@ -135,15 +233,19 @@ async function localSetUp({ runLimit = 1 }: { runLimit?: number } = {}) {
     claudeEnv,
     start,
     delegate,
+    delegateOffline,
+    runOf,
     runs,
     runState,
     scratch,
     cache,
+    printed,
     go,
   };
 }
 
-const git = async (cwd: string, ...args: string[]) => (await promisify(execFile)("git", args, { cwd })).stdout.trim();
+const git = async (cwd: string, ...args: string[]) =>
+  (await promisify(execFile)("git", args, { cwd })).stdout.trim();
 
 /**
  * The local set-up with the GitHub App installed on cronkcorp/cronker, listed by the Project, and a local bare git
@@ -155,7 +257,12 @@ async function withRepository(options: { runLimit?: number } = {}) {
   const app = cronk.github.apps[0]!;
   const installation = cronk.github.install(app, "cronkcorp", ["cronker"]);
   const repository = installation.repositories[0]!;
-  await ok("POST", `/api/projects/${setup.project.id}/repositories`, setup.ada, { id: repository.id });
+  await ok(
+    "POST",
+    `/api/projects/${setup.project.id}/repositories`,
+    setup.ada,
+    { id: repository.id },
+  );
 
   const remote = join(home, "cronker.git");
   await git(home, "init", "--bare", "--quiet", "--initial-branch=main", remote);
@@ -164,7 +271,17 @@ async function withRepository(options: { runLimit?: number } = {}) {
   const commit = async (file: string) => {
     await writeFile(join(seed, file), `${file}\n`);
     await git(seed, "add", file);
-    await git(seed, "-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", file);
+    await git(
+      seed,
+      "-c",
+      "user.name=Ada",
+      "-c",
+      "user.email=ada@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      file,
+    );
     return git(seed, "rev-parse", "HEAD");
   };
   const main = await commit("README.md");
@@ -196,18 +313,45 @@ async function withRepository(options: { runLimit?: number } = {}) {
     expect(delivered.status).toBe(200);
   };
   const cloneUrl = `${cronk.github.url}/cronkcorp/cronker`;
-  const startWith = (mode: string, more: { heartbeatMs?: number; env?: NodeJS.ProcessEnv; lostCheckMs?: number } = {}) =>
-    setup.start(mode, more.heartbeatMs, { remote, lostCheckMs: more.lostCheckMs, env: { STAND_IN_CLAUDE_CREDENTIAL_URL: `${cloneUrl}.git`, ...more.env } });
+  const startWith = (
+    mode: string,
+    more: {
+      heartbeatMs?: number;
+      env?: NodeJS.ProcessEnv;
+      lostCheckMs?: number;
+    } = {},
+  ) =>
+    setup.start(mode, more.heartbeatMs, {
+      remote,
+      lostCheckMs: more.lostCheckMs,
+      env: { STAND_IN_CLAUDE_CREDENTIAL_URL: `${cloneUrl}.git`, ...more.env },
+    });
   /** The installation tokens GitHub issued that are still good, by the test's clock. */
-  const goodTokens = () => cronk.github.tokensIssued.filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime()).map((t) => t.token);
-  return { ...setup, remote, main, started, openPullRequest, startWith, goodTokens };
+  const goodTokens = () =>
+    cronk.github.tokensIssued
+      .filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime())
+      .map((t) => t.token);
+  return {
+    ...setup,
+    remote,
+    main,
+    started,
+    openPullRequest,
+    startWith,
+    goodTokens,
+  };
 }
 
-const exists = (path: string) => access(path).then(() => true, () => false);
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false,
+  );
 
 describe("cronk-runner run", () => {
   test("claims a delegated Run and runs claude with the Brief, model, stream-json, Cronk's MCP server, edits accepted and the Runner's allowlist; finish finishes the Run", async () => {
-    const { ada, start, delegate, runs, runState, scratch } = await localSetUp();
+    const { ada, start, delegate, runs, runState, scratch } =
+      await localSetUp();
     start("finish");
 
     const { run } = await delegate("Run me locally");
@@ -237,7 +381,15 @@ describe("cronk-runner run", () => {
     ]);
     expect(ran.args).not.toContain("--strict-mcp-config");
     expect(ran.mcpConfig).toEqual({
-      mcpServers: { cronk: { type: "http", url: `${cronk.url}/mcp`, headers: { authorization: expect.stringMatching(/^Bearer cronk_agent_/) } } },
+      mcpServers: {
+        cronk: {
+          type: "http",
+          url: `${cronk.url}/mcp`,
+          headers: {
+            authorization: expect.stringMatching(/^Bearer cronk_agent_/),
+          },
+        },
+      },
     });
     expect(ran.mcpConfigMode).toBe(0o600);
     // It ran in a fresh scratch directory, which is gone once the Run ended.
@@ -256,12 +408,16 @@ describe("cronk-runner run", () => {
       const state = await runState(run.id);
       return state.state === "failed" && state;
     });
-    expect(failed.endReason).toBe("The session ended without calling `finish`: claude exited with code 3: stand-in claude gave up");
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 3: stand-in claude gave up",
+    );
   });
 
   test("the edited allowlist is passed, Cronk's own tools always with it", async () => {
     const { ada, runner, start, delegate, runs, runState } = await localSetUp();
-    await ok("PATCH", `/api/runners/${runner.id}`, ada, { allowedTools: ["Bash(git:*)", "Bash(cargo test:*)"] });
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, {
+      allowedTools: ["Bash(git:*)", "Bash(cargo test:*)"],
+    });
     start("finish");
 
     const { run } = await delegate("Narrow");
@@ -315,12 +471,47 @@ describe("cronk-runner run", () => {
     expect(await readdir(scratch)).toEqual([]);
   });
 
+  test("holds a second Run beyond the Machine's limit until the first ends", async () => {
+    const { ada, start, delegate, runState } = await localSetUp({
+      limit: 1,
+      runLimit: 2,
+    });
+    start("hang", 50);
+    const { ticket, run: first } = await delegate("First");
+    await eventually(async () => daemon!.held().includes(first.id));
+
+    const { run: second } = await delegate("Second");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(daemon!.held()).toEqual([first.id]);
+    expect((await runState(second.id)).state).toBe("running");
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+
+    await eventually(async () => daemon!.held().includes(second.id));
+    expect(daemon!.held()).toEqual([second.id]);
+  });
+
+  test("sends its version and the Machine's limit, which Cronk records", async () => {
+    const { ada, start } = await localSetUp({ limit: 3 });
+    start("finish");
+
+    const machine = await eventually(async () => {
+      const [shown] = await ok("GET", "/api/machines", ada);
+      return shown.connected && shown;
+    });
+    expect(machine.limit).toBe(3);
+    expect(machine.upgradeTo).toBeNull();
+  });
+
   test("a Run stopped in Cronk is killed at once on the stream's word, even a claude ignoring SIGTERM, and its stop confirmed", async () => {
-    const { ada, machineToken, start, delegate, runs, runState, scratch } = await localSetUp();
+    const { ada, machineToken, start, delegate, runs, runState, scratch } =
+      await localSetUp();
     // Heartbeats far apart: only the stream tells the daemon of the stop.
     start("hang-hard", 60_000, { killGraceMs: 200 });
     const { ticket, run } = await delegate("Stubborn");
-    const [{ pid }] = await eventually(async () => (await runs()).length > 0 && runs());
+    const [{ pid }] = await eventually(
+      async () => (await runs()).length > 0 && runs(),
+    );
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
 
@@ -335,10 +526,13 @@ describe("cronk-runner run", () => {
   });
 
   test("unpairing the Machine kills the Runs it holds", async () => {
-    const { ada, machine, start, delegate, runs, runState, scratch } = await localSetUp();
+    const { ada, machine, start, delegate, runs, runState, scratch } =
+      await localSetUp();
     start("hang", 60_000);
     const { run } = await delegate("Unpaired");
-    const [{ pid }] = await eventually(async () => (await runs()).length > 0 && runs());
+    const [{ pid }] = await eventually(
+      async () => (await runs()).length > 0 && runs(),
+    );
 
     await ok("DELETE", `/api/machines/${machine.id}`, ada);
 
@@ -349,19 +543,32 @@ describe("cronk-runner run", () => {
   });
 
   test("a daemon starting again kills the claude processes the last one left behind and fails their Runs: runner restarted", async () => {
-    const { configPath, claudeEnv, start, delegate, runs, runState, scratch } = await localSetUp();
+    const { configPath, claudeEnv, start, delegate, runs, runState, scratch } =
+      await localSetUp();
     // The last daemon, as its own process, killed without a chance to clean up.
     // Node itself, loading TypeScript through tsx, so SIGKILL reaches the daemon rather than a wrapper.
-    const main = fileURLToPath(new URL("../../daemon/src/main.ts", import.meta.url));
+    const main = fileURLToPath(
+      new URL("../../daemon/src/main.ts", import.meta.url),
+    );
     const last = spawn(process.execPath, ["--import", "tsx", main, "run"], {
-      env: { ...claudeEnv("hang-hard"), CRONK_RUNNER_CONFIG: configPath, TMPDIR: scratch },
+      env: {
+        ...claudeEnv("hang-hard"),
+        CRONK_RUNNER_CONFIG: configPath,
+        TMPDIR: scratch,
+      },
       stdio: "ignore",
     });
     try {
       const { run } = await delegate("Left behind");
-      const [{ pid }] = await eventually(async () => (await runs()).length > 0 && runs(), 20_000);
+      const [{ pid }] = await eventually(
+        async () => (await runs()).length > 0 && runs(),
+        20_000,
+      );
       // The last daemon records its process once it has started it.
-      await eventually(async () => (await readdir(join(home, "runs")).catch(() => [])).length > 0);
+      await eventually(
+        async () =>
+          (await readdir(join(home, "runs")).catch(() => [])).length > 0,
+      );
       last.kill("SIGKILL");
       await new Promise((resolve) => last.once("exit", resolve));
       expect(alive(pid)).toBe(true);
@@ -372,11 +579,19 @@ describe("cronk-runner run", () => {
         const state = await runState(run.id);
         return state.state === "failed" && state;
       });
-      expect(failed.endReason).toBe("The session ended without calling `finish`: runner restarted");
+      expect(failed.endReason).toBe(
+        "The session ended without calling `finish`: runner restarted",
+      );
       await eventually(async () => !alive(pid));
       // tsx keeps its own cache in the last daemon's TMPDIR.
-      expect((await readdir(scratch)).filter((name) => name.startsWith("cronk-run-"))).toEqual([]);
-      await eventually(async () => (await readdir(join(home, "runs"))).length === 0);
+      expect(
+        (await readdir(scratch)).filter((name) =>
+          name.startsWith("cronk-run-"),
+        ),
+      ).toEqual([]);
+      await eventually(
+        async () => (await readdir(join(home, "runs"))).length === 0,
+      );
     } finally {
       last.kill("SIGKILL");
     }
@@ -388,20 +603,71 @@ describe("cronk-runner run", () => {
     const { ticket, run } = await delegate("Show your work");
 
     // While the stand-in still runs, its transcript so far is the Run's Transcript in Cronk.
-    const live = await eventually(async () => (await runState(run.id)).transcriptId as string | null);
+    const live = await eventually(
+      async () => (await runState(run.id)).transcriptId as string | null,
+    );
     expect(daemon!.held()).toEqual([run.id]);
-    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(1);
+    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(
+      1,
+    );
 
     await go();
     await eventually(async () => daemon!.held().length === 0);
 
     const ended = await runState(run.id);
     expect(ended).toEqual(
-      expect.objectContaining({ state: "finished", transcriptId: live, cost: { amount: 137, currency: "USD", estimate: true } }),
+      expect.objectContaining({
+        state: "finished",
+        transcriptId: live,
+        cost: { amount: 137, currency: "USD", estimate: true },
+      }),
     );
     const transcript = await ok("GET", `/api/transcripts/${live}`, ada);
-    expect(transcript).toEqual(expect.objectContaining({ runId: run.id, entryCount: 2 }));
-    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([{ amount: 137, currency: "USD", estimate: true }]);
+    expect(transcript).toEqual(
+      expect.objectContaining({ runId: run.id, entryCount: 2 }),
+    );
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([
+      { amount: 137, currency: "USD", estimate: true },
+    ]);
+  });
+});
+
+describe("a daemon too old for Cronk", () => {
+  test("stops connecting to it and says what to upgrade to", async () => {
+    const tooOld = await refusingCronk();
+    const configPath = join(home, "old.json");
+    await writeConfig(configPath, {
+      limit: 2,
+      cronks: [
+        {
+          url: tooOld.url,
+          machineId: "m",
+          machineName: "ada-laptop",
+          token: "cronk_machine_x",
+        },
+      ],
+    });
+    const printed: string[] = [];
+
+    daemon = runDaemon({
+      configPath,
+      print: (line) => printed.push(line),
+      reconnectMs: 10,
+    });
+
+    await eventually(async () =>
+      printed.some((line) => line.includes("refused")),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(printed).toEqual([`${tooOld.url}: refused: ${tooOldMessage}`]);
+    expect(tooOld.calls()).toEqual(1);
+    expect(tooOld.headers()).toEqual(
+      expect.objectContaining({
+        "x-cronk-runner-version": "0.3.0",
+        "x-cronk-runner-limit": "2",
+      }),
+    );
+    await tooOld.close();
   });
 });
 
@@ -421,38 +687,88 @@ function alive(pid: number): boolean {
 
 describe("a local Run's Repository", () => {
   test("is a worktree on the Ticket's branch when the remote has it, and the Run pushes with the App's token", async () => {
-    const { delegate, runs, runState, scratch, cache, remote, started, openPullRequest, startWith, goodTokens } = await withRepository();
-    const { run } = await delegate("Carry on");
+    const {
+      delegateOffline,
+      runOf,
+      runs,
+      runState,
+      scratch,
+      cache,
+      remote,
+      started,
+      openPullRequest,
+      startWith,
+      goodTokens,
+    } = await withRepository();
+    const ticket = await delegateOffline("Carry on");
     await openPullRequest("CRONK-1", "feat/CRONK-1-started");
 
-    startWith("finish", { env: { STAND_IN_CLAUDE_PUSH: "feat/CRONK-1-started" } });
+    startWith("finish", {
+      env: { STAND_IN_CLAUDE_PUSH: "feat/CRONK-1-started" },
+    });
+    const run = await runOf(ticket.id);
 
     await eventually(async () => (await runState(run.id)).state !== "running");
     expect((await runState(run.id)).endReason).toBe(null);
     const [ran] = await runs();
-    expect(ran.repository).toEqual({ branch: "feat/CRONK-1-started", head: started, password: expect.any(String) });
+    expect(ran.repository).toEqual({
+      branch: "feat/CRONK-1-started",
+      head: started,
+      password: expect.any(String),
+    });
     expect(goodTokens()).toContain(ran.repository.password);
     // The token never shows in argv, nor in the remote the bare clone keeps.
     expect(JSON.stringify(ran.args)).not.toContain(ran.repository.password);
-    const pushed = await git(remote, "log", "-1", "--format=%s %P", "feat/CRONK-1-started");
+    const pushed = await git(
+      remote,
+      "log",
+      "-1",
+      "--format=%s %P",
+      "feat/CRONK-1-started",
+    );
     expect(pushed).toBe(`Stand-in work ${started}`);
     expect(await readdir(cache)).toEqual(["cronkcorp__cronker.git"]);
-    expect(await git(join(cache, "cronkcorp__cronker.git"), "remote", "get-url", "origin")).toBe(remote);
+    expect(
+      await git(
+        join(cache, "cronkcorp__cronker.git"),
+        "remote",
+        "get-url",
+        "origin",
+      ),
+    ).toBe(remote);
     // Once the Run ended, its worktree is gone, and only the bare clone's own entry is left.
     await eventually(async () => (await readdir(scratch)).length === 0);
-    expect((await git(join(cache, "cronkcorp__cronker.git"), "worktree", "list")).split("\n")).toHaveLength(1);
+    expect(
+      (
+        await git(join(cache, "cronkcorp__cronker.git"), "worktree", "list")
+      ).split("\n"),
+    ).toHaveLength(1);
   });
 
   test("starts off the default branch for a Ticket without a branch, or whose branch the remote doesn't have", async () => {
-    const { delegate, runs, runState, main, openPullRequest, startWith } = await withRepository();
-    const { run: first } = await delegate("New work");
+    const {
+      delegate,
+      delegateOffline,
+      runOf,
+      runs,
+      runState,
+      main,
+      openPullRequest,
+      startWith,
+    } = await withRepository();
     startWith("finish");
-    await eventually(async () => (await runState(first.id)).state === "finished");
+    const { run: first } = await delegate("New work");
+    await eventually(
+      async () => (await runState(first.id)).state === "finished",
+    );
     await daemon!.stop();
-    const { run: second } = await delegate("Stale branch");
+    const stale = await delegateOffline("Stale branch");
     await openPullRequest("CRONK-2", "feat/CRONK-2-never-pushed");
     startWith("finish");
-    await eventually(async () => (await runState(second.id)).state === "finished");
+    const second = await runOf(stale.id);
+    await eventually(
+      async () => (await runState(second.id)).state === "finished",
+    );
 
     const ran = await runs();
     expect(ran.map((r) => r.repository)).toEqual([
@@ -462,18 +778,30 @@ describe("a local Run's Repository", () => {
   });
 
   test("of two Runs at once is a separate worktree each, from one bare clone", async () => {
-    const { delegate, runs, cache, startWith } = await withRepository({ runLimit: 2 });
+    const { delegate, runs, cache, startWith } = await withRepository({
+      runLimit: 2,
+    });
     startWith("hang");
 
     const { run: first } = await delegate("One");
     const { run: second } = await delegate("Two");
-    await eventually(async () => daemon!.held().length === 2 && (await runs()).length === 2);
+    await eventually(
+      async () => daemon!.held().length === 2 && (await runs()).length === 2,
+    );
 
     const [a, b] = await runs();
     expect(a.cwd).not.toBe(b.cwd);
     expect(await readdir(cache)).toEqual(["cronkcorp__cronker.git"]);
-    const worktrees = await git(join(cache, "cronkcorp__cronker.git"), "worktree", "list", "--porcelain");
-    const paths = worktrees.split("\n").filter((l) => l.startsWith("worktree ")).map((l) => l.slice(9));
+    const worktrees = await git(
+      join(cache, "cronkcorp__cronker.git"),
+      "worktree",
+      "list",
+      "--porcelain",
+    );
+    const paths = worktrees
+      .split("\n")
+      .filter((l) => l.startsWith("worktree "))
+      .map((l) => l.slice(9));
     expect(paths).toHaveLength(3);
     expect(daemon!.held().sort()).toEqual([first.id, second.id].sort());
   });
@@ -482,7 +810,9 @@ describe("a local Run's Repository", () => {
     const { ada, delegate, runs, runState, startWith } = await withRepository();
     startWith("exit:3");
     const { run: failing } = await delegate("Give up");
-    await eventually(async () => (await runState(failing.id)).state === "failed");
+    await eventually(
+      async () => (await runState(failing.id)).state === "failed",
+    );
     const [failed] = await runs();
     await eventually(async () => !(await exists(failed.cwd)));
     await daemon!.stop();
@@ -517,7 +847,9 @@ describe("a local Run's Repository", () => {
     await eventually(async () => daemon!.held().length === 0);
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(await exists(ran.cwd)).toBe(true);
-    expect(await git(ran.cwd, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    expect(await git(ran.cwd, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
+      "HEAD",
+    );
 
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
 

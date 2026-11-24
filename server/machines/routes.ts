@@ -6,6 +6,8 @@ import { requireUser } from "../identity/sign-ins.js";
 import {
   approvePairing,
   Machine,
+  machineConnected,
+  machineDisconnected,
   MachineSelf,
   machinesOf,
   PairedMachine,
@@ -47,8 +49,10 @@ const machineEventList = Object.entries(machineEventTypes)
 export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
   return async (app) => {
     // A Run's transcript arrives as the file it is: JSON Lines, read as text.
-    app.addContentTypeParser("application/x-ndjson", { parseAs: "string", bodyLimit: uploadLimitBytes }, (_request, body, done) =>
-      done(null, body),
+    app.addContentTypeParser(
+      "application/x-ndjson",
+      { parseAs: "string", bodyLimit: uploadLimitBytes },
+      (_request, body, done) => done(null, body),
     );
 
     app.post(
@@ -59,13 +63,15 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           summary: "Ask for a pairing code, as a Machine's daemon",
           description:
             "Called by `cronk-runner login`, without credentials. Answers a device code for the daemon to poll with and a " +
-            "short user code its User approves on the Runners page. Both work for ten minutes.",
+            "short user code its User approves on the Runners page. Both work for ten minutes. A daemon older than this " +
+            "Cronk works with is refused with `daemon_too_old`, naming the version to upgrade to.",
           security: [],
           body: PairingStart,
-          response: { 201: StartedPairing, 400: ErrorBody },
+          response: { 201: StartedPairing, 400: ErrorBody, 426: ErrorBody },
         },
       },
-      async (request, reply) => reply.code(201).send(await startPairing(context, request.body)),
+      async (request, reply) =>
+        reply.code(201).send(await startPairing(context, request.body)),
     );
 
     app.post(
@@ -73,13 +79,19 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Machines"],
-          summary: "Poll a pairing for its Machine token, as a Machine's daemon",
+          summary:
+            "Poll a pairing for its Machine token, as a Machine's daemon",
           description:
             "Refused with `pairing_pending` until the User approves the code. Once approved, answers the Machine token, " +
             "this once. A pairing that expired or was already redeemed is refused with `pairing_expired`.",
           security: [],
           body: PairingPoll,
-          response: { 200: PairedMachine, 400: ErrorBody, 409: ErrorBody, 410: ErrorBody },
+          response: {
+            200: PairedMachine,
+            400: ErrorBody,
+            409: ErrorBody,
+            410: ErrorBody,
+          },
         },
       },
       async (request) => pollPairing(context, request.body.deviceCode),
@@ -96,12 +108,21 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "`pairing_not_found` for a code that expired, was already approved or never existed, as not found for a " +
             "Runner that isn't yours and with `runner_not_local` for a Runner of another kind.",
           body: PairingApproval,
-          response: { 201: Machine, 400: ErrorBody, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: {
+            201: Machine,
+            400: ErrorBody,
+            401: ErrorBody,
+            403: ErrorBody,
+            404: ErrorBody,
+            409: ErrorBody,
+          },
         },
       },
       async (request, reply) => {
         const user = await requireUser(context, request);
-        return reply.code(201).send(await approvePairing(context, user.id, request.body));
+        return reply
+          .code(201)
+          .send(await approvePairing(context, user.id, request.body));
       },
     );
 
@@ -111,10 +132,15 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
         schema: {
           tags: ["Machines"],
           summary: "Your paired Machines",
-          response: { 200: Type.Array(Machine), 401: ErrorBody, 403: ErrorBody },
+          response: {
+            200: Type.Array(Machine),
+            401: ErrorBody,
+            403: ErrorBody,
+          },
         },
       },
-      async (request) => machinesOf(context, (await requireUser(context, request)).id),
+      async (request) =>
+        machinesOf(context, (await requireUser(context, request)).id),
     );
 
     app.delete(
@@ -127,7 +153,12 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Revokes its Machine token, so its daemon's later calls are refused with `invalid_machine_token`, and stops " +
             "the Runs it holds.",
           params: Type.Object({ machineId: Type.String() }),
-          response: { 204: Type.Null(), 401: ErrorBody, 403: ErrorBody, 404: ErrorBody },
+          response: {
+            204: Type.Null(),
+            401: ErrorBody,
+            403: ErrorBody,
+            404: ErrorBody,
+          },
         },
       },
       async (request, reply) => {
@@ -147,7 +178,7 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Called by a Machine's daemon with its Machine token: the Machine, its User and the Runners it serves. " +
             "Records the Machine's last contact. Refused with `invalid_machine_token` once it is unpaired.",
           security: [{ machineToken: [] }],
-          response: { 200: MachineSelf, 401: ErrorBody },
+          response: { 200: MachineSelf, 401: ErrorBody, 426: ErrorBody },
         },
       },
       async (request) => requireMachine(context, request),
@@ -165,27 +196,54 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "starts. It also tells again of every Run the Machine holds that was stopped in Cronk and whose stop it hasn't " +
             "confirmed, then of each one as it is stopped. The event's data is JSON naming the Run by `runId`. The stream " +
             "ends when the Machine is unpaired.\n\n" +
+            "While a Machine holds it open, the `local` Runners it serves are online: with none of their Machines connected " +
+            "they are offline, and their Tickets wait, starting once one connects.\n\n" +
             machineEventList,
           security: [{ machineToken: [] }],
           produces: ["text/event-stream"],
-          response: { 200: Type.String({ description: "The event stream." }), 401: ErrorBody, 503: ErrorBody },
+          response: {
+            200: Type.String({ description: "The event stream." }),
+            401: ErrorBody,
+            426: ErrorBody,
+            503: ErrorBody,
+          },
         },
       },
       async (request, reply) => {
         const machine = await requireMachine(context, request);
-        if (context.live.closed) throw new ApiError(503, "closing", "Cronk is shutting down; connect again shortly.");
+        if (context.live.closed)
+          throw new ApiError(
+            503,
+            "closing",
+            "Cronk is shutting down; connect again shortly.",
+          );
         const raw = reply.raw;
         let open = true;
+        // Held back until the connection is recorded, so the daemon hears every Run that waited for it in one go.
+        let held: string[] | null = [];
         const write = (chunk: string) => {
-          if (open) raw.write(chunk);
+          if (!open) return;
+          if (held) held.push(chunk);
+          else raw.write(chunk);
         };
-        const send = ({ type, ...data }: MachineEvent) => write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+        const send = ({ type, ...data }: MachineEvent) =>
+          write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+        /** Whether this stream counts towards the Machine's connections, which its close then undoes. */
+        let counted = false;
+        const disconnected = () =>
+          machineDisconnected(context, machine).catch((error: unknown) =>
+            request.log.error(
+              { err: error },
+              "Couldn't record a Machine's stream closing.",
+            ),
+          );
         const close = () => {
           if (!open) return;
           open = false;
           clearInterval(keepAlive);
           unsubscribe();
           raw.end();
+          if (counted) void disconnected();
         };
         reply.hijack();
         raw.writeHead(200, {
@@ -194,7 +252,6 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           connection: "keep-alive",
           "x-accel-buffering": "no",
         });
-        raw.write(": connected\n\n");
         // Subscribed before the replay, so a Run starting meanwhile is told at least once; a second claim is refused.
         const unsubscribe = context.live.subscribeMachine({
           machineId: machine.id,
@@ -202,11 +259,34 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           send,
           end: close,
         });
-        const keepAlive = setInterval(() => write(": keep-alive\n\n"), keepAliveMs);
+        const keepAlive = setInterval(
+          () => write(": keep-alive\n\n"),
+          keepAliveMs,
+        );
         keepAlive.unref();
         raw.on("close", close);
-        for (const runId of await stopsToReplay(context, machine)) send({ type: "run.stop", runId });
-        for (const runId of await claimableRuns(context, machine)) send({ type: "run.claimable", runId });
+        try {
+          for (const runId of await stopsToReplay(context, machine))
+            send({ type: "run.stop", runId });
+          for (const runId of await claimableRuns(context, machine))
+            send({ type: "run.claimable", runId });
+          // Connected, its Runners are online: their waiting Tickets start now, each announced on this stream.
+          await machineConnected(context, machine);
+          counted = true;
+        } catch (error) {
+          request.log.error(
+            { err: error },
+            "Couldn't record a Machine's stream opening.",
+          );
+        }
+        if (!open) {
+          // Closed while connecting: undo what was recorded.
+          if (counted) void disconnected();
+          return;
+        }
+        const chunks = held;
+        held = null;
+        raw.write(`: connected\n\n${chunks.join("")}`);
         if (request.socket.destroyed) close();
       },
     );
@@ -223,16 +303,28 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Claims a Run of a Runner the Machine serves, answering what the daemon needs to run `claude`: the Brief, the " +
             "model id, an Agent token minted for the Run (revoked once the Run ends), Cronk's MCP URL, and the Project's " +
             "Repositories with the branch to start from and fresh GitHub App installation tokens. A Run is granted " +
-            "once: a Run claimed already or no longer running is refused with `run_not_claimable`, and a Machine running " +
-            "as many Runs as its limit with `machine_limit_reached`. A Run whose model label lost its model id fails, " +
-            "refused with `no_model_id`, and one whose Repositories Cronk can't get GitHub tokens for with " +
+            "once: a Run claimed already or no longer running is refused with `run_not_claimable`, a Machine running " +
+            "as many Runs as its limit with `machine_limit_reached`, and a Run whose Runner has as many claimed Runs as " +
+            "its limit, as after its limit was lowered, with `runner_limit_reached`. A Run whose model label lost its " +
+            "model id fails, refused with `no_model_id`, and one whose Repositories Cronk can't get GitHub tokens for with " +
             "`repositories_unavailable`.",
           security: [{ machineToken: [] }],
           params: runParams,
-          response: { 200: ClaimedRun, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: {
+            200: ClaimedRun,
+            401: ErrorBody,
+            404: ErrorBody,
+            409: ErrorBody,
+            426: ErrorBody,
+          },
         },
       },
-      async (request) => claimRun(context, await requireMachine(context, request), request.params.runId),
+      async (request) =>
+        claimRun(
+          context,
+          await requireMachine(context, request),
+          request.params.runId,
+        ),
     );
 
     app.post(
@@ -248,10 +340,21 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "in Cronk: the daemon then kills its process.",
           security: [{ machineToken: [] }],
           params: runParams,
-          response: { 200: HeartbeatAnswer, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: {
+            200: HeartbeatAnswer,
+            401: ErrorBody,
+            404: ErrorBody,
+            409: ErrorBody,
+            426: ErrorBody,
+          },
         },
       },
-      async (request) => heartbeat(context, await requireMachine(context, request), request.params.runId),
+      async (request) =>
+        heartbeat(
+          context,
+          await requireMachine(context, request),
+          request.params.runId,
+        ),
     );
 
     app.post(
@@ -259,16 +362,30 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Machines"],
-          summary: "Report a claimed Run's Claude Code session, as a Machine's daemon",
-          description: "Records the session id as the Run's session reference. Refused with `run_stopped` once the Run no longer runs.",
+          summary:
+            "Report a claimed Run's Claude Code session, as a Machine's daemon",
+          description:
+            "Records the session id as the Run's session reference. Refused with `run_stopped` once the Run no longer runs.",
           security: [{ machineToken: [] }],
           params: runParams,
           body: LocalSession,
-          response: { 204: Type.Null(), 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          response: {
+            204: Type.Null(),
+            400: ErrorBody,
+            401: ErrorBody,
+            404: ErrorBody,
+            409: ErrorBody,
+            426: ErrorBody,
+          },
         },
       },
       async (request, reply) => {
-        await reportSession(context, await requireMachine(context, request), request.params.runId, request.body.sessionId);
+        await reportSession(
+          context,
+          await requireMachine(context, request),
+          request.params.runId,
+          request.body.sessionId,
+        );
         return reply.code(204).send(null);
       },
     );
@@ -284,11 +401,20 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
             "Machine's event stream stops telling of it. Accepted whatever the Run's state, as often as it is sent.",
           security: [{ machineToken: [] }],
           params: runParams,
-          response: { 204: Type.Null(), 401: ErrorBody, 404: ErrorBody },
+          response: {
+            204: Type.Null(),
+            401: ErrorBody,
+            404: ErrorBody,
+            426: ErrorBody,
+          },
         },
       },
       async (request, reply) => {
-        await acknowledgeStop(context, await requireMachine(context, request), request.params.runId);
+        await acknowledgeStop(
+          context,
+          await requireMachine(context, request),
+          request.params.runId,
+        );
         return reply.code(204).send(null);
       },
     );
@@ -298,7 +424,8 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
       {
         schema: {
           tags: ["Machines"],
-          summary: "Report that a claimed Run's process ended, as a Machine's daemon",
+          summary:
+            "Report that a claimed Run's process ended, as a Machine's daemon",
           description:
             "A Run whose agent didn't call `finish` fails with the reason given, naming any `deniedTools` as outside its " +
             "Runner's allowlist. A Run that ended already, as `finish` ends it, is left as it is. A `costUsd` given is " +
@@ -307,10 +434,22 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           security: [{ machineToken: [] }],
           params: runParams,
           body: LocalRunEnd,
-          response: { 200: LocalRunEnded, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody },
+          response: {
+            200: LocalRunEnded,
+            400: ErrorBody,
+            401: ErrorBody,
+            404: ErrorBody,
+            426: ErrorBody,
+          },
         },
       },
-      async (request) => reportEnd(context, await requireMachine(context, request), request.params.runId, request.body),
+      async (request) =>
+        reportEnd(
+          context,
+          await requireMachine(context, request),
+          request.params.runId,
+          request.body,
+        ),
     );
 
     app.put(
@@ -331,12 +470,26 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           security: [{ machineToken: [] }],
           params: runParams,
           body: TranscriptUpload,
-          response: { 200: Transcript, 201: Transcript, 400: ErrorBody, 401: ErrorBody, 404: ErrorBody, 409: ErrorBody, 410: ErrorBody, 413: ErrorBody },
+          response: {
+            200: Transcript,
+            201: Transcript,
+            400: ErrorBody,
+            401: ErrorBody,
+            404: ErrorBody,
+            409: ErrorBody,
+            410: ErrorBody,
+            413: ErrorBody,
+          },
         },
       },
       async (request, reply) => {
         const machine = await requireMachine(context, request);
-        const { transcript, created } = await uploadRunTranscript(context, machine, request.params.runId, request.body);
+        const { transcript, created } = await uploadRunTranscript(
+          context,
+          machine,
+          request.params.runId,
+          request.body,
+        );
         return reply.code(created ? 201 : 200).send(transcript);
       },
     );

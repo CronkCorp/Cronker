@@ -1422,6 +1422,13 @@
     padding-inline: var(--space-1);
   }
 }
+.runner-machines {
+  margin: 0;
+}
+/* A daemon too old for this Cronk: what to upgrade it to, beside its version. */
+.machine-upgrade {
+  color: var(--warn);
+}
 .machine-approve,
 .machine-runners {
   display: grid;

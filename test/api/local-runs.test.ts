@@ -3,11 +3,16 @@ import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { minutes } from "../harness/clock.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
-import { openMachineStream, type OpenStream } from "../harness/stream.js";
+import {
+  openMachineStream,
+  openRunnerStream,
+  type OpenStream,
+} from "../harness/stream.js";
 
 /**
  * Seam 1 for local Runs: a real Cronk with the `local` Runner kind, and the daemon played over HTTP with a Machine
- * token. Delegating starts a claimable Run, a Machine claims it once, heartbeats it and reports how it ended.
+ * token. Delegating starts a claimable Run while a Machine serving its Runner is connected, a Machine claims it once,
+ * heartbeats it and reports how it ended.
  */
 
 let cronk: StartedCronk;
@@ -22,63 +27,171 @@ afterEach(async () => {
 
 type Options = { cookie?: string; body?: unknown; token?: string };
 
-async function call(method: string, path: string, options: Options = {}) {
+type CallOptions = Options & { headers?: Record<string, string> };
+
+async function call(method: string, path: string, options: CallOptions = {}) {
   const response = await cronk.request(method, path, {
     cookie: options.cookie,
     body: options.body,
-    headers: options.token ? { authorization: `Bearer ${options.token}` } : {},
+    headers: {
+      ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+      ...options.headers,
+    },
   });
-  return { status: response.status, json: response.status === 204 ? null : await response.json() };
+  return {
+    status: response.status,
+    json: response.status === 204 ? null : await response.json(),
+  };
 }
 
-async function ok(method: string, path: string, options: Options = {}) {
+async function ok(method: string, path: string, options: CallOptions = {}) {
   const response = await call(method, path, options);
-  expect(response.status, `${method} ${path}: ${JSON.stringify(response.json)}`).toBeLessThan(300);
+  expect(
+    response.status,
+    `${method} ${path}: ${JSON.stringify(response.json)}`,
+  ).toBeLessThan(300);
   return response.json;
 }
 
-async function pair(ada: string, runnerIds: string[], limit?: number) {
+async function pair(
+  ada: string,
+  runnerIds: string[],
+  limit?: number,
+  name = "ada-laptop",
+) {
   const started = await ok("POST", "/api/machines/pairings", {
-    body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0", ...(limit ? { limit } : {}) },
+    body: {
+      name,
+      os: "linux",
+      daemonVersion: "0.3.0",
+      ...(limit ? { limit } : {}),
+    },
   });
-  await ok("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds } });
-  const paired = await ok("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } });
+  await ok("POST", "/api/machines/pairings/approve", {
+    cookie: ada,
+    body: { userCode: started.userCode, runnerIds },
+  });
+  const paired = await ok("POST", "/api/machines/pairings/poll", {
+    body: { deviceCode: started.deviceCode },
+  });
   return paired.machineToken as string;
 }
 
-/** Ada with a `local` Runner, an Agent on it, a Project with Tickets, and a Machine serving the Runner. */
-async function localSetUp({ runLimit = 1, machineLimit }: { runLimit?: number; machineLimit?: number } = {}) {
-  const { workspace } = await setUp(cronk);
-  const ada = await signIn(cronk);
-  const runner = await ok("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } });
-  if (runLimit !== 1) await ok("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { runLimit } });
-  const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: ada, body: { name: "laptop" } });
-  const agent = await ok("PATCH", `/api/agents/${created.id}`, { cookie: ada, body: { runnerId: runner.id } });
-  const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, { cookie: ada, body: { name: "Cronker", key: "CRONK" } });
-  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
-  const machineToken = await pair(ada, [runner.id], machineLimit);
-  /** Files a Ticket and delegates it into Triage, answering its Run. */
-  const delegate = async (title: string, labels: string[] = []) => {
-    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, { cookie: ada, body: { title, labels } });
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: agent.id, statusId: triage } });
-    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, { cookie: ada });
-    return { ticket, run };
-  };
-  return { workspace, ada, runner, agent, project, machineToken, delegate };
+/** Opens the Machine's event stream, as its daemon does, closed after the test. */
+async function connect(machineToken: string) {
+  const stream = await openMachineStream(cronk, machineToken);
+  streams.push(stream);
+  return stream;
 }
 
-const claim = (token: string, runId: string) => call("POST", `/api/machine/runs/${runId}/claim`, { token });
+/**
+ * Ada with a `local` Runner, an Agent on it, a Project with Tickets, and a Machine serving the Runner, connected unless
+ * the test says otherwise.
+ */
+async function localSetUp({
+  runLimit = 1,
+  machineLimit,
+  connected = true,
+}: { runLimit?: number; machineLimit?: number; connected?: boolean } = {}) {
+  const { workspace } = await setUp(cronk);
+  const ada = await signIn(cronk);
+  const runner = await ok("POST", "/api/runners", {
+    cookie: ada,
+    body: { name: "Laptop", kind: "local" },
+  });
+  if (runLimit !== 1)
+    await ok("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: { limit: runLimit },
+    });
+  const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, {
+    cookie: ada,
+    body: { name: "laptop" },
+  });
+  const agent = await ok("PATCH", `/api/agents/${created.id}`, {
+    cookie: ada,
+    body: { runnerId: runner.id },
+  });
+  const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, {
+    cookie: ada,
+    body: { name: "Cronker", key: "CRONK" },
+  });
+  const triage = project.statuses.find(
+    (s: { name: string }) => s.name === "Triage",
+  ).id as string;
+  const machineToken = await pair(ada, [runner.id], machineLimit);
+  if (connected) await connect(machineToken);
+  /** Files a Ticket and delegates it into Triage, answering its Run, if it got one. */
+  const delegate = async (
+    title: string,
+    { labels = [], priority }: { labels?: string[]; priority?: string } = {},
+  ) => {
+    const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, {
+      cookie: ada,
+      body: { title, labels },
+    });
+    if (priority)
+      await ok("PATCH", `/api/tickets/${ticket.id}`, {
+        cookie: ada,
+        body: { priority },
+      });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: agent.id, statusId: triage },
+    });
+    const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, {
+      cookie: ada,
+    });
+    return { ticket, run };
+  };
+  const runsOf = (ticketId: string) =>
+    ok("GET", `/api/tickets/${ticketId}/runs`, { cookie: ada });
+  const runnerRecord = async () =>
+    (await ok("GET", "/api/runners", { cookie: ada })).find(
+      (r: { id: string }) => r.id === runner.id,
+    );
+  return {
+    workspace,
+    ada,
+    runner,
+    agent,
+    project,
+    machineToken,
+    delegate,
+    runsOf,
+    runnerRecord,
+  };
+}
+
+/** Waits until the check passes, as a stream's close reaches the server on its own time. */
+async function eventually(
+  check: () => Promise<boolean>,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (!(await check())) {
+    if (Date.now() > until) throw new Error("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+const claim = (token: string, runId: string) =>
+  call("POST", `/api/machine/runs/${runId}/claim`, { token });
 
 describe("claiming a local Run", () => {
   test("a connected Machine hears of the Run as it starts and claims it with what claude needs", async () => {
     const { ada, machineToken, delegate } = await localSetUp();
-    const stream = await openMachineStream(cronk, machineToken);
-    streams.push(stream);
+    const stream = await connect(machineToken);
 
-    const { run } = await delegate("Touch the laptop", ["local-only"]);
+    const { run } = await delegate("Touch the laptop", {
+      labels: ["local-only"],
+    });
 
     expect(run.state).toBe("running");
-    expect(await stream.next()).toEqual({ type: "run.claimable", data: { runId: run.id } });
+    expect(await stream.next()).toEqual({
+      type: "run.claimable",
+      data: { runId: run.id },
+    });
     const claimed = await claim(machineToken, run.id);
     expect(claimed.status).toBe(200);
     const brief = await ok("GET", `/api/runs/${run.id}/brief`, { cookie: ada });
@@ -96,14 +209,16 @@ describe("claiming a local Run", () => {
     expect(cronk.github.apiCalls).toEqual([]);
   });
 
-  test("a Machine connecting later is told of the Runs already waiting", async () => {
+  test("a Machine connecting is told of the Runs already waiting to be claimed", async () => {
     const { machineToken, delegate } = await localSetUp();
     const { run } = await delegate("Waiting");
 
-    const stream = await openMachineStream(cronk, machineToken);
-    streams.push(stream);
+    const stream = await connect(machineToken);
 
-    expect(await stream.next()).toEqual({ type: "run.claimable", data: { runId: run.id } });
+    expect(await stream.next()).toEqual({
+      type: "run.claimable",
+      data: { runId: run.id },
+    });
   });
 
   test("two claims of one Run grant it once", async () => {
@@ -111,15 +226,23 @@ describe("claiming a local Run", () => {
     const other = await pair(ada, [runner.id]);
     const { run } = await delegate("Race");
 
-    const [first, second] = await Promise.all([claim(machineToken, run.id), claim(other, run.id)]);
+    const [first, second] = await Promise.all([
+      claim(machineToken, run.id),
+      claim(other, run.id),
+    ]);
 
     expect([first.status, second.status].sort()).toEqual([200, 409]);
-    expect([first, second].find((c) => c.status === 409)!.json.error.code).toBe("run_not_claimable");
+    expect([first, second].find((c) => c.status === 409)!.json.error.code).toBe(
+      "run_not_claimable",
+    );
     expect((await claim(machineToken, run.id)).status).toBe(409);
   });
 
   test("a Machine claims no more Runs at once than its limit", async () => {
-    const { machineToken, delegate } = await localSetUp({ runLimit: 2, machineLimit: 1 });
+    const { machineToken, delegate } = await localSetUp({
+      runLimit: 2,
+      machineLimit: 1,
+    });
     const { run: first } = await delegate("One");
     const { run: second } = await delegate("Two");
     expect(second.state).toBe("running");
@@ -131,9 +254,56 @@ describe("claiming a local Run", () => {
     expect(refused.json.error.code).toBe("machine_limit_reached");
   });
 
+  test("a Runner whose limit was lowered gets no more Runs claimed than it until one ends", async () => {
+    const { ada, runner, machineToken, delegate } = await localSetUp({
+      runLimit: 2,
+      machineLimit: 5,
+    });
+    const { run: first } = await delegate("One");
+    const { run: second } = await delegate("Two");
+    await ok("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: { limit: 1 },
+    });
+
+    expect((await claim(machineToken, first.id)).status).toBe(200);
+    const refused = await claim(machineToken, second.id);
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe("runner_limit_reached");
+
+    await ok("POST", `/api/machine/runs/${first.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0" },
+    });
+    expect((await claim(machineToken, second.id)).status).toBe(200);
+  });
+
+  test("a Machine at its limit claims again once one of its Runs ends", async () => {
+    const { machineToken, delegate } = await localSetUp({
+      runLimit: 2,
+      machineLimit: 1,
+    });
+    const { run: first } = await delegate("One");
+    const { run: second } = await delegate("Two");
+    await claim(machineToken, first.id);
+    expect((await claim(machineToken, second.id)).json.error.code).toBe(
+      "machine_limit_reached",
+    );
+
+    await ok("POST", `/api/machine/runs/${first.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0" },
+    });
+
+    expect((await claim(machineToken, second.id)).status).toBe(200);
+  });
+
   test("a Machine can't claim a Run of a Runner it doesn't serve", async () => {
     const { ada, delegate } = await localSetUp();
-    const elsewhere = await ok("POST", "/api/runners", { cookie: ada, body: { name: "Desktop", kind: "local" } });
+    const elsewhere = await ok("POST", "/api/runners", {
+      cookie: ada,
+      body: { name: "Desktop", kind: "local" },
+    });
     const stranger = await pair(ada, [elsewhere.id]);
     const { run } = await delegate("Not yours");
 
@@ -143,7 +313,9 @@ describe("claiming a local Run", () => {
 
   test("a Step whose model label has no model id is refused, saying why", async () => {
     const { workspace, ada, delegate } = await localSetUp();
-    await ok("DELETE", `/api/workspaces/${workspace.id}/model-ids/haiku`, { cookie: ada });
+    await ok("DELETE", `/api/workspaces/${workspace.id}/model-ids/haiku`, {
+      cookie: ada,
+    });
 
     const { run } = await delegate("No model");
 
@@ -160,14 +332,22 @@ describe("the Run's token", () => {
     const { token } = (await claim(machineToken, run.id)).json;
 
     expect((await ok("GET", "/api/agent", { token })).agent.id).toBe(agent.id);
-    const finished = await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+    const finished = await ok("POST", `/api/runs/${run.id}/finish`, {
+      token,
+      body: { outcome: "ready" },
+    });
     expect(finished.state).toBe("finished");
 
     await cronk.jobsSettled();
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
     // The process exiting afterwards changes nothing.
-    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 0" } });
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("finished");
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0" },
+    });
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("finished");
   });
 
   test("is revoked when a User takes the Ticket away, and the heartbeat says the Run stopped", async () => {
@@ -175,11 +355,16 @@ describe("the Run's token", () => {
     const { ticket, run } = await delegate("Take it back");
     const { token } = (await claim(machineToken, run.id)).json;
 
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: null },
+    });
     await cronk.jobsSettled();
 
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
-    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken });
+    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, {
+      token: machineToken,
+    });
     expect(beat.status).toBe(409);
     expect(beat.json.error.code).toBe("run_stopped");
   });
@@ -190,10 +375,17 @@ describe("a claimed Run", () => {
     const { machineToken, delegate } = await localSetUp();
     const { run } = await delegate("Session");
     await claim(machineToken, run.id);
-    const report = () => call("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
+    const report = () =>
+      call("POST", `/api/machine/runs/${run.id}/session`, {
+        token: machineToken,
+        body: { sessionId: "4f1c2b9e" },
+      });
 
     expect((await report()).status).toBe(204);
-    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1" } });
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 1" },
+    });
     expect((await report()).json.error.code).toBe("run_stopped");
   });
 
@@ -203,13 +395,24 @@ describe("a claimed Run", () => {
     await claim(machineToken, run.id);
     cronk.clock.advance(minutes(40));
     await cronk.checkForLostRuns();
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("lost");
-    const end = () => ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 0" } });
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("lost");
+    const end = () =>
+      ok("POST", `/api/machine/runs/${run.id}/end`, {
+        token: machineToken,
+        body: { reason: "claude exited with code 0" },
+      });
 
     expect(await end()).toEqual({ mayComeBack: true });
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("lost");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("lost");
 
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: null },
+    });
     expect(await end()).toEqual({ mayComeBack: false });
   });
 
@@ -222,12 +425,18 @@ describe("a claimed Run", () => {
 
     for (let i = 0; i < 4; i++) {
       cronk.clock.advance(minutes(10));
-      await ok("POST", `/api/machine/runs/${beating.id}/heartbeat`, { token: machineToken });
+      await ok("POST", `/api/machine/runs/${beating.id}/heartbeat`, {
+        token: machineToken,
+      });
       await cronk.checkForLostRuns();
     }
 
-    expect((await ok("GET", `/api/runs/${beating.id}`, { cookie: ada })).state).toBe("running");
-    expect((await ok("GET", `/api/runs/${silent.id}`, { cookie: ada })).state).toBe("lost");
+    expect(
+      (await ok("GET", `/api/runs/${beating.id}`, { cookie: ada })).state,
+    ).toBe("running");
+    expect(
+      (await ok("GET", `/api/runs/${silent.id}`, { cookie: ada })).state,
+    ).toBe("lost");
   });
 
   test("whose process exits without finish fails with the reason, and its token is revoked", async () => {
@@ -235,11 +444,18 @@ describe("a claimed Run", () => {
     const { run } = await delegate("Crash");
     const { token } = (await claim(machineToken, run.id)).json;
 
-    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1" } });
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 1" },
+    });
     await cronk.jobsSettled();
 
     expect(await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).toEqual(
-      expect.objectContaining({ state: "failed", endReason: "The session ended without calling `finish`: claude exited with code 1" }),
+      expect.objectContaining({
+        state: "failed",
+        endReason:
+          "The session ended without calling `finish`: claude exited with code 1",
+      }),
     );
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
   });
@@ -251,27 +467,216 @@ describe("a claimed Run", () => {
     await claim(machineToken, run.id);
 
     for (const path of ["heartbeat", "end"]) {
-      const response = await call("POST", `/api/machine/runs/${run.id}/${path}`, { token: other, body: { reason: "no" } });
+      const response = await call(
+        "POST",
+        `/api/machine/runs/${run.id}/${path}`,
+        { token: other, body: { reason: "no" } },
+      );
       expect(response.status).toBe(404);
     }
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("running");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("running");
+  });
+});
+
+describe("an offline local Runner", () => {
+  test("keeps its delegated Tickets waiting, refusing none, and starts them in Priority order once a Machine connects", async () => {
+    const { ada, machineToken, delegate, runsOf } = await localSetUp({
+      runLimit: 2,
+      connected: false,
+    });
+    const low = await delegate("Low", { priority: "low" });
+    const urgent = await delegate("Urgent", { priority: "urgent" });
+    const high = await delegate("High", { priority: "high" });
+
+    for (const { ticket, run } of [low, urgent, high]) {
+      expect(run).toBeUndefined();
+      expect(
+        (await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).waiting,
+      ).toBe("runnerOffline");
+    }
+
+    const stream = await connect(machineToken);
+
+    const [urgentRun] = await runsOf(urgent.ticket.id);
+    const [highRun] = await runsOf(high.ticket.id);
+    expect(urgentRun.state).toBe("running");
+    expect(highRun.state).toBe("running");
+    expect(await runsOf(low.ticket.id)).toEqual([]);
+    expect(
+      (await ok("GET", `/api/tickets/${low.ticket.id}`, { cookie: ada }))
+        .waiting,
+    ).toBe("runnerSlot");
+    expect(await stream.next()).toEqual({
+      type: "run.claimable",
+      data: { runId: urgentRun.id },
+    });
+    expect(await stream.next()).toEqual({
+      type: "run.claimable",
+      data: { runId: highRun.id },
+    });
+  });
+
+  test("shows since when on its record, telling its Owner's stream as a Machine connects and goes", async () => {
+    const { ada, runner, machineToken, runnerRecord } = await localSetUp({
+      connected: false,
+    });
+    expect((await runnerRecord()).offlineSince).toBe(runner.createdAt);
+    const runners = await openRunnerStream(cronk, ada);
+    streams.push(runners);
+
+    const machine = await connect(machineToken);
+
+    expect(await runners.next()).toEqual({
+      type: "runner.changed",
+      data: { runnerId: runner.id },
+    });
+    expect((await runnerRecord()).offlineSince).toBeNull();
+    const [shown] = await ok("GET", "/api/machines", { cookie: ada });
+    expect(shown.connected).toBe(true);
+
+    cronk.clock.advance(minutes(5));
+    machine.close();
+
+    expect(await runners.next()).toEqual({
+      type: "runner.changed",
+      data: { runnerId: runner.id },
+    });
+    expect((await runnerRecord()).offlineSince).toBe(
+      cronk.clock.now().toISOString(),
+    );
+    const [gone] = await ok("GET", "/api/machines", { cookie: ada });
+    expect(gone.connected).toBe(false);
+  });
+
+  test("stays online while another Machine serving it is connected", async () => {
+    const { ada, runner, machineToken, runnerRecord } = await localSetUp({
+      connected: false,
+    });
+    const desktop = await pair(ada, [runner.id], undefined, "ada-desktop");
+    const laptop = await connect(machineToken);
+    await connect(desktop);
+
+    laptop.close();
+    await eventually(async () => {
+      const machines = await ok("GET", "/api/machines", { cookie: ada });
+      return (
+        machines.find((m: { name: string }) => m.name === "ada-laptop")
+          .connected === false
+      );
+    });
+
+    expect((await runnerRecord()).offlineSince).toBeNull();
+  });
+
+  test("leaves a Run told already claimable when its Machine goes", async () => {
+    const { machineToken, delegate, runnerRecord } = await localSetUp({
+      connected: false,
+    });
+    const machine = await connect(machineToken);
+    const { run } = await delegate("Told");
+    machine.close();
+    await eventually(async () => (await runnerRecord()).offlineSince !== null);
+
+    const back = await connect(machineToken);
+
+    expect(await back.next()).toEqual({
+      type: "run.claimable",
+      data: { runId: run.id },
+    });
+    expect((await claim(machineToken, run.id)).status).toBe(200);
+  });
+});
+
+describe("the daemon's version and limit", () => {
+  test("a daemon too old for Cronk can't pair, told the version to upgrade to", async () => {
+    const refused = await call("POST", "/api/machines/pairings", {
+      body: { name: "old-laptop", os: "linux", daemonVersion: "0.2.9" },
+    });
+
+    expect(refused.status).toBe(426);
+    expect(refused.json.error.code).toBe("daemon_too_old");
+    expect(refused.json.error.message).toContain(
+      "upgrade cronk-runner to 0.3.0",
+    );
+  });
+
+  test("a paired Machine whose daemon announces an old version is refused, and its card says what to upgrade to", async () => {
+    const { ada, machineToken } = await localSetUp({ connected: false });
+    const old = { "x-cronk-runner-version": "0.2.0" };
+
+    for (const [method, path] of [
+      ["GET", "/api/machine"],
+      ["GET", "/api/machine/events"],
+    ] as const) {
+      const refused = await call(method, path, {
+        token: machineToken,
+        headers: old,
+      });
+      expect(refused.status).toBe(426);
+      expect(refused.json.error).toEqual({
+        code: "daemon_too_old",
+        message:
+          "This Cronk works with cronk-runner 0.3.0 or later, and this Machine runs 0.2.0: upgrade cronk-runner to 0.3.0 or later, then start it again.",
+      });
+    }
+    const [machine] = await ok("GET", "/api/machines", { cookie: ada });
+    expect(machine).toEqual(
+      expect.objectContaining({
+        daemonVersion: "0.2.0",
+        upgradeTo: "0.3.0",
+        connected: false,
+      }),
+    );
+
+    await ok("GET", "/api/machine", {
+      token: machineToken,
+      headers: { "x-cronk-runner-version": "0.3.1" },
+    });
+    const [upgraded] = await ok("GET", "/api/machines", { cookie: ada });
+    expect(upgraded).toEqual(
+      expect.objectContaining({ daemonVersion: "0.3.1", upgradeTo: null }),
+    );
+  });
+
+  test("the limit a daemon announces replaces the one it paired with", async () => {
+    const { ada, machineToken } = await localSetUp({ connected: false });
+
+    await ok("GET", "/api/machine", {
+      token: machineToken,
+      headers: { "x-cronk-runner-limit": "4" },
+    });
+
+    const [machine] = await ok("GET", "/api/machines", { cookie: ada });
+    expect(machine.limit).toBe(4);
   });
 });
 
 describe("stopping a local Run", () => {
-  const stopped = (machineToken: string, runId: string) => call("POST", `/api/machine/runs/${runId}/stopped`, { token: machineToken });
+  const stopped = (machineToken: string, runId: string) =>
+    call("POST", `/api/machine/runs/${runId}/stopped`, { token: machineToken });
 
   test("a stop while the Machine is connected is told on its stream, and its confirmation is taken once or more", async () => {
     const { ada, machineToken, delegate } = await localSetUp();
     const stream = await openMachineStream(cronk, machineToken);
     streams.push(stream);
     const { ticket, run } = await delegate("Stop me");
-    expect(await stream.next()).toEqual({ type: "run.claimable", data: { runId: run.id } });
+    expect(await stream.next()).toEqual({
+      type: "run.claimable",
+      data: { runId: run.id },
+    });
     await claim(machineToken, run.id);
 
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: null },
+    });
 
-    expect(await stream.next()).toEqual({ type: "run.stop", data: { runId: run.id } });
+    expect(await stream.next()).toEqual({
+      type: "run.stop",
+      data: { runId: run.id },
+    });
     expect((await stopped(machineToken, run.id)).status).toBe(204);
     expect((await stopped(machineToken, run.id)).status).toBe(204);
     // Confirmed, it isn't told again.
@@ -285,15 +690,23 @@ describe("stopping a local Run", () => {
     const { ticket, run } = await delegate("Stop me offline");
     const { token } = (await claim(machineToken, run.id)).json;
 
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: null },
+    });
     await cronk.jobsSettled();
 
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("stopped");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("stopped");
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
     for (let i = 0; i < 2; i++) {
       const stream = await openMachineStream(cronk, machineToken);
       streams.push(stream);
-      expect(await stream.next()).toEqual({ type: "run.stop", data: { runId: run.id } });
+      expect(await stream.next()).toEqual({
+        type: "run.stop",
+        data: { runId: run.id },
+      });
       stream.close();
     }
     await stopped(machineToken, run.id);
@@ -306,14 +719,22 @@ describe("stopping a local Run", () => {
     const { ada, machineToken, delegate } = await localSetUp();
     const { ticket, run } = await delegate("Ended");
     await claim(machineToken, run.id);
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: null },
+    });
 
-    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude was killed by SIGTERM" } });
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude was killed by SIGTERM" },
+    });
 
     const stream = await openMachineStream(cronk, machineToken);
     streams.push(stream);
     await stream.expectQuiet();
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("stopped");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("stopped");
   });
 
   test("another Machine can't confirm a Run's stop", async () => {
@@ -336,10 +757,14 @@ describe("stopping a local Run", () => {
 
     const ended = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
     expect(ended.state).toBe("stopped");
-    expect(ended.endReason).toBe("ada-laptop, the Machine running it, was unpaired.");
+    expect(ended.endReason).toBe(
+      "ada-laptop, the Machine running it, was unpaired.",
+    );
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
     // Its slot is free again.
-    const [listed] = (await ok("GET", "/api/runners", { cookie: ada })).filter((r: { id: string }) => r.id === runner.id);
+    const [listed] = (await ok("GET", "/api/runners", { cookie: ada })).filter(
+      (r: { id: string }) => r.id === runner.id,
+    );
     expect(listed.running).toBe(0);
   });
 
@@ -353,8 +778,13 @@ describe("stopping a local Run", () => {
 
     await ok("DELETE", `/api/runners/${runner.id}`, { cookie: ada });
 
-    expect(await stream.next()).toEqual({ type: "run.stop", data: { runId: run.id } });
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("stopped");
+    expect(await stream.next()).toEqual({
+      type: "run.stop",
+      data: { runId: run.id },
+    });
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("stopped");
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
   });
 });
@@ -367,7 +797,9 @@ describe("a local Run whose Machine slept", () => {
     cronk.clock.advance(minutes(120));
     await cronk.checkForLostRuns();
     await cronk.jobsSettled();
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: set.ada })).state).toBe("lost");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: set.ada })).state,
+    ).toBe("lost");
     return { ...set, ticket, run, token };
   }
 
@@ -379,24 +811,40 @@ describe("a local Run whose Machine slept", () => {
     streams.push(stream);
     await stream.expectQuiet();
 
-    expect((await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken })).status).toBe(200);
+    expect(
+      (
+        await call("POST", `/api/machine/runs/${run.id}/heartbeat`, {
+          token: machineToken,
+        })
+      ).status,
+    ).toBe(200);
 
     const back = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
     expect(back.state).toBe("running");
     expect(back.endReason).toBeNull();
-    const finished = await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+    const finished = await ok("POST", `/api/runs/${run.id}/finish`, {
+      token,
+      body: { outcome: "ready" },
+    });
     expect(finished.state).toBe("finished");
   });
 
   test("whose Ticket moved on meanwhile is told to stop on waking, and its token is revoked", async () => {
     const { ada, machineToken, ticket, run, token } = await lostRun();
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: null } });
+    await ok("PATCH", `/api/tickets/${ticket.id}`, {
+      cookie: ada,
+      body: { delegateId: null },
+    });
 
-    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken });
+    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, {
+      token: machineToken,
+    });
 
     expect(beat.status).toBe(409);
     expect(beat.json.error.code).toBe("run_stopped");
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state).toBe("lost");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("lost");
     expect((await call("GET", "/api/agent", { token })).status).toBe(401);
     // Told by the answer, it isn't told again on the stream.
     const stream = await openMachineStream(cronk, machineToken);
@@ -411,12 +859,24 @@ describe("a local Run's Repositories", () => {
     const setup = await localSetUp();
     await createGitHubApp(cronk, setup.ada);
     const app = cronk.github.apps[0]!;
-    const installation = cronk.github.install(app, "cronkcorp", ["cronker", "website"]);
+    const installation = cronk.github.install(app, "cronkcorp", [
+      "cronker",
+      "website",
+    ]);
     for (const repository of installation.repositories) {
-      await ok("POST", `/api/projects/${setup.project.id}/repositories`, { cookie: setup.ada, body: { id: repository.id } });
+      await ok("POST", `/api/projects/${setup.project.id}/repositories`, {
+        cookie: setup.ada,
+        body: { id: repository.id },
+      });
     }
     /** Opens a Pull Request on the Repository for the Ticket, by its key in the title, as GitHub tells Cronk of it. */
-    const openPullRequest = async (repository: (typeof installation.repositories)[number], number: number, title: string, branch: string, updatedAt: string) => {
+    const openPullRequest = async (
+      repository: (typeof installation.repositories)[number],
+      number: number,
+      title: string,
+      branch: string,
+      updatedAt: string,
+    ) => {
       const delivered = await cronk.github.deliver(app, "pull_request", {
         action: "opened",
         installation: { id: installation.id },
@@ -442,7 +902,9 @@ describe("a local Run's Repositories", () => {
 
   /** The installation tokens GitHub issued that are still good, by the test's clock. */
   const goodTokens = () =>
-    cronk.github.tokensIssued.filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime()).map((t) => t.token);
+    cronk.github.tokensIssued
+      .filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime())
+      .map((t) => t.token);
 
   test("come with the claim, each with its clone URL, a fresh App token, and no start branch for a Ticket without one", async () => {
     const { machineToken, delegate, installation } = await withRepositories();
@@ -451,8 +913,20 @@ describe("a local Run's Repositories", () => {
     const { repositories } = (await claim(machineToken, run.id)).json;
 
     expect(repositories).toEqual([
-      { fullName: "cronkcorp/cronker", cloneUrl: `${cronk.github.url}/cronkcorp/cronker`, startBranch: null, token: expect.any(String), expiresAt: expect.any(String) },
-      { fullName: "cronkcorp/website", cloneUrl: `${cronk.github.url}/cronkcorp/website`, startBranch: null, token: expect.any(String), expiresAt: expect.any(String) },
+      {
+        fullName: "cronkcorp/cronker",
+        cloneUrl: `${cronk.github.url}/cronkcorp/cronker`,
+        startBranch: null,
+        token: expect.any(String),
+        expiresAt: expect.any(String),
+      },
+      {
+        fullName: "cronkcorp/website",
+        cloneUrl: `${cronk.github.url}/cronkcorp/website`,
+        startBranch: null,
+        token: expect.any(String),
+        expiresAt: expect.any(String),
+      },
     ]);
     for (const { token, expiresAt } of repositories) {
       const issued = cronk.github.tokensIssued.find((t) => t.token === token);
@@ -463,16 +937,42 @@ describe("a local Run's Repositories", () => {
   });
 
   test("start on the branch of the Ticket's open Pull Request in each, the most recently updated", async () => {
-    const { machineToken, delegate, installation, openPullRequest } = await withRepositories();
+    const { machineToken, delegate, installation, openPullRequest } =
+      await withRepositories();
     const [cronker, website] = installation.repositories;
     const { run } = await delegate("Carry on");
-    await openPullRequest(cronker!, 7, "CRONK-1: first go", "feat/CRONK-1-first", "2026-01-01T09:00:00Z");
-    await openPullRequest(cronker!, 8, "CRONK-1: second go", "feat/CRONK-1-second", "2026-01-02T09:00:00Z");
-    await openPullRequest(website!, 3, "CRONK-2: another Ticket's", "feat/CRONK-2-other", "2026-01-03T09:00:00Z");
+    await openPullRequest(
+      cronker!,
+      7,
+      "CRONK-1: first go",
+      "feat/CRONK-1-first",
+      "2026-01-01T09:00:00Z",
+    );
+    await openPullRequest(
+      cronker!,
+      8,
+      "CRONK-1: second go",
+      "feat/CRONK-1-second",
+      "2026-01-02T09:00:00Z",
+    );
+    await openPullRequest(
+      website!,
+      3,
+      "CRONK-2: another Ticket's",
+      "feat/CRONK-2-other",
+      "2026-01-03T09:00:00Z",
+    );
 
     const { repositories } = (await claim(machineToken, run.id)).json;
 
-    expect(repositories.map((r: { fullName: string; startBranch: string | null }) => [r.fullName, r.startBranch])).toEqual([
+    expect(
+      repositories.map(
+        (r: { fullName: string; startBranch: string | null }) => [
+          r.fullName,
+          r.startBranch,
+        ],
+      ),
+    ).toEqual([
       ["cronkcorp/cronker", "feat/CRONK-1-second"],
       ["cronkcorp/website", null],
     ]);
@@ -483,14 +983,20 @@ describe("a local Run's Repositories", () => {
     const { run } = await delegate("Long work");
     const claimed = (await claim(machineToken, run.id)).json;
     const first = claimed.repositories.map((r: { token: string }) => r.token);
-    const beat = () => ok("POST", `/api/machine/runs/${run.id}/heartbeat`, { token: machineToken });
+    const beat = () =>
+      ok("POST", `/api/machine/runs/${run.id}/heartbeat`, {
+        token: machineToken,
+      });
 
     cronk.clock.advance(minutes(30));
     expect(await beat()).toEqual({ repositories: [] });
 
     cronk.clock.advance(minutes(21));
     const { repositories } = await beat();
-    expect(repositories.map((r: { fullName: string }) => r.fullName)).toEqual(["cronkcorp/cronker", "cronkcorp/website"]);
+    expect(repositories.map((r: { fullName: string }) => r.fullName)).toEqual([
+      "cronkcorp/cronker",
+      "cronkcorp/website",
+    ]);
     for (const { token } of repositories) {
       expect(first).not.toContain(token);
       expect(goodTokens()).toContain(token);
@@ -502,11 +1008,13 @@ describe("a local Run's Repositories", () => {
     const again = await beat();
     expect(again.repositories).toHaveLength(2);
     cronk.clock.advance(minutes(15));
-    for (const { token } of again.repositories) expect(goodTokens()).toContain(token);
+    for (const { token } of again.repositories)
+      expect(goodTokens()).toContain(token);
   });
 
   test("that the GitHub App no longer covers fail the Run on its claim, saying which", async () => {
-    const { ada, machineToken, delegate, installation } = await withRepositories();
+    const { ada, machineToken, delegate, installation } =
+      await withRepositories();
     installation.repositories.splice(0, 1);
     // What GitHub said the installation covers is kept for five minutes.
     cronk.clock.advance(minutes(6));
@@ -527,39 +1035,72 @@ describe("a local Runner's allowlist", () => {
     const { runner } = await localSetUp();
 
     expect(runner.allowedTools).toEqual([...defaultAllowedTools]);
-    expect(runner.allowedTools).toEqual(expect.arrayContaining(["Bash(git:*)", "Bash(npm:*)", "Bash(pytest:*)", "mcp__cronk"]));
+    expect(runner.allowedTools).toEqual(
+      expect.arrayContaining([
+        "Bash(git:*)",
+        "Bash(npm:*)",
+        "Bash(pytest:*)",
+        "mcp__cronk",
+      ]),
+    );
   });
 
   test("its User edits it, trimmed and without repeats, and it applies to the Runs claimed from then on", async () => {
-    const { ada, runner, machineToken, delegate } = await localSetUp({ runLimit: 2, machineLimit: 2 });
+    const { ada, runner, machineToken, delegate } = await localSetUp({
+      runLimit: 2,
+      machineLimit: 2,
+    });
     const { run: before } = await delegate("Before");
     const beforeClaim = await claim(machineToken, before.id);
 
     const { run: after } = await delegate("After");
     const edited = await ok("PATCH", `/api/runners/${runner.id}`, {
       cookie: ada,
-      body: { allowedTools: [" Bash(git:*) ", "Bash(cargo test:*)", "Bash(git:*)"] },
+      body: {
+        allowedTools: [" Bash(git:*) ", "Bash(cargo test:*)", "Bash(git:*)"],
+      },
     });
 
     expect(edited.allowedTools).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
-    expect((await ok("GET", "/api/runners", { cookie: ada }))[0].allowedTools).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
+    expect(
+      (await ok("GET", "/api/runners", { cookie: ada }))[0].allowedTools,
+    ).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
     expect(beforeClaim.json.allowedTools).toEqual([...defaultAllowedTools]);
-    expect((await claim(machineToken, after.id)).json.allowedTools).toEqual(["Bash(git:*)", "Bash(cargo test:*)"]);
+    expect((await claim(machineToken, after.id)).json.allowedTools).toEqual([
+      "Bash(git:*)",
+      "Bash(cargo test:*)",
+    ]);
 
-    const reset = await ok("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { allowedTools: null } });
+    const reset = await ok("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: { allowedTools: null },
+    });
     expect(reset.allowedTools).toEqual([...defaultAllowedTools]);
   });
 
   test("an empty or overlong rule is refused, and a Runner of another kind has none", async () => {
     const { ada, runner } = await localSetUp();
-    for (const allowedTools of [[" "], ["x".repeat(201)], Array.from({ length: 201 }, (_, i) => `Bash(tool${i}:*)`)]) {
-      const refused = await call("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { allowedTools } });
+    for (const allowedTools of [
+      [" "],
+      ["x".repeat(201)],
+      Array.from({ length: 201 }, (_, i) => `Bash(tool${i}:*)`),
+    ]) {
+      const refused = await call("PATCH", `/api/runners/${runner.id}`, {
+        cookie: ada,
+        body: { allowedTools },
+      });
       expect(refused.status).toBe(400);
     }
 
-    const cloud = await ok("POST", "/api/runners", { cookie: ada, body: { name: "Max", kind: "subscription" } });
+    const cloud = await ok("POST", "/api/runners", {
+      cookie: ada,
+      body: { name: "Max", kind: "subscription" },
+    });
     expect(cloud.allowedTools).toBeNull();
-    const refused = await call("PATCH", `/api/runners/${cloud.id}`, { cookie: ada, body: { allowedTools: ["Bash(git:*)"] } });
+    const refused = await call("PATCH", `/api/runners/${cloud.id}`, {
+      cookie: ada,
+      body: { allowedTools: ["Bash(git:*)"] },
+    });
     expect(refused.status).toBe(409);
     expect(refused.json.error.code).toBe("runner_has_no_allowlist");
   });
@@ -571,11 +1112,16 @@ describe("a local Runner's allowlist", () => {
 
     await ok("POST", `/api/machine/runs/${run.id}/end`, {
       token: machineToken,
-      body: { reason: "claude exited with code 0", deniedTools: ["Bash(npm publish)", "WebFetch"] },
+      body: {
+        reason: "claude exited with code 0",
+        deniedTools: ["Bash(npm publish)", "WebFetch"],
+      },
     });
     await cronk.jobsSettled();
 
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).endReason).toBe(
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).endReason,
+    ).toBe(
       "The session ended without calling `finish`: claude exited with code 0. It needed tools outside the Runner's " +
         "allowlist: Bash(npm publish), WebFetch; widen the allowlist and Retry.",
     );
@@ -585,16 +1131,27 @@ describe("a local Runner's allowlist", () => {
 /** A Claude Code transcript of `count` user messages, its JSONL file as it is. */
 const jsonl = (count: number) =>
   Array.from({ length: count }, (_, i) =>
-    JSON.stringify({ type: "user", uuid: `u-${i}`, timestamp: "2026-01-01T09:00:00.000Z", message: { role: "user", content: `Message ${i}.` } }),
+    JSON.stringify({
+      type: "user",
+      uuid: `u-${i}`,
+      timestamp: "2026-01-01T09:00:00.000Z",
+      message: { role: "user", content: `Message ${i}.` },
+    }),
   ).join("\n") + "\n";
 
 /** Uploads a claimed Run's transcript with the Machine token, as the daemon does. */
 async function uploadTranscript(token: string, runId: string, body: string) {
-  const response = await fetch(`${cronk.url}/api/machine/runs/${runId}/transcript`, {
-    method: "PUT",
-    headers: { "content-type": "application/x-ndjson", authorization: `Bearer ${token}` },
-    body,
-  });
+  const response = await fetch(
+    `${cronk.url}/api/machine/runs/${runId}/transcript`,
+    {
+      method: "PUT",
+      headers: {
+        "content-type": "application/x-ndjson",
+        authorization: `Bearer ${token}`,
+      },
+      body,
+    },
+  );
   return { status: response.status, json: await response.json() };
 }
 
@@ -603,20 +1160,40 @@ describe("a local Run's transcript", () => {
     const { ada, agent, machineToken, delegate } = await localSetUp();
     const { run } = await delegate("Transcribe me");
     const { token } = (await claim(machineToken, run.id)).json;
-    await ok("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
+    await ok("POST", `/api/machine/runs/${run.id}/session`, {
+      token: machineToken,
+      body: { sessionId: "4f1c2b9e" },
+    });
 
     const first = await uploadTranscript(machineToken, run.id, jsonl(1));
     expect(first.status).toBe(201);
-    expect(first.json).toEqual(expect.objectContaining({ runId: run.id, entryCount: 1, agent: { id: agent.id, name: "laptop" } }));
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).transcriptId).toBe(first.json.id);
+    expect(first.json).toEqual(
+      expect.objectContaining({
+        runId: run.id,
+        entryCount: 1,
+        agent: { id: agent.id, name: "laptop" },
+      }),
+    );
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).transcriptId,
+    ).toBe(first.json.id);
 
     // The agent finishes: the Run's own token is revoked, but the Machine's last upload still lands.
-    await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+    await ok("POST", `/api/runs/${run.id}/finish`, {
+      token,
+      body: { outcome: "ready" },
+    });
     await cronk.jobsSettled();
     const last = await uploadTranscript(machineToken, run.id, jsonl(3));
 
     expect(last.status).toBe(200);
-    expect(last.json).toEqual(expect.objectContaining({ id: first.json.id, runId: run.id, entryCount: 3 }));
+    expect(last.json).toEqual(
+      expect.objectContaining({
+        id: first.json.id,
+        runId: run.id,
+        entryCount: 3,
+      }),
+    );
   });
 
   test("is refused before the Run's session is reported, and for a Run the Machine doesn't hold", async () => {
@@ -629,7 +1206,10 @@ describe("a local Run's transcript", () => {
     expect(early.status).toBe(409);
     expect(early.json.error.code).toBe("no_session");
 
-    await ok("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
+    await ok("POST", `/api/machine/runs/${run.id}/session`, {
+      token: machineToken,
+      body: { sessionId: "4f1c2b9e" },
+    });
     expect((await uploadTranscript(other, run.id, jsonl(1))).status).toBe(404);
   });
 
@@ -637,8 +1217,15 @@ describe("a local Run's transcript", () => {
     const { ada, machineToken, delegate } = await localSetUp();
     const { run } = await delegate("Secret");
     await claim(machineToken, run.id);
-    await ok("POST", `/api/machine/runs/${run.id}/session`, { token: machineToken, body: { sessionId: "4f1c2b9e" } });
-    const { json: transcript } = await uploadTranscript(machineToken, run.id, jsonl(1));
+    await ok("POST", `/api/machine/runs/${run.id}/session`, {
+      token: machineToken,
+      body: { sessionId: "4f1c2b9e" },
+    });
+    const { json: transcript } = await uploadTranscript(
+      machineToken,
+      run.id,
+      jsonl(1),
+    );
 
     await ok("DELETE", `/api/transcripts/${transcript.id}`, { cookie: ada });
     const refused = await uploadTranscript(machineToken, run.id, jsonl(2));
@@ -653,7 +1240,10 @@ describe("a local Run's cost", () => {
     const { ada, runner, machineToken, delegate } = await localSetUp();
     const { ticket, run } = await delegate("Costly");
     const { token } = (await claim(machineToken, run.id)).json;
-    await ok("POST", `/api/runs/${run.id}/finish`, { token, body: { outcome: "ready" } });
+    await ok("POST", `/api/runs/${run.id}/finish`, {
+      token,
+      body: { outcome: "ready" },
+    });
 
     await ok("POST", `/api/machine/runs/${run.id}/end`, {
       token: machineToken,
@@ -661,10 +1251,16 @@ describe("a local Run's cost", () => {
     });
 
     const estimate = { amount: 123, currency: "USD", estimate: true };
-    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).cost).toEqual(estimate);
-    expect((await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).cost).toEqual([estimate]);
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).cost,
+    ).toEqual(estimate);
+    expect(
+      (await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).cost,
+    ).toEqual([estimate]);
     const runners = await ok("GET", "/api/runners", { cookie: ada });
-    expect(runners.find((r: { id: string }) => r.id === runner.id).costThisMonth).toEqual([estimate]);
+    expect(
+      runners.find((r: { id: string }) => r.id === runner.id).costThisMonth,
+    ).toEqual([estimate]);
   });
 
   test("of a Run that failed is recorded too, and an end without one records none", async () => {
@@ -674,19 +1270,37 @@ describe("a local Run's cost", () => {
     await claim(machineToken, failed.id);
     await claim(machineToken, silent.id);
 
-    await ok("POST", `/api/machine/runs/${failed.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1", costUsd: 0.5 } });
-    await ok("POST", `/api/machine/runs/${silent.id}/end`, { token: machineToken, body: { reason: "claude was killed by SIGKILL" } });
+    await ok("POST", `/api/machine/runs/${failed.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 1", costUsd: 0.5 },
+    });
+    await ok("POST", `/api/machine/runs/${silent.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude was killed by SIGKILL" },
+    });
 
-    const failedRun = await ok("GET", `/api/runs/${failed.id}`, { cookie: ada });
-    expect(failedRun).toEqual(expect.objectContaining({ state: "failed", cost: { amount: 50, currency: "USD", estimate: true } }));
-    expect((await ok("GET", `/api/runs/${silent.id}`, { cookie: ada })).cost).toBeNull();
+    const failedRun = await ok("GET", `/api/runs/${failed.id}`, {
+      cookie: ada,
+    });
+    expect(failedRun).toEqual(
+      expect.objectContaining({
+        state: "failed",
+        cost: { amount: 50, currency: "USD", estimate: true },
+      }),
+    );
+    expect(
+      (await ok("GET", `/api/runs/${silent.id}`, { cookie: ada })).cost,
+    ).toBeNull();
   });
 
   test("estimates stay apart from real costs in a Ticket's total", async () => {
     const { ada, machineToken, delegate } = await localSetUp();
     const { ticket, run } = await delegate("Mixed");
     await claim(machineToken, run.id);
-    await ok("POST", `/api/machine/runs/${run.id}/end`, { token: machineToken, body: { reason: "claude exited with code 1", costUsd: 0.25 } });
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 1", costUsd: 0.25 },
+    });
     // A real cost on the same Ticket, as a Managed Agents session reports one.
     await cronk.stage(
       `insert into runs (id, workspace_id, ticket_id, agent_id, status_id, status_name, model, brief, state, started_at, ended_at, cost_amount, cost_currency)
@@ -695,7 +1309,9 @@ describe("a local Run's cost", () => {
       [run.id],
     );
 
-    expect((await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).cost).toEqual([
+    expect(
+      (await ok("GET", `/api/tickets/${ticket.id}`, { cookie: ada })).cost,
+    ).toEqual([
       { amount: 300, currency: "USD", estimate: false },
       { amount: 25, currency: "USD", estimate: true },
     ]);

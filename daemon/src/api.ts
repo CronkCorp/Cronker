@@ -1,3 +1,5 @@
+import { daemonVersion } from "./version.js";
+
 /** The few calls the daemon makes to Cronk's HTTP API, and what they answer. */
 
 export interface StartedPairing {
@@ -68,11 +70,24 @@ export class CronkError extends Error {
   }
 }
 
-/** Uploads a file's text to Cronk as `contentType`, such as a transcript's JSONL, with the token given. */
-export async function upload(cronkUrl: string, method: string, path: string, options: { body: string; contentType: string; token: string }): Promise<void> {
+/**
+ * The headers of every call with a Machine token: its token, and the daemon's version and the Machine's limit, which
+ * Cronk records each time, so a changed limit takes effect without pairing again, and refuses a daemon too old for it.
+ */
+export function machineHeaders(token: string, limit: number): Record<string, string> {
+  return { authorization: `Bearer ${token}`, "x-cronk-runner-version": daemonVersion, "x-cronk-runner-limit": String(limit) };
+}
+
+/** Uploads a file's text to Cronk as `contentType`, such as a transcript's JSONL, with the headers given. */
+export async function upload(
+  cronkUrl: string,
+  method: string,
+  path: string,
+  options: { body: string; contentType: string; headers: Record<string, string> },
+): Promise<void> {
   const response = await fetch(`${cronkUrl}${path}`, {
     method,
-    headers: { accept: "application/json", "content-type": options.contentType, authorization: `Bearer ${options.token}` },
+    headers: { accept: "application/json", ...options.headers, "content-type": options.contentType },
     body: options.body,
     signal: AbortSignal.timeout(120_000),
   });
@@ -84,10 +99,14 @@ export async function upload(cronkUrl: string, method: string, path: string, opt
   throw new CronkError(response.status, json.error?.code ?? "unknown", json.error?.message ?? `Cronk answered ${response.status}.`);
 }
 
-export async function call<T>(cronkUrl: string, method: string, path: string, options: { body?: unknown; token?: string } = {}): Promise<T> {
-  const headers: Record<string, string> = { accept: "application/json" };
+export async function call<T>(
+  cronkUrl: string,
+  method: string,
+  path: string,
+  options: { body?: unknown; headers?: Record<string, string> } = {},
+): Promise<T> {
+  const headers: Record<string, string> = { accept: "application/json", ...options.headers };
   if (options.body !== undefined) headers["content-type"] = "application/json";
-  if (options.token) headers.authorization = `Bearer ${options.token}`;
   const response = await fetch(`${cronkUrl}${path}`, {
     method,
     headers,

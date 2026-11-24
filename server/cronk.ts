@@ -16,6 +16,7 @@ import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Jobs } from "./jobs.js";
 import { runImports } from "./github/importing.js";
 import { Live } from "./live/live.js";
+import { forgetConnections } from "./machines/machines.js";
 import { checkMergeability } from "./pipeline/conflicts.js";
 import { queuePass } from "./pipeline/merge-queue.js";
 import type { RunnerKind } from "./runs/runner.js";
@@ -82,6 +83,8 @@ export async function createCronk({
   try {
     await migrate(db, { before: migrateBefore });
     await backfillMentions(db);
+    // A database migrated only partway, as a test of one migration has it, may have no Machines yet.
+    if (!migrateBefore) await forgetConnections(db, clock.now());
     const context: Context = {
       config,
       db,

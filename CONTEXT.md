@@ -237,11 +237,11 @@ _Avoid_: Principal, author
 ### Runs
 
 **Runner**:
-A way for Cronk to start Runs, set up by a User with their own credentials: their Claude subscription (`subscription`), the Claude API (Managed Agents, `managed_agents`), their own Machines (`local`), or later a sandbox provider. Each has its own limit on Runs at once; Tickets beyond it wait, highest Priority first. A `local` Runner isn't a cloud Runner: its Runs run on a Machine serving it, which claims them (ADR 0014).
+A way for Cronk to start Runs, set up by a User with their own credentials: their Claude subscription (`subscription`), the Claude API (Managed Agents, `managed_agents`), their own Machines (`local`), or later a sandbox provider. Each has its own limit on Runs at once; Tickets beyond it wait, highest Priority first. A `local` Runner isn't a cloud Runner: its Runs run on a Machine serving it, which claims them (ADR 0014). While no Machine serving it is connected it is **offline**: its Tickets wait, as for a rate limit, and start once one connects.
 _Avoid_: Provider, backend, executor
 
 **Machine**:
-A computer of a User's paired with a Cronk installation, running the `cronk-runner` daemon, which serves some of that User's `local` Runners. The User pairs it by approving the code `cronk-runner login` shows on the Runners page; it then holds a Machine token, which unpairing revokes. A Machine serves only its own User's Runners.
+A computer of a User's paired with a Cronk installation, running the `cronk-runner` daemon, which serves some of that User's `local` Runners. The User pairs it by approving the code `cronk-runner login` shows on the Runners page; it then holds a Machine token, which unpairing revokes. A Machine serves only its own User's Runners. Its daemon announces its version and its own limit on Runs at once, across all its Runners, whenever it calls; Cronk refuses a daemon older than it works with (`daemon_too_old`).
 _Avoid_: Host, device, worker, node
 
 **Runner setup**:

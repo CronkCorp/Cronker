@@ -1,4 +1,4 @@
-import { call, CronkError, type MachineSelf } from "./api.js";
+import { call, CronkError, machineHeaders, type MachineSelf } from "./api.js";
 import { readConfig } from "./config.js";
 
 export interface StatusOptions {
@@ -21,7 +21,7 @@ export async function status(options: StatusOptions): Promise<CronkStatus[]> {
   const statuses: CronkStatus[] = [];
   for (const cronk of config.cronks) {
     try {
-      const machine = await call<MachineSelf>(cronk.url, "GET", "/api/machine", { token: cronk.token });
+      const machine = await call<MachineSelf>(cronk.url, "GET", "/api/machine", { headers: machineHeaders(cronk.token, config.limit) });
       statuses.push({ url: cronk.url, machine });
       print(`${cronk.url}: paired as ${machine.name}${machine.owner.email ? ` for ${machine.owner.email}` : ""}`);
       if (machine.runners.length === 0) print("  serves no Runners");
@@ -30,7 +30,9 @@ export async function status(options: StatusOptions): Promise<CronkStatus[]> {
       const message =
         error instanceof CronkError && error.code === "invalid_machine_token"
           ? `unpaired: run \`cronk-runner login ${cronk.url}\` again`
-          : `can't reach it: ${(error as Error).message}`;
+          : error instanceof CronkError && error.code === "daemon_too_old"
+            ? `refused: ${error.message}`
+            : `can't reach it: ${(error as Error).message}`;
       statuses.push({ url: cronk.url, error: message });
       print(`${cronk.url}: ${message}`);
     }

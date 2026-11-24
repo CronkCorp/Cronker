@@ -436,6 +436,7 @@ describe("Runners and Agents", () => {
         limit: 2,
         running: 0,
         pausedUntil: null,
+        offlineSince: null,
         triggers: [],
         managedAgents: null,
         budgetPerRun: null,
