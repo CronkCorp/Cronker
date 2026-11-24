@@ -8,12 +8,17 @@
 // Claude Code does, a line as it starts and another as it finishes.
 // Run in a git worktree, it also records the branch and commit it is on and the password git's credential helpers give
 // for the URL in $STAND_IN_CLAUDE_CREDENTIAL_URL; with $STAND_IN_CLAUDE_PUSH set, it commits a file and pushes it to
-// that branch before finishing.
+// that branch before finishing. Asked `auth status`, it says it is signed in.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
+// `claude auth status`, as the daemon's preflight asks before `run`: signed in.
+if (args[0] === "auth" && args[1] === "status") {
+  process.stdout.write(`${JSON.stringify({ loggedIn: true })}\n`);
+  process.exit(0);
+}
 const after = (flag) => args[args.indexOf(flag) + 1];
 const mcpConfigPath = after("--mcp-config");
 const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, "utf8"));
