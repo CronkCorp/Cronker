@@ -19,6 +19,8 @@ A Full token's acts are recorded like any Agent's: Changes by the Agent, with no
 
 ## Consequences
 
-- Moving Tickets is the first Full act (CRONK-123). Editing and delegating any Ticket and deleting knowledge follow in their own Tickets.
+- A Full token moves any Ticket, to Canceled and Done included (CRONK-123).
+- A Full token edits every field of any Ticket, delegated or running included, delegating only to its Owner's Agents; makes Sub-Tickets and links Documents and Artifacts outside a Run; and adds and removes Relations and dismisses Discovered Tickets (CRONK-124).
 - A Full token queues merges and removes them from the Merge Queue, Cuts and Releases, answers and dismisses Questions and retries Runs (CRONK-125). A merge it queues is its Agent's merge, completing the Ticket as Unverified, as an Autonomous Delegation one does; but it acted as its Owner, so it needs no *agents may merge* and turning that off leaves it queued. Cut, Release and a dismissed Question record the Agent.
+- A Full token deletes Documents, Terms, Artifacts and their Versions, and deletes and redacts Transcripts (CRONK-126). A Transcript's deletion and Redaction record the Agent.
 - The token dialog and the OAuth approval screen offer the levels, with a warning on Full.
