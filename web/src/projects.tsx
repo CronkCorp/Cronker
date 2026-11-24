@@ -165,10 +165,6 @@ export function ProjectMenu({
     <>
       <Menu label="More of this Project">
         <MenuLink to={`${base}/releases`}>Releases</MenuLink>
-        <MenuLink to={`${base}/documents`}>Documents</MenuLink>
-        <MenuLink to={`${base}/glossary`}>Terms</MenuLink>
-        <MenuLink to={`${base}/decisions`}>Decisions</MenuLink>
-        <MenuLink to={`${base}/artifacts`}>Artifacts</MenuLink>
         <MenuLink to={`${base}/settings`}>Project settings</MenuLink>
         {workspace.isAdmin && project.archivedAt === null && (
           <>
@@ -187,7 +183,7 @@ export function ProjectMenu({
           setArchiving(false);
         }}
       >
-        It becomes read-only for everyone, Admins and Agents included, and moves to Archived in the sidebar. Its key and
+        It becomes read-only for everyone, Admins and Agents included, and moves to Archived in the Project menu. Its key and
         addresses keep working, and an Admin can unarchive it.
       </ConfirmDialog>
     </>

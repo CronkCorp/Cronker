@@ -24,7 +24,7 @@ async function board(page: Page, cronk: StartedCronk) {
   const open = async (on: Page = page) => {
     if (on === page) await signInInBrowser(on, cronk);
     else await on.goto(page.url());
-    if (on === page) await on.getByRole("link", { name: "CRONK Cronker" }).click();
+    if (on === page) await on.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
     const shown = on.getByRole("region", { name: "Board" });
     await expect(shown.getByRole("region", { name: "Backlog", exact: true })).toBeVisible();
     const lane = (name: string) => shown.getByRole("region", { name, exact: true });

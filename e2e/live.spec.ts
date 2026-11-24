@@ -23,7 +23,7 @@ test("the board and the Ticket view show what another member changes, without a 
   await page.getByLabel("Email").fill("ada@example.com");
   await page.getByLabel("Password").fill("correct horse battery");
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const board = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => board.getByRole("region", { name, exact: true });
   await expect(lane("Backlog")).toBeVisible();

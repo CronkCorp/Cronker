@@ -15,7 +15,7 @@ async function board(page: Page, cronk: StartedCronk) {
     tickets.push(await call("POST", `/api/projects/${project.id}/tickets`, { title }));
   }
   await signInInBrowser(page, cronk);
-  await page.getByRole("link", { name: "CRONK Cronker" }).click();
+  await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
   const shown = page.getByRole("region", { name: "Board" });
   const lane = (name: string) => shown.getByRole("region", { name, exact: true });
   await expect(lane("Backlog").getByRole("link")).toHaveCount(4);
