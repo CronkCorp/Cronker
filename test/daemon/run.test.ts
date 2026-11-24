@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
+import { daemonVersion } from "../../daemon/src/version.js";
 import { minutes } from "../harness/clock.js";
 import { refusingCronk, tooOldMessage } from "../harness/refusing-cronk.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
@@ -663,7 +664,7 @@ describe("a daemon too old for Cronk", () => {
     expect(tooOld.calls()).toEqual(1);
     expect(tooOld.headers()).toEqual(
       expect.objectContaining({
-        "x-cronk-runner-version": "0.3.0",
+        "x-cronk-runner-version": daemonVersion,
         "x-cronk-runner-limit": "2",
       }),
     );

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { login } from "../../daemon/src/login.js";
 import { status } from "../../daemon/src/status.js";
+import { daemonVersion } from "../../daemon/src/version.js";
 import { setUp, signIn } from "../harness/flows.js";
 import { writeConfig } from "../../daemon/src/config.js";
 import { refusingCronk, tooOldMessage } from "../harness/refusing-cronk.js";
@@ -80,7 +81,7 @@ describe("cronk-runner login", () => {
       limit: 2,
       cronks: [{ url: cronk.url, machineId: machine.id, machineName: "ada-laptop", token: expect.stringMatching(/^cronk_machine_/) }],
     });
-    expect(machine).toEqual(expect.objectContaining({ name: "ada-laptop", os: "linux", daemonVersion: "0.3.0", limit: 2 }));
+    expect(machine).toEqual(expect.objectContaining({ name: "ada-laptop", os: "linux", daemonVersion, limit: 2 }));
   });
 
   test("pairs one Machine with several Cronks, keeping each in the config", async () => {
