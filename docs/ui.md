@@ -264,8 +264,9 @@ The web client keeps its own small component set, styled with the tokens in plai
 |---|---|---|
 | ![Terms](ui/terms.png) | ![Term](ui/term.png) | ![Terms, dark](ui/terms-dark.png) |
 
-- **Terms page:** reads like a glossary. The page head holds the scope dropdown, then Export and **New Term**. The scope dropdown, shared by Terms and Artifacts (Documents and Decisions show the Project's and the Workspace's as two sections instead), is a `Menu` whose button shows the current scope (Workspace, or the Project's key in mono and its name, cut short with an ellipsis so the head stays on one line) and whose `MenuRadioGroup` lists Workspace first, then the Projects by key, the current one checked; choosing one goes to that scope's page, so Back and Forward move between them. A filter box matches names and words to avoid.
-- **Each Term:** the name, "Overrides the Workspace Term" in `--info` where it does (on a Workspace Term, "Replaced in CRONK"), its scope and Version. Then the definition, and "Avoid:" with the words struck through.
+- **Terms page:** reads like a glossary, in stacked sections: on a Project's page the Project's Terms under its key in mono and its name, then the Workspace's under "Workspace"; on the Workspace's page only the Workspace's. The page head holds Export alone, with no scope dropdown. One filter box above the sections matches names and words to avoid in both. Each section heading carries its count ("1 of 3 Terms" while filtering) and its own small secondary **New Term**, which creates the Term in that section's glossary; with Read in the Project, the Project's section offers none. Each section has its own empty state, and "No Term matches" when the filter leaves it none.
+- **Each Term:** the name, its Version, then the definition and "Avoid:" with the words struck through. A Project Term replacing a Workspace Term of the same name says "Overrides the Workspace Term" in `--info`; that Workspace Term stays listed, muted, with "Replaced in CRONK".
+- **A Workspace Term's "Terms" crumb** leads to the active Project's Terms page, which shows the Workspace's under the Project's; a Project Term's leads to its Project's.
 - **A Term's page and its editor** look like a Document's: the definition reads at Document size with "Avoid:" under it, beside **Mentioned in** (as on a Ticket, the texts mentioning the Term's name, its own definition left out) and the Term's Versions, each of which opens to what it said; picking two shows their Diff, the definition's lines and then, under "Avoid:", the words to avoid. The editor holds the Name, the definition in the [rich editor](#component-conventions), with no separate preview, and the words to avoid, with "Save as Version N" first.
 
 ### Decisions
@@ -282,7 +283,7 @@ The web client keeps its own small component set, styled with the tokens in plai
 
 ### Artifacts
 
-- **List** (`/projects/<id>/artifacts`, `/workspaces/<id>/artifacts`): the page head holds the same scope dropdown as Terms, and no action, since Artifacts are created over the API and MCP. Below it, a table of title (its description under it in 12px `--muted`), who saved its current Version and when, last change first. An empty list says how Artifacts get there.
+- **List** (`/projects/<id>/artifacts`, `/workspaces/<id>/artifacts`): the page head holds the scope dropdown, the last knowledge page to keep one (Documents, Terms and Decisions show the Project's and the Workspace's as two sections instead): a `Menu` whose button shows the current scope (Workspace, or the Project's key in mono and its name, cut short with an ellipsis so the head stays on one line) and whose `MenuRadioGroup` lists Workspace first, then the Projects by key, the current one checked; choosing one goes to that scope's page, so Back and Forward move between them. There is no action, since Artifacts are created over the API and MCP. Below it, a table of title (its description under it in 12px `--muted`), who saved its current Version and when, last change first. An empty list says how Artifacts get there.
 
 ### Artifact
 
