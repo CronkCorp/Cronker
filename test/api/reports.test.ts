@@ -86,6 +86,8 @@ async function runningRun(options: StartCronkOptions = {}) {
     await cronk.applyAhead("0079_token_levels.sql");
     // Reading a Ticket needs its Runs' costs, estimates apart.
     await cronk.applyAhead("0084_cost_estimates.sql");
+    // Adding a Runner needs its allowlist.
+    await cronk.applyAhead("0085_runner_allowlists.sql");
   }
   const { user, workspace } = await setUp(cronk);
   const ada = { cookie: await signIn(cronk) };

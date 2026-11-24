@@ -1466,11 +1466,19 @@
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
 }
-.runner-managed {
+.runner-managed,
+.runner-allowlist {
   display: grid;
   gap: var(--space-3);
   padding-top: var(--space-4);
   border-top: 1px solid var(--border);
+}
+.runner-allowlist form {
+  display: grid;
+  gap: var(--space-3);
+}
+.runner-allowlist textarea {
+  width: 100%;
 }
 .runner-managed-ids {
   display: grid;
