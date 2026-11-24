@@ -1,4 +1,4 @@
-import { useAddresses, useCanonicalAddress } from "./addresses.js";
+import { useActiveProject, useAddresses, useCanonicalAddress } from "./addresses.js";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   api,
@@ -23,7 +23,8 @@ import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
 import { Markdown, type Slot } from "./markdown.js";
-import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
+import { KnowledgeSection } from "./knowledge-section.js";
+import { knowledgeCrumbs } from "./projects.js";
 import { Link, navigate } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, DeletedElsewhere, EmptyState, Field, FormError, LiveIndicator, PageHead, Panel, RelativeTime, workspaceCrumb } from "./ui/controls.js";
@@ -43,8 +44,6 @@ function childrenOf(documents: DocumentSummary[]): Map<string | null, DocumentSu
   }
   return children;
 }
-
-/** Where a page tree is shown: a Project's Documents page, or the Workspace's. */
 
 /** Text with its line endings made `\n`, as the server matches and places quotes. */
 const normaliseLineEndings = (text: string) => text.replace(/\r\n?/g, "\n");
@@ -104,11 +103,13 @@ export function DocumentBody({
   );
 }
 
-/** A page tree's Documents, nested, under a page head with the scope dropdown and New Document. */
-function PageTree({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
+/**
+ * One page tree's Documents, nested, as a section of a Documents page: the Project's, headed by its key and name, or
+ * the Workspace's. It loads its own Documents, follows its own tree's changes and offers its own New Document.
+ */
+function DocumentsSection({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
   const to = useAddresses();
   const tree: Tree = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
-  usePlace("documents", project?.id ?? null);
   const [documents, setDocuments] = useState<DocumentSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -128,6 +129,9 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
     navigate(to.document(created));
   });
 
+  // With Read in the Project, or with it archived, its page tree offers no New Document; the Workspace's always does.
+  const canCreate = !project || (project.access === "write" && project.archivedAt === null);
+  const name = project ? project.key : "Workspace";
   const children = documents ? childrenOf(documents) : new Map<string | null, DocumentSummary[]>();
   const branch = (parentId: string | null, depth: number): ReactNode =>
     (children.get(parentId) ?? []).map((document) => (
@@ -143,36 +147,29 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
       </li>
     ));
   return (
-    <div className="page">
-      <PageHead
-        crumbs={knowledgeCrumbs(workspace, project, "Documents")}
-        title="Documents"
-        switcher={
-          <>
-            <LiveIndicator workspaceId={workspace.id} />
-            <ScopeSwitch workspace={workspace} project={project} kind="documents" />
-          </>
-        }
-        actions={
-          // With Read in the Project, its page tree offers no New Document.
-          (!project || project.access === "write") && (
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              New Document
-            </Button>
-          )
-        }
-      />
+    <KnowledgeSection
+      project={project}
+      actions={
+        canCreate && (
+          <Button size="small" onClick={() => setCreating(true)}>
+            New Document
+          </Button>
+        )
+      }
+    >
       {project && <ProjectNote project={project} />}
       <FormError error={failure} />
       {documents &&
         (documents.length === 0 ? (
-          <EmptyState title="No Documents yet.">New Document starts one. Reports live with their Tickets.</EmptyState>
+          <EmptyState title={project ? `No Documents in ${project.key} yet.` : "No Workspace Documents yet."}>
+            {canCreate ? "New Document starts one. " : ""}Reports live with their Tickets.
+          </EmptyState>
         ) : (
-          <section aria-label="Page tree" className="panel panel-flush">
+          <div role="group" aria-label={`Page tree: ${name}`} className="panel panel-flush">
             <ul className="rows">{branch(null, 0)}</ul>
-          </section>
+          </div>
         ))}
-      <Dialog open={creating} onOpenChange={setCreating} title="New Document">
+      <Dialog open={creating} onOpenChange={setCreating} title={project ? `New Document in ${project.key}` : "New Workspace Document"}>
         <form onSubmit={onSubmit}>
           <Field label="Title">
             <input name="title" required maxLength={300} autoFocus />
@@ -188,18 +185,34 @@ function PageTree({ workspace, project }: { workspace: Workspace; project: Proje
           </DialogActions>
         </form>
       </Dialog>
+    </KnowledgeSection>
+  );
+}
+
+/** A Documents page: its head, then a section for each page tree it shows. */
+function DocumentsPage({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
+  usePlace("documents", project?.id ?? null);
+  return (
+    <div className="page">
+      <PageHead
+        crumbs={knowledgeCrumbs(workspace, project, "Documents")}
+        title="Documents"
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
+      />
+      {project && <DocumentsSection workspace={workspace} project={project} />}
+      <DocumentsSection workspace={workspace} project={null} />
     </div>
   );
 }
 
-/** The Workspace's own page tree, separate from its Projects'. */
+/** The Workspace's own page tree, alone: for old links and Workspaces with no Project. */
 export function WorkspaceDocuments({ workspace }: { workspace: Workspace }) {
-  return <PageTree workspace={workspace} project={null} />;
+  return <DocumentsPage workspace={workspace} project={null} />;
 }
 
-/** A Project's page tree. */
+/** A Project's page tree, then the Workspace's. */
 export function ProjectDocuments({ workspace, project }: { workspace: Workspace; project: ProjectSummary }) {
-  return <PageTree workspace={workspace} project={project} />;
+  return <DocumentsPage workspace={workspace} project={project} />;
 }
 
 /**
@@ -226,6 +239,7 @@ export function DocumentScreen({
   const [versionsShown, setVersionsShown] = useState(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const { gone, failed, deleteHere } = useDeletedElsewhere();
+  const activeProject = useActiveProject();
   usePlace("documents", document?.projectId ?? null);
 
   const load = useCallback(() => {
@@ -283,7 +297,9 @@ export function DocumentScreen({
   const canWrite = !project || project.access === "write";
   const tree: Tree = document.projectId ? { kind: "project", id: document.projectId } : { kind: "workspace", id: document.workspaceId };
   // Where the Document is listed: its Ticket for a Report, otherwise its page tree.
-  const home = document.ticketId ? (ticket ? to.ticket(ticket) : `/tickets/${document.ticketId}`) : to.place(tree, "documents");
+  // A Workspace Document's list is the active Project's Documents page, which shows the Workspace's page tree too.
+  const listedIn: Tree = !document.projectId && activeProject ? { kind: "project", id: activeProject.id } : tree;
+  const home = document.ticketId ? (ticket ? to.ticket(ticket) : `/tickets/${document.ticketId}`) : to.place(listedIn, "documents");
   const crumbs = [
     workspaceCrumb(workspace),
     ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.project(project) }] : []),
