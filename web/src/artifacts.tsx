@@ -5,7 +5,8 @@ import { sized } from "./attachments.js";
 import { VersionMeta, Versions } from "./documents.js";
 import { usePlace } from "./frame.js";
 import { useArrivals, useDeletedElsewhere, useLatest, useLiveEvents } from "./live.js";
-import { knowledgeCrumbs, ScopeSwitch } from "./projects.js";
+import { knowledgeCrumbs } from "./projects.js";
+import { KnowledgeSection } from "./knowledge-section.js";
 import { ArtifactFrame } from "./embed.js";
 import { Link, navigate, useQuery } from "./router.js";
 import { Actor, Avatar } from "./ui/actor.js";
@@ -27,11 +28,16 @@ import { ProjectAccessProvider, ProjectNote, useCanWrite } from "./write-access.
 import { CommentsPanel, useComments } from "./comments-panel.js";
 import { ConfirmDialog, Menu, MenuItem } from "./ui/overlays.js";
 
-/** Where a Project's or the Workspace's Artifacts are listed. */
+/** A Project's Artifacts, or the Workspace's own, as loaded and kept current as they change. */
+interface ArtifactsShelf {
+  place: Place;
+  project: ProjectSummary | null;
+  artifacts: ArtifactSummary[] | null;
+  failure: string | null;
+}
 
-/** A Project's Artifacts, or the Workspace's own, last changed first. */
-function ArtifactList({ workspace, project }: { workspace: Workspace; project: ProjectSummary | null }) {
-  const to = useAddresses();
+/** Loads a Project's Artifacts, or the Workspace's own, and loads them again as they change. */
+function useArtifacts(workspace: Workspace, project: ProjectSummary | null): ArtifactsShelf {
   const place: Place = project ? { kind: "project", id: project.id } : { kind: "workspace", id: workspace.id };
   const [artifacts, setArtifacts] = useState<ArtifactSummary[] | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -44,20 +50,36 @@ function ArtifactList({ workspace, project }: { workspace: Workspace; project: P
   useLiveEvents(workspace.id, (event) => {
     if (event.type === "reconnected" || (event.type === "artifact.changed" && event.projectId === (project?.id ?? null))) load();
   });
-  const arrived = useArrivals(artifacts?.map((a) => a.id) ?? [], artifacts !== null);
+  return { place, project, artifacts, failure };
+}
 
+/** The Artifacts page: each place's Artifacts as its own section, the Project's before the Workspace's. */
+function ArtifactsPage({ workspace, project, shelves }: { workspace: Workspace; project: ProjectSummary | null; shelves: ArtifactsShelf[] }) {
   return (
     <div className="page">
       <PageHead
         crumbs={knowledgeCrumbs(workspace, project, "Artifacts")}
         title="Artifacts"
-        switcher={
-          <>
-            <LiveIndicator workspaceId={workspace.id} />
-            <ScopeSwitch workspace={workspace} project={project} kind="artifacts" />
-          </>
-        }
+        switcher={<LiveIndicator workspaceId={workspace.id} />}
       />
+      {shelves.map((shelf) => (
+        <ArtifactsSection key={shelf.place.id} shelf={shelf} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One place's Artifacts as a section: its heading, then a table of them, last changed first, or its empty state. It
+ * has no action, since Artifacts are created over the API and MCP.
+ */
+function ArtifactsSection({ shelf }: { shelf: ArtifactsShelf }) {
+  const to = useAddresses();
+  const { project, artifacts, failure } = shelf;
+  const arrived = useArrivals(artifacts?.map((a) => a.id) ?? [], artifacts !== null);
+  return (
+    <KnowledgeSection project={project}>
+      {project && <ProjectNote project={project} />}
       <FormError error={failure} />
       {artifacts &&
         (artifacts.length === 0 ? (
@@ -65,7 +87,7 @@ function ArtifactList({ workspace, project }: { workspace: Workspace; project: P
             Agents and Users create them over the API and MCP; one an Agent makes during a Run is linked to its Ticket.
           </EmptyState>
         ) : (
-          <section aria-label="Artifacts" className="panel panel-flush">
+          <div className="panel panel-flush">
             <table className="register artifact-list">
               <thead>
                 <tr>
@@ -91,22 +113,25 @@ function ArtifactList({ workspace, project }: { workspace: Workspace; project: P
                 ))}
               </tbody>
             </table>
-          </section>
+          </div>
         ))}
-    </div>
+    </KnowledgeSection>
   );
 }
 
-/** The Workspace's own Artifacts, separate from its Projects'. */
+/** The Workspace's own Artifacts, separate from its Projects': its section alone. */
 export function WorkspaceArtifacts({ workspace }: { workspace: Workspace }) {
   usePlace("artifacts");
-  return <ArtifactList workspace={workspace} project={null} />;
+  const own = useArtifacts(workspace, null);
+  return <ArtifactsPage workspace={workspace} project={null} shelves={[own]} />;
 }
 
-/** A Project's Artifacts. */
+/** A Project's Artifacts, then the Workspace's. */
 export function ProjectArtifacts({ workspace, project }: { workspace: Workspace; project: ProjectSummary }) {
   usePlace("artifacts", project.id);
-  return <ArtifactList workspace={workspace} project={project} />;
+  const own = useArtifacts(workspace, project);
+  const workspaces = useArtifacts(workspace, null);
+  return <ArtifactsPage workspace={workspace} project={project} shelves={[own, workspaces]} />;
 }
 
 /**
