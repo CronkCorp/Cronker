@@ -1,12 +1,13 @@
 name: Release
 
-# Publishes the `cronk-runner` daemon to npm whenever a Release of Cronk is published, at the same version.
+# Stages the `cronk-runner` daemon on npm whenever a Release of Cronk is published, at the same version. A maintainer
+# approves it with 2FA before anyone can install it (`docs/releasing.md`).
 on:
   release:
     types: [published]
 
 jobs:
-  publish-runner:
+  stage-runner:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,8 +29,10 @@ jobs:
             echo "::error::daemon/package.json is $version but the Release is $TAG: bump it as docs/releasing.md says."
             exit 1
           fi
-      - name: Publish cronk-runner
+      # `npm stage` needs npm 11.15 or later; Node 22 comes with npm 10.
+      - run: npm install -g npm@11.21.3
+      - name: Stage cronk-runner
         working-directory: daemon
-        run: npm publish --access public $([ "${{ github.event.release.prerelease }}" = "true" ] && echo "--tag next")
+        run: npm stage publish --access public $([ "${{ github.event.release.prerelease }}" = "true" ] && echo "--tag next")
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

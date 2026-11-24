@@ -11,7 +11,7 @@ How a new version of Cronk is cut. Installations upgrade by following **Upgradin
 
 ## Once: npm
 
-The daemon is published as `cronk-runner` on npm. Before the first release, create an npm automation token (or a granular token that may publish `cronk-runner`) and add it to the Repository's Actions secrets as `NPM_TOKEN`.
+The daemon is published as `cronk-runner` on npm. The Release workflow only stages each version; a maintainer of the package approves it with 2FA, so the token needs no way around 2FA. Create a granular access token with *Read and write* on `cronk-runner` and **Bypass two-factor authentication** off, and add it to the Repository's Actions secrets as `NPM_TOKEN`. In the package's settings on npm, set **Publishing access** to *Require two-factor authentication and disallow tokens*, so the token can stage but not publish.
 
 ## Checklist
 
@@ -25,6 +25,14 @@ The daemon is published as `cronk-runner` on npm. Before the first release, crea
    ```
 
    `--generate-notes` lists the pull requests merged since the previous tag, by their titles, so keep PR titles in the `feat:` / `fix:` / `docs:` form and written for people running Cronk.
-   Publishing the release runs `.github/workflows/release.yml`, which publishes the `cronk-runner` daemon to npm at the same version (a prerelease under the `next` dist-tag), and fails if `daemon/package.json` doesn't match the tag. Check its run on the Actions tab.
-4. **Edit the notes** on GitHub: put anything an installation must do by hand under an **Upgrade notes** heading at the top (new environment variables, GitHub App permissions or events to add, anything else the migrations can't do), and say "Nothing to do by hand" when there is none.
-5. **Upgrade your own installation** with `docs/setup.md`'s **Upgrading**, so every release has been through that path once before anyone else follows it.
+   Publishing the release runs `.github/workflows/release.yml`, which stages the `cronk-runner` daemon on npm at the same version (a prerelease under the `next` dist-tag), and fails if `daemon/package.json` doesn't match the tag. Check its run on the Actions tab.
+4. **Approve `cronk-runner` on npm.** Nobody can install the staged version until a maintainer approves it, under **Staged Packages** on npmjs.com or, with npm 11.15 or later and signed in:
+
+   ```sh
+   npm stage list cronk-runner
+   npm stage approve <stage-id>
+   ```
+
+   Both ways of approving ask for 2FA. npm may take a few minutes to serve the version; check with `npm view cronk-runner version`. To redo a staged version, `npm stage reject <stage-id>` it first.
+5. **Edit the notes** on GitHub: put anything an installation must do by hand under an **Upgrade notes** heading at the top (new environment variables, GitHub App permissions or events to add, anything else the migrations can't do), and say "Nothing to do by hand" when there is none.
+6. **Upgrade your own installation** with `docs/setup.md`'s **Upgrading**, so every release has been through that path once before anyone else follows it.
