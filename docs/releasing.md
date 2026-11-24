@@ -11,7 +11,12 @@ How a new version of Cronk is cut. Installations upgrade by following **Upgradin
 
 ## Once: npm
 
-The daemon is published as `cronk-runner` on npm. The Release workflow only stages each version; a maintainer of the package approves it with 2FA, so the token needs no way around 2FA. Create a granular access token with *Read and write* on `cronk-runner` and **Bypass two-factor authentication** off, and add it to the Repository's Actions secrets as `NPM_TOKEN`. In the package's settings on npm, set **Publishing access** to *Require two-factor authentication and disallow tokens*, so the token can stage but not publish.
+The daemon is published as `cronk-runner` on npm by trusted publishing, so there is no npm token. In the package's settings on npm, a maintainer:
+
+- adds a **trusted publisher** for GitHub Actions: organization `CronkCorp`, repository `Cronker`, workflow `release.yml`, no environment, allowed to run `npm stage publish` and not `npm publish`. npm drops a new trusted publisher whose first publish doesn't succeed within 2 days, so add it just before a release. Its fields can't be changed later; delete it and add another;
+- sets **Publishing access** to *Require two-factor authentication and disallow tokens*.
+
+The Release workflow only stages each version; a maintainer with 2FA approves it.
 
 ## Checklist
 
