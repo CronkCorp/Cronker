@@ -77,13 +77,21 @@ async function localSetUp({ limit = 2, runLimit = 1 }: { limit?: number; runLimi
   await writeFile(log, "");
 
   const printed: string[] = [];
+  const claudeConfig = join(home, "claude-config");
   const start = (mode: string, heartbeatMs?: number) => {
     daemon = runDaemon({
       configPath,
       print: (line) => printed.push(line),
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STAND_IN_CLAUDE_LOG: log, STAND_IN_CLAUDE_MODE: mode },
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        STAND_IN_CLAUDE_LOG: log,
+        STAND_IN_CLAUDE_MODE: mode,
+        CLAUDE_CONFIG_DIR: claudeConfig,
+      },
       scratchRoot: scratch,
       heartbeatMs,
+      transcriptMs: 50,
     });
     return daemon;
   };
@@ -101,7 +109,9 @@ async function localSetUp({ limit = 2, runLimit = 1 }: { limit?: number; runLimi
       .filter(Boolean)
       .map((line) => JSON.parse(line));
   const runState = (runId: string) => ok("GET", `/api/runs/${runId}`, ada);
-  return { ada, start, delegate, runs, runState, scratch, printed, configPath };
+  /** Lets a `wait-finish` stand-in go on to finish. */
+  const go = () => writeFile(`${log}.go`, "");
+  return { ada, start, delegate, runs, runState, scratch, printed, configPath, go };
 }
 
 describe("cronk-runner run", () => {
@@ -204,6 +214,27 @@ describe("cronk-runner run", () => {
     });
     expect(machine.limit).toBe(3);
     expect(machine.upgradeTo).toBeNull();
+  });
+  test("uploads the session's transcript as it goes and once more at the end, and reports Claude Code's cost as an estimate", async () => {
+    const { ada, start, delegate, runState, go } = await localSetUp();
+    start("wait-finish");
+    const { ticket, run } = await delegate("Show your work");
+
+    // While the stand-in still runs, its transcript so far is the Run's Transcript in Cronk.
+    const live = await eventually(async () => (await runState(run.id)).transcriptId as string | null);
+    expect(daemon!.held()).toEqual([run.id]);
+    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(1);
+
+    await go();
+    await eventually(async () => daemon!.held().length === 0);
+
+    const ended = await runState(run.id);
+    expect(ended).toEqual(
+      expect.objectContaining({ state: "finished", transcriptId: live, cost: { amount: 137, currency: "USD", estimate: true } }),
+    );
+    const transcript = await ok("GET", `/api/transcripts/${live}`, ada);
+    expect(transcript).toEqual(expect.objectContaining({ runId: run.id, entryCount: 2 }));
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).cost).toEqual([{ amount: 137, currency: "USD", estimate: true }]);
   });
 });
 

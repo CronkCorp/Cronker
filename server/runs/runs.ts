@@ -67,8 +67,9 @@ export const Run = Type.Object({
   sessionUrl: Type.Union([Type.String(), Type.Null()], { description: "Where to follow the Run, such as its claude.ai session." }),
   cost: Type.Union([Cost, Type.Null()], {
     description:
-      "What it cost, once it ended, where its Runner reports it: a Managed Agents session's cost at list prices. " +
-      "Null while it runs and for Runners that report none, such as a subscription.",
+      "What it cost, once it ended, where its Runner reports it: a Managed Agents session's cost at list prices, or, " +
+      "marked as an `estimate`, what Claude Code reported for a local Run. Null while it runs and for Runners that " +
+      "report none, such as a cloud subscription's.",
   }),
   transcriptId: Type.Union([Type.String({ format: "uuid" }), Type.Null()], {
     description: "Its Transcript, once one was uploaded for the session its Runner returned when starting it.",
@@ -100,7 +101,7 @@ const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
   case when runs.cost_amount is not null
-    then json_build_object('amount', runs.cost_amount, 'currency', runs.cost_currency) end as cost,
+    then json_build_object('amount', runs.cost_amount, 'currency', runs.cost_currency, 'estimate', runs.cost_estimate) end as cost,
   (select transcripts.id from transcripts where transcripts.run_id = runs.id and transcripts.deleted_at is null limit 1)
     as "transcriptId",
   (select ${slugColumn("transcript", "transcripts.id", "agents.name")} from transcripts
@@ -1144,12 +1145,12 @@ export function runReports(context: Context): RunReports {
           runnerId: string | null;
           ownerId: string | null;
         }>(
-          `update runs set cost_amount = $2, cost_currency = $3
+          `update runs set cost_amount = $2, cost_currency = $3, cost_estimate = $4
            from tickets where runs.id = $1 and runs.state <> 'running' and tickets.id = runs.ticket_id
-             and (runs.cost_amount, runs.cost_currency) is distinct from ($2, $3)
+             and (runs.cost_amount, runs.cost_currency, runs.cost_estimate) is distinct from ($2, $3, $4)
            returning runs.workspace_id as "workspaceId", tickets.project_id as "projectId", runs.ticket_id as "ticketId",
              runs.runner_id as "runnerId", (select owner_id from runners where runners.id = runs.runner_id) as "ownerId"`,
-          [runId, cost.amount, cost.currency],
+          [runId, cost.amount, cost.currency, cost.estimate ?? false],
         );
         for (const { workspaceId, projectId, ticketId, runnerId, ownerId } of rows) {
           context.live.publish(tx, workspaceId, { type: "ticket.changed", projectId, ticketId });

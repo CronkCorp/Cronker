@@ -90,6 +90,8 @@ const moves = async (ticketId: string, as: Request) =>
 describe("the upgrade", () => {
   test("a token stored as full before it is Write after it, acting exactly as before", async () => {
     cronk = await startCronk({ migrateBefore: "0079_token_levels.sql" });
+    // Reading a Ticket needs its Runs' costs, estimates apart.
+    await cronk.applyAhead("0084_cost_estimates.sql");
     const { workspace } = await setUp(cronk);
     const ada = { cookie: await signIn(cronk) };
     const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });

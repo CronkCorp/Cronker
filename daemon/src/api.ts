@@ -51,6 +51,27 @@ export function machineHeaders(token: string, limit: number): Record<string, str
   return { authorization: `Bearer ${token}`, "x-cronk-runner-version": daemonVersion, "x-cronk-runner-limit": String(limit) };
 }
 
+/** Uploads a file's text to Cronk as `contentType`, such as a transcript's JSONL, with the headers given. */
+export async function upload(
+  cronkUrl: string,
+  method: string,
+  path: string,
+  options: { body: string; contentType: string; headers: Record<string, string> },
+): Promise<void> {
+  const response = await fetch(`${cronkUrl}${path}`, {
+    method,
+    headers: { accept: "application/json", ...options.headers, "content-type": options.contentType },
+    body: options.body,
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (response.ok) {
+    await response.body?.cancel();
+    return;
+  }
+  const json = (await response.json().catch(() => ({}))) as { error?: { code: string; message: string } };
+  throw new CronkError(response.status, json.error?.code ?? "unknown", json.error?.message ?? `Cronk answered ${response.status}.`);
+}
+
 export async function call<T>(
   cronkUrl: string,
   method: string,
