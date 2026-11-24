@@ -15,5 +15,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["server", "test", "web", "e2e", "*.config.ts"]
+  "include": ["server", "daemon/src", "test", "web", "e2e", "*.config.ts"]
 }

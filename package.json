@@ -9,8 +9,9 @@
   "scripts": {
     "dev": "tsx watch server/main.ts",
     "dev:web": "vite",
-    "build": "npm run build:server && npm run build:web",
+    "build": "npm run build:server && npm run build:daemon && npm run build:web",
     "build:server": "tsc -p tsconfig.build.json",
+    "build:daemon": "tsc -p daemon/tsconfig.json",
     "build:web": "vite build",
     "start": "node dist/server/main.js",
     "command": "node dist/server/command.js",

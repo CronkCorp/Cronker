@@ -425,7 +425,7 @@ describe("Runners and Agents", () => {
 
     const unknown = await call("POST", "/api/runners", ada, { name: "Mystery", kind: "mystery" });
     expect(unknown.status).toBe(400);
-    expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has subscription, managed_agents, fake." });
+    expect(unknown.json.error).toEqual({ code: "unknown_runner_kind", message: "This Cronk has no Runner of the kind mystery; it has subscription, managed_agents, local, fake." });
 
     expect(await ok("GET", "/api/runners", ada)).toEqual([
       {

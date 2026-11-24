@@ -22,6 +22,7 @@ import type { RunnerKind } from "./runs/runner.js";
 import { checkForLostRuns, resumePausedRunners, runReports } from "./runs/runs.js";
 import { managedAgentsRunner, pollManagedAgentsSessions, rotateRepositoryTokens } from "./runs/managed-agents.js";
 import { subscriptionRunner } from "./runs/subscription.js";
+import { localRunner } from "./runs/local.js";
 import { InboxNotifier } from "./webhooks/notifier.js";
 import { deliverWebhooks } from "./webhooks/webhooks.js";
 
@@ -29,7 +30,7 @@ export interface CronkOptions {
   config: Config;
   clock?: Clock;
   logStream?: Writable;
-  /** Further kinds of Runner Users may set up, by name, beside the built-in `subscription`. */
+  /** Further kinds of Runner Users may set up, by name, beside the built-in `subscription`, `managed_agents` and `local`. */
   runnerKinds?: Record<string, RunnerKind>;
   /** Stops migrating short of this migration and those after it; only a test of that migration sets it. */
   migrateBefore?: string;
@@ -96,6 +97,7 @@ export async function createCronk({
     const reports = runReports(context);
     context.runners.subscription = subscriptionRunner(context);
     context.runners.managed_agents = managedAgentsRunner(context, reports);
+    context.runners.local = localRunner();
     for (const [kind, build] of Object.entries(runnerKinds)) context.runners[kind] = build(reports);
     const app = await buildApp(context, { logStream });
     log = app.log;

@@ -237,8 +237,12 @@ _Avoid_: Principal, author
 ### Runs
 
 **Runner**:
-A way for Cronk to start Runs, set up by a User with their own credentials: their Claude subscription, the Claude API (Managed Agents), or later a sandbox provider. Each has its own limit on Runs at once; Tickets beyond it wait, highest Priority first.
+A way for Cronk to start Runs, set up by a User with their own credentials: their Claude subscription (`subscription`), the Claude API (Managed Agents, `managed_agents`), their own Machines (`local`), or later a sandbox provider. Each has its own limit on Runs at once; Tickets beyond it wait, highest Priority first. A `local` Runner isn't a cloud Runner: its Runs run on a Machine serving it, which claims them (ADR 0014).
 _Avoid_: Provider, backend, executor
+
+**Machine**:
+A computer of a User's paired with a Cronk installation, running the `cronk-runner` daemon, which serves some of that User's `local` Runners. The User pairs it by approving the code `cronk-runner login` shows on the Runners page; it then holds a Machine token, which unpairing revokes. A Machine serves only its own User's Runners.
+_Avoid_: Host, device, worker, node
 
 **Runner setup**:
 A one-time, short-lived handoff in which a User's own Claude Code creates a Project's claude.ai routines for their subscription Runner, one per model label its board uses, and reports their trigger ids back to Cronk. Each becomes the Project's trigger for its label, waiting for the token the User pastes. Cronk never holds a claude.ai credential.
