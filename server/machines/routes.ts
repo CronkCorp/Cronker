@@ -301,8 +301,9 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Machines"],
           summary: "Report that a claimed Run's process ended, as a Machine's daemon",
           description:
-            "A Run whose agent didn't call `finish` fails with the reason given. A Run that ended already, as `finish` " +
-            "ends it, is left as it is. A `costUsd` given is recorded as the Run's cost, marked as an estimate.",
+            "A Run whose agent didn't call `finish` fails with the reason given, naming any `deniedTools` as outside its " +
+            "Runner's allowlist. A Run that ended already, as `finish` ends it, is left as it is. A `costUsd` given is " +
+            "recorded as the Run's cost, marked as an estimate.",
           security: [{ machineToken: [] }],
           params: runParams,
           body: LocalRunEnd,

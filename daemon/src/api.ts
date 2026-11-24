@@ -30,6 +30,8 @@ export interface ClaimedRun {
   modelId: string;
   token: string;
   mcpUrl: string;
+  /** The Runner's allowlist: Claude Code permission rules for the tools the Run may use without asking. */
+  allowedTools: string[];
 }
 
 /** A refusal from Cronk, with its error code. */

@@ -511,9 +511,11 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0079_token_levels.sql");
     // And its Runs' costs, estimates apart.
     await cronk.applyAhead("0084_cost_estimates.sql");
+    // And a Runner's allowlist.
+    await cronk.applyAhead("0085_runner_allowlists.sql");
     // Reading whether a `local` Runner is offline needs its Machines' connections.
     await cronk.applyAhead("0082_machines.sql");
-    await cronk.applyAhead("0085_machine_connections.sql");
+    await cronk.applyAhead("0086_machine_connections.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });
