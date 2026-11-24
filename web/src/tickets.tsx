@@ -500,7 +500,8 @@ function Fields({
         selected={[ticket.statusId]}
         // An Unverified Ticket leaves its Done Status only by Accept or Reopen.
         disabled={readOnly || ticket.verification === "unverified"}
-        title={ticket.verification === "unverified" ? "Accept or Reopen it to move it" : undefined}
+        // The full name, which a long one only shows here, ellipsised in the pill.
+        title={ticket.verification === "unverified" ? "Accept or Reopen it to move it" : status?.name}
         onPick={(statusId) => statusId !== ticket.statusId && void onSave({ statusId })}
       />
       <FieldPicker

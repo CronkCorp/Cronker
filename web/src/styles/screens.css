@@ -658,6 +658,7 @@
 .field-row-value .picker-trigger {
   width: auto;
   flex: 1;
+  min-width: 0;
 }
 .field-inline {
   min-height: 28px !important;
