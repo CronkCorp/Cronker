@@ -244,8 +244,8 @@ export const Ticket = Type.Object({
   knowledge: TicketKnowledge,
   cost: Type.Array(Cost, {
     description:
-      "What its Runs cost in all, one total per currency, counting the Runs whose Runner reported a cost; empty when " +
-      "none did, as for subscription Runs.",
+      "What its Runs cost in all, one total per currency, real costs apart from estimates (`estimate`, as local Runs " +
+      "report), counting the Runs whose Runner reported a cost; empty when none did, as for cloud subscription Runs.",
   }),
 });
 export type Ticket = Static<typeof Ticket>;

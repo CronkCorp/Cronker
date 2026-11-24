@@ -75,3 +75,38 @@ test("a local Runner's allowed tools are edited on its card, kept on reload and 
   await card.getByRole("button", { name: "Reset to default" }).click();
   await expect(rules).toHaveValue(/^Bash\(git:\*\)\nBash\(npm:\*\)\n/);
 });
+
+test("a local Run's cost shows as an estimate on its Ticket and its Runner's card", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  await signInInBrowser(page, cronk);
+  const cookie = (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
+  const call = async (method: string, path: string, body?: unknown, token?: string) => {
+    const response = await cronk.request(method, path, { cookie, body, headers: token ? { authorization: `Bearer ${token}` } : {} });
+    expect(response.status, `${method} ${path}`).toBeLessThan(300);
+    return response.status === 204 ? null : response.json();
+  };
+  const runner = await call("POST", "/api/runners", { name: "Laptop", kind: "local" });
+  const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "laptop" });
+  await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Make it so" });
+  // The daemon pairs, as `cronk-runner login` does.
+  const started = await call("POST", "/api/machines/pairings", { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" });
+  await call("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
+  const { machineToken } = await call("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode });
+  await call("PATCH", `/api/tickets/${ticket.id}`, {
+    delegateId: agent.id,
+    statusId: project.statuses.find((s: { name: string }) => s.name === "Triage").id,
+  });
+  const [run] = await call("GET", `/api/tickets/${ticket.id}/runs`);
+  // It claims the Run, and its `claude` exits reporting what Claude Code estimated the session cost.
+  await call("POST", `/api/machine/runs/${run.id}/claim`, undefined, machineToken);
+  await call("POST", `/api/machine/runs/${run.id}/end`, { reason: "claude exited with code 1", costUsd: 1.37 }, machineToken);
+
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  await expect(page.locator(".field-row").filter({ hasText: "Cost" })).toContainText("≈ $1.37 estimated");
+  await expect(page.getByRole("region", { name: "Timeline" })).toContainText("≈ $1.37 estimated");
+
+  await page.goto(`${cronk.url}/runners`);
+  await expect(page.getByRole("region", { name: "Laptop" }).locator(".runner-cost")).toHaveText("≈ $1.37 estimated this month");
+});

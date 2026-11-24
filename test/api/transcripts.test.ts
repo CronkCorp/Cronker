@@ -509,8 +509,10 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0078_backports.sql");
     // And a Write token.
     await cronk.applyAhead("0079_token_levels.sql");
+    // And its Runs' costs, estimates apart.
+    await cronk.applyAhead("0084_cost_estimates.sql");
     // And a Runner's allowlist.
-    await cronk.applyAhead("0084_runner_allowlists.sql");
+    await cronk.applyAhead("0085_runner_allowlists.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

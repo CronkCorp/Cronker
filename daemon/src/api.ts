@@ -43,6 +43,22 @@ export class CronkError extends Error {
   }
 }
 
+/** Uploads a file's text to Cronk as `contentType`, such as a transcript's JSONL, with the token given. */
+export async function upload(cronkUrl: string, method: string, path: string, options: { body: string; contentType: string; token: string }): Promise<void> {
+  const response = await fetch(`${cronkUrl}${path}`, {
+    method,
+    headers: { accept: "application/json", "content-type": options.contentType, authorization: `Bearer ${options.token}` },
+    body: options.body,
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (response.ok) {
+    await response.body?.cancel();
+    return;
+  }
+  const json = (await response.json().catch(() => ({}))) as { error?: { code: string; message: string } };
+  throw new CronkError(response.status, json.error?.code ?? "unknown", json.error?.message ?? `Cronk answered ${response.status}.`);
+}
+
 export async function call<T>(cronkUrl: string, method: string, path: string, options: { body?: unknown; token?: string } = {}): Promise<T> {
   const headers: Record<string, string> = { accept: "application/json" };
   if (options.body !== undefined) headers["content-type"] = "application/json";
