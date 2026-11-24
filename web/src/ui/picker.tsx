@@ -184,7 +184,7 @@ export function FieldPicker({
   /** The current value as shown on the field. */
   value: ReactNode;
   disabled?: boolean;
-  /** Why the field can't be changed, when disabled. */
+  /** The button's tooltip: why the field can't be changed, when disabled, or else the full value. */
   title?: string;
   /** Shown before the value, outside the button, such as a link to what is picked. */
   before?: ReactNode;

@@ -1,6 +1,7 @@
+import { setUp, signIn } from "../test/harness/flows.js";
 import type { Page } from "@playwright/test";
 import type { StartedCronk } from "../test/harness/start-cronk.js";
-import { expect, fieldPicker, newTicket, openProjectSettings, pick, pickFilter, placeCommentButton, test } from "./fixtures.js";
+import { expect, fieldPicker, newTicket, openProjectSettings, pick, pickFilter, placeCommentButton, signInInBrowser, test } from "./fixtures.js";
 
 async function signedInWithProject(page: Page, cronk: StartedCronk) {
   const setup = await cronk.request("POST", "/api/setup", {
@@ -142,3 +143,40 @@ test("create Tickets, drag one across the board, edit it, comment, follow a key 
   await expect(page.getByRole("alert")).toContainText("Ready holds 1 Ticket");
   await expect(page.getByLabel("Name of Ready")).toBeVisible();
 });
+
+for (const { width, height } of [
+  { width: 1280, height: 800 },
+  { width: 390, height: 844 },
+]) {
+  test(`a long Status name stays inside the Ticket's Details column, with its model label, at ${width}px`, async ({ page, cronk }) => {
+    await page.setViewportSize({ width, height });
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    const call = async (method: string, path: string, body?: unknown) => (await cronk.request(method, path, { cookie, body })).json();
+    const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+    // Triage has a Step, so its pill carries the Step's model label too.
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage");
+    const long = "Averyveryveryveryveryveryverylongstatusnamewithnospacesatall";
+    await call("PATCH", `/api/projects/${project.id}/statuses/${triage.id}`, { name: long });
+    const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Long Status" });
+    await call("PATCH", `/api/tickets/${ticket.id}`, { statusId: triage.id });
+
+    await signInInBrowser(page, cronk);
+    await page.getByRole("navigation", { name: "Sidebar" }).getByRole("link", { name: "Tickets" }).click();
+    await page.getByRole("link", { name: /CRONK-1 Long Status/ }).click();
+    await expect(page.getByRole("heading", { name: "CRONK-1 Long Status" })).toBeVisible();
+
+    const status = fieldPicker(page, "Status");
+    await expect(status).toHaveAttribute("title", long);
+    await expect(status.locator(".model-label")).toHaveText("haiku");
+
+    // Neither the Details column nor the page scrolls sideways: the name ends in an ellipsis instead.
+    const details = page.getByRole("complementary", { name: "Details" });
+    expect(await details.evaluate((e) => e.scrollWidth - e.clientWidth)).toBe(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
+    expect(await status.locator(".status-pill-name").evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
+    const fields = (await page.getByRole("region", { name: "Fields" }).boundingBox())!;
+    const label = (await status.locator(".model-label").boundingBox())!;
+    expect(label.x + label.width).toBeLessThanOrEqual(fields.x + fields.width);
+  });
+}

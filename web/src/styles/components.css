@@ -432,6 +432,18 @@ textarea.markdown-source {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.status-pill > .status-dot,
+.status-pill > .model-label {
+  flex-shrink: 0;
+}
+.status-pill-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .model-label {
   padding: 0 5px;

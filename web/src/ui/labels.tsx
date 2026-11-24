@@ -24,12 +24,12 @@ export function StatusDot({ kind, name, alone = false }: { kind: StatusKind; nam
   );
 }
 
-/** A Status: its kind's dot and its name, with its Step's model label when it has one. */
+/** A Status: its kind's dot and its name, with its Step's model label when it has one. A name too long for its place ends in an ellipsis; the label always shows. */
 export function StatusPill({ kind, name, model }: { kind: StatusKind; name: string; model?: string | null }) {
   return (
     <span className="status-pill">
       <StatusDot kind={kind} />
-      <span>{name}</span>
+      <span className="status-pill-name">{name}</span>
       {model && <span className="model-label">{model}</span>}
     </span>
   );
