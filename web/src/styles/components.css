@@ -327,26 +327,6 @@ textarea.markdown-source {
   font-weight: 600;
 }
 
-/* Scope dropdown of a knowledge page's head: one line, its name cut short rather than wrapping. */
-.scope-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  max-width: 320px;
-}
-.scope-switch-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scope-switch-caret {
-  flex: none;
-  color: var(--muted);
-  font-size: 11px;
-}
-
 /* Avatars and Actors */
 .avatar {
   display: inline-flex;

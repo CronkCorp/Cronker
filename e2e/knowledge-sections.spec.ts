@@ -280,3 +280,44 @@ test("Decisions: with Read in the Project, its register offers no New Decision, 
   await expect(workspaces.getByRole("button", { name: "New Decision" })).toBeVisible();
   await expect(workspaces.getByRole("button", { name: "Accept" })).toHaveCount(1);
 });
+
+test("Artifacts: a Project's page shows its Artifacts, then the Workspace's, each section with its own empty state", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  const post = async (path: string, body: unknown) => {
+    const response = await cronk.request("POST", path, { cookie, body });
+    expect(response.status).toBe(201);
+    return (await response.json()) as { id: string };
+  };
+  const artifact = (title: string) => ({ title, files: [{ path: "index.html", contentBase64: Buffer.from(`<h1>${title}</h1>`).toString("base64") }] });
+  const project = await post(`/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const empty = await post(`/api/workspaces/${workspace.id}/projects`, { name: "Docs", key: "DOCS" });
+  await post(`/api/projects/${project.id}/artifacts`, artifact("Board prototype"));
+  await post(`/api/workspaces/${workspace.id}/artifacts`, artifact("Brand sheet"));
+  await signInInBrowser(page, cronk);
+
+  await page.goto(`${cronk.url}/projects/${project.id}/artifacts`);
+  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
+  const projectSection = page.getByRole("region", { name: "CRONK Cronker" });
+  const workspaceSection = page.getByRole("region", { name: "Workspace", exact: true });
+  await expect(page.getByRole("main").getByRole("heading", { level: 2 })).toHaveText(["CRONK Cronker", "Workspace"]);
+  await expect(projectSection.getByRole("link", { name: "Board prototype" })).toBeVisible();
+  await expect(projectSection.getByRole("link", { name: "Brand sheet" })).toHaveCount(0);
+  await expect(workspaceSection.getByRole("link", { name: "Brand sheet" })).toBeVisible();
+  await expect(workspaceSection.getByRole("link", { name: "Board prototype" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Scope:/ })).toHaveCount(0);
+
+  // A Project with no Artifacts says so in its own section; the Workspace's still lists its own.
+  await page.goto(`${cronk.url}/projects/${empty.id}/artifacts`);
+  const emptySection = page.getByRole("region", { name: "DOCS Docs" });
+  await expect(emptySection.getByText("No Artifacts yet.")).toBeVisible();
+  await expect(workspaceSection.getByText("No Artifacts yet.")).toHaveCount(0);
+  await expect(workspaceSection.getByRole("link", { name: "Brand sheet" })).toBeVisible();
+
+  // The Workspace's own page shows only its section.
+  await page.goto(`${cronk.url}/workspaces/${workspace.id}/artifacts`);
+  await expect(page.getByRole("heading", { name: "Artifacts", level: 1 })).toBeVisible();
+  await expect(workspaceSection.getByRole("link", { name: "Brand sheet" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("heading", { level: 2 })).toHaveText(["Workspace"]);
+  await expect(page.getByRole("region", { name: "CRONK Cronker" })).toHaveCount(0);
+});
