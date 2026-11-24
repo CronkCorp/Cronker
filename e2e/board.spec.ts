@@ -29,52 +29,82 @@ test("dragging a card to the board's right or left edge scrolls it, so the card 
   page,
   cronk,
 }) => {
+  // Two edge-scrolled drags, each retried below, outlast the default timeout on a loaded CI runner (CRONK-146).
+  test.slow();
   const { call, project, open } = await crowdedBoard(page, cronk);
   await call("POST", `/api/projects/${project.id}/tickets`, { title: "Ship it" });
   const { board, lane } = await open();
-  const card = lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ });
+  const shipIt = (name: string) => lane(name).getByRole("link", { name: /CRONK-1 Ship it/ });
+  const anywhere = board.getByRole("link", { name: /CRONK-1 Ship it/ });
+  const scrollLeft = () => board.evaluate((e) => e.scrollLeft);
+  const frames = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
   // Staging, the last open column, starts past the board's right edge.
   const edge = (await board.boundingBox())!;
   expect((await lane("Staging").boundingBox())!.x, "Staging starts off screen").toBeGreaterThan(edge.x + edge.width);
-
-  // Pick the card up and hold it at the board's right edge until Staging comes into view, then drop it there.
-  const from = (await card.boundingBox())!;
-  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
-  await page.mouse.down();
   const y = edge.y + 60;
-  await page.mouse.move(edge.x + edge.width / 2, y, { steps: 5 });
-  expect(await board.evaluate((e) => e.scrollLeft), "the board has not scrolled before the card reaches its edge").toBe(0);
-  await expect(async () => {
-    await page.mouse.move(edge.x + edge.width - 8, y);
-    await page.mouse.move(edge.x + edge.width - 4, y);
+
+  /**
+   * Picks the card up, holds it at the board's edge (`at`) until `inView` holds, then drops it at the middle of
+   * `column`. The board keeps scrolling for a while after the last dragover (edgeHold in projects.tsx), so before
+   * measuring the column the card is moved back to the board's middle, out of the edge zone, and the board left to
+   * settle: measured while it still scrolled, the column shifted under the pointer on a slow WebKit runner and the
+   * card landed on its neighbour (CRONK-146). Retried, as the board's other drags are (CRONK-128): each attempt picks
+   * the card up afresh wherever it is, and stops at once if an earlier attempt's drop has landed after all.
+   */
+  const edgeDrag = async (at: number, inView: () => Promise<void>, column: string) => {
+    await expect(async () => {
+      if (await shipIt(column).isVisible()) return;
+      await anywhere.scrollIntoViewIfNeeded({ timeout: 3_000 });
+      let from = await anywhere.boundingBox({ timeout: 3_000 });
+      await expect(async () => {
+        const before = from;
+        await frames();
+        from = await anywhere.boundingBox({ timeout: 3_000 });
+        expect(from, "the card has settled").toEqual(before);
+      }).toPass({ timeout: 5_000 });
+      await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+      await page.mouse.down();
+      try {
+        const scrolled = await scrollLeft();
+        await page.mouse.move(edge.x + edge.width / 2, y, { steps: 5 });
+        expect(await scrollLeft(), "the board has not scrolled before the card reaches its edge").toBe(scrolled);
+        await expect(async () => {
+          await page.mouse.move(at + Math.sign(edge.x + edge.width / 2 - at) * 8, y);
+          await page.mouse.move(at, y);
+          await inView();
+        }).toPass({ timeout: 10_000 });
+        // Out of the edge zone, the board stops scrolling: wait until it has, across a few frames.
+        await page.mouse.move(edge.x + edge.width / 2, y, { steps: 2 });
+        await expect(async () => {
+          const before = await scrollLeft();
+          await frames();
+          await frames();
+          expect(await scrollLeft(), "the board has stopped scrolling").toBe(before);
+        }).toPass({ timeout: 5_000 });
+        await inView();
+        const to = (await lane(column).boundingBox())!;
+        await page.mouse.move(to.x + to.width / 2, to.y + 80, { steps: 5 });
+      } finally {
+        await page.mouse.up();
+      }
+      await expect(shipIt(column), `the card dropped on ${column} is there`).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 60_000 });
+  };
+
+  // Held at the board's right edge, it scrolls until Staging comes into view, and the card drops there.
+  await edgeDrag(edge.x + edge.width - 4, async () => {
     const staging = (await lane("Staging").boundingBox())!;
     expect(staging.x + staging.width).toBeLessThanOrEqual(edge.x + edge.width);
-  }).toPass({ timeout: 10_000 });
-  const staging = (await lane("Staging").boundingBox())!;
-  await page.mouse.move(staging.x + staging.width / 2, staging.y + 80, { steps: 5 });
-  await page.mouse.up();
-
-  await expect(lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeVisible();
-  await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeHidden();
+  }, "Staging");
+  await expect(shipIt("Backlog")).toBeHidden();
   expect(await page.evaluate(() => window.scrollX)).toBe(0);
 
   // And back: held at the board's left edge, it scrolls back until Backlog is in view.
-  const moved = (await lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ }).boundingBox())!;
-  await page.mouse.move(moved.x + moved.width / 2, moved.y + moved.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(edge.x + edge.width / 2, y, { steps: 5 });
-  await expect(async () => {
-    await page.mouse.move(edge.x + 8, y);
-    await page.mouse.move(edge.x + 4, y);
+  await edgeDrag(edge.x + 4, async () => {
     expect((await lane("Backlog").boundingBox())!.x).toBeGreaterThanOrEqual(edge.x);
-  }).toPass({ timeout: 10_000 });
-  const backlog = (await lane("Backlog").boundingBox())!;
-  await page.mouse.move(backlog.x + backlog.width / 2, backlog.y + 80, { steps: 5 });
-  await page.mouse.up();
-
-  await expect(lane("Backlog").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeVisible();
-  await expect(lane("Staging").getByRole("link", { name: /CRONK-1 Ship it/ })).toBeHidden();
+  }, "Backlog");
+  await expect(shipIt("Staging")).toBeHidden();
 });
 
 /**
