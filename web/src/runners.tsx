@@ -3,6 +3,7 @@ import {
   api,
   type Agent,
   type AgentToken,
+  type Machine,
   type ProjectSummary,
   type Runner,
   type StartedSetup,
@@ -14,7 +15,7 @@ import { costsText } from "./costs.js";
 import { field, useSubmit } from "./forms.js";
 import { usePlace } from "./frame.js";
 import { useLatest, useRunnerEvents } from "./live.js";
-import { Actions, Banner, Button, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
+import { Actions, Banner, Button, Check, clockTime, CopyButton, dayShown, EmptyState, Field, FormError, PageHead, Panel, RelativeTime, RunnersLiveIndicator, Saved, ShownOnce } from "./ui/controls.js";
 import { ConfirmDialog, Dialog, DialogActions, DialogClose, Menu, MenuItem } from "./ui/overlays.js";
 import { Chip, ModelLabel } from "./ui/labels.js";
 
@@ -58,7 +59,7 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
     setRunners((all) => all?.map((r) => (r.id === updated.id ? updated : r)) ?? null);
   const drop = (removed: Runner) => setRunners((all) => all?.filter((r) => r.id !== removed.id) ?? null);
 
-  const [kind, setKind] = useState<"subscription" | "managed_agents">("subscription");
+  const [kind, setKind] = useState<"subscription" | "managed_agents" | "local">("subscription");
   const create = useSubmit(async (form, element) => {
     await api.createRunner(
       kind === "managed_agents"
@@ -79,7 +80,9 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
         implement on Opus) with an API trigger, and its prompt telling Claude to follow the instructions in the fire
         payload. Then save each task's trigger id and token here, and point your Agents at the Runner.
         A Managed Agents Runner spends your Claude API credits instead: paste an Anthropic API key, and Cronk creates
-        the agent and cloud environment its Runs use in your Anthropic workspace.
+        the agent and cloud environment its Runs use in your Anthropic workspace. A local Runner runs Runs on your own
+        computer, a Machine you pair with Cronk through the <code>cronk-runner</code> daemon, so it also takes
+        Tickets labelled <code>local-only</code>.
       </p>
       <FormError error={error} />
       {runners === null ? (
@@ -104,12 +107,18 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
         <form onSubmit={create.onSubmit}>
           <div className="form-row">
             <Field label="Runner name">
-              <input name="name" required autoComplete="off" placeholder={kind === "managed_agents" ? "Claude API" : "Claude Max"} />
+              <input
+                name="name"
+                required
+                autoComplete="off"
+                placeholder={kind === "managed_agents" ? "Claude API" : kind === "local" ? "My laptop" : "Claude Max"}
+              />
             </Field>
             <Field label="Kind">
               <select name="kind" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
                 <option value="subscription">Subscription (Claude Code on the web)</option>
                 <option value="managed_agents">Managed Agents (Claude API)</option>
+                <option value="local">Local (your own Machine)</option>
               </select>
             </Field>
           </div>
@@ -124,11 +133,16 @@ export function RunnersScreen({ workspaces }: { workspaces: WorkspaceSummary[] }
           <FormError error={create.error} />
           <Actions>
             <Button type="submit" variant="primary" disabled={create.busy}>
-              {kind === "managed_agents" ? "Set up a Managed Agents Runner" : "Set up a subscription Runner"}
+              {kind === "managed_agents"
+                ? "Set up a Managed Agents Runner"
+                : kind === "local"
+                  ? "Set up a local Runner"
+                  : "Set up a subscription Runner"}
             </Button>
           </Actions>
         </form>
       </Panel>
+      <Machines localRunners={(runners ?? []).filter((r) => r.kind === "local")} />
     </div>
   );
 }
@@ -238,6 +252,7 @@ function RunnerSettings({
         {agentsError ?? (agents === null ? "Finding the Agents that use it…" : agentsLeft(agents))}{" "}
         {triggersGoing(runner.triggers)}
         {runner.kind === "managed_agents" && runner.running > 0 && " Its running Runs stop, and their sessions are archived."}
+        {runner.kind === "local" && " Its running Runs stop, and the Machines serving it no longer serve it."}
       </ConfirmDialog>
       {pausedUntil && (
         <Banner tone="warn" label="Paused">
@@ -780,4 +795,118 @@ function triggersGoing(triggers: Trigger[]): string {
 /** Names in a sentence: "a", "a and b", "a, b and c". */
 function listed(names: string[]): string {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The User's paired Machines, each with its name, OS, daemon version, last contact and the `local` Runners it
+ * serves, with unpairing; and the form approving a pairing code `cronk-runner login` shows, onto the Runners picked.
+ */
+function Machines({ localRunners }: { localRunners: Runner[] }) {
+  const [machines, setMachines] = useState<Machine[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [unpairing, setUnpairing] = useState<Machine | null>(null);
+  const [approved, setApproved] = useState<Machine | null>(null);
+  const refresh = useCallback(() => {
+    api.machines().then(setMachines, (e: Error) => setError(e.message));
+  }, []);
+  useEffect(refresh, [refresh]);
+  const approve = useSubmit(async (form, element) => {
+    setApproved(null);
+    const machine = await api.approvePairing({ userCode: field(form, "userCode"), runnerIds: form.getAll("runnerId").map(String) });
+    element.reset();
+    setApproved(machine);
+    refresh();
+  });
+
+  return (
+    <Panel
+      title="Machines"
+      id="machines"
+      description={
+        <>
+          Your own computers paired with Cronk to run your local Runners' Runs. Install the daemon with{" "}
+          <code>npm install -g cronk-runner</code>, then run <code>cronk-runner login {location.origin}</code> and
+          approve the code it shows here.
+        </>
+      }
+    >
+      <FormError error={error} />
+      {machines === null ? (
+        <p className="muted">Loading…</p>
+      ) : machines.length === 0 ? (
+        <p className="muted small">No Machines paired yet.</p>
+      ) : (
+        <table className="machines">
+          <thead>
+            <tr>
+              <th>Machine</th>
+              <th>Daemon</th>
+              <th>Serves</th>
+              <th>Last contact</th>
+              <th>
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {machines.map((machine) => (
+              <tr key={machine.id}>
+                <td>
+                  {machine.name} <span className="muted small">{machine.os}</span>
+                </td>
+                <td className="mono">{machine.daemonVersion}</td>
+                <td>{machine.runners.length ? machine.runners.map((r) => r.name).join(", ") : <span className="muted">No Runners</span>}</td>
+                <td>{machine.lastContactAt ? <RelativeTime at={machine.lastContactAt} /> : <span className="muted">Never</span>}</td>
+                <td className="cell-actions">
+                  <div>
+                    <Button variant="ghost" size="small" onClick={() => setUnpairing(machine)}>
+                      Unpair
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <ConfirmDialog
+        open={unpairing !== null}
+        onOpenChange={(open) => !open && setUnpairing(null)}
+        title={`Unpair ${unpairing?.name ?? "the Machine"}?`}
+        confirm="Unpair"
+        onConfirm={async () => {
+          if (unpairing) await api.unpairMachine(unpairing.id);
+          setUnpairing(null);
+          refresh();
+        }}
+      >
+        Its token is revoked, so its daemon can no longer reach Cronk. Pair it again with <code>cronk-runner login</code>.
+      </ConfirmDialog>
+      <form onSubmit={approve.onSubmit} className="machine-approve">
+        <h3>Approve a pairing code</h3>
+        {localRunners.length === 0 ? (
+          <p className="muted small">Set up a local Runner first: a Machine serves your local Runners.</p>
+        ) : (
+          <>
+            <Field label="Code" hint="As `cronk-runner login` shows it. It works for ten minutes.">
+              <input name="userCode" required autoComplete="off" className="mono" placeholder="BCDF-GHJK" />
+            </Field>
+            <fieldset className="machine-runners">
+              <legend className="field-label">Runners it serves</legend>
+              {localRunners.map((runner, index) => (
+                <Check key={runner.id} name="runnerId" value={runner.id} label={runner.name} defaultChecked={index === 0} />
+              ))}
+            </fieldset>
+            <FormError error={approve.error} />
+            {approved && <p role="status">Paired {approved.name}. Its daemon receives its token on its next poll.</p>}
+            <Actions>
+              <Button type="submit" variant="primary" disabled={approve.busy}>
+                Approve
+              </Button>
+            </Actions>
+          </>
+        )}
+      </form>
+    </Panel>
+  );
 }

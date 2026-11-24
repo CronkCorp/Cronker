@@ -54,6 +54,7 @@ import type { Brief } from "../../server/runs/brief.js";
 import type { Cost } from "../../server/runs/costs.js";
 import type { RoutinePlan, StartedSetup } from "../../server/runs/runner-setups.js";
 import type { RunnerRecord as Runner, Trigger } from "../../server/runs/runners.js";
+import type { Machine, PairingApproval } from "../../server/machines/machines.js";
 import type { Run } from "../../server/runs/runs.js";
 import type { RunState } from "../../server/runs/states.js";
 import type { SearchKind, SearchResult } from "../../server/search/search.js";
@@ -115,7 +116,7 @@ export type { ProjectCreate, ProjectEdit, StatusAdd, StatusEdit, StepPut, SetupI
 export type { DecisionCreate, DecisionEdit, DocumentCreate, DocumentEdit, TermCreate, TermEdit };
 export type { AgentAccess, Link, LinkDetails, Member, PendingAdd, User, Workspace, WorkspaceSettings, WorkspaceSummary };
 export type { LabelRule, ListedUser, Outcome, Project, ProjectAccess, ProjectSummary, Status, StatusKind, Step, StepKind, Visibility };
-export type { Agent, AgentRecord, AgentToken, RecordEntry, Brief, RoutinePlan, Run, Runner, StartedSetup, TokenAccess, Trigger };
+export type { Agent, AgentRecord, AgentToken, RecordEntry, Brief, RoutinePlan, Run, Machine, Runner, StartedSetup, TokenAccess, Trigger };
 export type { TicketTranscript, Transcript, TranscriptEntry, TranscriptHook };
 export type { Actor, Attachment, AttachmentOwner };
 export type { ComparedLine, Comparison, Document, DocumentSummary, LinkedDocument, ReportRef, Version, VersionWithBody };
@@ -368,6 +369,9 @@ export const api = {
   setRunnerLimit: (id: string, limit: number) => call<Runner>("PATCH", runner(id), { limit } satisfies RunnerEdit),
   setBudgetPerRun: (id: string, budgetPerRun: Exclude<RunnerEdit["budgetPerRun"], undefined>) => call<Runner>("PATCH", runner(id), { budgetPerRun } satisfies RunnerEdit),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
+  machines: () => call<Machine[]>("GET", "/api/machines"),
+  approvePairing: (input: PairingApproval) => call<Machine>("POST", "/api/machines/pairings/approve", input),
+  unpairMachine: (id: string) => call<void>("DELETE", `/api/machines/${encodeURIComponent(id)}`),
   saveWebhookSecret: (id: string, secret: string) => call<Runner>("PUT", `${runner(id)}/webhook-secret`, { secret } satisfies WebhookSecret),
   forgetWebhookSecret: (id: string) => call<Runner>("DELETE", `${runner(id)}/webhook-secret`),
   saveTrigger: (runnerId: string, input: TriggerSave) =>

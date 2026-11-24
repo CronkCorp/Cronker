@@ -18,6 +18,7 @@ import { agentRights } from "./agents/rights.js";
 import { namedInCall, refuseStoppedRunCalls, reviveLostRunCalls } from "./runs/calls.js";
 import { runRoutes } from "./runs/routes.js";
 import { noteRunCall } from "./runs/runs.js";
+import { machineRoutes } from "./machines/routes.js";
 import { mcpRoutes } from "./mcp/routes.js";
 import { oauthRoutes } from "./oauth/routes.js";
 import { githubRoutes } from "./github/routes.js";
@@ -113,6 +114,11 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
             description:
               `An Agent's token. ${agentRights}`,
           },
+          machineToken: {
+            type: "http",
+            scheme: "bearer",
+            description: "A Machine token, which a Machine's `cronk-runner` daemon receives once its User approves its pairing.",
+          },
         },
       },
       security: [{ signIn: [] }, { agentToken: [] }],
@@ -143,6 +149,7 @@ export async function buildApp(context: Context, { logStream }: AppOptions = {})
   await app.register(inboxRoutes(context));
   await app.register(webhookRoutes(context));
   await app.register(agentRoutes(context));
+  await app.register(machineRoutes(context));
   await app.register(mcpRoutes(context, app));
   await app.register(oauthRoutes(context));
   await app.register(liveRoutes(context));

@@ -46,7 +46,7 @@ export const RunnerRecord = Type.Object({
   cloud: Type.Boolean({
     description:
       "Whether its kind runs Runs in the cloud, as `subscription` and `managed_agents` do: a Ticket labelled " +
-      "`local-only` gets no Run through it. False for a kind this Cronk lacks.",
+      "`local-only` gets no Run through it. False for `local`, whose Runs run on its Owner's own Machines, and for a kind this Cronk lacks.",
   }),
   limit: Type.Integer({
     minimum: 1,
