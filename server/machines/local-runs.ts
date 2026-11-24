@@ -8,6 +8,8 @@ import { mcpResource } from "../oauth/authorizations.js";
 import type { Brief } from "../runs/brief.js";
 import { runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
+import { convertClaudeCode } from "../transcripts/claude-code.js";
+import { uploadTranscript, type Transcript } from "../transcripts/transcripts.js";
 import { modelIdOf, type ModelId } from "../workspaces/workspaces.js";
 import type { MachineSelf } from "./machines.js";
 
@@ -169,15 +171,50 @@ export const LocalRunEnd = Type.Object({
     maxLength: 2000,
     description: "How the `claude` process ended, such as `claude exited with code 1`.",
   }),
+  costUsd: Type.Optional(
+    Type.Number({
+      minimum: 0,
+      maximum: 1_000_000,
+      description:
+        "What Claude Code's stream reported the session cost (`total_cost_usd` of its `result` message), in US dollars. " +
+        "Recorded as the Run's estimated cost: on a subscription login it is a figure at list prices, not money spent. " +
+        "Left out when the process ended without reporting one.",
+    }),
+  ),
 });
 export type LocalRunEnd = Static<typeof LocalRunEnd>;
 
 /**
  * Reports that the `claude` process of a Run the Machine holds ended. A Run its agent didn't finish fails with the
- * reason; one that ended already, as `finish` ends it, is left as it is.
+ * reason; one that ended already, as `finish` ends it, is left as it is. A cost given is recorded as the Run's
+ * estimated cost, whichever way it ended.
  */
-export async function reportEnd(context: Context, machine: MachineSelf, runId: string, reason: string): Promise<void> {
+export async function reportEnd(context: Context, machine: MachineSelf, runId: string, end: LocalRunEnd): Promise<void> {
   const { running } = await heldRun(context, machine, runId);
-  if (!running) return;
-  await runReports(context).endedWithoutFinishing(runId, `The session ended without calling \`finish\`: ${reason.trim()}`);
+  const reports = runReports(context);
+  if (running) await reports.endedWithoutFinishing(runId, `The session ended without calling \`finish\`: ${end.reason.trim()}`);
+  if (end.costUsd !== undefined) await reports.cost(runId, { amount: Math.round(end.costUsd * 100), currency: "USD", estimate: true });
+}
+
+/**
+ * Stores the Claude Code transcript of a Run the Machine holds, its JSONL file as it is, as the Transcript of the
+ * Run's session, by the Run's Agent, replacing what Cronk held, as the Transcript hook's upload does. It works after
+ * the Run ended, when the Run's own token is revoked, so the daemon's last upload is complete. A Run with no session
+ * reported yet is refused with `no_session`.
+ */
+export async function uploadRunTranscript(
+  context: Context,
+  machine: MachineSelf,
+  runId: string,
+  jsonl: string,
+): Promise<{ transcript: Transcript; created: boolean }> {
+  await heldRun(context, machine, runId);
+  const { rows } = await context.db.query<{ agentId: string; workspaceId: string; sessionId: string | null }>(
+    `select agent_id as "agentId", workspace_id as "workspaceId", session_id as "sessionId" from runs where id = $1`,
+    [runId],
+  );
+  const run = rows[0];
+  if (!run) throw noSuchRun();
+  if (!run.sessionId) throw new ApiError(409, "no_session", "This Run has no Claude Code session yet: report its session first.");
+  return uploadTranscript(context, { id: run.agentId, workspace: { id: run.workspaceId } }, run.sessionId, convertClaudeCode(jsonl));
 }

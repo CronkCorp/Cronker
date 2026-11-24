@@ -86,8 +86,9 @@ export const RunnerRecord = Type.Object({
   budgetPerRun: BudgetPerRunField,
   costThisMonth: Type.Array(Cost, {
     description:
-      "What its Runs that ended this calendar month (in UTC) cost, one total per currency; empty when none reported a " +
-      "cost, as subscription Runs don't.",
+      "What its Runs that ended this calendar month (in UTC) cost, one total per currency, real costs apart from " +
+      "estimates (`estimate`, as a `local` Runner's Runs report); empty when none reported a cost, as cloud " +
+      "subscription Runs don't.",
   }),
   createdAt: Type.String({ format: "date-time" }),
 });
