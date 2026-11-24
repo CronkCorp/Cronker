@@ -4,7 +4,10 @@
 // its `--mcp-config` and exits 0; `wait-finish` does so once the file `$STAND_IN_CLAUDE_LOG.go` exists; `exit:<code>`
 // exits with that code without finishing; `denied:<command>` ends its turn on a Bash call to that command outside its
 // allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; `hang`s until killed; or
-// `hang-hard`s, ignoring SIGTERM, until SIGKILL. With $CLAUDE_CONFIG_DIR set it writes its session's transcript where
+// `hang-hard`s, ignoring SIGTERM, until SIGKILL. A comma-separated $STAND_IN_CLAUDE_MODE gives each run its own mode, in
+// the order they run, the last one for any further runs. $STAND_IN_CLAUDE_OUTCOME is the Outcome it finishes with
+// (`ready` when unset), and with $STAND_IN_CLAUDE_LINGER_MS set it waits that long after finishing before it exits, as
+// Claude Code does while it writes its closing message. With $CLAUDE_CONFIG_DIR set it writes its session's transcript where
 // Claude Code does, a line as it starts and another as it finishes.
 // Run in a git worktree, it also records the branch and commit it is on and the password git's credential helpers give
 // for the URL in $STAND_IN_CLAUDE_CREDENTIAL_URL; with $STAND_IN_CLAUDE_PUSH set, it commits a file and pushes it to
@@ -37,6 +40,8 @@ try {
 } catch {
   // Not in a git worktree.
 }
+// Which run this is, counting from 0, by the runs logged before it.
+const runIndex = readFileSync(process.env.STAND_IN_CLAUDE_LOG, "utf8").split("\n").filter(Boolean).length;
 appendFileSync(
   process.env.STAND_IN_CLAUDE_LOG,
   `${JSON.stringify({ args, cwd: process.cwd(), pid: process.pid, mcpConfig, mcpConfigMode: statSync(mcpConfigPath).mode & 0o777, repository })}\n`,
@@ -66,7 +71,8 @@ const write = (type, content) => {
 };
 write("user", after("-p"));
 
-const mode = process.env.STAND_IN_CLAUDE_MODE ?? "finish";
+const modes = (process.env.STAND_IN_CLAUDE_MODE ?? "finish").split(",");
+const mode = modes[Math.min(runIndex, modes.length - 1)];
 if (mode === "wait-finish") {
   while (!existsSync(`${process.env.STAND_IN_CLAUDE_LOG}.go`)) await new Promise((resolve) => setTimeout(resolve, 20));
 }
@@ -98,9 +104,11 @@ if (mode === "hang" || mode === "hang-hard") {
     return response.json();
   };
   await rpc(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "stand-in-claude", version: "0" } });
-  const result = await rpc(2, "tools/call", { name: "finish", arguments: { run: runId, outcome: "ready" } });
+  const result = await rpc(2, "tools/call", { name: "finish", arguments: { run: runId, outcome: process.env.STAND_IN_CLAUDE_OUTCOME ?? "ready" } });
   say({ type: "assistant", message: { content: [{ type: "text", text: JSON.stringify(result) }] }, session_id: sessionId });
   write("assistant", [{ type: "text", text: "Finished." }]);
   say({ type: "result", subtype: "success", session_id: sessionId, total_cost_usd: 1.37, is_error: Boolean(result.result?.isError) });
+  const linger = Number(process.env.STAND_IN_CLAUDE_LINGER_MS ?? 0);
+  if (linger > 0) await new Promise((resolve) => setTimeout(resolve, linger));
   process.exit(0);
 }

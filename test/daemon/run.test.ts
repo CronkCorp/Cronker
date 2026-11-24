@@ -165,6 +165,7 @@ async function localSetUp({
       remote?: string;
       lostCheckMs?: number;
       killGraceMs?: number;
+      branchWaitMs?: number;
     } = {},
   ) => {
     daemon = runDaemon({
@@ -176,6 +177,7 @@ async function localSetUp({
       heartbeatMs,
       lostCheckMs: more.lostCheckMs,
       killGraceMs: more.killGraceMs,
+      branchWaitMs: more.branchWaitMs,
       ...(more.remote ? { remoteFor: () => more.remote! } : {}),
       transcriptMs: 50,
     });
@@ -225,6 +227,7 @@ async function localSetUp({
   const go = () => writeFile(`${log}.go`, "");
   return {
     ada,
+    agent,
     runner,
     workspace,
     project,
@@ -252,7 +255,9 @@ const git = async (cwd: string, ...args: string[]) =>
  * The local set-up with the GitHub App installed on cronkcorp/cronker, listed by the Project, and a local bare git
  * repository standing in for it as the remote: `main` with one commit, and `feat/CRONK-1-started` one commit ahead.
  */
-async function withRepository(options: { runLimit?: number } = {}) {
+async function withRepository(
+  options: { limit?: number; runLimit?: number } = {},
+) {
   const setup = await localSetUp(options);
   await createGitHubApp(cronk, setup.ada);
   const app = cronk.github.apps[0]!;
@@ -292,21 +297,21 @@ async function withRepository(options: { runLimit?: number } = {}) {
   await git(seed, "push", "--quiet", remote, "feat/CRONK-1-started");
 
   /** Opens a Pull Request of the Ticket's from the branch, as GitHub tells Cronk of it. */
-  const openPullRequest = async (key: string, branch: string) => {
+  const openPullRequest = async (key: string, branch: string, id = 9001) => {
     const delivered = await cronk.github.deliver(app, "pull_request", {
       action: "opened",
       installation: { id: installation.id },
       repository: { id: repository.id, full_name: repository.fullName },
       pull_request: {
-        id: 9001,
-        number: 1,
+        id,
+        number: id - 9000,
         title: `${key}: carry on`,
         state: "open",
         draft: false,
         merged: false,
         merged_by: null,
         auto_merge: null,
-        html_url: `https://github.com/${repository.fullName}/pull/1`,
+        html_url: `https://github.com/${repository.fullName}/pull/${id - 9000}`,
         head: { ref: branch, sha: started },
         updated_at: "2026-01-01T09:00:00Z",
       },
@@ -320,11 +325,13 @@ async function withRepository(options: { runLimit?: number } = {}) {
       heartbeatMs?: number;
       env?: NodeJS.ProcessEnv;
       lostCheckMs?: number;
+      branchWaitMs?: number;
     } = {},
   ) =>
     setup.start(mode, more.heartbeatMs, {
       remote,
       lostCheckMs: more.lostCheckMs,
+      branchWaitMs: more.branchWaitMs,
       env: { STAND_IN_CLAUDE_CREDENTIAL_URL: `${cloneUrl}.git`, ...more.env },
     });
   /** The installation tokens GitHub issued that are still good, by the test's clock. */
@@ -332,8 +339,45 @@ async function withRepository(options: { runLimit?: number } = {}) {
     cronk.github.tokensIssued
       .filter((t) => t.expiresAt.getTime() > cronk.clock.now().getTime())
       .map((t) => t.token);
+  /**
+   * Files a Ticket, with a Pull Request from the branch when one is given, and delegates it straight into the Step of
+   * the Status, without waiting for its Run.
+   */
+  const delegateInto = async (
+    title: string,
+    status: string,
+    pullRequest?: { branch: string; id?: number },
+  ) => {
+    const ticket = await ok(
+      "POST",
+      `/api/projects/${setup.project.id}/tickets`,
+      setup.ada,
+      { title },
+    );
+    if (pullRequest)
+      await openPullRequest(ticket.key, pullRequest.branch, pullRequest.id);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, setup.ada, {
+      delegateId: setup.agent.id,
+      statusId: statusOf(status),
+    });
+    return ticket;
+  };
+  const statusOf = (name: string) =>
+    setup.project.statuses.find((s: { name: string }) => s.name === name)
+      .id as string;
+  /** The Ticket's Runs, oldest first. */
+  const runsOf = async (ticketId: string) =>
+    (
+      (await ok("GET", `/api/tickets/${ticketId}/runs`, setup.ada)) as {
+        id: string;
+        startedAt: string;
+      }[]
+    ).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   return {
     ...setup,
+    delegateInto,
+    statusOf,
+    runsOf,
     remote,
     main,
     started,
@@ -855,5 +899,179 @@ describe("a local Run's Repository", () => {
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
 
     await eventually(async () => !(await exists(ran.cwd)));
+  });
+
+  test("of a Run whose agent finished while its claude still exits is let go of before the next Run on its branch starts in it", async () => {
+    const {
+      delegateInto,
+      runsOf,
+      runs,
+      runState,
+      printed,
+      openPullRequest,
+      startWith,
+    } = await withRepository({ runLimit: 2 });
+    // The Investigate Run finishes with done, moving its Ticket to Implement, and its claude lingers before exiting.
+    const ticket = await delegateInto("Carry on", "Investigate", {
+      branch: "feat/CRONK-1-started",
+    });
+    startWith("finish,hang", {
+      env: {
+        STAND_IN_CLAUDE_OUTCOME: "done",
+        STAND_IN_CLAUDE_LINGER_MS: "1000",
+      },
+    });
+
+    const [first, second] = await eventually(async () => {
+      const both = await runsOf(ticket.id);
+      return both.length === 2 && both;
+    });
+    await eventually(async () => (await runs()).length === 2, 15_000);
+    expect((await runState(first!.id)).state).toBe("finished");
+    expect((await runState(second!.id)).state).toBe("running");
+    const [firstRan, ran] = await runs();
+    expect(ran.repository.branch).toBe("feat/CRONK-1-started");
+    // It started once the first Run's process had exited and its worktree was removed.
+    expect(alive(firstRan.pid)).toBe(false);
+    expect(await exists(firstRan.cwd)).toBe(false);
+    await eventually(async () => daemon!.held().join() === second!.id);
+    expect(printed.join("\n")).not.toContain("couldn't start");
+  }, 20_000);
+
+  test("kept for a lost Run is let go of as soon as Cronk ended that Run and the next Run on its branch waits for it", async () => {
+    const {
+      ada,
+      delegateInto,
+      statusOf,
+      runsOf,
+      runs,
+      runState,
+      openPullRequest,
+      startWith,
+    } = await withRepository();
+    // Lost checks far apart: only the waiting Run makes the daemon ask about the kept worktree.
+    startWith("hang", { heartbeatMs: 60 * 60_000, lostCheckMs: 60 * 60_000 });
+    const ticket = await delegateInto("Nap", "Investigate", {
+      branch: "feat/CRONK-1-started",
+    });
+    await eventually(async () => (await runs()).length === 1);
+    const [first] = await runsOf(ticket.id);
+    const [ran] = await runs();
+    await eventually(async () => {
+      cronk.clock.advance(minutes(40));
+      await cronk.checkForLostRuns();
+      return (await runState(first!.id)).state === "lost";
+    });
+    process.kill(ran.pid, "SIGTERM");
+    await eventually(async () => daemon!.held().length === 0);
+    expect(await exists(ran.cwd)).toBe(true);
+
+    // Moved on to Implement: Cronk ends the lost Run and starts the next on the same branch.
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, {
+      statusId: statusOf("Implement"),
+    });
+
+    await eventually(async () => (await runs()).length === 2);
+    const [, next] = await runs();
+    expect(next.repository.branch).toBe("feat/CRONK-1-started");
+    expect(await exists(ran.cwd)).toBe(false);
+    const [, second] = await runsOf(ticket.id);
+    expect((await runState(second!.id)).state).toBe("running");
+  });
+
+  test("held by another Run makes a Run on its branch wait, failing it after the wait's bound", async () => {
+    const {
+      delegateInto,
+      runsOf,
+      runState,
+      printed,
+      openPullRequest,
+      startWith,
+    } = await withRepository({ runLimit: 2 });
+    startWith("hang", { branchWaitMs: 300 });
+    const holding = await delegateInto("Holds the branch", "Investigate", {
+      branch: "feat/CRONK-1-started",
+    });
+    const [holder] = await eventually(async () => {
+      const found = await runsOf(holding.id);
+      return found.length > 0 && daemon!.held().includes(found[0]!.id) && found;
+    });
+    await eventually(async () =>
+      printed.some((l) => l.includes(`running Run ${holder!.id}`)),
+    );
+
+    const waiting = await delegateInto("Wants it too", "Investigate", {
+      branch: "feat/CRONK-1-started",
+      id: 9002,
+    });
+    const [waiter] = await eventually(async () => {
+      const found = await runsOf(waiting.id);
+      return found.length > 0 && found;
+    });
+
+    const failed = await eventually(async () => {
+      const state = await runState(waiter!.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toContain(
+      `the Machine couldn't start the Run: branch feat/CRONK-1-started is still checked out in the worktree of Run ${holder!.id}`,
+    );
+    await eventually(async () => daemon!.held().join() === holder!.id);
+  });
+
+  test("a Run waiting for its branch heartbeats, can be stopped, and doesn't hold up other Runs", async () => {
+    const {
+      ada,
+      delegateInto,
+      runsOf,
+      runs,
+      runState,
+      printed,
+      openPullRequest,
+      startWith,
+    } = await withRepository({ limit: 3, runLimit: 3 });
+    startWith("hang", { heartbeatMs: 50 });
+    const holding = await delegateInto("Holds the branch", "Investigate", {
+      branch: "feat/CRONK-1-started",
+    });
+    const [holder] = await eventually(async () => {
+      const found = await runsOf(holding.id);
+      return found.length > 0 && found;
+    });
+    await eventually(async () =>
+      printed.some((l) => l.includes(`running Run ${holder!.id}`)),
+    );
+    const waiting = await delegateInto("Wants it too", "Investigate", {
+      branch: "feat/CRONK-1-started",
+      id: 9002,
+    });
+    const [waiter] = await eventually(async () => {
+      const found = await runsOf(waiting.id);
+      return found.length > 0 && daemon!.held().includes(found[0]!.id) && found;
+    });
+
+    // An unrelated Run claimed after it starts meanwhile.
+    const other = await delegateInto("Unrelated", "Investigate");
+    await eventually(async () => (await runs()).length === 2);
+    const [otherRun] = await runsOf(other.id);
+    expect(daemon!.held().sort()).toEqual(
+      [holder!.id, waiter!.id, otherRun!.id].sort(),
+    );
+
+    // Its heartbeats keep it running past the lost-Run threshold while it waits.
+    cronk.clock.advance(minutes(40));
+    const now = cronk.clock.now().toISOString();
+    await eventually(
+      async () => (await runState(waiter!.id)).lastCallAt === now,
+    );
+    await cronk.checkForLostRuns();
+    expect((await runState(waiter!.id)).state).toBe("running");
+
+    await ok("PATCH", `/api/tickets/${waiting.id}`, ada, { delegateId: null });
+
+    await eventually(async () => !daemon!.held().includes(waiter!.id));
+    expect((await runState(waiter!.id)).state).toBe("stopped");
+    expect(daemon!.held().sort()).toEqual([holder!.id, otherRun!.id].sort());
+    expect((await runs()).length).toBe(2);
   });
 });
