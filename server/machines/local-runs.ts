@@ -3,6 +3,7 @@ import type { Context } from "../context.js";
 import { transaction } from "../db.js";
 import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
+import { repositoryUrl, tokenRotationMarginMs, withFreshTokens } from "../github/repository-tokens.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import type { Brief } from "../runs/brief.js";
@@ -30,6 +31,26 @@ export async function claimableRuns(context: Context, machine: MachineSelf): Pro
   return rows.map((r) => r.id);
 }
 
+export const RepositoryToken = Type.Object({
+  fullName: Type.String({ description: "The Repository, as `owner/name`." }),
+  token: Type.String({ description: "A fresh installation token of Cronk's GitHub App covering the Repository, to fetch and push with." }),
+  expiresAt: Type.String({ format: "date-time", description: "When the token expires; a heartbeat gives a fresh one before then." }),
+});
+export type RepositoryToken = Static<typeof RepositoryToken>;
+
+export const ClaimedRepository = Type.Intersect([
+  RepositoryToken,
+  Type.Object({
+    cloneUrl: Type.String({ format: "uri", description: "Where the Repository is cloned from and pushed to." }),
+    startBranch: Type.Union([Type.String(), Type.Null()], {
+      description:
+        "The Ticket's branch: the branch of its open Pull Request in the Repository, most recently updated first. The " +
+        "Run's worktree starts on it if the remote has it, or else off the Repository's default branch, as with null.",
+    }),
+  }),
+]);
+export type ClaimedRepository = Static<typeof ClaimedRepository>;
+
 export const ClaimedRun = Type.Object({
   runId: Type.String({ format: "uuid" }),
   ticketKey: Type.String({ description: "The Run's Ticket, such as `CRONK-12`." }),
@@ -37,6 +58,7 @@ export const ClaimedRun = Type.Object({
   modelId: Type.String({ description: "The model id the Step's label stands for in the Workspace, for `claude --model`." }),
   token: Type.String({ description: "An Agent token of the Run's Agent, minted for this Run and revoked once it ends." }),
   mcpUrl: Type.String({ format: "uri", description: "Cronk's MCP server, which the Run reaches with the token." }),
+  repositories: Type.Array(ClaimedRepository, { description: "The Project's Repositories, which the Run works in." }),
 });
 export type ClaimedRun = Static<typeof ClaimedRun>;
 
@@ -65,9 +87,11 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       model: string;
       brief: Brief;
       ticketKey: string;
+      ticketId: string;
+      projectId: string;
     }>(
       `select runs.state, runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
-         projects.key || '-' || tickets.number as "ticketKey"
+         projects.key || '-' || tickets.number as "ticketKey", tickets.id as "ticketId", tickets.project_id as "projectId"
        from runs join tickets on tickets.id = runs.ticket_id join projects on projects.id = tickets.project_id
          join workspaces on workspaces.id = runs.workspace_id
        where runs.id = $1 and runs.runner_id = any($2::uuid[])
@@ -90,7 +114,7 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       throw new ApiError(409, "machine_limit_reached", `This Machine already runs ${machines[0].limit} Runs, its limit.`);
     }
     const modelId = modelIdOf(run, run.model.trim());
-    if (!modelId) return { unmapped: run.model, claimed: null };
+    if (!modelId) return { unmapped: run.model, claimed: null, repositories: [] };
     const token = issueSecret("agent");
     const { rows: tokens } = await tx.query<{ id: string }>(
       `insert into agent_tokens (agent_id, name, access, token_hash, created_at) values ($1, $2, 'write', $3, $4) returning id`,
@@ -106,10 +130,34 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
     await tx.query("update runs set last_call_at = $2 where id = $1", [runId, now]);
     return {
       unmapped: null,
-      claimed: { runId, ticketKey: run.ticketKey, brief: run.brief.text, modelId, token, mcpUrl: mcpResource(context) } satisfies ClaimedRun,
+      claimed: { runId, ticketKey: run.ticketKey, brief: run.brief.text, modelId, token, mcpUrl: mcpResource(context) },
+      repositories: await repositoriesOf(tx, run.projectId, run.ticketId),
     };
   });
-  if (result.claimed) return result.claimed;
+  if (result.claimed) {
+    // Asked of GitHub once the claim is recorded, holding no locks meanwhile.
+    let repositories;
+    try {
+      repositories = await withFreshTokens(context, result.repositories);
+    } catch (error) {
+      const reason = `Cronk couldn't get GitHub tokens for the Run's Repositories. ${(error as Error).message}`;
+      await runReports(context).endedWithoutFinishing(runId, reason);
+      throw new ApiError(409, "repositories_unavailable", reason);
+    }
+    if (repositories.length > 0) {
+      await context.db.query("update local_runs set tokens_expire_at = $2 where run_id = $1", [runId, earliest(repositories)]);
+    }
+    return {
+      ...result.claimed,
+      repositories: repositories.map((r, i) => ({
+        fullName: r.fullName,
+        cloneUrl: repositoryUrl(context, r.fullName),
+        startBranch: result.repositories[i]!.startBranch,
+        token: r.token,
+        expiresAt: r.expiresAt.toISOString(),
+      })),
+    } satisfies ClaimedRun;
+  }
   // The label lost its model id after the Run started: the Run can't run, so it fails, saying why.
   const reason =
     `The Workspace has no model id for the label ${result.unmapped}, so the Machine can't tell Claude Code which model ` +
@@ -117,6 +165,29 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
   await runReports(context).endedWithoutFinishing(runId, reason);
   throw new ApiError(409, "no_model_id", reason);
 }
+
+type Queryable = Pick<Context["db"], "query">;
+
+/**
+ * The Repositories of the Project, each with the Ticket's branch in it: the branch of its open Pull Request there, the
+ * most recently updated if it has several.
+ */
+async function repositoriesOf(db: Queryable, projectId: string, ticketId: string) {
+  const { rows } = await db.query<{ id: string; fullName: string; startBranch: string | null }>(
+    `select repositories.id, repositories.full_name as "fullName",
+       (select pull_requests.branch from pull_request_links join pull_requests on pull_requests.id = pull_request_links.pull_request_id
+        where pull_request_links.ticket_id = $2 and pull_requests.repository_id = repositories.id
+          and pull_requests.state in ('open', 'draft')
+        order by pull_requests.updated_at desc, pull_requests.id desc limit 1) as "startBranch"
+     from project_repositories join repositories on repositories.id = project_repositories.repository_id
+     where project_repositories.project_id = $1
+     order by lower(repositories.full_name), repositories.id`,
+    [projectId, ticketId],
+  );
+  return rows.map((r) => ({ id: Number(r.id), fullName: r.fullName, startBranch: r.startBranch }));
+}
+
+const earliest = (tokens: { expiresAt: Date }[]) => new Date(Math.min(...tokens.map((t) => t.expiresAt.getTime())));
 
 /** A Run this Machine claimed, and whether it still runs. */
 async function heldRun(context: Context, machine: MachineSelf, runId: string): Promise<{ running: boolean }> {
@@ -133,18 +204,42 @@ async function heldRun(context: Context, machine: MachineSelf, runId: string): P
 const runStopped = () =>
   new ApiError(409, "run_stopped", "This Run is no longer running in Cronk: stop its process and let go of what it holds.");
 
+export const HeartbeatAnswer = Type.Object({
+  repositories: Type.Array(RepositoryToken, {
+    description: "Fresh GitHub tokens for the Run's Repositories once theirs expire within ten minutes; none before then.",
+  }),
+});
+export type HeartbeatAnswer = Static<typeof HeartbeatAnswer>;
+
 /**
- * Records a heartbeat of a Run the Machine holds, counted as a call naming the Run, so a working Run isn't lost. A Run
- * no longer running is refused with `run_stopped`, telling the daemon to kill its process.
+ * Records a heartbeat of a Run the Machine holds, counted as a call naming the Run, so a working Run isn't lost, and
+ * answers fresh GitHub tokens for its Repositories once theirs near their expiry. A Run no longer running is refused
+ * with `run_stopped`, telling the daemon to kill its process.
  */
-export async function heartbeat(context: Context, machine: MachineSelf, runId: string): Promise<void> {
+export async function heartbeat(context: Context, machine: MachineSelf, runId: string): Promise<HeartbeatAnswer> {
   const { running } = await heldRun(context, machine, runId);
   if (!running) throw runStopped();
-  const { rowCount } = await context.db.query("update runs set last_call_at = $2 where id = $1 and state = 'running'", [
-    runId,
-    context.clock.now(),
-  ]);
-  if (!rowCount) throw runStopped();
+  const now = context.clock.now();
+  const { rows } = await context.db.query<{ projectId: string; ticketId: string; tokensExpireAt: Date | null }>(
+    `update runs set last_call_at = $2 from tickets, local_runs
+     where runs.id = $1 and runs.state = 'running' and tickets.id = runs.ticket_id and local_runs.run_id = runs.id
+     returning tickets.project_id as "projectId", tickets.id as "ticketId", local_runs.tokens_expire_at as "tokensExpireAt"`,
+    [runId, now],
+  );
+  const run = rows[0];
+  if (!run) throw runStopped();
+  if (!run.tokensExpireAt || run.tokensExpireAt.getTime() > now.getTime() + tokenRotationMarginMs) return { repositories: [] };
+  let repositories;
+  try {
+    repositories = await withFreshTokens(context, await repositoriesOf(context.db, run.projectId, run.ticketId));
+  } catch {
+    // GitHub can't be asked now, or the App lost a Repository: the tokens the Run holds still work, so the next
+    // heartbeat asks again.
+    return { repositories: [] };
+  }
+  if (repositories.length === 0) return { repositories: [] };
+  await context.db.query("update local_runs set tokens_expire_at = $2 where run_id = $1", [runId, earliest(repositories)]);
+  return { repositories: repositories.map((r) => ({ fullName: r.fullName, token: r.token, expiresAt: r.expiresAt.toISOString() })) };
 }
 
 export const LocalSession = Type.Object({
@@ -172,12 +267,29 @@ export const LocalRunEnd = Type.Object({
 });
 export type LocalRunEnd = Static<typeof LocalRunEnd>;
 
+export const LocalRunEnded = Type.Object({
+  mayComeBack: Type.Boolean({
+    description:
+      "Whether the Run is lost and its Ticket hasn't moved on, so it may yet come back: the daemon keeps its worktree " +
+      "and reports its end again later, removing the worktree once this is false.",
+  }),
+});
+export type LocalRunEnded = Static<typeof LocalRunEnded>;
+
 /**
  * Reports that the `claude` process of a Run the Machine holds ended. A Run its agent didn't finish fails with the
- * reason; one that ended already, as `finish` ends it, is left as it is.
+ * reason; one that ended already, as `finish` ends it, is left as it is. Answers whether the Run may yet come back.
  */
-export async function reportEnd(context: Context, machine: MachineSelf, runId: string, reason: string): Promise<void> {
+export async function reportEnd(context: Context, machine: MachineSelf, runId: string, reason: string): Promise<LocalRunEnded> {
   const { running } = await heldRun(context, machine, runId);
-  if (!running) return;
-  await runReports(context).endedWithoutFinishing(runId, `The session ended without calling \`finish\`: ${reason.trim()}`);
+  if (running) {
+    await runReports(context).endedWithoutFinishing(runId, `The session ended without calling \`finish\`: ${reason.trim()}`);
+    return { mayComeBack: false };
+  }
+  const { rowCount } = await context.db.query(
+    `select 1 from runs join tickets on tickets.id = runs.ticket_id
+     where runs.id = $1 and runs.state = 'lost' and tickets.status_id = runs.status_id and tickets.delegate_id = runs.agent_id`,
+    [runId],
+  );
+  return { mayComeBack: Boolean(rowCount) };
 }

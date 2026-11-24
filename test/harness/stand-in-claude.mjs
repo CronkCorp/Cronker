@@ -2,16 +2,42 @@
 // to the JSON-lines file in $STAND_IN_CLAUDE_LOG, prints a `stream-json` session start, and then, as
 // $STAND_IN_CLAUDE_MODE says: `finish`es the Run named in its Brief through Cronk's MCP server with the token from
 // its `--mcp-config` and exits 0; `exit:<code>` exits with that code without finishing; or `hang`s until killed.
-import { appendFileSync, readFileSync, statSync } from "node:fs";
+// Run in a git worktree, it also records the branch and commit it is on and the password git's credential helpers give
+// for the URL in $STAND_IN_CLAUDE_CREDENTIAL_URL; with $STAND_IN_CLAUDE_PUSH set, it commits a file and pushes it to
+// that branch before finishing.
+import { execFileSync } from "node:child_process";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const after = (flag) => args[args.indexOf(flag) + 1];
 const mcpConfigPath = after("--mcp-config");
 const mcpConfig = JSON.parse(readFileSync(mcpConfigPath, "utf8"));
+const git = (...gitArgs) => execFileSync("git", gitArgs, { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+let repository = null;
+try {
+  const credentialUrl = process.env.STAND_IN_CLAUDE_CREDENTIAL_URL;
+  const credential = credentialUrl
+    ? execFileSync("git", ["credential", "fill"], { input: `url=${credentialUrl}\n\n`, encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] })
+    : "";
+  repository = {
+    branch: git("rev-parse", "--abbrev-ref", "HEAD"),
+    head: git("rev-parse", "HEAD"),
+    password: /^password=(.*)$/m.exec(credential)?.[1] ?? null,
+  };
+} catch {
+  // Not in a git worktree.
+}
 appendFileSync(
   process.env.STAND_IN_CLAUDE_LOG,
-  `${JSON.stringify({ args, cwd: process.cwd(), mcpConfig, mcpConfigMode: statSync(mcpConfigPath).mode & 0o777 })}\n`,
+  `${JSON.stringify({ args, cwd: process.cwd(), pid: process.pid, mcpConfig, mcpConfigMode: statSync(mcpConfigPath).mode & 0o777, repository })}\n`,
 );
+const pushTo = process.env.STAND_IN_CLAUDE_PUSH;
+if (pushTo) {
+  writeFileSync("stand-in.txt", `pushed by ${process.pid}\n`);
+  git("add", "stand-in.txt");
+  git("-c", "user.name=stand-in", "-c", "user.email=stand-in@example.com", "commit", "--quiet", "-m", "Stand-in work");
+  git("push", "--quiet", "origin", `HEAD:refs/heads/${pushTo}`);
+}
 
 const sessionId = `stand-in-${process.pid}`;
 const say = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
