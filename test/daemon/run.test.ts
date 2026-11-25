@@ -111,7 +111,7 @@ async function localSetUp({
 
   const started = await (
     await cronk.request("POST", "/api/machines/pairings", {
-      body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" },
+      body: { name: "ada-laptop", os: "linux", daemonVersion: "0.6.0" },
     })
   ).json();
   const machine = await ok("POST", "/api/machines/pairings/approve", ada, {

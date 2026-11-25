@@ -29,7 +29,7 @@ async function call(method: string, path: string, options: Options = {}) {
   const response = await cronk.request(method, path, {
     cookie: options.cookie,
     body: options.body,
-    headers: options.token ? { authorization: `Bearer ${options.token}`, "x-cronk-runner-version": "0.3.0" } : {},
+    headers: options.token ? { authorization: `Bearer ${options.token}`, "x-cronk-runner-version": "0.6.0" } : {},
   });
   return { status: response.status, json: response.status === 204 ? null : await response.json() };
 }
@@ -54,7 +54,7 @@ async function adaOnQwen() {
   await ok("PATCH", `/api/agents/${created.id}`, { cookie: ada, body: { runnerId: runner.id } });
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, { cookie: ada, body: { name: "Cronker", key: "CRONK" } });
   const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
-  const started = await ok("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0", limit: 2 } });
+  const started = await ok("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.6.0", limit: 2 } });
   await ok("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
   const token = (await ok("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).machineToken as string;
   streams.push(await openMachineStream(cronk, token));

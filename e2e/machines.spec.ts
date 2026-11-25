@@ -14,7 +14,7 @@ test("a local Runner is set up, a Machine's code approved onto it, listed and un
   await expect(page.getByRole("region", { name: "Laptop" })).toBeVisible();
 
   // The daemon asks for a code, as `cronk-runner login` does.
-  const started = await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" } });
+  const started = await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "darwin", daemonVersion: "0.6.0" } });
   const { userCode } = await started.json();
 
   const machines = page.getByRole("region", { name: "Machines" });
@@ -26,7 +26,7 @@ test("a local Runner is set up, a Machine's code approved onto it, listed and un
   await expect(machines.getByRole("status")).toHaveText("Paired ada-laptop. Its daemon receives its token on its next poll.");
   const row = machines.getByRole("row").filter({ hasText: "ada-laptop" });
   await expect(row).toContainText("darwin");
-  await expect(row).toContainText("0.3.0");
+  await expect(row).toContainText("0.6.0");
   await expect(row).toContainText("Laptop");
   await expect(row).toContainText("Never");
 
@@ -56,7 +56,7 @@ test("a local Runner's card shows it offline until its Machine connects, and a d
   const ada = await signIn(cronk);
   const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
   const started = await (
-    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" } })
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "darwin", daemonVersion: "0.6.0" } })
   ).json();
   await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
   const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
@@ -81,8 +81,8 @@ test("a local Runner's card shows it offline until its Machine connects, and a d
   });
   expect(refused.status).toBe(426);
   await page.reload();
-  await expect(card).toContainText("ada-laptop runs cronk-runner 0.2.0, older than this Cronk works with: upgrade it to 0.3.0 or later.");
-  await expect(page.getByRole("region", { name: "Machines" }).getByRole("row").filter({ hasText: "ada-laptop" })).toContainText("Upgrade to 0.3.0");
+  await expect(card).toContainText("ada-laptop runs cronk-runner 0.2.0, older than this Cronk works with: upgrade it to 0.6.0 or later.");
+  await expect(page.getByRole("region", { name: "Machines" }).getByRole("row").filter({ hasText: "ada-laptop" })).toContainText("Upgrade to 0.6.0");
 });
 
 test("a local Runner's allowed tools are edited on its card, kept on reload and reset to the default", async ({ page, cronk }) => {
@@ -126,7 +126,7 @@ test("a local Run's cost shows as an estimate on its Ticket and its Runner's car
   const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
   const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Make it so" });
   // The daemon pairs, as `cronk-runner login` does.
-  const started = await call("POST", "/api/machines/pairings", { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" });
+  const started = await call("POST", "/api/machines/pairings", { name: "ada-laptop", os: "darwin", daemonVersion: "0.6.0" });
   await call("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
   const { machineToken } = await call("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode });
   // It connects, as `cronk-runner run` does: until then the Ticket would wait for a Machine.
@@ -157,7 +157,7 @@ test("a Machine lists the Machine models its daemon announces, live, kept but do
   const ada = await signIn(cronk);
   const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
   const started = await (
-    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" } })
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.6.0" } })
   ).json();
   await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
   const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
@@ -208,7 +208,7 @@ test("a local Runner's card maps model labels to the Machine models its Machines
   const ada = await signIn(cronk);
   const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
   const started = await (
-    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0" } })
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.6.0" } })
   ).json();
   await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
   const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
@@ -255,10 +255,10 @@ test("a Ticket waiting for its Machine model says which, and starts once the mod
     return response.status === 204 ? null : response.json();
   };
   const runner = await post("POST", "/api/runners", { name: "Laptop", kind: "local" });
-  const started = await post("POST", "/api/machines/pairings", { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0" });
+  const started = await post("POST", "/api/machines/pairings", { name: "ada-gpu", os: "linux", daemonVersion: "0.6.0" });
   await post("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
   const { machineToken } = await post("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode });
-  const daemon = { authorization: `Bearer ${machineToken}`, "x-cronk-runner-version": "0.3.0" };
+  const daemon = { authorization: `Bearer ${machineToken}`, "x-cronk-runner-version": "0.6.0" };
   const stream = await openMachineStream(cronk, machineToken);
   await post("PUT", "/api/machine/announcement", { claude: true, models: [{ name: "qwen", limit: 1, up: false }] }, daemon);
   await post("PATCH", `/api/runners/${runner.id}`, { machineModels: [{ label: "haiku", model: "qwen" }] });
@@ -288,7 +288,7 @@ test("a local Runner's card lists the allowlist's rules that don't apply to Mach
   const ada = await signIn(cronk);
   const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
   const started = await (
-    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0" } })
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.6.0" } })
   ).json();
   await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
   const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();

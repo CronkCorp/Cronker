@@ -22,7 +22,7 @@ async function call(method: string, path: string, options: { cookie?: string; bo
   const response = await cronk.request(method, path, {
     cookie: options.cookie,
     body: options.body,
-    headers: options.token ? { authorization: `Bearer ${options.token}`, "x-cronk-runner-version": "0.3.0" } : {},
+    headers: options.token ? { authorization: `Bearer ${options.token}`, "x-cronk-runner-version": "0.6.0" } : {},
   });
   return { status: response.status, json: response.status === 204 ? null : await response.json() };
 }
@@ -49,7 +49,7 @@ async function adaWithMachine() {
   const { workspace } = await setUp(cronk);
   const ada = await signIn(cronk);
   const runner = await ok("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } });
-  const started = await ok("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" } });
+  const started = await ok("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.6.0" } });
   const machine = await ok("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
   const paired = await ok("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } });
   return { workspace, ada, runner, machine, token: paired.machineToken as string };
@@ -98,7 +98,7 @@ test("an announcement is shown while connected, kept but not up while offline, a
 
   await ok("DELETE", `/api/machines/${machine.id}`, { cookie: ada });
   // Paired again, the same computer starts from nothing announced.
-  const started = await ok("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" } });
+  const started = await ok("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.6.0" } });
   const runners = await ok("GET", "/api/runners", { cookie: ada });
   await ok("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runners[0].id] } });
   expect(await shown(ada)).toEqual(expect.objectContaining({ claude: true, models: [] }));
