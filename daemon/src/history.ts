@@ -11,7 +11,7 @@ export interface RunRecord {
   runId: string;
   ticketKey: string;
   cronkUrl: string;
-  /** The `claude` process's pid. */
+  /** The program's process's pid. */
   pid: number | null;
   /** Claude Code's session id, once its stream said it. */
   sessionId: string | null;

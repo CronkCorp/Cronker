@@ -30,13 +30,15 @@ import {
   type RunRecord,
 } from "./history.js";
 import { announcementOf, type Announcement } from "./models.js";
+import { claudeCode, type RunProgram } from "./program.js";
 import { repositoryCache, type RunWorkspace } from "./repositories.js";
 
 /**
  * `cronk-runner run`: the daemon's foreground service. For each paired Cronk it keeps the Machine's event stream open,
- * claims the Runs it announces while the Machine's limit has room, and runs each with `claude -p` in a fresh scratch
- * directory holding a fresh worktree of each of its Repositories: reporting its session id, heartbeating it while it
- * runs, uploading its transcript as it goes, and reporting how the process ended, with the cost Claude Code estimated.
+ * claims the Runs it announces while the Machine's limit has room, and runs each with its program (Claude Code, see
+ * `program.ts`) in a fresh scratch directory holding a fresh worktree of each of its Repositories: reporting its session
+ * id, heartbeating it while it runs, uploading its transcript as it goes, and reporting how the process ended, with the
+ * cost the program estimated.
  * The worktrees are removed once the Run ended, unless it is lost and may yet come back: then they are kept until
  * Cronk says otherwise.
  * A Run stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory,
@@ -52,7 +54,7 @@ export interface RunOptions {
   print: (line: string) => void;
   /** The Claude Code executable, looked up on the `PATH` of `env`; `claude` when left out. */
   claude?: string;
-  /** The environment `claude` runs with; the daemon's own when left out. */
+  /** The environment the program runs with; the daemon's own when left out. */
   env?: NodeJS.ProcessEnv;
   /** How often a running Run is heartbeated: every minute, well inside the lost-Run threshold, when left out. */
   heartbeatMs?: number;
@@ -62,7 +64,7 @@ export interface RunOptions {
   scratchRoot?: string;
   /** Where the running processes are recorded; `runs/` next to the config when left out. */
   stateDir?: string;
-  /** How long a killed `claude` has to exit after SIGTERM before it gets SIGKILL: ten seconds when left out. */
+  /** How long a killed program has to exit after SIGTERM before it gets SIGKILL: ten seconds when left out. */
   killGraceMs?: number;
   /**
    * Where the bare clones of the Repositories live: `cronk-runner/repositories` under `$XDG_CACHE_HOME`, else under
@@ -103,99 +105,6 @@ export interface RunningDaemon {
   stop(): Promise<void>;
 }
 
-/** The name Cronk's MCP server goes by in a Run's `--mcp-config`, so `mcp__cronk` allows its tools. */
-const mcpServerName = "cronk";
-
-/** Cronk's own MCP tools, always allowed: without them the agent can't call `finish`. */
-const cronkTools = `mcp__${mcpServerName}`;
-
-/**
- * The arguments `claude` runs a claimed Run with: edits accepted, and the Runner's allowlist, with Cronk's own tools
- * always in it, as the tools it may use without asking. In `-p` mode a tool call outside them is denied. A
- * Repository's committed Claude Code settings add their own allow rules, as Claude Code merges them.
- */
-export function claudeArguments(
-  claimed: ClaimedRun,
-  mcpConfigPath: string,
-): string[] {
-  const allowed = [...new Set([...claimed.allowedTools, cronkTools])];
-  return [
-    "-p",
-    claimed.brief,
-    "--model",
-    claimed.modelId,
-    "--output-format",
-    "stream-json",
-    // `-p` refuses `stream-json` output without it.
-    "--verbose",
-    "--mcp-config",
-    mcpConfigPath,
-    "--permission-mode",
-    "acceptEdits",
-    // Last, one rule per argument: the flag takes every argument after it.
-    "--allowedTools",
-    ...allowed,
-  ];
-}
-
-/** At most this many denied tools are reported with a Run's end, each at most `deniedToolLength` characters. */
-const deniedToolsMax = 20;
-const deniedToolLength = 200;
-
-/**
- * The tool calls Claude Code denied, from its `result` message's `permission_denials`, as a person reads them: a
- * Bash call as `Bash(<command>)`, any other by its tool name.
- */
-export function deniedTools(message: {
-  permission_denials?: unknown;
-}): string[] {
-  if (!Array.isArray(message.permission_denials)) return [];
-  const names = message.permission_denials.flatMap(
-    (denial: { tool_name?: unknown; tool_input?: { command?: unknown } }) => {
-      if (typeof denial?.tool_name !== "string" || !denial.tool_name.trim())
-        return [];
-      const command = denial.tool_input?.command;
-      const name =
-        denial.tool_name === "Bash" && typeof command === "string"
-          ? `Bash(${command.trim()})`
-          : denial.tool_name.trim();
-      return [
-        name.length > deniedToolLength
-          ? `${name.slice(0, deniedToolLength - 1)}…`
-          : name,
-      ];
-    },
-  );
-  return [...new Set(names)].slice(0, deniedToolsMax);
-}
-
-/**
- * Where Claude Code writes a session's transcript: `<config dir>/projects/<encoded cwd>/<session id>.jsonl`, the config
- * directory being `$CLAUDE_CONFIG_DIR` or `~/.claude`. The encoded cwd is looked up rather than computed, as a
- * symlinked temporary directory (macOS's `/var`) makes it differ from the path the daemon knows.
- */
-export async function findTranscript(
-  env: NodeJS.ProcessEnv,
-  sessionId: string,
-): Promise<string | null> {
-  const projects = join(
-    env.CLAUDE_CONFIG_DIR || join(env.HOME || homedir(), ".claude"),
-    "projects",
-  );
-  const directories = await readdir(projects).catch(() => [] as string[]);
-  for (const directory of directories) {
-    const path = join(projects, directory, `${sessionId}.jsonl`);
-    if (
-      await stat(path).then(
-        (s) => s.isFile(),
-        () => false,
-      )
-    )
-      return path;
-  }
-  return null;
-}
-
 /** One Run the daemon holds: its process, and how to stop it. */
 interface HeldRun {
   cronkUrl: string;
@@ -210,8 +119,10 @@ interface ProcessRecord {
   pid: number;
   /** The Run's scratch directory. */
   directory: string;
-  /** The `--mcp-config` path, unique to the Run, which the process's command line must carry to be killed. */
-  mcpConfigPath: string;
+  /** The program's identity for the Run, which the process's command line must carry to be killed. */
+  identity?: string;
+  /** What a daemon before `identity` recorded in its place: Claude Code's `--mcp-config` path. */
+  mcpConfigPath?: string;
 }
 
 /** The state directory, next to the config at the path. */
@@ -226,7 +137,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     transcriptMs = 10_000,
   } = options;
   const env = options.env ?? process.env;
-  const claude = options.claude ?? "claude";
+  /** The program the Runs run as. */
+  const program: RunProgram = claudeCode(options.claude);
   const scratchRoot = options.scratchRoot ?? tmpdir();
   const stateDir = options.stateDir ?? stateDirOf(options.configPath);
   const historyDir = historyDirOf(stateDir);
@@ -433,7 +345,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     pending.delete(`${cronk.url} ${runId}`);
     const run = held.get(runId);
     if (run) {
-      print(`Run ${runId} was stopped in Cronk; stopping claude.`);
+      print(`Run ${runId} was stopped in Cronk; stopping ${program.name}.`);
       run.kill();
       await run.ended;
     }
@@ -442,7 +354,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     }).catch(() => {});
   }
 
-  /** Kills the `claude` processes a daemon before this one left running, and reports their Runs ended. */
+  /** Kills the program's processes a daemon before this one left running, and reports their Runs ended. */
   async function killLeftovers(cronks: PairedCronk[]): Promise<void> {
     let names: string[];
     try {
@@ -462,7 +374,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         continue;
       }
       // A pid is reused once its process is gone: only a process still running this Run's command is killed.
-      if ((await commandLineOf(record.pid))?.includes(record.mcpConfigPath))
+      const identity = record.identity ?? record.mcpConfigPath;
+      if (identity && (await commandLineOf(record.pid))?.includes(identity))
         await killProcess(record.pid, killGraceMs);
       await rm(record.directory, { recursive: true, force: true });
       const cronk = cronks.find((c) => c.url === record.cronkUrl);
@@ -482,7 +395,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   }
 
   /**
-   * Runs a claimed Run's `claude` process in a fresh scratch directory with its worktrees, until it exits. The Run is
+   * Runs a claimed Run's program in a fresh scratch directory with its worktrees, until it exits. The Run is
    * held, heartbeated and stoppable from the claim on, as making its worktrees may wait for an earlier Run's.
    */
   async function start(cronk: PairedCronk, claimed: ClaimedRun): Promise<void> {
@@ -521,7 +434,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
 
     let directory: string | undefined;
     let child: ReturnType<typeof spawn>;
-    let mcpConfigPath: string;
+    let identity: string;
     try {
       directory = await mkdtemp(join(scratchRoot, "cronk-run-"));
       workspace = await repositories.prepare(
@@ -531,25 +444,13 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         { owner: `Run ${runId}`, signal: abort.signal, branchWaitMs },
       );
       if (abort.signal.aborted) throw new Error("it was stopped");
-      // The Run's token goes in a file only its User reads, outside the directory the agent works in, never in argv.
-      mcpConfigPath = join(directory, "mcp.json");
-      const mcpConfig = {
-        mcpServers: {
-          [mcpServerName]: {
-            type: "http",
-            url: claimed.mcpUrl,
-            headers: { authorization: `Bearer ${claimed.token}` },
-          },
-        },
-      };
-      await writeFile(mcpConfigPath, JSON.stringify(mcpConfig), {
-        mode: 0o600,
-      });
+      const prepared = await program.prepare(claimed, directory);
+      identity = prepared.identity;
       if (abort.signal.aborted) throw new Error("it was stopped");
       print(
         `${claimed.ticketKey}: running Run ${runId} with ${claimed.modelId}.`,
       );
-      child = spawn(claude, claudeArguments(claimed, mcpConfigPath), {
+      child = spawn(program.command, prepared.args, {
         cwd: workspace.cwd,
         env: { ...env, ...workspace.env },
         stdio: ["ignore", "pipe", "pipe"],
@@ -584,7 +485,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
                 cronkUrl: cronk.url,
                 pid: child.pid!,
                 directory: runDirectory,
-                mcpConfigPath,
+                identity,
               };
               return writeFile(recordPath, JSON.stringify(record), {
                 mode: 0o600,
@@ -624,40 +525,19 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     });
     let sessionId: string | null = null;
     let sessionReported: Promise<unknown> = Promise.resolve();
-    /** What Claude Code's `result` message said the session cost, in US dollars; none if it ended without one. */
+    /** What the program said the session cost, in US dollars; none if it ended without saying. */
     let costUsd: number | undefined;
     let denied: string[] = [];
+    const read = program.reader();
     createInterface({ input: child.stdout! }).on("line", (line) => {
-      let message: {
-        type?: unknown;
-        subtype?: unknown;
-        session_id?: unknown;
-        total_cost_usd?: unknown;
-        permission_denials?: unknown;
-      };
-      try {
-        message = JSON.parse(line) as typeof message;
-      } catch {
-        return;
-      }
-      if (
-        !sessionId &&
-        message.type === "system" &&
-        message.subtype === "init" &&
-        typeof message.session_id === "string"
-      ) {
-        sessionId = message.session_id;
+      const said = read(line);
+      if (!sessionId && said.sessionId) {
+        sessionId = said.sessionId;
         sessionReported = report("session", { sessionId }).catch(() => {});
         void saveHistory({ sessionId });
       }
-      if (
-        message.type === "result" &&
-        typeof message.total_cost_usd === "number" &&
-        Number.isFinite(message.total_cost_usd)
-      ) {
-        costUsd = Math.max(0, message.total_cost_usd);
-      }
-      if (message.type === "result") denied = deniedTools(message);
+      if (said.costUsd !== undefined) costUsd = said.costUsd;
+      if (said.deniedTools) denied = said.deniedTools;
     });
 
     // The transcript follows the session: uploaded whole whenever its file changed, one upload at a time.
@@ -670,7 +550,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         .then(async () => {
           if (!uploads || !sessionId) return;
           if (!transcriptPath) {
-            transcriptPath = await findTranscript(env, sessionId);
+            transcriptPath = await program.transcript(env, sessionId);
             if (!transcriptPath) return;
             void saveHistory({ transcriptPath });
           }
@@ -768,12 +648,12 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     };
     child.on(
       "error",
-      (error) => void end(`couldn't run ${claude}: ${error.message}`),
+      (error) => void end(`couldn't run ${program.command}: ${error.message}`),
     );
     child.on("close", (code, signal) => {
       const how = signal
-        ? `claude was killed by ${signal}`
-        : `claude exited with code ${code}`;
+        ? `${program.name} was killed by ${signal}`
+        : `${program.name} exited with code ${code}`;
       void end(code !== 0 && lastError ? `${how}: ${lastError}` : how);
     });
   }
@@ -785,7 +665,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     workspace: RunWorkspace,
   ): void {
     const ask = () =>
-      report<RunEnded>("end", { reason: "claude had exited" }).then(
+      report<RunEnded>("end", { reason: `${program.name} had exited` }).then(
         async (ended) => {
           if (ended.mayComeBack || !kept.has(check)) return;
           kept.delete(check);
