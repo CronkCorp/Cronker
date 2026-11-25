@@ -897,8 +897,31 @@ function listed(names: string[]): string {
 }
 
 /**
+ * The Machine models a Machine's daemon last announced, each by name with its limit on Runs at once and whether it is
+ * up (never while the Machine is offline); and a Machine that can't run Claude says so.
+ */
+function MachineModels({ machine }: { machine: Machine }) {
+  return (
+    <ul className="machine-models">
+      {!machine.claude && (
+        <li>
+          <Chip tone="warn">Doesn't run Claude</Chip>
+        </li>
+      )}
+      {machine.models.length === 0 && <li className="muted">No Machine models</li>}
+      {machine.models.map((model) => (
+        <li key={model.name}>
+          <span className="mono">{model.name}</span> <span className="muted small">{model.limit} at once</span>{" "}
+          {model.up ? <Chip tone="ok">Up</Chip> : <Chip title={machine.connected ? "Its server didn't answer the last check." : "Its Machine is offline."}>Down</Chip>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
  * The User's paired Machines, each with its name, OS, daemon version, whether it is connected or else its last
- * contact, and the `local` Runners it serves, with unpairing; and the form approving a pairing code
+ * contact, the `local` Runners it serves and the Machine models it offers, with unpairing; and the form approving a pairing code
  * `cronk-runner login` shows, onto the Runners picked.
  */
 function Machines({ localRunners, machines, onChanged }: { localRunners: Runner[]; machines: Machine[] | null; onChanged: () => void }) {
@@ -936,6 +959,7 @@ function Machines({ localRunners, machines, onChanged }: { localRunners: Runner[
               <th>Machine</th>
               <th>Daemon</th>
               <th>Serves</th>
+              <th>Machine models</th>
               <th>Connection</th>
               <th>
                 <span className="sr-only">Actions</span>
@@ -948,12 +972,15 @@ function Machines({ localRunners, machines, onChanged }: { localRunners: Runner[
                 <td>
                   {machine.name} <span className="muted small">{machine.os}</span>
                 </td>
-                <td>
+                <td data-label="Daemon">
                   <span className="mono">{machine.daemonVersion}</span>
                   {machine.upgradeTo && <span className="small machine-upgrade"> Upgrade to {machine.upgradeTo}</span>}
                 </td>
-                <td>{machine.runners.length ? machine.runners.map((r) => r.name).join(", ") : <span className="muted">No Runners</span>}</td>
-                <td>
+                <td data-label="Serves">{machine.runners.length ? machine.runners.map((r) => r.name).join(", ") : <span className="muted">No Runners</span>}</td>
+                <td data-label="Machine models">
+                  <MachineModels machine={machine} />
+                </td>
+                <td data-label="Connection">
                   {machine.connected ? (
                     "Connected"
                   ) : machine.lastContactAt ? (

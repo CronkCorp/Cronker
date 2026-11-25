@@ -29,6 +29,7 @@ import {
   writeRunRecord,
   type RunRecord,
 } from "./history.js";
+import { announcementOf, type Announcement } from "./models.js";
 import { repositoryCache, type RunWorkspace } from "./repositories.js";
 
 /**
@@ -41,6 +42,9 @@ import { repositoryCache, type RunWorkspace } from "./repositories.js";
  * A Run stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory,
  * so a daemon starting again kills those it left behind and reports their Runs ended. Each Run is also remembered in
  * the state directory's `history/` for a week after it ends, for `cronk-runner logs`.
+ * About once a minute it reads the config again for its Machine models and checks each one's server, and it announces
+ * what the Machine offers (whether it runs Claude, and each model's name, limit and whether it is up) to each Cronk on
+ * connecting and whenever that changed.
  */
 
 export interface RunOptions {
@@ -76,6 +80,11 @@ export interface RunOptions {
    * fails: five minutes when left out.
    */
   branchWaitMs?: number;
+  /**
+   * How often the config is read again for its Machine models and each one's server checked, announcing what changed
+   * to every Cronk: every minute when left out.
+   */
+  modelCheckMs?: number;
 }
 
 /** Where the bare clones live unless the options say otherwise. */
@@ -237,6 +246,14 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   let stopped = false;
   let limit = 2;
   let claiming = Promise.resolve();
+  /** What the Machine offers, from the latest check of its Machine models; null before the first. */
+  let offered: Announcement | null = null;
+  /** The announcement each Cronk last accepted, as JSON, by address; dropped when its stream reconnects. */
+  const announced = new Map<string, string>();
+  /** The Cronks whose event stream is open now, by address. */
+  const streaming = new Map<string, PairedCronk>();
+  let checking = Promise.resolve();
+  let modelTimer: NodeJS.Timeout | undefined;
 
   /** A call's headers for the Cronk: the Machine token, the daemon's version and the Machine's limit. */
   const headers = (cronk: PairedCronk) => machineHeaders(cronk.token, limit);
@@ -250,6 +267,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     return config;
   });
   const connections = configRead.then(async (config) => {
+    checkModels();
+    modelTimer = setInterval(checkModels, options.modelCheckMs ?? 60_000);
     await pruneRunRecords(historyDir).catch(() => {});
     await killLeftovers(config.cronks);
     await Promise.all(config.cronks.map((cronk) => connect(cronk)));
@@ -298,6 +317,10 @@ export function runDaemon(options: RunOptions): RunningDaemon {
           throw new Error(`Cronk answered ${response.status}.`);
         print(`${cronk.url}: connected.`);
         wait = reconnectMs;
+        // Cronk hears what the Machine offers on every connection, as it may have restarted meanwhile.
+        announced.delete(cronk.url);
+        streaming.set(cronk.url, cronk);
+        void checking.then(() => announceTo(cronk));
         for await (const event of serverSentEvents(response.body)) {
           if (event.type === "run.claimable") {
             const { runId } = JSON.parse(event.data) as { runId: string };
@@ -315,10 +338,47 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         );
       } finally {
         aborts.delete(abort);
+        streaming.delete(cronk.url);
       }
       if (stopped) return;
       await new Promise((resolve) => setTimeout(resolve, wait));
       wait = Math.min(wait * 2, 60_000);
+    }
+  }
+
+  /**
+   * Reads the config again for its Machine models, checks each one's server, and announces what the Machine offers to
+   * each connected Cronk that hasn't accepted it yet. One check at a time.
+   */
+  function checkModels(): void {
+    checking = checking.then(async () => {
+      if (stopped) return;
+      try {
+        const { models } = await readConfig(options.configPath);
+        offered = await announcementOf(models, env);
+      } catch (error) {
+        print(`Couldn't read the Machine models: ${(error as Error).message}`);
+        return;
+      }
+      await Promise.all([...streaming.values()].map((cronk) => announceTo(cronk)));
+    });
+  }
+
+  /** Tells the Cronk what the Machine offers, unless it already accepted the same announcement. */
+  async function announceTo(cronk: PairedCronk): Promise<void> {
+    if (!offered || stopped) return;
+    const body = JSON.stringify(offered);
+    if (announced.get(cronk.url) === body) return;
+    try {
+      await call(cronk.url, "PUT", "/api/machine/announcement", { headers: headers(cronk), body: offered });
+      announced.set(cronk.url, body);
+    } catch (error) {
+      // A Cronk too old to know of Machine models: it counts this Machine as running Claude, which it does.
+      if (error instanceof CronkError && error.status === 404) {
+        announced.set(cronk.url, body);
+        return;
+      }
+      print(`${cronk.url}: couldn't announce this Machine's models (${(error as Error).message}); trying again on the next check.`);
     }
   }
 
@@ -754,11 +814,13 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     held: () => [...held.keys()],
     async stop() {
       stopped = true;
+      clearInterval(modelTimer);
       // Kept worktrees stay on disk, as the Runs may yet come back.
       for (const check of kept) clearInterval(check);
       kept.clear();
       for (const abort of aborts) abort.abort();
       await connections.catch(() => {});
+      await checking;
       await claiming;
       const ending = [...held.values()];
       for (const run of ending) run.kill();

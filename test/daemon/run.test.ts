@@ -123,6 +123,7 @@ async function localSetUp({
   const configPath = join(home, "config.json");
   await writeConfig(configPath, {
     limit,
+    models: [],
     cronks: [
       {
         url: cronk.url,
@@ -721,6 +722,7 @@ describe("a daemon too old for Cronk", () => {
     const configPath = join(home, "old.json");
     await writeConfig(configPath, {
       limit: 2,
+      models: [],
       cronks: [
         {
           url: tooOld.url,

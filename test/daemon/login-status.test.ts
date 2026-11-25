@@ -80,6 +80,7 @@ describe("cronk-runner login", () => {
     expect(config).toEqual({
       limit: 2,
       cronks: [{ url: cronk.url, machineId: machine.id, machineName: "ada-laptop", token: expect.stringMatching(/^cronk_machine_/) }],
+      models: [],
     });
     expect(machine).toEqual(expect.objectContaining({ name: "ada-laptop", os: "linux", daemonVersion, limit: 2 }));
   });
@@ -155,7 +156,7 @@ describe("cronk-runner status", () => {
 
   test("says when a Cronk refuses the daemon as too old, naming the version to upgrade to", async () => {
     const tooOld = await refusingCronk();
-    await writeConfig(configPath, { limit: 2, cronks: [{ url: tooOld.url, machineId: "m", machineName: "ada-laptop", token: "cronk_machine_x" }] });
+    await writeConfig(configPath, { limit: 2, cronks: [{ url: tooOld.url, machineId: "m", machineName: "ada-laptop", token: "cronk_machine_x" }], models: [] });
     const printed: string[] = [];
 
     const statuses = await status({ configPath, print: (line) => printed.push(line) });

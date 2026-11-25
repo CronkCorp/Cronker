@@ -1430,6 +1430,46 @@
 .machine-upgrade {
   color: var(--warn);
 }
+/* A Machine's Machine models, one per line: name, limit and an Up or Down chip. */
+.machine-models {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* On a phone each Machine is a block of its cells, each named by its column, rather than a row wider than the screen. */
+@media (max-width: 760px) {
+  .machines thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .machines,
+  .machines tbody,
+  .machines tr,
+  .machines td {
+    display: block;
+  }
+  .machines tr {
+    display: grid;
+    gap: var(--space-1);
+    padding-block: var(--space-3);
+    border-bottom: 1px solid var(--border);
+  }
+  .machines td {
+    padding: 0;
+    border: 0;
+  }
+  .machines td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+  }
+}
 .machine-approve,
 .machine-runners {
   display: grid;

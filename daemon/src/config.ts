@@ -14,10 +14,44 @@ export interface PairedCronk {
   token: string;
 }
 
+/**
+ * A Machine model: a model served on the Machine, on its User's network or by a hosted API, offered to Cronk by name.
+ * Its address, model id and key stay here: Cronk is told only its name, limit and whether it is up.
+ */
+export interface MachineModel {
+  /** 1 to 50 lower case letters, digits and dashes. */
+  name: string;
+  /** The OpenAI-compatible server's address, such as `http://localhost:11434/v1`, without a trailing slash. */
+  address: string;
+  /** The model's id on that server, such as `qwen3.5:9b`. */
+  modelId: string;
+  /** The context size it is served with, in tokens. */
+  contextSize: number;
+  /** The key, kept here readable by its User alone; or `keyEnv` names the environment variable holding it. */
+  key?: string;
+  keyEnv?: string;
+  /** The most Runs it runs at once on this Machine. */
+  limit: number;
+  /** How long one of its Runs may take, in minutes. */
+  timeoutMinutes: number;
+}
+
 export interface Config {
   /** The most Runs the Machine runs at once, across all its Cronks and Runners. */
   limit: number;
   cronks: PairedCronk[];
+  /** The Machine models it offers. */
+  models: MachineModel[];
+}
+
+/** A Machine model's name: 1 to 50 lower case letters, digits and dashes. */
+export const modelNamePattern = /^[a-z0-9-]{1,50}$/;
+
+/** Throws unless the name is one a Machine model may have. */
+export function checkModelName(name: string): void {
+  if (!modelNamePattern.test(name)) {
+    throw new Error(`${JSON.stringify(name)} isn't a Machine model's name: use 1 to 50 lower case letters, digits and dashes.`);
+  }
 }
 
 export const defaultLimit = 2;
@@ -38,11 +72,13 @@ export async function readConfig(path: string): Promise<Config> {
   try {
     text = await readFile(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { limit: defaultLimit, cronks: [] };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { limit: defaultLimit, cronks: [], models: [] };
     throw error;
   }
   const parsed = JSON.parse(text) as Partial<Config>;
-  return { limit: parsed.limit ?? defaultLimit, cronks: parsed.cronks ?? [] };
+  const models = parsed.models ?? [];
+  for (const model of models) checkModelName(model.name);
+  return { limit: parsed.limit ?? defaultLimit, cronks: parsed.cronks ?? [], models };
 }
 
 /**
