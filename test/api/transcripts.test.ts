@@ -516,6 +516,8 @@ describe("a Run's Transcript", () => {
     // Reading whether a `local` Runner is offline needs its Machines' connections.
     await cronk.applyAhead("0082_machines.sql");
     await cronk.applyAhead("0088_machine_connections.sql");
+    // Creating a Project writes its Steps' read-only setting.
+    await cronk.applyAhead("0090_read_only_steps.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

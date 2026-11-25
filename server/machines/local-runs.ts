@@ -8,7 +8,7 @@ import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import type { Brief } from "../runs/brief.js";
 import { revokeLocalRunToken } from "../runs/local.js";
-import { reviveLostRun, runReports } from "../runs/runs.js";
+import { readOnlyRun, reviveLostRun, runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { convertClaudeCode } from "../transcripts/claude-code.js";
 import { uploadTranscript, type Transcript } from "../transcripts/transcripts.js";
@@ -67,6 +67,11 @@ export const ClaimedRun = Type.Object({
       "The Runner's allowlist as it stood at the claim: the tools the Run may use without asking, for `claude " +
       "--allowedTools` with `--permission-mode acceptEdits`.",
   }),
+  readOnly: Type.Boolean({
+    description:
+      "Whether the Run's Step was read-only when the Run started: the program must refuse the Run's file edits, " +
+      "whatever the allowlist says. A daemon too old to know the field edits anyway.",
+  }),
 });
 export type ClaimedRun = Static<typeof ClaimedRun>;
 
@@ -99,8 +104,9 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       ticketId: string;
       projectId: string;
       allowedTools: string[] | null;
+      readOnly: boolean;
     }>(
-      `select runs.state, runners.allowed_tools as "allowedTools", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
+      `select runs.state, runs.read_only as "readOnly", runners.allowed_tools as "allowedTools", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
          projects.key || '-' || tickets.number as "ticketKey", tickets.id as "ticketId", tickets.project_id as "projectId"
        from runs join tickets on tickets.id = runs.ticket_id join projects on projects.id = tickets.project_id
          join workspaces on workspaces.id = runs.workspace_id join runners on runners.id = runs.runner_id
@@ -159,6 +165,7 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
         token,
         mcpUrl: mcpResource(context),
         allowedTools: run.allowedTools ?? [],
+        readOnly: run.readOnly,
       },
       repositories: await repositoriesOf(tx, run.projectId, run.ticketId),
     };
@@ -387,6 +394,11 @@ export const LocalRunEnded = Type.Object({
 });
 export type LocalRunEnded = Static<typeof LocalRunEnded>;
 
+/** The tools that edit files, as a program names them when it denies them: Claude Code's, and OpenCode's in lower case. */
+const fileEditTools = new Set(["edit", "write", "multiedit", "notebookedit", "patch"]);
+
+const isFileEdit = (tool: string) => fileEditTools.has(tool.toLowerCase());
+
 /**
  * Reports that the `claude` process of a Run the Machine holds ended, which also confirms any stop. A Run its agent
  * didn't finish fails with the reason, naming any tools outside its Runner's allowlist it was denied; one that ended
@@ -400,8 +412,16 @@ export async function reportEnd(context: Context, machine: MachineSelf, runId: s
   if (running) {
     let reason = `The session ended without calling \`finish\`: ${end.reason.trim()}`;
     const denied = [...new Set((end.deniedTools ?? []).map((tool) => tool.trim()).filter(Boolean))];
-    if (denied.length) {
-      reason += `. It needed ${denied.length === 1 ? "a tool" : "tools"} outside the Runner's allowlist: ${denied.join(", ")}; widen the allowlist and Retry.`;
+    // A read-only Step's file edits are refused whatever the allowlist says, so widening it wouldn't help.
+    const edits = (await readOnlyRun(context.db, runId)) ? denied.filter(isFileEdit) : [];
+    const outside = denied.filter((tool) => !edits.includes(tool));
+    if (edits.length) {
+      reason += `. Its Step is read-only, so its file edits were refused: ${edits.join(", ")}`;
+    }
+    if (outside.length) {
+      reason += `. It needed ${outside.length === 1 ? "a tool" : "tools"} outside the Runner's allowlist: ${outside.join(", ")}; widen the allowlist and Retry.`;
+    } else if (edits.length) {
+      reason += ".";
     }
     await reports.endedWithoutFinishing(runId, reason);
   }

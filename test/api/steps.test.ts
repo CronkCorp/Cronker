@@ -14,7 +14,7 @@ interface Status {
   id: string;
   name: string;
   kind: string;
-  step: { kind: "ordinary" | "merge"; brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; outcomes: Outcome[] } | null;
+  step: { kind: "ordinary" | "merge"; brief: string; model: string; roundLimit: number; labelRule: LabelRule | null; readOnly: boolean; outcomes: Outcome[] } | null;
 }
 interface LabelRule {
   kind: "requires" | "skippedBy";
@@ -69,6 +69,7 @@ describe("the default board's Steps", () => {
           model: s.step.model,
           roundLimit: s.step.roundLimit,
           labelRule: s.step.labelRule,
+          readOnly: s.step.readOnly,
           outcomes: s.step.outcomes,
         },
       ]),
@@ -80,6 +81,7 @@ describe("the default board's Steps", () => {
         model: "haiku",
         roundLimit: 2,
         labelRule: null,
+        readOnly: true,
         outcomes: [outcome("ready", id("Ready"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Ready: null,
@@ -88,6 +90,7 @@ describe("the default board's Steps", () => {
         model: "sonnet",
         roundLimit: 2,
         labelRule: null,
+        readOnly: true,
         outcomes: [outcome("done", id("Implement"), { default: true }), outcome("needs you", id("Backlog"), { needsYou: true })],
       },
       Implement: {
@@ -95,6 +98,7 @@ describe("the default board's Steps", () => {
         model: "opus",
         roundLimit: 2,
         labelRule: null,
+        readOnly: false,
         outcomes: [outcome("done", id("Code review"), { default: true }), outcome("needs you", id("Ready"), { needsYou: true })],
       },
       "Code review": {
@@ -102,6 +106,7 @@ describe("the default board's Steps", () => {
         model: "sonnet",
         roundLimit: 2,
         labelRule: { kind: "skippedBy", label: "no-review" },
+        readOnly: false,
         outcomes: [
           outcome("approve", id("Merge"), { default: true }),
           outcome("changes", id("Implement"), { countsAsRound: true }),
@@ -114,6 +119,7 @@ describe("the default board's Steps", () => {
         model: "haiku",
         roundLimit: 2,
         labelRule: null,
+        readOnly: false,
         outcomes: [
           outcome("review", id("In Review"), { default: true }),
           outcome("resolved", id("Merge")),
@@ -145,6 +151,55 @@ describe("the default board's Steps", () => {
       "If the Ticket already has an open Pull Request, push to its branch instead of opening another.",
     );
   });
+
+  test("an existing Project's Steps on Statuses named Triage or Investigate become read-only, and its other Steps don't", async () => {
+    await cronk.stop();
+    cronk = await startCronk({ migrateBefore: "0090_read_only_steps.sql" });
+    const { workspace } = await setUp(cronk);
+    const cookie = await signIn(cronk);
+    // As a Cronk before read-only Steps wrote a Project, its Statuses named in any case, each with a Step.
+    const projectId = "00000000-0000-4000-8000-000000000001";
+    await cronk.stage(
+      `insert into projects (id, workspace_id, name, key, created_at) values ($1, $2, 'Cronker', 'CRONK', '2026-01-01T09:00:00Z')`,
+      [projectId, workspace.id],
+    );
+    const board = [
+      ["Backlog", "backlog"],
+      ["triage", "active"],
+      ["INVESTIGATE", "active"],
+      ["Implement", "active"],
+      ["Done", "done"],
+      ["Canceled", "canceled"],
+    ];
+    const statusId = (position: number) => `00000000-0000-4000-8000-0000000001${String(position).padStart(2, "0")}`;
+    for (const [position, [name, kind]] of board.entries()) {
+      await cronk.stage(
+        `insert into statuses (id, workspace_id, project_id, name, kind, position, created_at)
+         values ($1, $2, $3, $4, $5, $6, '2026-01-01T09:00:00Z')`,
+        [statusId(position), workspace.id, projectId, name, kind, position],
+      );
+    }
+    for (const [position, [, kind]] of board.entries()) {
+      if (kind !== "active") continue;
+      const stepId = `00000000-0000-4000-8000-0000000002${String(position).padStart(2, "0")}`;
+      await cronk.stage(
+        `insert into steps (id, workspace_id, project_id, status_id, brief, model, created_at)
+         values ($1, $2, $3, $4, 'Do the work.', 'sonnet', '2026-01-01T09:00:00Z')`,
+        [stepId, workspace.id, projectId, statusId(position)],
+      );
+      await cronk.stage(
+        `insert into outcomes (step_id, project_id, position, name, status_id, is_default, needs_you, counts_as_round)
+         values ($1, $2, 0, 'done', $3, true, false, false), ($1, $2, 1, 'needs you', $4, false, true, false)`,
+        [stepId, projectId, statusId(4), statusId(0)],
+      );
+    }
+
+    await cronk.upgrade();
+
+    const project = (await (await cronk.request("GET", `/api/projects/${projectId}`, { cookie })).json()) as Project;
+    const readOnly = Object.fromEntries(project.statuses.filter((s) => s.step).map((s) => [s.name, s.step!.readOnly]));
+    expect(readOnly).toEqual({ triage: true, INVESTIGATE: true, Implement: false });
+  });
 });
 
 /** A Step for the Ready Status, sending Tickets on to Investigate or back to Backlog. */
@@ -155,6 +210,7 @@ function readyStep(id: (name: string) => string) {
     model: "sonnet",
     roundLimit: 3,
     labelRule: null,
+    readOnly: false,
     outcomes: [
       outcome("planned", id("Investigate"), { default: true }),
       outcome("unclear", id("Triage"), { countsAsRound: true }),
@@ -192,7 +248,7 @@ describe("attaching, editing and removing a Step", () => {
     expect(((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step!.roundLimit).toBe(2);
   });
 
-  test("editing a Step replaces its Brief, model, round limit, Label rule and Outcomes", async () => {
+  test("editing a Step replaces its Brief, model, round limit, Label rule, read-only setting and Outcomes", async () => {
     const { cookie, project, id } = await projectOnDefaultBoard();
     const edited = {
       kind: "ordinary",
@@ -200,6 +256,7 @@ describe("attaching, editing and removing a Step", () => {
       model: "opus",
       roundLimit: 1,
       labelRule: { kind: "requires", label: "ready-to-go" },
+      readOnly: false,
       outcomes: [outcome("go", id("Investigate"), { default: true }), outcome("ask", id("Backlog"), { needsYou: true })],
     };
 
@@ -211,6 +268,20 @@ describe("attaching, editing and removing a Step", () => {
     expect(response.status).toBe(200);
     const changed = (await response.json()) as Project;
     expect(changed.statuses.find((s) => s.name === "Triage")!.step).toEqual(edited);
+  });
+
+  test("a Step is not read-only unless set, and set read-only it says so on the Project", async () => {
+    const { cookie, project, id } = await projectOnDefaultBoard();
+    const { readOnly: _, ...step } = readyStep(id);
+    const put = async (body: unknown) => {
+      const response = await cronk.request("PUT", `/api/projects/${project.id}/statuses/${id("Ready")}/step`, { cookie, body });
+      expect(response.status).toBe(200);
+      return ((await response.json()) as Project).statuses.find((s) => s.name === "Ready")!.step!.readOnly;
+    };
+
+    expect(await put(step)).toBe(false);
+    expect(await put({ ...step, readOnly: true })).toBe(true);
+    expect(await put({ ...step, readOnly: false })).toBe(false);
   });
 
   test("a Step has no Label rule unless given, and its Label is kept trimmed", async () => {
@@ -556,6 +627,7 @@ describe("Outcome refusals", () => {
       model: "sonnet",
       roundLimit: 2,
       labelRule: null,
+      readOnly: false,
       outcomes: [
         outcome("again", id("Ready"), { default: true }),
         outcome("retry", id("Ready"), { countsAsRound: true }),
@@ -764,6 +836,9 @@ describe("the Brief preview", () => {
           "CRONK-1's Assignee as a Discovered Ticket.",
         "- Give your Run id when you create an Artifact with `create_artifact`, so it is linked to CRONK-1.",
         "- Don't merge pull requests on GitHub directly.",
+        // Triage is read-only on the default board.
+        "- This Step is read-only: don't change files in the Repository, and don't describe a change as made. Say in " +
+          "your Report what should change instead.",
       ].join("\n"),
     );
     expect(brief.brief).toBe(status("Triage").step!.brief);

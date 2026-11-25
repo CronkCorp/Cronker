@@ -44,16 +44,32 @@ const mcpServerName = "cronk";
 /** Cronk's own MCP tools, always allowed: without them the agent can't call `finish`. */
 const cronkTools = `mcp__${mcpServerName}`;
 
+/** Claude Code's tools that edit files, which a Run of a read-only Step is denied. */
+export const claudeEditTools = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/** Whether an allow rule names one of Claude Code's edit tools, such as `Edit` or `Write(src/**)`. */
+const allowsEdits = (rule: string) =>
+  claudeEditTools.includes(rule.trim().replace(/\(.*$/s, ""));
+
 /**
  * The arguments `claude` runs a claimed Run with: edits accepted, and the Runner's allowlist, with Cronk's own tools
  * always in it, as the tools it may use without asking. In `-p` mode a tool call outside them is denied. A
  * Repository's committed Claude Code settings add their own allow rules, as Claude Code merges them.
+ *
+ * A Run of a read-only Step accepts no edits: the edit tools are disallowed, which wins over any allow rule, the
+ * Repository's included, and dropped from the allowlist. Commands that write, such as `sed -i`, aren't stopped.
  */
 export function claudeArguments(
   claimed: ClaimedRun,
   mcpConfigPath: string,
 ): string[] {
-  const allowed = [...new Set([...claimed.allowedTools, cronkTools])];
+  const readOnly = claimed.readOnly === true;
+  const allowed = [
+    ...new Set([
+      ...claimed.allowedTools.filter((rule) => !readOnly || !allowsEdits(rule)),
+      cronkTools,
+    ]),
+  ];
   return [
     "-p",
     claimed.brief,
@@ -66,7 +82,8 @@ export function claudeArguments(
     "--mcp-config",
     mcpConfigPath,
     "--permission-mode",
-    "acceptEdits",
+    readOnly ? "default" : "acceptEdits",
+    ...(readOnly ? ["--disallowedTools", ...claudeEditTools] : []),
     // Last, one rule per argument: the flag takes every argument after it.
     "--allowedTools",
     ...allowed,
