@@ -163,6 +163,17 @@ function gitIdentity(env: NodeJS.ProcessEnv): Promise<{ name: string; email: str
 /** Quotes a value for a git config file. */
 const gitValue = (value: string) => `"${value.replace(/[\\"]/g, (c) => `\\${c}`).replace(/\n/g, " ")}"`;
 
+/**
+ * Whether an event of `opencode run --format json` only says OpenCode is retrying a request to its server, which it
+ * does by itself without end while the server doesn't answer: a `retry` event, or one whose session status is `retry`.
+ * Kept in one place, as no event recorded from OpenCode V2 shows the shape yet.
+ */
+export function isRetryEvent(event: unknown): boolean {
+  if (typeof event !== "object" || event === null) return false;
+  const e = event as { type?: unknown; status?: { type?: unknown }; properties?: { status?: { type?: unknown } } };
+  return e.type === "retry" || e.status?.type === "retry" || e.properties?.status?.type === "retry";
+}
+
 /** What a line of `opencode run --format json` says, of what the daemon reads: every event names its session. */
 function readOpenCodeLine(line: string): ProgramOutput {
   let event: { sessionID?: unknown };
@@ -172,8 +183,19 @@ function readOpenCodeLine(line: string): ProgramOutput {
     return {};
   }
   // No cost: a made-up estimate would be added to the Run's totals.
-  return typeof event?.sessionID === "string" && event.sessionID ? { sessionId: event.sessionID } : {};
+  return {
+    ...(typeof event?.sessionID === "string" && event.sessionID ? { sessionId: event.sessionID } : {}),
+    ...(isRetryEvent(event) ? { retrying: true } : {}),
+  };
 }
+
+/**
+ * What a resumed session is told in place of the Brief: that it ended without `finish`, and the Run id to call it with.
+ */
+export const reminderOf = (runId: string) =>
+  `You ended your turn without calling Cronk's \`finish\` tool, so the Run is still running. Your Run id is ${runId}. ` +
+  "Call `finish` now with that Run id and one of the Outcomes your Brief offers. If you can't go on, choose the Outcome " +
+  "that hands the Ticket back and give a Question saying what you need.";
 
 /** OpenCode, running a Run on the Machine model, its executable `opencode` unless given. */
 export function openCode(model: MachineModel, command = "opencode"): RunProgram {
@@ -223,5 +245,8 @@ export function openCode(model: MachineModel, command = "opencode"): RunProgram 
     reader: () => readOpenCodeLine,
     // OpenCode's events become a Transcript in a later version.
     transcript: async () => null,
+    // The same arguments, title included so a daemon starting again still finds the process, on the same session.
+    resume: (args, sessionId, runId) => [...args.slice(0, -1), "--session", sessionId, reminderOf(runId)],
+    timeLimitMinutes: model.timeoutMinutes,
   };
 }
