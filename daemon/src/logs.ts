@@ -4,7 +4,7 @@ import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { isRunning, readRunRecord, readRunRecords, type RunRecord } from "./history.js";
-import { findTranscript } from "./run.js";
+import { claudeCode } from "./program.js";
 import { serviceFile, systemdUnitName } from "./service.js";
 
 /**
@@ -160,7 +160,7 @@ function follower(options: LogsOptions, prefix: string) {
     /** Reads what the session added; true once the Run has ended and all of it was read. */
     async step(record: RunRecord): Promise<boolean> {
       const ended = !isRunning(record);
-      path ??= record.transcriptPath ?? (record.sessionId ? await findTranscript(options.env, record.sessionId) : null);
+      path ??= record.transcriptPath ?? (record.sessionId ? await claudeCode().transcript(options.env, record.sessionId) : null);
       const lines = path ? await tail.read(path, ended) : null;
       if (lines) seen = true;
       for (const line of lines ?? []) emit(line);
