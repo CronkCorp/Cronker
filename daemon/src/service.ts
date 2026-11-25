@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { preflight } from "./preflight.js";
+import { checkMachine } from "./preflight.js";
 
 /**
  * `cronk-runner install` and `uninstall`: the daemon as a background service that starts at login and comes back when
@@ -152,12 +152,13 @@ export async function install(options: InstallOptions): Promise<number> {
     print(unsupported(platform));
     return 1;
   }
-  const problems = await preflight({ env: options.env });
+  const { problems, notes } = await checkMachine({ env: options.env, configPath: program.configPath });
   if (problems.length > 0) {
     for (const problem of problems) print(problem);
     print("Nothing was installed.");
     return 1;
   }
+  for (const note of notes) print(note);
   await mkdir(dirname(file), { recursive: true });
   if (platform === "darwin") {
     const logPath = join(home, "Library", "Logs", "cronk-runner.log");

@@ -32,6 +32,7 @@ import {
   type RunRecord,
 } from "./history.js";
 import { announcementOf, type Announcement } from "./models.js";
+import { checkPrograms } from "./preflight.js";
 import { openCode } from "./opencode.js";
 import { claudeCode, type RunProgram } from "./program.js";
 import { repositoryCache, type RunWorkspace } from "./repositories.js";
@@ -282,7 +283,9 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       if (stopped) return;
       try {
         const { models } = await readConfig(options.configPath);
-        offered = await announcementOf(models, env);
+        // Checked each time, so installing, signing in to or removing a program is picked up within a check.
+        const programs = await checkPrograms({ env, claude: options.claude, opencode: options.opencode });
+        offered = await announcementOf(models, env, programs);
       } catch (error) {
         print(`Couldn't read the Machine models: ${(error as Error).message}`);
         return;

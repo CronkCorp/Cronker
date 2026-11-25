@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -271,6 +271,25 @@ describe("cronk-runner run", () => {
     return { machines: async () => (await call("GET", "/api/machines", undefined, ada)) as { connected: boolean; claude: boolean; models: unknown[] }[] };
   }
 
+  /**
+   * The daemon's environment: a PATH of stand-ins, `git`, a `claude` signed in unless `claude` says otherwise, and an
+   * `opencode` printing `opencode` as its version unless it is null.
+   */
+  async function programs({ claude = "signedIn", opencode = "2.4.0" as string | null } = {}): Promise<NodeJS.ProcessEnv> {
+    const bin = join(home, "bin");
+    await rm(bin, { recursive: true, force: true });
+    await mkdir(bin);
+    const fake = async (name: string, script: string) => {
+      await writeFile(join(bin, name), `#!/bin/sh\n${script}\n`);
+      await chmod(join(bin, name), 0o755);
+    };
+    await fake("git", "exit 0");
+    if (claude === "signedIn") await fake("claude", `echo '{"loggedIn": true}'`);
+    if (claude === "signedOut") await fake("claude", `echo '{"loggedIn": false}'`);
+    if (opencode !== null) await fake("opencode", `echo '${opencode}'`);
+    return { PATH: bin };
+  }
+
   async function eventually<T>(check: () => Promise<T | undefined | false>, timeoutMs = 10_000): Promise<T> {
     const until = Date.now() + timeoutMs;
     for (;;) {
@@ -285,7 +304,7 @@ describe("cronk-runner run", () => {
     const { machines } = await paired();
     server = await standInModelServer({ key: "sk-secret" });
     const printed: string[] = [];
-    daemon = runDaemon({ configPath, print: (line) => printed.push(line), modelCheckMs: 100, cacheDir: join(home, "cache") });
+    daemon = runDaemon({ configPath, print: (line) => printed.push(line), modelCheckMs: 100, cacheDir: join(home, "cache"), env: await programs() });
 
     // Connected with no Machine models: it runs Claude and offers nothing else.
     const connected = await eventually(async () => (await machines()).find((m) => m.connected));
@@ -315,7 +334,8 @@ describe("cronk-runner run", () => {
     const { machines } = await paired();
     server = await standInModelServer();
     await add("qwen", { address: server.address, modelId: "qwen3.5:9b", contextSize: "65536", limit: "2", timeoutMinutes: "60", noKey: true });
-    daemon = runDaemon({ configPath, print: () => {}, modelCheckMs: 60_000, cacheDir: join(home, "cache") });
+    const env = await programs();
+    daemon = runDaemon({ configPath, print: () => {}, modelCheckMs: 60_000, cacheDir: join(home, "cache"), env });
     await eventually(async () => (await machines())[0]!.models.length === 1);
     await daemon.stop();
     daemon = undefined;
@@ -324,10 +344,93 @@ describe("cronk-runner run", () => {
     expect(offline.models).toEqual([{ name: "qwen", limit: 2, up: false }]);
 
     // Started again, it announces on connecting, though nothing changed and its next check is a minute away.
-    daemon = runDaemon({ configPath, print: () => {}, modelCheckMs: 60_000, cacheDir: join(home, "cache") });
+    daemon = runDaemon({ configPath, print: () => {}, modelCheckMs: 60_000, cacheDir: join(home, "cache"), env });
     await eventually(async () => {
       const [machine] = await machines();
       return machine!.connected && JSON.stringify(machine!.models) === JSON.stringify([{ name: "qwen", limit: 2, up: true }]);
     });
+  });
+  test("announces whether it runs Claude and offers its Machine models as up only with OpenCode V2, picking up a change within a check", async () => {
+    const { machines } = await paired();
+    server = await standInModelServer();
+    await add("qwen", { address: server.address, modelId: "qwen3.5:9b", contextSize: "65536", limit: "1", timeoutMinutes: "60", noKey: true });
+    const announced = async () => {
+      const [machine] = await machines();
+      return machine?.connected ? JSON.stringify({ claude: machine.claude, models: machine.models }) : undefined;
+    };
+    const expecting = (claude: boolean, up: boolean) => JSON.stringify({ claude, models: [{ name: "qwen", limit: 1, up }] });
+
+    // Claude Code and OpenCode V2: both.
+    daemon = runDaemon({ configPath, print: () => {}, modelCheckMs: 100, cacheDir: join(home, "cache"), env: await programs() });
+    await eventually(async () => (await announced()) === expecting(true, true));
+
+    // OpenCode V1, then none: its Machine models are still set up, but none is up; it keeps running Claude.
+    await programs({ opencode: "1.9.3" });
+    await eventually(async () => (await announced()) === expecting(true, false));
+    await programs({ opencode: null });
+    await eventually(async () => (await announced()) === expecting(true, false));
+
+    // Claude Code signed out, or gone, with OpenCode V2: it says it doesn't run Claude.
+    await programs({ claude: "signedOut" });
+    await eventually(async () => (await announced()) === expecting(false, true));
+    await programs({ claude: "missing" });
+    await eventually(async () => (await announced()) === expecting(false, true));
+  });
+
+  test("a Machine without Claude claims no Run needing Claude: the Run waits for one that runs it", async () => {
+    cronk = await startCronk();
+    const { workspace } = await setUp(cronk);
+    const ada = await signIn(cronk);
+    const call = async (method: string, path: string, body?: unknown, cookie = ada) => {
+      const response = await cronk!.request(method, path, { cookie, body });
+      expect(response.status, `${method} ${path}`).toBeLessThan(300);
+      return response.json();
+    };
+    const runner = await call("POST", "/api/runners", { name: "Laptop", kind: "local" });
+    const agent = await call("POST", `/api/workspaces/${workspace.id}/agents`, { name: "laptop" });
+    await call("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+    const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
+    const pair = async (name: string) => {
+      const started = await call("POST", "/api/machines/pairings", { name, os: "linux", daemonVersion: "0.3.0" }, undefined);
+      const machine = await call("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
+      const { machineToken } = await call("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode }, undefined);
+      return { url: cronk!.url, machineId: machine.id, machineName: name, token: machineToken };
+    };
+    // Another Machine runs Claude, but is offline: it announced so, then stopped.
+    const other = await pair("ada-desktop");
+    const otherConfig = join(home, "other.json");
+    await writeConfig(otherConfig, { limit: 2, cronks: [other], models: [] });
+    const withClaude = await programs();
+    daemon = runDaemon({ configPath: otherConfig, print: () => {}, cacheDir: join(home, "cache"), env: withClaude });
+    await eventually(async () => {
+      const list = (await call("GET", "/api/machines")) as { name: string; connected: boolean }[];
+      return list.find((m) => m.name === "ada-desktop")?.connected;
+    });
+    await daemon.stop();
+
+    // This Machine runs no Claude: it connects and announces so.
+    await writeConfig(configPath, { limit: 2, cronks: [await pair("ada-laptop")], models: [] });
+    const printed: string[] = [];
+    const bin = join(home, "laptop-bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "git"), "#!/bin/sh\nexit 0\n");
+    await chmod(join(bin, "git"), 0o755);
+    daemon = runDaemon({ configPath, print: (line) => printed.push(line), cacheDir: join(home, "cache"), env: { PATH: bin } });
+    await eventually(async () => {
+      const list = (await call("GET", "/api/machines")) as { name: string; connected: boolean; claude: boolean }[];
+      const laptop = list.find((m) => m.name === "ada-laptop");
+      return laptop?.connected && !laptop.claude;
+    });
+
+    const ticket = await call("POST", `/api/projects/${project.id}/tickets`, { title: "Needs Claude" });
+    await call("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
+    const waiting = await eventually(async () => {
+      const read = await call("GET", `/api/tickets/${ticket.id}`);
+      return read.waiting === "claude" && read;
+    });
+    expect(waiting.waiting).toBe("claude");
+    expect(await call("GET", `/api/tickets/${ticket.id}/runs`)).toEqual([]);
+    expect(printed.filter((line) => line.includes("couldn't claim"))).toEqual([]);
   });
 });

@@ -2,7 +2,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { preflight } from "../../daemon/src/preflight.js";
+import { writeConfig } from "../../daemon/src/config.js";
+import { checkMachine, preflight } from "../../daemon/src/preflight.js";
 import {
   install,
   launchdPlist,
@@ -70,6 +71,52 @@ describe("preflight", () => {
     expect(await preflight({ env: env() })).toEqual([expect.stringMatching(/Claude Code isn't signed in.*claude auth login/)]);
     await fake("claude", "exit 1");
     expect(await preflight({ env: env() })).toEqual([expect.stringMatching(/Claude Code isn't signed in/)]);
+  });
+
+  /** A config with the Machine model qwen set up, or none. */
+  async function config(models: boolean): Promise<string> {
+    const path = join(home, "config.json");
+    const qwen = { name: "qwen", address: "http://localhost:11434/v1", modelId: "qwen3.5:9b", contextSize: 65536, limit: 1, timeoutMinutes: 60 };
+    await writeConfig(path, { limit: 2, cronks: [], models: models ? [qwen] : [] });
+    return path;
+  }
+
+  test.each([
+    // [claude, opencode, Machine models, problems, notes]
+    ["signed in", "2.4.0", true, [], []],
+    ["signed in", null, true, [], [/OpenCode isn't on the PATH, so this Machine offers none of its Machine models: it keeps running Claude's Runs/]],
+    ["signed in", "1.9.3", true, [], [/OpenCode is V1, and V2 is needed.*keeps running Claude's Runs/]],
+    ["signed in", null, false, [], []],
+    [null, "2.4.0", true, [], [/`claude` isn't on the PATH, so this Machine doesn't run Claude: it runs only Runs on its Machine models/]],
+    ["signed out", "2.4.0", true, [], [/Claude Code isn't signed in, so this Machine doesn't run Claude/]],
+    [null, "2.4.0", false, [/`claude` isn't on the PATH/], []],
+    [null, null, true, [/`claude` isn't on the PATH/, /`opencode` isn't on the PATH.*install OpenCode V2/], []],
+    [null, "1.9.3", true, [/`claude` isn't on the PATH/, /OpenCode is V1.*need V2/], []],
+    ["signed out", null, false, [/Claude Code isn't signed in/], []],
+  ] as const)("claude %s, opencode %s, Machine models %s", async (claude, opencode, models, problems, notes) => {
+    await fake("git", "exit 0");
+    if (claude) await fake("claude", `echo '{"loggedIn": ${claude === "signed in"}}'`);
+    if (opencode) await fake("opencode", `echo '${opencode}'`);
+    const checked = await checkMachine({ env: env(), configPath: await config(models) });
+    expect(checked.problems).toEqual(problems.map((p) => expect.stringMatching(p)));
+    expect(checked.notes).toEqual(notes.map((n) => expect.stringMatching(n)));
+    // Without Machine models OpenCode is never named.
+    if (!models) expect([...checked.problems, ...checked.notes].join("\n")).not.toMatch(/opencode/i);
+  });
+
+  test("git is needed whatever else the Machine has", async () => {
+    await fake("claude", signedInClaude);
+    await fake("opencode", "echo 2.4.0");
+    expect((await checkMachine({ env: env(), configPath: await config(true) })).problems).toEqual([
+      expect.stringMatching(/`git` isn't on the PATH/),
+    ]);
+  });
+
+  test("an opencode that can't say its version counts as V1", async () => {
+    await fake("git", "exit 0");
+    await fake("opencode", "exit 1");
+    const checked = await checkMachine({ env: env(), configPath: await config(true) });
+    expect(checked.programs.openCode).toBe("v1");
   });
 
   test("a file on the PATH that isn't executable isn't found", async () => {

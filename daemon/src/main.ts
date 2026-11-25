@@ -7,7 +7,7 @@ import { historyDirOf } from "./history.js";
 import { login } from "./login.js";
 import { followDaemonLog, followRun, followRunning } from "./logs.js";
 import { addModel, listModels, removeModel, type ModelFlags } from "./models.js";
-import { preflight } from "./preflight.js";
+import { checkMachine } from "./preflight.js";
 import { asker } from "./prompt.js";
 import { runDaemon, stateDirOf } from "./run.js";
 import { install, uninstall } from "./service.js";
@@ -76,10 +76,10 @@ function parseModelAdd(args: string[]): { name: string; flags: ModelFlags } | nu
   return names.length === 1 ? { name: names[0]!, flags } : null;
 }
 
-/** Prints the preflight's problems, if any; whether there were none. */
+/** Prints the preflight's problems, if any, and what the Machine leaves out; whether there were no problems. */
 async function ready(print: (line: string) => void): Promise<boolean> {
-  const problems = await preflight();
-  for (const problem of problems) print(problem);
+  const { problems, notes } = await checkMachine({ configPath: configPath() });
+  for (const line of [...problems, ...notes]) print(line);
   return problems.length === 0;
 }
 
