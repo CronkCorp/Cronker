@@ -1,4 +1,4 @@
-/** What both converters read their source's records with. */
+/** What the converters read their sources' records with. */
 
 export const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
