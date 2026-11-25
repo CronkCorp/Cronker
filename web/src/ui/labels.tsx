@@ -131,9 +131,9 @@ export function DecisionStatusPill({ status }: { status: DecisionStatus }) {
   return <span className={`decision-status decision-status-${status}`}>{decisionStatusLabel(status)}</span>;
 }
 
-/** A model label, in the mono face. */
-export function ModelLabel({ model }: { model: string }) {
-  return <span className="model-label">{model}</span>;
+/** A model label, in the mono face, with the Machine model a Run ran on after it, such as `haiku (qwen)`. */
+export function ModelLabel({ model, machineModel }: { model: string; machineModel?: string | null }) {
+  return <span className="model-label">{machineModel ? `${model} (${machineModel})` : model}</span>;
 }
 
 /** A Ticket or Project key, such as CRONK-12, in the mono face at 12px muted. */

@@ -317,16 +317,20 @@ export function runDaemon(options: RunOptions): RunningDaemon {
             error.code === "machine_limit_reached"
           )
             return;
-          // Its Runner is full, as when its limit was lowered: it waits here, while other Runners' Runs may go.
+          // Its Runner is full, as when its limit was lowered, or its Machine model is on this Machine: it waits here,
+          // while other Runs may go.
           if (
             error instanceof CronkError &&
-            error.code === "runner_limit_reached"
+            (error.code === "runner_limit_reached" || error.code === "machine_model_limit_reached")
           )
             continue;
           // Claimed by another Machine, ended meanwhile, or Cronk unreachable: the stream tells it again if it still waits.
           pending.delete(key);
           if (
-            !(error instanceof CronkError && error.code === "run_not_claimable")
+            !(
+              error instanceof CronkError &&
+              ["run_not_claimable", "machine_model_missing", "machine_runs_no_claude"].includes(error.code ?? "")
+            )
           ) {
             print(
               `${cronk.url}: couldn't claim Run ${runId}: ${(error as Error).message}`,
@@ -431,6 +435,19 @@ export function runDaemon(options: RunOptions): RunningDaemon {
           ),
         );
     }, heartbeatMs);
+
+    if (claimed.machineModel) {
+      // Running a Machine model needs OpenCode, which this version doesn't drive yet: the Run fails rather than fall
+      // back to Claude.
+      clearInterval(heartbeat);
+      const reason = `this version of cronk-runner can't run Machine models such as ${claimed.machineModel} yet; upgrade it once one can, or map the label back to Claude`;
+      await report("end", { reason }).catch(() => {});
+      print(`${claimed.ticketKey}: ${reason}.`);
+      held.delete(runId);
+      resolveEnded();
+      claimWaiting();
+      return;
+    }
 
     let directory: string | undefined;
     let child: ReturnType<typeof spawn>;

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { writeConfig } from "../../daemon/src/config.js";
+import { writeConfig, type MachineModel } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { readRunRecord } from "../../daemon/src/history.js";
 import { followRun } from "../../daemon/src/logs.js";
@@ -78,7 +78,8 @@ async function eventually<T>(
 async function localSetUp({
   limit = 2,
   runLimit = 1,
-}: { limit?: number; runLimit?: number } = {}) {
+  models = [],
+}: { limit?: number; runLimit?: number; models?: MachineModel[] } = {}) {
   const { workspace } = await setUp(cronk);
   const ada = await signIn(cronk);
   const runner = await ok("POST", "/api/runners", ada, {
@@ -123,7 +124,7 @@ async function localSetUp({
   const configPath = join(home, "config.json");
   await writeConfig(configPath, {
     limit,
-    models: [],
+    models,
     cronks: [
       {
         url: cronk.url,
@@ -459,6 +460,31 @@ describe("cronk-runner run", () => {
     expect(failed.endReason).toBe(
       "The session ended without calling `finish`: claude exited with code 3: stand-in claude gave up",
     );
+  });
+
+  test("a Run claimed on a Machine model fails, saying this version can't run Machine models, and never runs claude", async () => {
+    const { ada, runner, start, delegate, runs, runState } = await localSetUp({
+      models: [
+        // Set up though its server isn't there: it is announced, down.
+        { name: "qwen", address: "http://127.0.0.1:9/v1", modelId: "qwen3.5:9b", contextSize: 65536, limit: 1, timeoutMinutes: 60 },
+      ],
+    });
+    start("finish");
+    await eventually(async () => {
+      const [machine] = await ok("GET", "/api/machines", ada);
+      return machine?.models.length === 1;
+    });
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, { machineModels: [{ label: "haiku", model: "qwen" }] });
+
+    const { run } = await delegate("On a Machine model");
+
+    const failed = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.machineModel).toBe("qwen");
+    expect(failed.endReason).toContain("can't run Machine models");
+    expect(await runs()).toEqual([]);
   });
 
   test("the edited allowlist is passed, Cronk's own tools always with it", async () => {

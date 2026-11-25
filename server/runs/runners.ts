@@ -13,6 +13,7 @@ import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 import { runnerOffline } from "./waiting.js";
+import { machineModelNamePattern, recheckClaimable, type MachineModelMapping } from "./machine-models.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -31,6 +32,12 @@ export const Trigger = Type.Object({
   createdAt: Type.String({ format: "date-time" }),
 });
 export type Trigger = Static<typeof Trigger>;
+
+/** A model label a `local` Runner maps to a Machine model. */
+const MachineModelMappingRecord = Type.Object({
+  label: Type.String({ description: "The model label, such as `haiku`, matched against a Step's model ignoring case." }),
+  model: Type.String({ description: "The Machine model it stands for, by its name on the Runner's Machines." }),
+});
 
 /** A Runner's budget per Run as its record shows it. */
 const BudgetPerRunField = Type.Union([Cost, Type.Null()], {
@@ -98,6 +105,12 @@ export const RunnerRecord = Type.Object({
       "Runs may use without asking, passed to `claude` as `--allowedTools` with `--permission-mode acceptEdits`. Cronk's " +
       "own MCP tools (`mcp__cronk`) are always allowed. Null for other kinds.",
   }),
+  machineModels: Type.Union([Type.Array(MachineModelMappingRecord), Type.Null()], {
+    description:
+      "For a `local` Runner, the model labels it maps to Machine models, in the order saved: a Run of a Step wanting " +
+      "a mapped label (matched ignoring case) is claimed only by a Machine that has its Machine model set up, never " +
+      "falling back to Claude, and needs no model id in the Workspace. Empty by default; null for other kinds.",
+  }),
   costThisMonth: Type.Array(Cost, {
     description:
       "What its Runs that ended this calendar month (in UTC) cost, one total per currency, real costs apart from " +
@@ -131,6 +144,7 @@ const columns = (now: string) => `id, name, kind, run_limit as limit,
   case when budget_per_run is not null then json_build_object('amount', budget_per_run, 'currency', 'USD') end
     as "budgetPerRun",
   allowed_tools as "allowedTools",
+  case when kind = 'local' then machine_models end as "machineModels",
   ${costTotalsSql(`runs.runner_id = runners.id and runs.ended_at >= date_trunc('month', ${now}::timestamptz, 'UTC')`)}
     as "costThisMonth",
   coalesce((select json_agg(${triggerJson} order by t.project_id nulls first, lower(t.model), t.created_at)
@@ -493,12 +507,34 @@ export const AllowedTools = Type.Union(
   },
 );
 
-/** The change-a-Runner route's body: whichever of its limit, budget per Run and allowlist are given, at least one. */
+/** A `local` Runner's mapping of model labels to Machine models, as the API takes it. */
+export const MachineModels = Type.Array(
+  Type.Object(
+    {
+      label: ModelLabel,
+      model: Type.String({
+        pattern: machineModelNamePattern,
+        description: "The name of a Machine model one of the Runner's Machines has set up.",
+      }),
+    },
+    { additionalProperties: false },
+  ),
+  {
+    maxItems: 50,
+    description:
+      "For a `local` Runner, the model labels it maps to Machine models, replacing those it maps: each label once, " +
+      "ignoring case, to a Machine model one of the Machines serving it has set up. Labels are trimmed. An empty list " +
+      "maps none. It applies to Runs not claimed yet.",
+  },
+);
+
+/** The change-a-Runner route's body: whichever of its limit, budget per Run, allowlist and Machine models are given, at least one. */
 export const RunnerEdit = Type.Object(
   {
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     budgetPerRun: Type.Optional(BudgetPerRun),
     allowedTools: Type.Optional(AllowedTools),
+    machineModels: Type.Optional(MachineModels),
   },
   { minProperties: 1 },
 );
@@ -507,7 +543,8 @@ export type RunnerEdit = Static<typeof RunnerEdit>;
 /**
  * Changes one of the User's own Runners: how many Runs it keeps running at once, where a higher limit starts waiting
  * Tickets, for a `managed_agents` Runner its budget per Run, which Runs started from then on get, and for a `local`
- * Runner its allowlist, which Runs claimed from then on get.
+ * Runner its allowlist and its mapping of labels to Machine models, which Runs claimed from then on get. Only the
+ * Runner's Owner changes it: another User's Runner answers as not found.
  */
 export async function updateRunner(
   context: Context,
@@ -538,12 +575,21 @@ export async function updateRunner(
         `${runner.name} is a Runner of the kind ${runner.kind}, whose Runs don't run on your Machines: only a local Runner has an allowlist.`,
       );
     }
+    if (input.machineModels !== undefined && runner.kind !== "local") {
+      throw new ApiError(
+        409,
+        "runner_has_no_machine_models",
+        `${runner.name} is a Runner of the kind ${runner.kind}, whose Runs don't run on your Machines: only a local Runner maps labels to Machine models.`,
+      );
+    }
+    const machineModels = input.machineModels && (await checkedMachineModels(tx, runnerId, input.machineModels));
     const allowedTools =
       input.allowedTools === null ? [...defaultAllowedTools] : input.allowedTools && [...new Set(input.allowedTools.map((rule) => rule.trim()))];
     const { rows } = await tx.query<Row>(
       `update runners set run_limit = coalesce($3, run_limit),
          budget_per_run = case when $4::boolean then $5::integer else budget_per_run end,
-         allowed_tools = coalesce($7::text[], allowed_tools)
+         allowed_tools = coalesce($7::text[], allowed_tools),
+         machine_models = coalesce($8::jsonb, machine_models)
        where id = $1 and owner_id = $2 returning ${columns("$6")}`,
       [
         runnerId,
@@ -553,9 +599,40 @@ export async function updateRunner(
         input.budgetPerRun?.amount ?? null,
         context.clock.now(),
         allowedTools ?? null,
+        machineModels ? JSON.stringify(machineModels) : null,
       ],
     );
     if (input.limit !== undefined) afterCommit(tx, () => startWaitingRuns(context, runnerId));
+    if (machineModels) afterCommit(tx, () => recheckClaimable(context, [runnerId]));
     return present(context, rows[0]!);
   });
+}
+
+/**
+ * A mapping as saved: labels trimmed, each once ignoring case (`duplicate_model_label`), each to a Machine model one of
+ * the Machines serving the Runner has set up (`unknown_machine_model`), so a name isn't mistyped.
+ */
+async function checkedMachineModels(tx: Tx, runnerId: string, input: MachineModelMapping[]): Promise<MachineModelMapping[]> {
+  const mapping = input.map(({ label, model }) => ({ label: label.trim(), model }));
+  const labels = mapping.map((m) => m.label.toLowerCase());
+  const twice = mapping.find((_, i) => labels.indexOf(labels[i]!) !== i);
+  if (twice) {
+    throw new ApiError(400, "duplicate_model_label", `The label ${twice.label} is mapped twice: map each label once.`);
+  }
+  const { rows } = await tx.query<{ name: string }>(
+    `select distinct m->>'name' as name from machine_runners join machines on machines.id = machine_runners.machine_id
+     cross join jsonb_array_elements(machines.announced_models) m
+     where machine_runners.runner_id = $1 and machines.revoked_at is null`,
+    [runnerId],
+  );
+  const offered = new Set(rows.map((r) => r.name));
+  const unknown = mapping.find((m) => !offered.has(m.model));
+  if (unknown) {
+    throw new ApiError(
+      400,
+      "unknown_machine_model",
+      `No Machine serving this Runner has the Machine model ${unknown.model} set up: add it with \`cronk-runner model add ${unknown.model}\` first.`,
+    );
+  }
+  return mapping;
 }

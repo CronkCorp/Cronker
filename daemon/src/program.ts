@@ -58,7 +58,7 @@ export function claudeArguments(
     "-p",
     claimed.brief,
     "--model",
-    claimed.modelId,
+    claimed.modelId ?? "",
     "--output-format",
     "stream-json",
     // `-p` refuses `stream-json` output without it.

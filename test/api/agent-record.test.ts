@@ -200,6 +200,7 @@ describe("the Agent Record", () => {
         ticket: ticketRef,
         step: "Triage",
         model: run.model,
+        machineModel: null,
         state: "running",
         outcome: null,
         endedAt: null,

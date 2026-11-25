@@ -370,6 +370,8 @@ export const api = {
   setBudgetPerRun: (id: string, budgetPerRun: Exclude<RunnerEdit["budgetPerRun"], undefined>) => call<Runner>("PATCH", runner(id), { budgetPerRun } satisfies RunnerEdit),
   /** Null resets it to the default. */
   setAllowedTools: (id: string, allowedTools: string[] | null) => call<Runner>("PATCH", runner(id), { allowedTools } satisfies RunnerEdit),
+  setMachineModels: (id: string, machineModels: { label: string; model: string }[]) =>
+    call<Runner>("PATCH", runner(id), { machineModels } satisfies RunnerEdit),
   removeRunner: (id: string) => call<void>("DELETE", runner(id)),
   machines: () => call<Machine[]>("GET", "/api/machines"),
   approvePairing: (input: PairingApproval) => call<Machine>("POST", "/api/machines/pairings/approve", input),
