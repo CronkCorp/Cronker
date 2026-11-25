@@ -37,7 +37,7 @@ import { useArrivals } from "./live.js";
 import { keys } from "./live-queries.js";
 import { Markdown } from "./markdown.js";
 import { MentionedIn } from "./mentioned-in.js";
-import { labelsOf, priorityLabel, QueueChip } from "./projects.js";
+import { labelsOf, priorityLabel, QueueChip, waitingReason } from "./projects.js";
 import { PullRequestCards, PullRequestRows } from "./pull-requests.js";
 import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
@@ -733,13 +733,6 @@ function Verification({
 /** A Pull Request as the timeline and Verification name it: its Repository and number. */
 const pullRequestName = (pr: { repository: string; number: number }) => `${pr.repository}#${pr.number}`;
 
-const waitingReasons = {
-  runnerSlot: "Runner full",
-  runnerPaused: "Runner rate-limited",
-  runnerOffline: "Runner offline: no Machine connected",
-  blocked: "Blocked by another Ticket",
-  archived: "Project archived",
-} as const;
 
 /** The Ticket's Run while one is running or waiting, or gone wrong with Retry; hidden otherwise. */
 function RunCard({
@@ -765,7 +758,7 @@ function RunCard({
     return (
       <section aria-label="Run" className="panel side-section run-card">
         <div className="run-card-head">
-          <RunState state="waiting" reason={waitingReasons[ticket.waiting]} />
+          <RunState state="waiting" reason={waitingReason(ticket)} />
         </div>
         {delegate && <Actor actor={{ kind: "agent", name: delegate.name }} />}
         {step && (
@@ -773,7 +766,7 @@ function RunCard({
             {step.name} <ModelLabel model={step.model} />
           </p>
         )}
-        <p className="small muted">Waiting: {waitingReasons[ticket.waiting]}.</p>
+        <p className="small muted">Waiting: {waitingReason(ticket)}.</p>
       </section>
     );
   }

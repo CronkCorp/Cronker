@@ -58,7 +58,8 @@ async function adaWithRunner({ runLimit = 1 }: { runLimit?: number } = {}) {
   const created = await ok("POST", `/api/workspaces/${workspace.id}/agents`, { cookie: ada, body: { name: "laptop" } });
   const agent = await ok("PATCH", `/api/agents/${created.id}`, { cookie: ada, body: { runnerId: runner.id } });
   const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, { cookie: ada, body: { name: "Cronker", key: "CRONK" } });
-  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
+  const statusId = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id as string;
+  const triage = statusId("Triage");
 
   const machine = async (name: string, models: (typeof qwen)[] | null, { limit = 2 }: { limit?: number } = {}) => {
     const started = await ok("POST", "/api/machines/pairings", { body: { name, os: "linux", daemonVersion: "0.3.0", limit } });
@@ -73,14 +74,24 @@ async function adaWithRunner({ runLimit = 1 }: { runLimit?: number } = {}) {
   };
   const map = (machineModels: { label: string; model: string }[]) =>
     ok("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { machineModels } });
-  const delegate = async (title: string) => {
+  // Triage's Step is on haiku, Investigate's on sonnet.
+  const delegate = async (title: string, { priority, status = "Triage" }: { priority?: string; status?: string } = {}) => {
     const ticket = await ok("POST", `/api/projects/${project.id}/tickets`, { cookie: ada, body: { title } });
-    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: agent.id, statusId: triage } });
+    const statusOf = status === "Triage" ? triage : statusId(status);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, { cookie: ada, body: { delegateId: agent.id, statusId: statusOf, ...(priority ? { priority } : {}) } });
     const [run] = await ok("GET", `/api/tickets/${ticket.id}/runs`, { cookie: ada });
     return { ticket, run };
   };
   const run = (runId: string) => ok("GET", `/api/runs/${runId}`, { cookie: ada });
-  return { workspace, ada, runner, agent, machine, map, delegate, run };
+  /** Waits until Cronk has seen the named Machine's stream close. */
+  const offline = (name: string) =>
+    eventually(async () => {
+      const machines = (await ok("GET", "/api/machines", { cookie: ada })) as { name: string; connected: boolean }[];
+      return machines.find((m) => m.name === name)?.connected === false;
+    });
+  const ticketOf = (ticketId: string) => ok("GET", `/api/tickets/${ticketId}`, { cookie: ada });
+  const runsOf = async (ticketId: string) => (await ok("GET", `/api/tickets/${ticketId}/runs`, { cookie: ada })) as { id: string; state: string }[];
+  return { workspace, ada, runner, agent, machine, map, delegate, run, ticketOf, runsOf, offline };
 }
 
 const claim = (token: string, runId: string) => call("POST", `/api/machine/runs/${runId}/claim`, { token });
@@ -192,16 +203,21 @@ test("with no Machine serving the Runner having the Machine model set up, the Ru
   expect(run.endReason).toContain("qwen");
 });
 
-test("a Machine model set up on an offline Machine still lets the Run start, claimable once it connects", async () => {
-  const { machine, map, delegate } = await adaWithRunner();
+test("a Machine model set up only on an offline Machine keeps the Ticket waiting for it, until that Machine connects", async () => {
+  const { machine, map, delegate, ticketOf, runsOf, offline } = await adaWithRunner();
   const gpu = await machine("ada-gpu", [qwen]);
   await map([{ label: "haiku", model: "qwen" }]);
   await machine("ada-laptop", [], {});
   gpu.stream.close();
+  await offline("ada-gpu");
 
-  const { run } = await delegate("Later");
+  const { ticket, run } = await delegate("Later");
 
-  expect(run.state).toBe("running");
+  expect(run).toBeUndefined();
+  expect(await ticketOf(ticket.id)).toEqual(expect.objectContaining({ waiting: "machineModel", waitingModel: "qwen" }));
+  streams.push(await openMachineStream(cronk, gpu.token));
+  await eventually(async () => (await runsOf(ticket.id)).length === 1);
+  expect((await ticketOf(ticket.id)).waiting).toBeNull();
 });
 
 test("a Run that becomes refusable before its claim fails with the same reason", async () => {
@@ -226,7 +242,7 @@ test("a Run that becomes refusable before its claim fails with the same reason",
 
 test("the mapping is read at the claim: a change applies to Runs not claimed yet and leaves claimed ones alone", async () => {
   const { machine, map, delegate, run } = await adaWithRunner({ runLimit: 3 });
-  const gpu = await machine("ada-gpu", [qwen]);
+  const gpu = await machine("ada-gpu", [{ ...qwen, limit: 2 }]);
   const claude = await machine("ada-laptop", []);
 
   // Started on Claude, then mapped before its claim: only a Machine with the Machine model claims it.
@@ -290,4 +306,108 @@ test("a Run's Machine model shows in the Agent Record and stays after the mappin
   expect(record.entries.find((e: { kind: string }) => e.kind === "run")).toEqual(
     expect.objectContaining({ model: "haiku", machineModel: "qwen" }),
   );
+});
+
+test("a Ticket whose Machine model is down waits naming it, and starts once the model comes back", async () => {
+  const { machine, map, delegate, ticketOf, runsOf } = await adaWithRunner();
+  const gpu = await machine("ada-gpu", [{ ...qwen, up: false }]);
+  await map([{ label: "haiku", model: "qwen" }]);
+
+  const { ticket, run } = await delegate("Down");
+
+  expect(run).toBeUndefined();
+  expect(await ticketOf(ticket.id)).toEqual(expect.objectContaining({ waiting: "machineModel", waitingModel: "qwen" }));
+  await drain(gpu.stream);
+  await ok("PUT", "/api/machine/announcement", { token: gpu.token, body: { claude: true, models: [qwen] } });
+  await eventually(async () => (await runsOf(ticket.id)).length === 1);
+  const [started] = await runsOf(ticket.id);
+  expect(started!.state).toBe("running");
+  expect(await ticketOf(ticket.id)).toEqual(expect.objectContaining({ waiting: null, waitingModel: null }));
+  expect((await claim(gpu.token, started!.id)).json.machineModel).toBe("qwen");
+});
+
+test("with every Machine offline, a Ticket on a Machine model waits for the Runner, not the model", async () => {
+  const { machine, map, delegate, ticketOf, offline } = await adaWithRunner();
+  const gpu = await machine("ada-gpu", [qwen]);
+  await map([{ label: "haiku", model: "qwen" }]);
+  gpu.stream.close();
+  await offline("ada-gpu");
+
+  const { ticket } = await delegate("Offline");
+
+  await eventually(async () => (await ticketOf(ticket.id)).waiting === "runnerOffline");
+  expect((await ticketOf(ticket.id)).waitingModel).toBeNull();
+});
+
+test("the queue passes by a Ticket waiting for its Machine model, holding no slot for it, and keeps Priority order among the rest", async () => {
+  const { ada, runner, machine, map, delegate, ticketOf, runsOf } = await adaWithRunner();
+  await ok("PATCH", `/api/runners/${runner.id}`, { cookie: ada, body: { limit: 1 } });
+  const gpu = await machine("ada-gpu", [{ ...qwen, up: false }]);
+  await map([{ label: "haiku", model: "qwen" }]);
+
+  const urgent = await delegate("Urgent on qwen", { priority: "urgent" });
+  const first = await delegate("First on Claude", { priority: "low", status: "Investigate" });
+  const low = await delegate("Low on Claude", { priority: "low", status: "Investigate" });
+  const high = await delegate("High on Claude", { priority: "high", status: "Investigate" });
+
+  // The Runner's one slot goes to the first Ticket that can start, not to the urgent one waiting for qwen.
+  expect(urgent.run).toBeUndefined();
+  expect(first.run?.state).toBe("running");
+  expect((await ticketOf(urgent.ticket.id)).waiting).toBe("machineModel");
+  expect((await ticketOf(low.ticket.id)).waiting).toBe("runnerSlot");
+  expect((await ticketOf(high.ticket.id)).waiting).toBe("runnerSlot");
+
+  // A Run's end gives its slot to the highest Priority Ticket that can start.
+  expect((await claim(gpu.token, first.run.id)).status).toBe(200);
+  await ok("POST", `/api/machine/runs/${first.run.id}/end`, { token: gpu.token, body: { reason: "done" } });
+  await eventually(async () => (await runsOf(high.ticket.id)).length === 1);
+  expect(await runsOf(low.ticket.id)).toEqual([]);
+  expect(await runsOf(urgent.ticket.id)).toEqual([]);
+});
+
+test("room for a Machine model is the sum of its connected Machines' limits; a Run's end starts the Ticket waiting for it", async () => {
+  const { machine, map, delegate, ticketOf, runsOf } = await adaWithRunner({ runLimit: 5 });
+  const one = await machine("ada-gpu", [qwen]);
+  await machine("ada-gpu-2", [qwen]);
+  await map([{ label: "haiku", model: "qwen" }]);
+
+  const first = await delegate("First");
+  const second = await delegate("Second");
+  const third = await delegate("Third");
+
+  expect(first.run?.state).toBe("running");
+  expect(second.run?.state).toBe("running");
+  expect(third.run).toBeUndefined();
+  expect(await ticketOf(third.ticket.id)).toEqual(expect.objectContaining({ waiting: "machineModel", waitingModel: "qwen" }));
+
+  expect((await claim(one.token, first.run.id)).status).toBe(200);
+  await ok("POST", `/api/machine/runs/${first.run.id}/end`, { token: one.token, body: { reason: "done" } });
+  await eventually(async () => (await runsOf(third.ticket.id)).length === 1);
+});
+
+test("a changed mapping starts the Tickets waiting for a Machine model", async () => {
+  const { machine, map, delegate, runsOf } = await adaWithRunner();
+  await machine("ada-gpu", [{ ...qwen, up: false }]);
+  await map([{ label: "haiku", model: "qwen" }]);
+  const { ticket, run } = await delegate("Remapped");
+  expect(run).toBeUndefined();
+
+  await map([]);
+
+  await eventually(async () => (await runsOf(ticket.id)).length === 1);
+});
+
+test("a claimed Run isn't touched when its Machine model goes down", async () => {
+  const { machine, map, delegate, run } = await adaWithRunner();
+  const gpu = await machine("ada-gpu", [qwen]);
+  await map([{ label: "haiku", model: "qwen" }]);
+  const { run: started } = await delegate("Claimed");
+  expect((await claim(gpu.token, started.id)).status).toBe(200);
+  await drain(gpu.stream);
+
+  await ok("PUT", "/api/machine/announcement", { token: gpu.token, body: { claude: true, models: [{ ...qwen, up: false }] } });
+
+  await gpu.stream.expectQuiet(300);
+  expect(await run(started.id)).toEqual(expect.objectContaining({ state: "running", machineModel: "qwen" }));
+  expect((await call("POST", `/api/machine/runs/${started.id}/heartbeat`, { token: gpu.token })).status).toBeLessThan(300);
 });

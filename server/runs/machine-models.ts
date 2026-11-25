@@ -1,5 +1,7 @@
 import type { Context } from "../context.js";
-import { runReports } from "./runs.js";
+import { transaction } from "../db.js";
+import { runReports, startWaitingRuns } from "./runs.js";
+import { mappedModelOf } from "./waiting.js";
 
 /**
  * What a Run of a `local` Runner needs (CRONK-156): a label its Runner maps to a Machine model needs that Machine
@@ -20,9 +22,7 @@ export interface MachineModelMapping {
  * SQL for the Machine model the Run's label is mapped to on its Runner, matched ignoring case; null for an unmapped
  * label, which needs Claude.
  */
-export const mappedModelSql = (runners: string, runs: string) =>
-  `(select m->>'model' from jsonb_array_elements(${runners}.machine_models) m
-    where lower(m->>'label') = lower(btrim(${runs}.model)) limit 1)`;
+export const mappedModelSql = (runners: string, runs: string) => mappedModelOf(runners, `${runs}.model`);
 
 /** SQL for whether the Machine offers what a Run needs, given its mapped Machine model (null for Claude). */
 export const offersSql = (machines: string, mapped: string) =>
@@ -93,6 +93,33 @@ export async function recheckClaimable(context: Context, runnerIds: string[]): P
       context.live.sendToMachine(machine.id, { type: "run.claimable", runId });
     }
   }
+}
+
+/**
+ * Once what the Runners' Machines offer, which of them are connected, or the Runners' mapping changed, and that
+ * committed: their Runs not claimed yet are rechecked (`recheckClaimable`), their waiting Tickets' cards change, since
+ * a Ticket may now wait for a Machine model or no longer, and their queues give out their free slots.
+ */
+export async function machineModelsChanged(context: Context, runnerIds: string[]): Promise<void> {
+  if (runnerIds.length === 0) return;
+  await recheckClaimable(context, runnerIds);
+  await ticketCardsChanged(context, runnerIds);
+  for (const runnerId of runnerIds) await startWaitingRuns(context, runnerId);
+}
+
+/** Tells the Workspaces of the Runners' waiting Tickets that their cards changed: what they wait for may have. */
+export async function ticketCardsChanged(context: Context, runnerIds: string[]): Promise<void> {
+  await transaction(context.db, async (tx) => {
+    const { rows } = await tx.query<{ id: string; workspaceId: string; projectId: string }>(
+      `select tickets.id, tickets.workspace_id as "workspaceId", tickets.project_id as "projectId"
+       from tickets join agents on agents.id = tickets.delegate_id
+       where tickets.waits_for_run and agents.runner_id = any($1::uuid[])`,
+      [runnerIds],
+    );
+    for (const ticket of rows) {
+      context.live.publish(tx, ticket.workspaceId, { type: "ticket.changed", projectId: ticket.projectId, ticketId: ticket.id });
+    }
+  });
 }
 
 /**

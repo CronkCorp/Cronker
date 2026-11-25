@@ -246,6 +246,40 @@ test("a local Runner's card maps model labels to the Machine models its Machines
   expect(runners[0].machineModels).toEqual([{ label: "haiku", model: "qwen" }]);
 });
 
+test("a Ticket waiting for its Machine model says which, and starts once the model is up", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const ada = await signIn(cronk);
+  const post = async (method: string, path: string, body?: unknown, headers?: Record<string, string>) => {
+    const response = await cronk.request(method, path, { cookie: ada, body, ...(headers ? { headers } : {}) });
+    expect(response.status, `${method} ${path}`).toBeLessThan(300);
+    return response.status === 204 ? null : response.json();
+  };
+  const runner = await post("POST", "/api/runners", { name: "Laptop", kind: "local" });
+  const started = await post("POST", "/api/machines/pairings", { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0" });
+  await post("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
+  const { machineToken } = await post("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode });
+  const daemon = { authorization: `Bearer ${machineToken}`, "x-cronk-runner-version": "0.3.0" };
+  const stream = await openMachineStream(cronk, machineToken);
+  await post("PUT", "/api/machine/announcement", { claude: true, models: [{ name: "qwen", limit: 1, up: false }] }, daemon);
+  await post("PATCH", `/api/runners/${runner.id}`, { machineModels: [{ label: "haiku", model: "qwen" }] });
+  const agent = await post("POST", `/api/workspaces/${workspace.id}/agents`, { name: "gpu" });
+  await post("PATCH", `/api/agents/${agent.id}`, { runnerId: runner.id });
+  const project = await post("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
+  const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id;
+  const ticket = await post("POST", `/api/projects/${project.id}/tickets`, { title: "On qwen" });
+  await post("PATCH", `/api/tickets/${ticket.id}`, { delegateId: agent.id, statusId: triage });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/tickets/${ticket.id}`);
+  const run = page.getByRole("region", { name: "Run" });
+  await expect(run).toContainText("Waiting: Machine model qwen down or full.");
+
+  // The daemon's check passes again: the Ticket starts, and its card follows.
+  await post("PUT", "/api/machine/announcement", { claude: true, models: [{ name: "qwen", limit: 1, up: true }] }, daemon);
+  await expect(run).not.toContainText("Machine model qwen down or full");
+  stream.close();
+});
+
 test("a local Runner's card lists the allowlist's rules that don't apply to Machine models, once it maps a label to one", async ({
   page,
   cronk,
