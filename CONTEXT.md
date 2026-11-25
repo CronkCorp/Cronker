@@ -244,6 +244,10 @@ _Avoid_: Provider, backend, executor
 A computer of a User's paired with a Cronk installation, running the `cronk-runner` daemon, which serves some of that User's `local` Runners. The User pairs it by approving the code `cronk-runner login` shows on the Runners page; it then holds a Machine token, which unpairing revokes. A Machine serves only its own User's Runners. Its daemon announces its version and its own limit on Runs at once, across all its Runners, whenever it calls; Cronk refuses a daemon older than it works with (`daemon_too_old`).
 _Avoid_: Host, device, worker, node
 
+**Machine model**:
+A model a Machine offers the `local` Runners it serves, wherever it is served: on the Machine, on its User's network or by a hosted API, but never Claude. Its Machine keeps its address and key; Cronk knows it by name, and Machines offering the same name offer the same Machine model. A Runner's Owner maps model labels to Machine models on it: a Run of a Step wanting a mapped label is claimed only by a Machine offering that Machine model, and never falls back to Claude (ADR 0015). While none offers it, the label's Tickets wait; once no Machine serving the Runner has it set up, their Runs are refused. A label not mapped stands for its model id in the Workspace.
+_Avoid_: Local model, custom model, provider
+
 **Runner setup**:
 A one-time, short-lived handoff in which a User's own Claude Code creates a Project's claude.ai routines for their subscription Runner, one per model label its board uses, and reports their trigger ids back to Cronk. Each becomes the Project's trigger for its label, waiting for the token the User pastes. Cronk never holds a claude.ai credential.
 _Avoid_: Install, bootstrap
