@@ -64,7 +64,7 @@ async function pair(
     body: {
       name,
       os: "linux",
-      daemonVersion: "0.3.0",
+      daemonVersion: "0.6.0",
       ...(limit ? { limit } : {}),
     },
   });
@@ -703,7 +703,7 @@ describe("the daemon's version and limit", () => {
     expect(refused.status).toBe(426);
     expect(refused.json.error.code).toBe("daemon_too_old");
     expect(refused.json.error.message).toContain(
-      "upgrade cronk-runner to 0.3.0",
+      "upgrade cronk-runner to 0.6.0",
     );
   });
 
@@ -723,25 +723,25 @@ describe("the daemon's version and limit", () => {
       expect(refused.json.error).toEqual({
         code: "daemon_too_old",
         message:
-          "This Cronk works with cronk-runner 0.3.0 or later, and this Machine runs 0.2.0: upgrade cronk-runner to 0.3.0 or later, then start it again.",
+          "This Cronk works with cronk-runner 0.6.0 or later, and this Machine runs 0.2.0: upgrade cronk-runner to 0.6.0 or later, then start it again.",
       });
     }
     const [machine] = await ok("GET", "/api/machines", { cookie: ada });
     expect(machine).toEqual(
       expect.objectContaining({
         daemonVersion: "0.2.0",
-        upgradeTo: "0.3.0",
+        upgradeTo: "0.6.0",
         connected: false,
       }),
     );
 
     await ok("GET", "/api/machine", {
       token: machineToken,
-      headers: { "x-cronk-runner-version": "0.3.1" },
+      headers: { "x-cronk-runner-version": "0.6.1" },
     });
     const [upgraded] = await ok("GET", "/api/machines", { cookie: ada });
     expect(upgraded).toEqual(
-      expect.objectContaining({ daemonVersion: "0.3.1", upgradeTo: null }),
+      expect.objectContaining({ daemonVersion: "0.6.1", upgradeTo: null }),
     );
   });
 

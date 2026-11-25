@@ -23,7 +23,7 @@ import { startWaitingRuns, stopRunningRun } from "../runs/runs.js";
  * pairing and on every call. Raise it when the daemon protocol changes in a way older daemons get wrong
  * (`docs/releasing.md`).
  */
-export const minDaemonVersion = "0.3.0";
+export const minDaemonVersion = "0.6.0";
 
 /** The header a daemon names its version in, on every call with its Machine token. */
 export const daemonVersionHeader = "x-cronk-runner-version";

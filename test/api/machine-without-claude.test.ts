@@ -26,7 +26,7 @@ async function call(method: string, path: string, options: Options = {}) {
   const response = await cronk.request(method, path, {
     cookie: options.cookie,
     body: options.body,
-    headers: options.token ? { authorization: `Bearer ${options.token}`, "x-cronk-runner-version": "0.3.0" } : {},
+    headers: options.token ? { authorization: `Bearer ${options.token}`, "x-cronk-runner-version": "0.6.0" } : {},
   });
   return { status: response.status, json: response.status === 204 ? null : await response.json() };
 }
@@ -67,7 +67,7 @@ async function adaWithRunner({ runLimit = 1 }: { runLimit?: number } = {}) {
     models: (typeof qwen)[] | null,
     { limit = 2, claude = true }: { limit?: number; claude?: boolean } = {},
   ) => {
-    const started = await ok("POST", "/api/machines/pairings", { body: { name, os: "linux", daemonVersion: "0.3.0", limit } });
+    const started = await ok("POST", "/api/machines/pairings", { body: { name, os: "linux", daemonVersion: "0.6.0", limit } });
     await ok("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
     const paired = await ok("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } });
     const token = paired.machineToken as string;

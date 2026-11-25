@@ -260,7 +260,7 @@ describe("cronk-runner run", () => {
       return response.json();
     };
     const runner = await call("POST", "/api/runners", { name: "Laptop", kind: "local" }, ada);
-    const started = await call("POST", "/api/machines/pairings", { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" });
+    const started = await call("POST", "/api/machines/pairings", { name: "ada-laptop", os: "linux", daemonVersion: "0.6.0" });
     const machine = await call("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] }, ada);
     const { machineToken } = await call("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode });
     await writeConfig(configPath, {
@@ -392,7 +392,7 @@ describe("cronk-runner run", () => {
     const project = await call("POST", `/api/workspaces/${workspace.id}/projects`, { name: "Cronker", key: "CRONK" });
     const triage = project.statuses.find((s: { name: string }) => s.name === "Triage").id as string;
     const pair = async (name: string) => {
-      const started = await call("POST", "/api/machines/pairings", { name, os: "linux", daemonVersion: "0.3.0" }, undefined);
+      const started = await call("POST", "/api/machines/pairings", { name, os: "linux", daemonVersion: "0.6.0" }, undefined);
       const machine = await call("POST", "/api/machines/pairings/approve", { userCode: started.userCode, runnerIds: [runner.id] });
       const { machineToken } = await call("POST", "/api/machines/pairings/poll", { deviceCode: started.deviceCode }, undefined);
       return { url: cronk!.url, machineId: machine.id, machineName: name, token: machineToken };

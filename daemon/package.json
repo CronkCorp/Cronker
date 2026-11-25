@@ -1,6 +1,6 @@
 {
   "name": "cronk-runner",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "The daemon that pairs a Machine with Cronk and runs the Runs of its User's local Runners.",
   "type": "module",
   "license": "MIT",

@@ -26,7 +26,7 @@ async function ok(method: string, path: string, options: { cookie?: string; body
   return response.json;
 }
 
-const laptop = { name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0" };
+const laptop = { name: "ada-laptop", os: "darwin", daemonVersion: "0.6.0" };
 
 /** Ada, signed in, with a `local` Runner. */
 async function adaWithLocalRunner() {
@@ -84,7 +84,7 @@ describe("pairing a Machine", () => {
     const userCode = started.userCode.replace("-", "").toLowerCase();
     const machine = await ok("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode, runnerIds: [runner.id] } });
     expect(machine).toEqual(
-      expect.objectContaining({ name: "ada-laptop", os: "darwin", daemonVersion: "0.3.0", limit: 2, lastContactAt: null, runners: [{ id: runner.id, name: "Laptop" }] }),
+      expect.objectContaining({ name: "ada-laptop", os: "darwin", daemonVersion: "0.6.0", limit: 2, lastContactAt: null, runners: [{ id: runner.id, name: "Laptop" }] }),
     );
 
     const paired = await ok("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } });
