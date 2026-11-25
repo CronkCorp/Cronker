@@ -18,7 +18,7 @@ import { startRunIfNeeded, blockingChanged, stopRunningRun } from "../runs/runs.
 import { Cost, costTotalsSql } from "../runs/costs.js";
 import { RunState } from "../runs/states.js";
 import { isLocalOnly, runsInCloud } from "../runs/runner.js";
-import { unfinishedBlockers, Waiting, waitingColumn } from "../runs/waiting.js";
+import { unfinishedBlockers, Waiting, waitingColumn, waitingModelColumn } from "../runs/waiting.js";
 import { userName } from "../identity/user.js";
 import { Description, Label, nullable, title } from "./fields.js";
 import {
@@ -133,6 +133,9 @@ export const TicketSummary = Type.Object({
     },
   ),
   waiting: Waiting,
+  waitingModel: Type.Union([Type.String(), Type.Null()], {
+    description: "The Machine model the Ticket waits for while `waiting` is `machineModel`, by its name; null otherwise.",
+  }),
   blockedBy: Type.Array(TicketRef, {
     description:
       "The unfinished Tickets blocking this one, of any Project of the Workspace, oldest block first. A blocker in a " +
@@ -297,7 +300,7 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
       order by lower(linked.repository_full_name), linked.number)
     from pull_request_links join pull_requests linked on linked.id = pull_request_links.pull_request_id
     where pull_request_links.ticket_id = tickets.id), '[]'::json) as "pullRequests",
-  ${waitingColumn("tickets")} as waiting,
+  ${waitingColumn("tickets")} as waiting, ${waitingModelColumn("tickets")} as "waitingModel",
   ${blockersColumns("tickets", reach)},
   array(select distinct pull_requests.conflict_branch from pull_request_links
     join pull_requests on pull_requests.id = pull_request_links.pull_request_id

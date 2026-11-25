@@ -7,7 +7,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { revokeLocalRunToken } from "../runs/local.js";
-import { machineModelNamePattern, recheckClaimable } from "../runs/machine-models.js";
+import { machineModelNamePattern, machineModelsChanged, ticketCardsChanged } from "../runs/machine-models.js";
 import { noSuchRunner } from "../runs/runners.js";
 import { startWaitingRuns, stopRunningRun } from "../runs/runs.js";
 
@@ -477,8 +477,8 @@ export async function unpairMachine(
       `select runner_id as "runnerId" from machine_runners where machine_id = $1`,
       [machineId],
     );
-    // Runs needing a Machine model only it had set up fail once it is gone.
-    afterCommit(tx, () => recheckClaimable(context, served.map((r) => r.runnerId)));
+    // Runs needing a Machine model only it had set up fail once it is gone, and Tickets waiting for room on it wait on.
+    afterCommit(tx, () => machineModelsChanged(context, served.map((r) => r.runnerId)));
     for (const ticket of held) {
       await stopRunningRun(
         context,
@@ -575,8 +575,9 @@ export async function announce(
         type: "runner.changed",
         runnerId: id,
       });
-    // Runs needing a Machine model it now offers are told to it, and those needing one no Machine has any more fail.
-    afterCommit(tx, () => recheckClaimable(context, machine.runners.map((r) => r.id)));
+    // Runs needing a Machine model it now offers are told to it, and those needing one no Machine has any more fail;
+    // Tickets waiting for a Machine model that came back or got room start, and those whose went down wait.
+    afterCommit(tx, () => machineModelsChanged(context, machine.runners.map((r) => r.id)));
   });
 }
 
@@ -706,6 +707,8 @@ export async function machineDisconnected(
         type: "runner.changed",
         runnerId: id,
       });
+    // Its Machine models' room went with it: Tickets that may now wait for one say so.
+    afterCommit(tx, () => ticketCardsChanged(context, machine.runners.map((r) => r.id)));
   });
 }
 

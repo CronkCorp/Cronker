@@ -539,13 +539,20 @@ const waitingReasons = {
   runnerSlot: "Runner full",
   runnerPaused: "Runner rate-limited",
   runnerOffline: "Runner offline: no Machine connected",
+  machineModel: "Machine model down or full",
   blocked: "Blocked by another Ticket",
   archived: "Project archived",
 } as const;
 
+/** Why the waiting Ticket waits, as a Run state's tooltip and the Run card read: a Machine model by its name. */
+export function waitingReason(ticket: Pick<TicketSummary, "waiting" | "waitingModel">): string {
+  if (ticket.waiting === "machineModel" && ticket.waitingModel) return `Machine model ${ticket.waitingModel} down or full`;
+  return ticket.waiting ? waitingReasons[ticket.waiting] : "";
+}
+
 /** A Ticket's Run state on its card or row: while a Run is running, waiting or has gone wrong; nothing otherwise. */
 export function TicketRunState({ ticket }: { ticket: TicketSummary }) {
-  if (ticket.waiting) return <RunState state="waiting" reason={waitingReasons[ticket.waiting]} />;
+  if (ticket.waiting) return <RunState state="waiting" reason={waitingReason(ticket)} />;
   const state = ticket.lastRun?.state;
   if (state === "running" || state === "failed" || state === "lost" || state === "refused") return <RunState state={state} />;
   return null;

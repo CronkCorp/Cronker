@@ -13,7 +13,7 @@ import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
 import { runnerOffline } from "./waiting.js";
-import { machineModelNamePattern, recheckClaimable, type MachineModelMapping } from "./machine-models.js";
+import { machineModelNamePattern, machineModelsChanged, type MachineModelMapping } from "./machine-models.js";
 
 /** A subscription Runner's trigger: the claude.ai scheduled task it fires for one model label. Its token is never returned. */
 export const Trigger = Type.Object({
@@ -603,7 +603,7 @@ export async function updateRunner(
       ],
     );
     if (input.limit !== undefined) afterCommit(tx, () => startWaitingRuns(context, runnerId));
-    if (machineModels) afterCommit(tx, () => recheckClaimable(context, [runnerId]));
+    if (machineModels) afterCommit(tx, () => machineModelsChanged(context, [runnerId]));
     return present(context, rows[0]!);
   });
 }
