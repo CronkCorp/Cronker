@@ -534,7 +534,6 @@ export function runDaemon(options: RunOptions): RunningDaemon {
                 `${claimed.ticketKey}: couldn't record its process: ${(error as Error).message}`,
               ),
             );
-    let recorded = recordProcess(child.pid);
     // What `cronk-runner logs` reads of the Run, saved whole at each change, one write at a time.
     let history: RunRecord = {
       runId,
@@ -557,6 +556,9 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         );
       }));
     void saveHistory({});
+    // The history first, so a daemon starting again after this one dies finds a recorded process's history to end.
+    const firstPid = child.pid;
+    let recorded = historySaved.then(() => recordProcess(firstPid));
     let lastError = "";
     let sessionId: string | null = null;
     let sessionReported: Promise<unknown> = Promise.resolve();
