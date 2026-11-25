@@ -264,6 +264,27 @@ async function stillRunning(context: Context, machine: MachineSelf, runId: strin
 const runStopped = () =>
   new ApiError(409, "run_stopped", "This Run is no longer running in Cronk: stop its process and let go of what it holds.");
 
+/**
+ * Records a call of a Run this Machine holds with `record`, an update matching the Run only while it runs, at the
+ * clock's time; refused with `run_stopped` once the Run no longer runs. The lost-Run check may make the Run lost between
+ * `stillRunning` reading it running and the update, which then matches nothing: the call brings it back as one finding
+ * it lost would, and records again.
+ */
+async function whileRunning<T>(
+  context: Context,
+  machine: MachineSelf,
+  runId: string,
+  record: (now: Date) => Promise<T | undefined>,
+): Promise<{ now: Date; row: T }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!(await stillRunning(context, machine, runId))) break;
+    const now = context.clock.now();
+    const row = await record(now);
+    if (row) return { now, row };
+  }
+  throw runStopped();
+}
+
 export const HeartbeatAnswer = Type.Object({
   repositories: Type.Array(RepositoryToken, {
     description: "Fresh GitHub tokens for the Run's Repositories once theirs expire within ten minutes; none before then.",
@@ -278,16 +299,15 @@ export type HeartbeatAnswer = Static<typeof HeartbeatAnswer>;
  * daemon to kill its process.
  */
 export async function heartbeat(context: Context, machine: MachineSelf, runId: string): Promise<HeartbeatAnswer> {
-  if (!(await stillRunning(context, machine, runId))) throw runStopped();
-  const now = context.clock.now();
-  const { rows } = await context.db.query<{ projectId: string; ticketId: string; tokensExpireAt: Date | null }>(
-    `update runs set last_call_at = $2 from tickets, local_runs
-     where runs.id = $1 and runs.state = 'running' and tickets.id = runs.ticket_id and local_runs.run_id = runs.id
-     returning tickets.project_id as "projectId", tickets.id as "ticketId", local_runs.tokens_expire_at as "tokensExpireAt"`,
-    [runId, now],
-  );
-  const run = rows[0];
-  if (!run) throw runStopped();
+  const { now, row: run } = await whileRunning(context, machine, runId, async (now) => {
+    const { rows } = await context.db.query<{ projectId: string; ticketId: string; tokensExpireAt: Date | null }>(
+      `update runs set last_call_at = $2 from tickets, local_runs
+       where runs.id = $1 and runs.state = 'running' and tickets.id = runs.ticket_id and local_runs.run_id = runs.id
+       returning tickets.project_id as "projectId", tickets.id as "ticketId", local_runs.tokens_expire_at as "tokensExpireAt"`,
+      [runId, now],
+    );
+    return rows[0];
+  });
   if (!run.tokensExpireAt || run.tokensExpireAt.getTime() > now.getTime() + tokenRotationMarginMs) return { repositories: [] };
   let repositories;
   try {
@@ -322,12 +342,13 @@ export type LocalSession = Static<typeof LocalSession>;
 
 /** Records the Claude Code session of a Run the Machine holds as its session reference. */
 export async function reportSession(context: Context, machine: MachineSelf, runId: string, sessionId: string): Promise<void> {
-  if (!(await stillRunning(context, machine, runId))) throw runStopped();
-  await context.db.query("update runs set session_id = $2, last_call_at = $3 where id = $1 and state = 'running'", [
-    runId,
-    sessionIdOf(sessionId.trim()),
-    context.clock.now(),
-  ]);
+  await whileRunning(context, machine, runId, async (now) => {
+    const { rows } = await context.db.query<{ id: string }>(
+      "update runs set session_id = $2, last_call_at = $3 where id = $1 and state = 'running' returning id",
+      [runId, sessionIdOf(sessionId.trim()), now],
+    );
+    return rows[0];
+  });
 }
 
 export const LocalRunEnd = Type.Object({
