@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import pg from "pg";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
 import { minutes } from "../harness/clock.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
@@ -827,6 +828,104 @@ describe("a local Run whose Machine slept", () => {
       body: { outcome: "ready" },
     });
     expect(finished.state).toBe("finished");
+  });
+
+  /**
+   * Has `between` run once a call has read its Run running and is about to record itself with the update starting with
+   * `update`, as the lost-Run check could run on the server in between.
+   */
+  function beforeUpdate(update: string, between: () => Promise<void>) {
+    const query = pg.Pool.prototype.query;
+    let held = false;
+    const spy = vi
+      .spyOn(pg.Pool.prototype, "query")
+      .mockImplementation(async function (this: pg.Pool, ...args: unknown[]) {
+        if (!held && typeof args[0] === "string" && args[0].trimStart().startsWith(update)) {
+          held = true;
+          await between();
+        }
+        return (query as (...a: unknown[]) => unknown).apply(this, args);
+      } as typeof query);
+    return {
+      get held() {
+        return held;
+      },
+      restore: () => spy.mockRestore(),
+    };
+  }
+
+  /** A claimed local Run past the lost-Run threshold, its silence not yet checked. */
+  async function silentRun() {
+    const set = await localSetUp();
+    const { ticket, run } = await set.delegate("Asleep");
+    const { token } = (await claim(set.machineToken, run.id)).json;
+    cronk.clock.advance(minutes(120));
+    return { ...set, ticket, run, token };
+  }
+
+  test("whose heartbeat races the lost-Run check comes back rather than being told to stop", async () => {
+    const { ada, machineToken, run, token } = await silentRun();
+    const lostMeanwhile = beforeUpdate("update runs set last_call_at", async () => {
+      await cronk.checkForLostRuns();
+      await cronk.jobsSettled();
+    });
+
+    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, {
+      token: machineToken,
+    });
+    lostMeanwhile.restore();
+
+    expect(lostMeanwhile.held).toBe(true);
+    expect(beat.status).toBe(200);
+    const back = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
+    expect(back.state).toBe("running");
+    expect(back.endReason).toBeNull();
+    expect((await call("GET", "/api/agent", { token })).status).toBe(200);
+  });
+
+  test("whose session report races the lost-Run check comes back and records the session", async () => {
+    const { ada, machineToken, run } = await silentRun();
+    const lostMeanwhile = beforeUpdate("update runs set session_id", async () => {
+      await cronk.checkForLostRuns();
+      await cronk.jobsSettled();
+    });
+
+    const reported = await call("POST", `/api/machine/runs/${run.id}/session`, {
+      token: machineToken,
+      body: { sessionId: "session-after-sleep" },
+    });
+    lostMeanwhile.restore();
+
+    expect(lostMeanwhile.held).toBe(true);
+    expect(reported.status).toBeLessThan(300);
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("running");
+  });
+
+  test("whose heartbeat races the lost-Run check while its Ticket moves on is still told to stop", async () => {
+    const { ada, machineToken, ticket, run, token } = await silentRun();
+    const lostMeanwhile = beforeUpdate("update runs set last_call_at", async () => {
+      await cronk.checkForLostRuns();
+      await cronk.jobsSettled();
+      await ok("PATCH", `/api/tickets/${ticket.id}`, {
+        cookie: ada,
+        body: { delegateId: null },
+      });
+    });
+
+    const beat = await call("POST", `/api/machine/runs/${run.id}/heartbeat`, {
+      token: machineToken,
+    });
+    lostMeanwhile.restore();
+
+    expect(lostMeanwhile.held).toBe(true);
+    expect(beat.status).toBe(409);
+    expect(beat.json.error.code).toBe("run_stopped");
+    expect(
+      (await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).state,
+    ).toBe("lost");
+    expect((await call("GET", "/api/agent", { token })).status).toBe(401);
   });
 
   test("whose Ticket moved on meanwhile is told to stop on waking, and its token is revoked", async () => {
