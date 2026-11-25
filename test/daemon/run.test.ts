@@ -26,6 +26,7 @@ import { refusingCronk, tooOldMessage } from "../harness/refusing-cronk.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 import { openMachineStream } from "../harness/stream.js";
+import { standInModelServer, type StandInModelServer } from "../harness/model-server.js";
 
 /**
  * Seam 2: `cronk-runner run` in-process against a real Cronk, with a scripted stand-in `claude` on its PATH that
@@ -742,16 +743,24 @@ describe("cronk-runner run", () => {
 });
 
 describe("a Run on a Machine model, through OpenCode", () => {
-  const qwen: MachineModel = {
-    name: "qwen",
-    // Set up though its server isn't there: it is announced, down, and a Run on it still starts.
-    address: "http://127.0.0.1:9/v1",
-    modelId: "qwen3.5:9b",
-    contextSize: 65536,
-    key: "sk-machine-model-key",
-    limit: 1,
-    timeoutMinutes: 60,
-  };
+  // Its server is up, so the daemon announces it up and a Run on it starts rather than waits.
+  let modelServer: StandInModelServer;
+  let qwen: MachineModel;
+  beforeEach(async () => {
+    modelServer = await standInModelServer();
+    qwen = {
+      name: "qwen",
+      address: modelServer.address,
+      modelId: "qwen3.5:9b",
+      contextSize: 65536,
+      key: "sk-machine-model-key",
+      limit: 1,
+      timeoutMinutes: 60,
+    };
+  });
+  afterEach(async () => {
+    await modelServer.stop();
+  });
 
   /**
    * The set-up with a Repository and the Machine model qwen, which Triage's label maps to, a stand-in `opencode` and a
@@ -811,7 +820,7 @@ describe("a Run on a Machine model, through OpenCode", () => {
     const mapToQwen = async () => {
       await eventually(async () => {
         const [machine] = await ok("GET", "/api/machines", setup.ada);
-        return machine?.models.length === 1;
+        return machine?.models.length === 1 && machine.models[0].up === true;
       });
       await ok("PATCH", `/api/runners/${setup.runner.id}`, setup.ada, {
         machineModels: [{ label: "haiku", model: "qwen" }],
@@ -869,7 +878,7 @@ describe("a Run on a Machine model, through OpenCode", () => {
         machine: {
           name: "qwen",
           package: "@opencode/ai/providers/openai-compatible",
-          settings: { baseURL: "http://127.0.0.1:9/v1", apiKey: "{env:CRONK_MODEL_KEY}" },
+          settings: { baseURL: modelServer.address, apiKey: "{env:CRONK_MODEL_KEY}" },
           models: { "qwen3.5:9b": { limit: { context: 65536, output: 8192 } } },
         },
       },

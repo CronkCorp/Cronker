@@ -73,6 +73,7 @@ describe("creating a Ticket", () => {
       lastRun: null,
       pullRequests: [],
       waiting: null,
+      waitingModel: null,
       blockedBy: [],
       conflicts: [],
       backport: null,
