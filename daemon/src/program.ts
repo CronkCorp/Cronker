@@ -6,7 +6,7 @@ import type { ClaimedRun } from "./api.js";
 /**
  * The program a Run's agent runs as, behind the seam the daemon's Run lifecycle (worktrees, heartbeats, stops,
  * uploads, reporting its end, what a restarted daemon cleans up) calls: what to spawn, and what its output means.
- * Claude Code is the one program today.
+ * Claude Code runs Runs on Claude; OpenCode (`opencode.ts`) runs Runs on a Machine model.
  */
 export interface RunProgram {
   /** What the daemon calls it in what it prints and reports, such as `claude was killed by SIGTERM`. */
@@ -15,13 +15,15 @@ export interface RunProgram {
   command: string;
   /**
    * Writes what the program needs into the Run's scratch directory, outside the directory the agent works in, and
-   * answers the arguments it runs with and its identity: a string unique to the Run that the process's command line
+   * answers the arguments it runs with, the environment it runs with, from the daemon's own (`base`) and what the
+   * Run's worktrees need (`workspace`), and its identity: a string unique to the Run that the process's command line
    * carries, so a daemon starting again kills only a process still running this Run.
    */
   prepare(
     claimed: ClaimedRun,
     directory: string,
-  ): Promise<{ args: string[]; identity: string }>;
+    env: { base: NodeJS.ProcessEnv; workspace: NodeJS.ProcessEnv },
+  ): Promise<{ args: string[]; identity: string; env: NodeJS.ProcessEnv }>;
   /** A reader of one Run's output, line by line, answering what each line said. */
   reader(): (line: string) => ProgramOutput;
   /** Where the transcript of the session is, once the program wrote it; null until then. */
@@ -44,16 +46,32 @@ const mcpServerName = "cronk";
 /** Cronk's own MCP tools, always allowed: without them the agent can't call `finish`. */
 const cronkTools = `mcp__${mcpServerName}`;
 
+/** Claude Code's tools that edit files, which a Run of a read-only Step is denied. */
+export const claudeEditTools = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/** Whether an allow rule names one of Claude Code's edit tools, such as `Edit` or `Write(src/**)`. */
+const allowsEdits = (rule: string) =>
+  claudeEditTools.includes(rule.trim().replace(/\(.*$/s, ""));
+
 /**
  * The arguments `claude` runs a claimed Run with: edits accepted, and the Runner's allowlist, with Cronk's own tools
  * always in it, as the tools it may use without asking. In `-p` mode a tool call outside them is denied. A
  * Repository's committed Claude Code settings add their own allow rules, as Claude Code merges them.
+ *
+ * A Run of a read-only Step accepts no edits: the edit tools are disallowed, which wins over any allow rule, the
+ * Repository's included, and dropped from the allowlist. Commands that write, such as `sed -i`, aren't stopped.
  */
 export function claudeArguments(
   claimed: ClaimedRun,
   mcpConfigPath: string,
 ): string[] {
-  const allowed = [...new Set([...claimed.allowedTools, cronkTools])];
+  const readOnly = claimed.readOnly === true;
+  const allowed = [
+    ...new Set([
+      ...claimed.allowedTools.filter((rule) => !readOnly || !allowsEdits(rule)),
+      cronkTools,
+    ]),
+  ];
   return [
     "-p",
     claimed.brief,
@@ -66,7 +84,8 @@ export function claudeArguments(
     "--mcp-config",
     mcpConfigPath,
     "--permission-mode",
-    "acceptEdits",
+    readOnly ? "default" : "acceptEdits",
+    ...(readOnly ? ["--disallowedTools", ...claudeEditTools] : []),
     // Last, one rule per argument: the flag takes every argument after it.
     "--allowedTools",
     ...allowed,
@@ -168,7 +187,7 @@ export function claudeCode(command = "claude"): RunProgram {
   return {
     name: "claude",
     command,
-    async prepare(claimed, directory) {
+    async prepare(claimed, directory, env) {
       // The Run's token goes in a file only its User reads, outside the directory the agent works in, never in argv.
       const mcpConfigPath = join(directory, "mcp.json");
       const mcpConfig = {
@@ -186,6 +205,8 @@ export function claudeCode(command = "claude"): RunProgram {
       return {
         args: claudeArguments(claimed, mcpConfigPath),
         identity: mcpConfigPath,
+        // The User's own environment, signed in to Claude as they are.
+        env: { ...env.base, ...env.workspace },
       };
     },
     reader: () => readClaudeLine,

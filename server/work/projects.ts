@@ -196,13 +196,14 @@ export async function createProject(
     }
     const statuses = await statusesOf(tx, project.id);
     const idOf = (name: string) => statuses.find((s) => s.name === name)!.id;
-    for (const [name, { kind, brief, model, labelRule, outcomes }] of Object.entries(defaultSteps)) {
+    for (const [name, { kind, brief, model, labelRule, readOnly, outcomes }] of Object.entries(defaultSteps)) {
       const step: Step = {
         kind: kind ?? "ordinary",
         brief,
         model,
         roundLimit: defaultRoundLimit,
         labelRule: labelRule ?? null,
+        readOnly: readOnly ?? false,
         outcomes: outcomes.map(({ name, status, ...flags }) => ({
           name,
           statusId: idOf(status),

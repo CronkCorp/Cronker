@@ -3,7 +3,8 @@
 // $STAND_IN_CLAUDE_MODE says: `finish`es the Run named in its Brief through Cronk's MCP server with the token from
 // its `--mcp-config` and exits 0; `wait-finish` does so once the file `$STAND_IN_CLAUDE_LOG.go` exists; `exit:<code>`
 // exits with that code without finishing; `denied:<command>` ends its turn on a Bash call to that command outside its
-// allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; `hang`s until killed; or
+// allowed tools, reporting it in `permission_denials`, and exits 0 without finishing; `edit-denied:<path>` does the
+// same for an Edit of that file; `hang`s until killed; or
 // `hang-hard`s, ignoring SIGTERM, until SIGKILL. A comma-separated $STAND_IN_CLAUDE_MODE gives each run its own mode, in
 // the order they run, the last one for any further runs. $STAND_IN_CLAUDE_OUTCOME is the Outcome it finishes with
 // (`ready` when unset), and with $STAND_IN_CLAUDE_LINGER_MS set it waits that long after finishing before it exits, as
@@ -87,6 +88,16 @@ if (mode === "hang" || mode === "hang-hard") {
     session_id: sessionId,
     is_error: false,
     permission_denials: [{ tool_name: "Bash", tool_use_id: "toolu_stand_in", tool_input: { command } }],
+  });
+  process.exit(0);
+} else if (mode.startsWith("edit-denied:")) {
+  const file_path = mode.slice(12);
+  say({
+    type: "result",
+    subtype: "success",
+    session_id: sessionId,
+    is_error: false,
+    permission_denials: [{ tool_name: "Edit", tool_use_id: "toolu_stand_in", tool_input: { file_path } }],
   });
   process.exit(0);
 } else if (mode.startsWith("exit:")) {

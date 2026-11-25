@@ -340,8 +340,8 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
   // At most one running Run per Ticket: a second is never recorded, even by requests racing this one.
   const inserted = await tx.query(
     `insert into runs (id, workspace_id, ticket_id, status_id, status_name, model, agent_id, runner_id, state, brief,
-       end_reason, started_at, ended_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       end_reason, started_at, ended_at, read_only)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      on conflict (ticket_id) where state = 'running' do nothing`,
     [
       runId,
@@ -357,6 +357,7 @@ async function enterStatus(context: Context, tx: Tx, ticketId: string, now: Date
       refusal,
       now,
       refusal ? now : null,
+      status.step.readOnly,
     ],
   );
   if (inserted.rowCount === 0) return "none";
@@ -817,6 +818,23 @@ export const RunFinish = Type.Object({
 });
 export type RunFinish = Static<typeof RunFinish>;
 
+/** The line Cronk adds to the Report of a Run of a read-only Step held by a Machine, whatever its agent wrote. */
+export const readOnlyNote =
+  "_This Run's Step was read-only: its file edits were refused, so nothing it describes as changed was kept._";
+
+/**
+ * Whether the Run was of a read-only Step, as it stood when the Run started, and held by a Machine, which refuses its
+ * file edits. A Run of another Runner only has the Brief asking it not to edit.
+ */
+export async function readOnlyRun(db: Pick<Tx, "query">, runId: string): Promise<boolean> {
+  const { rows } = await db.query<{ readOnly: boolean }>(
+    `select runs.read_only and exists (select 1 from local_runs where local_runs.run_id = runs.id) as "readOnly"
+     from runs where runs.id = $1`,
+    [runId],
+  );
+  return rows[0]?.readOnly === true;
+}
+
 /**
  * Ends a running Run as its Agent chose, applying the Outcome: the Run is finished and its Ticket
  * moves to the Outcome's Status, which starts the next Run if that Status has a Step.
@@ -901,7 +919,8 @@ export async function finishRun(
         // Backported: the Ticket waits for the Backport to link and join the queue, with no other Run here.
         if (backports) await backported(context, tx, ticket);
         if (givenReport !== undefined) {
-          await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: givenReport });
+          const body = (await readOnlyRun(tx, run.id)) ? `${givenReport.trimEnd()}\n\n${readOnlyNote}` : givenReport;
+          await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body });
         }
         // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, shows on the Run
         // and with the Ticket's needs you in the Inbox.

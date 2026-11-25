@@ -51,6 +51,8 @@ export interface ClaimedRun {
   repositories: ClaimedRepository[];
   /** The Runner's allowlist: Claude Code permission rules for the tools the Run may use without asking. */
   allowedTools: string[];
+  /** Whether the Run's Step is read-only, so its file edits are refused whatever the allowlist says. */
+  readOnly?: boolean;
 }
 
 /** What a heartbeat answers: fresh tokens for the Run's Repositories once theirs near their expiry. */

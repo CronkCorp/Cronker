@@ -30,15 +30,16 @@ import {
   type RunRecord,
 } from "./history.js";
 import { announcementOf, type Announcement } from "./models.js";
+import { openCode } from "./opencode.js";
 import { claudeCode, type RunProgram } from "./program.js";
 import { repositoryCache, type RunWorkspace } from "./repositories.js";
 
 /**
  * `cronk-runner run`: the daemon's foreground service. For each paired Cronk it keeps the Machine's event stream open,
  * claims the Runs it announces while the Machine's limit has room, and runs each with its program (Claude Code, see
- * `program.ts`) in a fresh scratch directory holding a fresh worktree of each of its Repositories: reporting its session
- * id, heartbeating it while it runs, uploading its transcript as it goes, and reporting how the process ended, with the
- * cost the program estimated.
+ * `program.ts`, or OpenCode for a Run on a Machine model, see `opencode.ts`) in a fresh scratch directory holding a
+ * fresh worktree of each of its Repositories: reporting its session id, heartbeating it while it runs, uploading its
+ * transcript as it goes, and reporting how the process ended, with the cost the program estimated.
  * The worktrees are removed once the Run ended, unless it is lost and may yet come back: then they are kept until
  * Cronk says otherwise.
  * A Run stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory,
@@ -54,6 +55,8 @@ export interface RunOptions {
   print: (line: string) => void;
   /** The Claude Code executable, looked up on the `PATH` of `env`; `claude` when left out. */
   claude?: string;
+  /** The OpenCode executable, looked up on the `PATH` of `env`; `opencode` when left out. */
+  opencode?: string;
   /** The environment the program runs with; the daemon's own when left out. */
   env?: NodeJS.ProcessEnv;
   /** How often a running Run is heartbeated: every minute, well inside the lost-Run threshold, when left out. */
@@ -108,6 +111,8 @@ export interface RunningDaemon {
 /** One Run the daemon holds: its process, and how to stop it. */
 interface HeldRun {
   cronkUrl: string;
+  /** What its program is called, such as `claude`. */
+  program: string;
   kill(): void;
   ended: Promise<void>;
 }
@@ -137,8 +142,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     transcriptMs = 10_000,
   } = options;
   const env = options.env ?? process.env;
-  /** The program the Runs run as. */
-  const program: RunProgram = claudeCode(options.claude);
+  /** The program the Runs on Claude run as. */
+  const claude: RunProgram = claudeCode(options.claude);
   const scratchRoot = options.scratchRoot ?? tmpdir();
   const stateDir = options.stateDir ?? stateDirOf(options.configPath);
   const historyDir = historyDirOf(stateDir);
@@ -349,7 +354,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     pending.delete(`${cronk.url} ${runId}`);
     const run = held.get(runId);
     if (run) {
-      print(`Run ${runId} was stopped in Cronk; stopping ${program.name}.`);
+      print(`Run ${runId} was stopped in Cronk; stopping ${run.program}.`);
       run.kill();
       await run.ended;
     }
@@ -414,7 +419,8 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     /** Stops the Run before its process is spawned, as while it waits for its worktrees. */
     const abort = new AbortController();
     let kill = () => abort.abort();
-    held.set(runId, { cronkUrl: cronk.url, kill: () => kill(), ended });
+    let program = claude;
+    held.set(runId, { cronkUrl: cronk.url, program: program.name, kill: () => kill(), ended });
     let workspace: RunWorkspace | undefined;
     const heartbeat = setInterval(() => {
       report<HeartbeatAnswer>("heartbeat")
@@ -436,23 +442,21 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         );
     }, heartbeatMs);
 
-    if (claimed.machineModel) {
-      // Running a Machine model needs OpenCode, which this version doesn't drive yet: the Run fails rather than fall
-      // back to Claude.
-      clearInterval(heartbeat);
-      const reason = `this version of cronk-runner can't run Machine models such as ${claimed.machineModel} yet; upgrade it once one can, or map the label back to Claude`;
-      await report("end", { reason }).catch(() => {});
-      print(`${claimed.ticketKey}: ${reason}.`);
-      held.delete(runId);
-      resolveEnded();
-      claimWaiting();
-      return;
-    }
-
     let directory: string | undefined;
     let child: ReturnType<typeof spawn>;
     let identity: string;
     try {
+      if (claimed.machineModel) {
+        // Read now, as the config may have changed since the last check; a Machine model never falls back to Claude.
+        const { models } = await readConfig(options.configPath);
+        const model = models.find((m) => m.name === claimed.machineModel);
+        if (!model)
+          throw new Error(
+            `it has no Machine model called ${claimed.machineModel} any more: add it again with \`cronk-runner model add ${claimed.machineModel}\``,
+          );
+        program = openCode(model, options.opencode);
+        held.set(runId, { cronkUrl: cronk.url, program: program.name, kill: () => kill(), ended });
+      }
       directory = await mkdtemp(join(scratchRoot, "cronk-run-"));
       workspace = await repositories.prepare(
         directory,
@@ -461,15 +465,18 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         { owner: `Run ${runId}`, signal: abort.signal, branchWaitMs },
       );
       if (abort.signal.aborted) throw new Error("it was stopped");
-      const prepared = await program.prepare(claimed, directory);
+      const prepared = await program.prepare(claimed, directory, {
+        base: env,
+        workspace: workspace.env,
+      });
       identity = prepared.identity;
       if (abort.signal.aborted) throw new Error("it was stopped");
       print(
-        `${claimed.ticketKey}: running Run ${runId} with ${claimed.modelId}.`,
+        `${claimed.ticketKey}: running Run ${runId} with ${claimed.machineModel ?? claimed.modelId}.`,
       );
       child = spawn(program.command, prepared.args, {
         cwd: workspace.cwd,
-        env: { ...env, ...workspace.env },
+        env: prepared.env,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
@@ -654,7 +661,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         print(
           `${claimed.ticketKey}: Run ${runId} is lost in Cronk; keeping its worktree until it is stopped or ended.`,
         );
-        keepWhileLost(report, cleanUp, runWorkspace);
+        keepWhileLost(report, cleanUp, runWorkspace, program.name);
       } else {
         await cleanUp();
       }
@@ -680,9 +687,10 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     report: <T>(path: string, body?: unknown) => Promise<T>,
     cleanUp: () => Promise<void>,
     workspace: RunWorkspace,
+    programName: string,
   ): void {
     const ask = () =>
-      report<RunEnded>("end", { reason: `${program.name} had exited` }).then(
+      report<RunEnded>("end", { reason: `${programName} had exited` }).then(
         async (ended) => {
           if (ended.mayComeBack || !kept.has(check)) return;
           kept.delete(check);

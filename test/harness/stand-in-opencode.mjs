@@ -1,0 +1,71 @@
+// A stand-in for OpenCode V2's `opencode` CLI, put on the daemon's PATH by tests (seam 2) behind a wrapper script that
+// sets its own $STAND_IN_OPENCODE_* variables, as the daemon passes on only the environment a Run needs. It records how
+// it was run to the JSON-lines file in $STAND_IN_OPENCODE_LOG: its arguments, working directory, pid, environment (but
+// its own variables), the config in $OPENCODE_CONFIG_CONTENT and, run in a git worktree, the branch, the password git's
+// credential helpers give for $STAND_IN_OPENCODE_CREDENTIAL_URL, what `gh` printed and the git identity. It prints
+// `--format json` events, each naming its session, and then, as $STAND_IN_OPENCODE_MODE says: `finish`es the Run named
+// in its Brief through the MCP server and headers its config gives, `{env:…}` read as OpenCode does, and exits 0;
+// `exit:<code>` exits with that code without finishing; `hang`s until killed; or `hang-hard`s, ignoring SIGTERM, until
+// SIGKILL.
+import { execFileSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? "null");
+const fromEnv = (text) => text.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => process.env[name] ?? "");
+const run = (command, commandArgs, input) => {
+  try {
+    return execFileSync(command, commandArgs, { input, encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+};
+
+let repository = null;
+const branch = run("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+if (branch !== null) {
+  const credentialUrl = process.env.STAND_IN_OPENCODE_CREDENTIAL_URL;
+  const credential = credentialUrl ? run("git", ["credential", "fill"], `url=${credentialUrl}\n\n`) : "";
+  repository = {
+    branch,
+    password: /^password=(.*)$/m.exec(credential ?? "")?.[1] ?? null,
+    gh: run("gh", ["pr", "view"]),
+    gitName: run("git", ["config", "user.name"]),
+  };
+}
+const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("STAND_IN_OPENCODE_")));
+appendFileSync(
+  process.env.STAND_IN_OPENCODE_LOG,
+  `${JSON.stringify({ args, cwd: process.cwd(), pid: process.pid, env, config, repository })}\n`,
+);
+
+const sessionID = `ses_stand_in_${process.pid}`;
+const say = (type, more = {}) => process.stdout.write(`${JSON.stringify({ type, timestamp: Date.now(), sessionID, ...more })}\n`);
+say("step_start");
+
+const mode = process.env.STAND_IN_OPENCODE_MODE ?? "finish";
+if (mode === "hang" || mode === "hang-hard") {
+  if (mode === "hang-hard") process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
+} else if (mode.startsWith("exit:")) {
+  process.stderr.write("stand-in opencode gave up\n");
+  process.exit(Number(mode.slice(5)));
+} else {
+  const brief = args.at(-1);
+  const runId = /Run id is ([0-9a-f-]{36})/.exec(brief)[1];
+  const server = config.mcp.servers.cronk;
+  const headers = Object.fromEntries(Object.entries(server.headers).map(([name, value]) => [name, fromEnv(value)]));
+  const rpc = async (id, method, params) => {
+    const response = await fetch(server.url, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    });
+    return response.json();
+  };
+  await rpc(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "stand-in-opencode", version: "0" } });
+  const result = await rpc(2, "tools/call", { name: "finish", arguments: { run: runId, outcome: "ready" } });
+  say("tool_use", { part: { tool: "cronk_finish", state: { status: result.result?.isError ? "error" : "completed" } } });
+  say("step_finish");
+  process.exit(0);
+}

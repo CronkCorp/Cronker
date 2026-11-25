@@ -29,6 +29,7 @@ function newStep(project: Project, status: Status): Step {
     model: "sonnet",
     roundLimit: 2,
     labelRule: null,
+    readOnly: false,
     outcomes: [
       { name: "done", statusId: next.id, default: true, needsYou: false, countsAsRound: false },
       { name: "needs you", statusId: firstOther.id, default: false, needsYou: true, countsAsRound: false },
@@ -78,6 +79,7 @@ function StepItem({
         status.step.model,
         `${status.step.outcomes.length} Outcomes`,
         ...(status.step.labelRule ? [labelRuleShown(status.step.labelRule)] : []),
+        ...(status.step.readOnly ? ["read-only"] : []),
       ].join(", ")
     : "No Step: Tickets here wait for a User";
 
@@ -212,6 +214,12 @@ function StepForm({
           </Field>
         )}
       </div>
+      <Check
+        label={`${of} is read-only`}
+        hint="Its Runs on machine Runners can't edit files, and their Brief says so. Commands that write, such as sed -i, aren't stopped."
+        checked={draft.readOnly}
+        onChange={(e) => onDraft({ ...draft, readOnly: e.target.checked })}
+      />
       <fieldset>
         <legend className="field-label">Outcomes of {of}</legend>
         <ol className="outcomes">

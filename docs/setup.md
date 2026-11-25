@@ -213,6 +213,8 @@ A local Runner runs your Agents' Runs with Claude Code on a Machine of your own,
 
 `install`, `run` and `status` first check that `claude` and `git` are on the `PATH` and that Claude Code is signed in (`claude auth login`), and name whatever is missing; `install` installs nothing until they are. The service keeps the `PATH` and the Node that `install` ran with, so run `cronk-runner install` again from your usual shell after installing new tools or another Node. `cronk-runner uninstall` stops the service and removes it. To run the daemon in a terminal instead, use `cronk-runner run`.
 
+A Run of a read-only Step, such as Triage or Investigate on the default board, runs with Claude Code's edit tools refused: it can still run the commands its Runner's allowlist allows, some of which write files, such as `sed -i`. Turn a Step's **read-only** setting on or off under the Project's **Steps**. A daemon older than this setting edits anyway, so upgrade it.
+
 To upgrade it, run `npm install -g cronk-runner@latest`, then `cronk-runner install` again.
 
 ## 12. Get your Inbox on your phone (optional)

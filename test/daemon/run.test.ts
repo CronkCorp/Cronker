@@ -220,6 +220,11 @@ async function localSetUp({
     });
     return ticket;
   };
+  /** Turns the Triage Step's read-only setting on or off, keeping the rest of the Step. */
+  const triageReadOnly = async (readOnly: boolean) => {
+    const step = project.statuses.find((s: { id: string }) => s.id === triage).step;
+    await ok("PUT", `/api/projects/${project.id}/statuses/${triage}/step`, ada, { ...step, readOnly });
+  };
   /** How the stand-in was run, once per run; a line the stand-in is still writing waits for the next read. */
   const runs = async () => {
     const text = await readFile(log, "utf8");
@@ -245,6 +250,7 @@ async function localSetUp({
     start,
     delegate,
     delegateOffline,
+    triageReadOnly,
     runOf,
     runs,
     runState,
@@ -263,7 +269,7 @@ const git = async (cwd: string, ...args: string[]) =>
  * repository standing in for it as the remote: `main` with one commit, and `feat/CRONK-1-started` one commit ahead.
  */
 async function withRepository(
-  options: { limit?: number; runLimit?: number } = {},
+  options: { limit?: number; runLimit?: number; models?: MachineModel[] } = {},
 ) {
   const setup = await localSetUp(options);
   await createGitHubApp(cronk, setup.ada);
@@ -402,8 +408,9 @@ const exists = (path: string) =>
 
 describe("cronk-runner run", () => {
   test("claims a delegated Run and runs claude with the Brief, model, stream-json, Cronk's MCP server, edits accepted and the Runner's allowlist; finish finishes the Run", async () => {
-    const { ada, start, delegate, runs, runState, scratch } =
+    const { ada, start, delegate, triageReadOnly, runs, runState, scratch } =
       await localSetUp();
+    await triageReadOnly(false);
     start("finish");
 
     const { run } = await delegate("Run me locally");
@@ -465,33 +472,10 @@ describe("cronk-runner run", () => {
     );
   });
 
-  test("a Run claimed on a Machine model fails, saying this version can't run Machine models, and never runs claude", async () => {
-    const { ada, runner, start, delegate, runs, runState } = await localSetUp({
-      models: [
-        // Set up though its server isn't there: it is announced, down.
-        { name: "qwen", address: "http://127.0.0.1:9/v1", modelId: "qwen3.5:9b", contextSize: 65536, limit: 1, timeoutMinutes: 60 },
-      ],
-    });
-    start("finish");
-    await eventually(async () => {
-      const [machine] = await ok("GET", "/api/machines", ada);
-      return machine?.models.length === 1;
-    });
-    await ok("PATCH", `/api/runners/${runner.id}`, ada, { machineModels: [{ label: "haiku", model: "qwen" }] });
-
-    const { run } = await delegate("On a Machine model");
-
-    const failed = await eventually(async () => {
-      const state = await runState(run.id);
-      return state.state === "failed" && state;
-    });
-    expect(failed.machineModel).toBe("qwen");
-    expect(failed.endReason).toContain("can't run Machine models");
-    expect(await runs()).toEqual([]);
-  });
-
   test("the edited allowlist is passed, Cronk's own tools always with it", async () => {
-    const { ada, runner, start, delegate, runs, runState } = await localSetUp();
+    const { ada, runner, start, delegate, triageReadOnly, runs, runState } =
+      await localSetUp();
+    await triageReadOnly(false);
     await ok("PATCH", `/api/runners/${runner.id}`, ada, {
       allowedTools: ["Bash(git:*)", "Bash(cargo test:*)"],
     });
@@ -509,6 +493,51 @@ describe("cronk-runner run", () => {
       "Bash(cargo test:*)",
       "mcp__cronk",
     ]);
+  });
+
+  test("a Run of a read-only Step runs claude accepting no edits, the edit tools disallowed and out of the allowlist", async () => {
+    const { ada, runner, start, delegate, runs, runState } = await localSetUp();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, {
+      allowedTools: ["Bash(git:*)", "Edit", "Write(src/**)", "Read"],
+    });
+    start("finish");
+
+    // Triage is read-only on a new Project's board.
+    const { run } = await delegate("Look only");
+
+    await eventually(async () => (await runState(run.id)).state === "finished");
+    const [ran] = await runs();
+    expect(ran.args.slice(ran.args.indexOf("--permission-mode"))).toEqual([
+      "--permission-mode",
+      "default",
+      "--disallowedTools",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "--allowedTools",
+      "Bash(git:*)",
+      "Read",
+      "mcp__cronk",
+    ]);
+    const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
+    expect(brief.text).toContain("This Step is read-only");
+  });
+
+  test("a Run of a read-only Step whose edit was refused fails saying the Step is read-only, not to widen the allowlist", async () => {
+    const { start, delegate, runState } = await localSetUp();
+    start("edit-denied:src/bug.ts");
+
+    const { run } = await delegate("Fix it anyway");
+
+    const failed = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 0. Its Step is read-only, so its file " +
+        "edits were refused: Edit.",
+    );
   });
 
   test("a claude that ends on a tool outside the allowlist fails the Run naming it", async () => {
@@ -710,6 +739,297 @@ describe("cronk-runner run", () => {
       { amount: 137, currency: "USD", estimate: true },
     ]);
   });
+});
+
+describe("a Run on a Machine model, through OpenCode", () => {
+  const qwen: MachineModel = {
+    name: "qwen",
+    // Set up though its server isn't there: it is announced, down, and a Run on it still starts.
+    address: "http://127.0.0.1:9/v1",
+    modelId: "qwen3.5:9b",
+    contextSize: 65536,
+    key: "sk-machine-model-key",
+    limit: 1,
+    timeoutMinutes: 60,
+  };
+
+  /**
+   * The set-up with a Repository and the Machine model qwen, which Triage's label maps to, a stand-in `opencode` and a
+   * `gh` printing the token it was given on the daemon's PATH, and a git identity in the daemon's environment.
+   */
+  async function onMachineModel({ repository = true } = {}) {
+    // A daemon of its own process clones from the Repository's real address: it runs without one.
+    const setup = repository
+      ? await withRepository({ models: [qwen] })
+      : { ...(await localSetUp({ models: [qwen] })), remote: undefined, goodTokens: () => [] as string[] };
+    const bin = join(home, "bin");
+    const log = join(home, "opencode.jsonl");
+    await writeFile(log, "");
+    const standIn = fileURLToPath(
+      new URL("../harness/stand-in-opencode.mjs", import.meta.url),
+    );
+    const cloneUrl = `${cronk.github.url}/cronkcorp/cronker`;
+    await writeFile(
+      join(bin, "gh"),
+      `#!/bin/sh\necho "gh $* with $GH_TOKEN"\n`,
+    );
+    await chmod(join(bin, "gh"), 0o755);
+    const gitconfig = join(home, "gitconfig");
+    await writeFile(gitconfig, "[user]\n\tname = Ada Lovelace\n\temail = ada@example.com\n");
+    /** Puts the stand-in `opencode` on the PATH, running in the mode, with its own variables set by its wrapper. */
+    const useMode = async (mode: string) => {
+      await writeFile(
+        join(bin, "opencode"),
+        `#!/bin/sh\nSTAND_IN_OPENCODE_LOG="${log}" STAND_IN_OPENCODE_MODE="${mode}" ` +
+          `STAND_IN_OPENCODE_CREDENTIAL_URL="${cloneUrl}.git" exec "${process.execPath}" "${standIn}" "$@"\n`,
+      );
+      await chmod(join(bin, "opencode"), 0o755);
+    };
+    const env = {
+      GIT_CONFIG_GLOBAL: gitconfig,
+      // The User's own variables, which a Run on a Machine model never sees.
+      ADA_SECRET: "not for the Run",
+      ANTHROPIC_API_KEY: "sk-ant-not-for-the-Run",
+    };
+    const startOn = async (mode: string, more: { heartbeatMs?: number; killGraceMs?: number } = {}) => {
+      await useMode(mode);
+      return setup.start("hang", more.heartbeatMs, {
+        remote: setup.remote,
+        killGraceMs: more.killGraceMs,
+        env,
+      });
+    };
+    const opencodeRuns = async () => {
+      const text = await readFile(log, "utf8");
+      return text
+        .slice(0, text.lastIndexOf("\n") + 1)
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+    };
+    /** Maps Triage's label to qwen, once the Machine announced it. */
+    const mapToQwen = async () => {
+      await eventually(async () => {
+        const [machine] = await ok("GET", "/api/machines", setup.ada);
+        return machine?.models.length === 1;
+      });
+      await ok("PATCH", `/api/runners/${setup.runner.id}`, setup.ada, {
+        machineModels: [{ label: "haiku", model: "qwen" }],
+      });
+    };
+    return { ...setup, useMode, startOn, opencodeRuns, mapToQwen, env };
+  }
+
+  test("runs opencode with the Brief, the Machine model as its only server and the fixed permissions, in a home and environment of its own; finish finishes the Run, its session reported and no cost", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns, runs, scratch, goodTokens } =
+      await onMachineModel();
+    await startOn("finish");
+    await mapToQwen();
+
+    const { run } = await delegate("On qwen");
+
+    const finished = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "finished" && state;
+    });
+    expect(finished.outcome).toBe("ready");
+    expect(finished.machineModel).toBe("qwen");
+    expect(await runs()).toEqual([]);
+    const [ran] = await opencodeRuns();
+    // The session id is reported, as `cronk-runner logs` reads it; no cost is.
+    expect((await readRunRecord(join(home, "runs", "history"), run.id))?.sessionId).toBe(`ses_stand_in_${ran.pid}`);
+    expect(finished.cost).toBeNull();
+
+    const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
+    expect(ran.args).toEqual([
+      "run",
+      "--standalone",
+      "--format",
+      "json",
+      "--model",
+      "machine/qwen3.5:9b",
+      "--title",
+      `cronk-run ${run.id}`,
+      brief.text,
+    ]);
+    // Neither the key nor the Run's token is in the arguments; both come from the environment the config names.
+    const token = ran.env.CRONK_RUN_TOKEN as string;
+    expect(token).toMatch(/^cronk_agent_/);
+    expect(ran.env.CRONK_MODEL_KEY).toBe("sk-machine-model-key");
+    expect(JSON.stringify(ran.args)).not.toContain(token);
+    expect(JSON.stringify(ran.args)).not.toContain("sk-machine-model-key");
+    expect(JSON.stringify(ran.config)).not.toContain(token);
+    expect(JSON.stringify(ran.config)).not.toContain("sk-machine-model-key");
+
+    expect(ran.config).toEqual({
+      $schema: "https://opencode.ai/config.json",
+      model: "machine/qwen3.5:9b",
+      small_model: "machine/qwen3.5:9b",
+      providers: {
+        machine: {
+          name: "qwen",
+          package: "@opencode/ai/providers/openai-compatible",
+          settings: { baseURL: "http://127.0.0.1:9/v1", apiKey: "{env:CRONK_MODEL_KEY}" },
+          models: { "qwen3.5:9b": { limit: { context: 65536, output: 8192 } } },
+        },
+      },
+      mcp: {
+        servers: {
+          cronk: {
+            type: "remote",
+            url: `${cronk.url}/mcp`,
+            codemode: false,
+            oauth: false,
+            headers: { Authorization: "Bearer {env:CRONK_RUN_TOKEN}" },
+          },
+        },
+      },
+      share: "disabled",
+      update: "disable",
+      autoupdate: false,
+      permissions: [
+        { action: "*", resource: "*", effect: "deny" },
+        { action: "read", resource: "*", effect: "allow" },
+        { action: "glob", resource: "*", effect: "allow" },
+        { action: "grep", resource: "*", effect: "allow" },
+        { action: "edit", resource: "*", effect: "allow" },
+        { action: "cronk_*", resource: "*", effect: "allow" },
+        ...[
+          "git *",
+          "gh pr view *",
+          "gh pr list *",
+          "gh pr diff *",
+          "gh pr checks *",
+          "gh issue view *",
+          "gh issue list *",
+          "gh run view *",
+          "gh run list *",
+          "gh repo view *",
+        ].map((resource) => ({ action: "shell", resource, effect: "allow" })),
+        { action: "external_directory", resource: "*", effect: "deny" },
+        { action: "read", resource: "/*", effect: "deny" },
+        { action: "edit", resource: "/*", effect: "deny" },
+        { action: "skill", resource: "*", effect: "deny" },
+        { action: "opencode_worktree_remove", resource: "*", effect: "deny" },
+      ],
+      policies: expect.arrayContaining([
+        { action: "provider.use", resource: "*", effect: "deny" },
+        { action: "provider.use", resource: "machine", effect: "allow" },
+        { action: "mcp.use", resource: "*", effect: "deny" },
+        { action: "mcp.use", resource: "cronk", effect: "allow" },
+        { action: "skill.use", resource: "*", effect: "deny" },
+        { action: "tool.use", resource: "*", effect: "deny" },
+        { action: "tool.use", resource: "shell:git *", effect: "allow" },
+        { action: "tool.use", resource: "skill:*", effect: "deny" },
+        { action: "tool.use", resource: "opencode_worktree_remove:*", effect: "deny" },
+        { action: "tool.use", resource: "external_directory:*", effect: "deny" },
+      ]),
+    });
+
+    // A home of the Run's own in its scratch directory, outside the worktree, and only the environment it needs.
+    const runDirectory = ran.cwd.slice(0, ran.cwd.indexOf("/work"));
+    expect(runDirectory.startsWith(scratch)).toBe(true);
+    expect(ran.env.HOME).toBe(join(runDirectory, "home"));
+    expect(ran.env.XDG_CONFIG_HOME).toBe(join(runDirectory, "home", ".config"));
+    expect(ran.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
+    expect(ran.env.ADA_SECRET).toBeUndefined();
+    expect(ran.env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(ran.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    const allowed = /^(PATH|HOME|XDG_[A-Z_]+|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|TMP|TEMP|GIT_TERMINAL_PROMPT|GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)|OPENCODE_[A-Z_]+|CRONK_RUN_TOKEN|CRONK_MODEL_KEY|PWD|SHLVL|_)$/;
+    expect(Object.keys(ran.env).filter((name) => !allowed.test(name))).toEqual([]);
+
+    // git and gh work there with the App's token, as the User's git identity.
+    expect(ran.repository).not.toBeNull();
+    expect(goodTokens()).toContain(ran.repository.password);
+    expect(ran.repository.gh).toBe(`gh pr view with ${ran.repository.password}`);
+    expect(ran.repository.gitName).toBe("Ada Lovelace");
+    await eventually(async () => (await readdir(scratch)).length === 0);
+  });
+
+  test("an opencode that exits without finish fails the Run with the exit reason", async () => {
+    const { startOn, mapToQwen, delegate, runState } = await onMachineModel();
+    await startOn("exit:3");
+    await mapToQwen();
+
+    const { run } = await delegate("Give up on qwen");
+
+    const failed = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: opencode exited with code 3: stand-in opencode gave up",
+    );
+    expect(failed.cost).toBeNull();
+  });
+
+  test("a Run on a Machine model this Machine no longer has fails saying so, and runs neither program", async () => {
+    const { startOn, mapToQwen, delegate, runState, runs, opencodeRuns, configPath } = await onMachineModel();
+    await startOn("finish");
+    await mapToQwen();
+    // Removed from the config after the daemon announced it.
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    await writeConfig(configPath, { ...config, models: [] });
+
+    const { run } = await delegate("Gone");
+
+    const failed = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toContain("it has no Machine model called qwen any more");
+    expect(await runs()).toEqual([]);
+    expect(await opencodeRuns()).toEqual([]);
+  });
+
+  test("a Run stopped in Cronk kills its opencode, even one ignoring SIGTERM", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns, scratch } = await onMachineModel();
+    await startOn("hang-hard", { heartbeatMs: 60_000, killGraceMs: 200 });
+    await mapToQwen();
+    const { ticket, run } = await delegate("Stubborn qwen");
+    const [{ pid }] = await eventually(async () => (await opencodeRuns()).length > 0 && opencodeRuns());
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+
+    await eventually(async () => daemon!.held().length === 0);
+    expect(alive(pid)).toBe(false);
+    expect((await runState(run.id)).state).toBe("stopped");
+    expect(await readdir(scratch)).toEqual([]);
+  });
+
+  test("a daemon starting again kills the opencode the last one left behind, by its title, and fails its Run: runner restarted", async () => {
+    const { configPath, claudeEnv, useMode, startOn, mapToQwen, delegate, runState, opencodeRuns, scratch, env } =
+      await onMachineModel({ repository: false });
+    await useMode("hang-hard");
+    const main = fileURLToPath(new URL("../../daemon/src/main.ts", import.meta.url));
+    const last = spawn(process.execPath, ["--import", "tsx", main, "run"], {
+      env: { ...claudeEnv("hang"), ...env, CRONK_RUNNER_CONFIG: configPath, TMPDIR: scratch },
+      stdio: "ignore",
+    });
+    try {
+      await mapToQwen();
+      const { run } = await delegate("Left behind on qwen");
+      const [{ pid }] = await eventually(async () => (await opencodeRuns()).length > 0 && opencodeRuns(), 20_000);
+      const processRecords = async () =>
+        (await readdir(join(home, "runs")).catch(() => [] as string[])).filter((name) => name.endsWith(".json"));
+      await eventually(async () => (await processRecords()).length > 0);
+      last.kill("SIGKILL");
+      await new Promise((resolve) => last.once("exit", resolve));
+      expect(alive(pid)).toBe(true);
+
+      await startOn("hang", { heartbeatMs: 60_000, killGraceMs: 200 });
+
+      const failed = await eventually(async () => {
+        const state = await runState(run.id);
+        return state.state === "failed" && state;
+      });
+      expect(failed.endReason).toBe("The session ended without calling `finish`: runner restarted");
+      await eventually(async () => !alive(pid));
+      await eventually(async () => (await processRecords()).length === 0);
+    } finally {
+      last.kill("SIGKILL");
+    }
+  }, 30_000);
 });
 
 describe("cronk-runner logs", () => {
