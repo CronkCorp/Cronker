@@ -2,6 +2,7 @@ import type { Context } from "../context.js";
 import { transaction, type Tx } from "../db.js";
 import { pullRequestOnGitHub } from "../github/client.js";
 import { installationCovering, tokenFor } from "../github/installations.js";
+import { isGitHubOutage, throughGitHub } from "../github/status.js";
 import { sendBackForKnownFailures } from "./sending-back.js";
 
 /**
@@ -12,8 +13,9 @@ import { sendBackForKnownFailures } from "./sending-back.js";
  * that base branch linking a Ticket in a Review Status; once an Outcome moves a Ticket into a Review Status, about its
  * open Pull Requests; and after a push to a marked Pull Request, about it, since the push may resolve the conflict.
  * Each ask waits in `mergeability_checks` until `checkMergeability` asks GitHub; while GitHub answers that it is still
- * working mergeability out, it is asked again shortly, a bounded number of times. Direct pushes to a base branch
- * aren't watched.
+ * working mergeability out, it is asked again shortly, a bounded number of times. While GitHub is unavailable
+ * (`github/status.ts`), no ask goes out and none counts as a try: each waits, still due, until GitHub may be asked
+ * again. Direct pushes to a base branch aren't watched.
  */
 
 /** How long Cronk waits before asking again about a Pull Request whose mergeability GitHub is still working out. */
@@ -26,8 +28,10 @@ const maxTries = 6;
 export type Mergeability =
   /** GitHub answered: `mergeable` is null while it is still working it out. */
   | { kind: "answered"; mergeable: boolean | null; base: { ref: string; sha: string } }
-  /** GitHub couldn't be reached or refused. */
+  /** GitHub refused. */
   | { kind: "unanswered" }
+  /** GitHub is unavailable, as Cronk just found or waits out: the ask waits for it. */
+  | { kind: "waiting" }
   /** No installation of the App can see the Pull Request. */
   | { kind: "unseen" };
 
@@ -42,14 +46,16 @@ export async function askMergeability(
   pullRequest: { repositoryId: number; repository: string; number: number },
 ): Promise<Mergeability> {
   try {
-    const installationId = await installationCovering(context, pullRequest.repositoryId);
-    if (installationId === undefined) return { kind: "unseen" };
-    const token = await tokenFor(context, installationId);
-    const answer = await pullRequestOnGitHub(context.config, token, pullRequest.repository, pullRequest.number);
-    if (!answer || typeof answer.base?.ref !== "string" || typeof answer.base.sha !== "string") return { kind: "unseen" };
-    return { kind: "answered", mergeable: typeof answer.mergeable === "boolean" ? answer.mergeable : null, base: answer.base };
-  } catch {
-    return { kind: "unanswered" };
+    return await throughGitHub(context, async (): Promise<Mergeability> => {
+      const installationId = await installationCovering(context, pullRequest.repositoryId);
+      if (installationId === undefined) return { kind: "unseen" };
+      const token = await tokenFor(context, installationId);
+      const answer = await pullRequestOnGitHub(context.config, token, pullRequest.repository, pullRequest.number);
+      if (!answer || typeof answer.base?.ref !== "string" || typeof answer.base.sha !== "string") return { kind: "unseen" };
+      return { kind: "answered", mergeable: typeof answer.mergeable === "boolean" ? answer.mergeable : null, base: answer.base };
+    });
+  } catch (error) {
+    return isGitHubOutage(error) ? { kind: "waiting" } : { kind: "unanswered" };
   }
 }
 
@@ -148,9 +154,11 @@ interface Waiting {
 /**
  * Asks GitHub about each Pull Request waiting to be checked whose time has come. One that conflicts is marked so, and
  * one that merges cleanly loses its marker; one GitHub is still working out, couldn't answer about, or answered for the base before the merge
- * that had Cronk ask, is asked again shortly, until it has been asked `maxTries` times.
+ * that had Cronk ask, is asked again shortly, until it has been asked `maxTries` times. While GitHub is unavailable the
+ * pass asks nothing, leaving each check as it was.
  */
 export async function checkMergeability(context: Context): Promise<void> {
+  if (context.githubStatus.waitingUntil(context.clock.now())) return;
   const { rows } = await context.db.query<Waiting>(
     `select pull_requests.id, pull_requests.repository_id as "repositoryId",
        coalesce(repositories.full_name, pull_requests.repository_full_name) as repository, pull_requests.number,
@@ -169,6 +177,8 @@ export async function checkMergeability(context: Context): Promise<void> {
   );
   for (const waiting of rows) {
     const asked = await askMergeability(context, { ...waiting, repositoryId: Number(waiting.repositoryId) });
+    // GitHub being unavailable is no try: this check and those after it wait for a later pass.
+    if (asked.kind === "waiting") return;
     await transaction(context.db, (tx) => settle(context, tx, waiting, asked));
   }
 }

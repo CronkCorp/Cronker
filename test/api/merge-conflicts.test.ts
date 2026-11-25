@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { hours, seconds } from "../harness/clock.js";
+import { hours, minutes, seconds } from "../harness/clock.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import type { StandInApp, StandInInstallation, StandInRepository } from "../harness/github.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
@@ -256,7 +256,7 @@ describe("Asking GitHub while it works mergeability out", () => {
     await notSentBack(ticket.id, cookie, status("In Review"));
   });
 
-  test("Cronk stops asking after six tries without an answer, and GitHub being unavailable counts as one", async () => {
+  test("Cronk stops asking after six tries without an answer; GitHub being unavailable counts as none", async () => {
     const { cookie, cronker, ticket, mergeAnother } = await inReview();
     cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [null] });
     await mergeAnother(9, "m1");
@@ -269,7 +269,8 @@ describe("Asking GitHub while it works mergeability out", () => {
       await cronk.checkMergeability();
     }
 
-    expect(asks()).toBe(6);
+    // The ask GitHub answered with 503, then six it answered.
+    expect(asks()).toBe(7);
     expect(await conflictOf(ticket.id, cookie)).toBeNull();
   });
 
@@ -474,6 +475,83 @@ describe("Marking only where it applies", () => {
     // Only the ask moving into In Review had Cronk make, with automation still on.
     expect(asked()).toHaveLength(1);
     expect(await ticketOf(ticket.id, cookie)).toMatchObject({ statusId: status("In Review") });
+    expect(await conflictOf(ticket.id, cookie)).toBeNull();
+  });
+});
+
+describe("While GitHub is unavailable", () => {
+  test("Cronk asks it nothing about mergeability until its backoff ends, longer for each outage in a row, then asks again", async () => {
+    const { cookie, cronker, ticket, mergeAnother } = await inReview();
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
+    await mergeAnother(9, "m1");
+
+    cronk.github.unavailable = true;
+    await cronk.checkMergeability();
+    const failed = cronk.github.apiCalls.length;
+    // Waiting: 30 seconds after the first outage, no call goes out.
+    for (let i = 0; i < 2; i++) {
+      cronk.clock.advance(seconds(10));
+      await cronk.checkMergeability();
+    }
+    expect(cronk.github.apiCalls).toHaveLength(failed);
+
+    // The ask after the wait meets the outage again, so Cronk waits twice as long: 60 seconds.
+    cronk.clock.advance(seconds(10));
+    await cronk.checkMergeability();
+    const failedAgain = cronk.github.apiCalls.length;
+    expect(failedAgain).toBeGreaterThan(failed);
+    cronk.github.unavailable = false;
+    cronk.clock.advance(seconds(50));
+    await cronk.checkMergeability();
+    expect(cronk.github.apiCalls).toHaveLength(failedAgain);
+
+    // Recovered: the next ask goes out and GitHub's answer marks the Pull Request.
+    cronk.clock.advance(seconds(10));
+    await cronk.checkMergeability();
+    expect(await conflictOf(ticket.id, cookie)).toMatchObject({ branch: "main", sha: "m1" });
+    // Asking afresh needs no wait now.
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m2", answers: [true] });
+    await mergeAnother(10, "m2");
+    await cronk.checkMergeability();
+    expect(await conflictOf(ticket.id, cookie)).toBeNull();
+  });
+
+  test("GitHub's rate limit has Cronk wait until it lifts, by its reset time or its Retry-After", async () => {
+    for (const header of ["reset", "retry-after"] as const) {
+      await cronk.stop();
+      cronk = await startCronk();
+      const { cookie, cronker, ticket, mergeAnother } = await inReview();
+      cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
+      await mergeAnother(9, "m1");
+      cronk.github.rateLimit(new Date(cronk.clock.now().getTime() + minutes(5)), { status: 429, header });
+
+      await cronk.checkMergeability();
+      const limited = cronk.github.apiCalls.length;
+      cronk.clock.advance(minutes(4));
+      await cronk.checkMergeability();
+      expect(cronk.github.apiCalls, header).toHaveLength(limited);
+
+      cronk.clock.advance(minutes(1));
+      await cronk.checkMergeability();
+      expect(await conflictOf(ticket.id, cookie), header).toMatchObject({ branch: "main", sha: "m1" });
+    }
+  });
+
+  test("a 403 that is GitHub's rate limit is waited out, not taken as GitHub not seeing the Pull Request", async () => {
+    const { cookie, cronker, ticket, mergeAnother } = await inReview();
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m1", answers: [false] });
+    await mergeAnother(9, "m1");
+    // The installation token is held, so the rate limit meets the ask about the Pull Request itself.
+    await cronk.checkMergeability();
+    cronk.github.pullRequest(cronker, 7, { base: "main", baseSha: "m2", answers: [true] });
+    await mergeAnother(10, "m2");
+    cronk.github.rateLimit(new Date(cronk.clock.now().getTime() + minutes(2)), { status: 403 });
+
+    await cronk.checkMergeability();
+    expect(await conflictOf(ticket.id, cookie)).toMatchObject({ sha: "m1" });
+    cronk.clock.advance(minutes(2));
+    await cronk.checkMergeability();
+
     expect(await conflictOf(ticket.id, cookie)).toBeNull();
   });
 });

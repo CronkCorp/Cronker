@@ -9,6 +9,7 @@ import {
   type RepositoryOnGitHub,
 } from "../github/client.js";
 import { installationCovering, tokenFor } from "../github/installations.js";
+import { throughGitHub } from "../github/status.js";
 import { ApiError } from "../http/errors.js";
 import { endRunFinished } from "../runs/runs.js";
 import { completeMergedTickets, type Merge } from "./merges.js";
@@ -24,6 +25,7 @@ import { failingCheckOn } from "./sending-back.js";
  *
  * No lock is held while GitHub is asked: Cronk checks its rules and marks the Pull Request as asked for by the actor,
  * asks GitHub, then records the merge. GitHub's own delivery of the merge, arriving first, records it the same way.
+ * While GitHub is unavailable (`github/status.ts`) Cronk refuses the merge without asking it, saying when to try again.
  */
 
 /** The Outcome a Run that merged finishes with. */
@@ -320,7 +322,7 @@ export async function mergeAsAsked<T>(
 ): Promise<T> {
   let mergeCommit: string | null;
   try {
-    mergeCommit = await askGitHub(context, asked, options);
+    mergeCommit = await throughGitHub(context, () => askGitHub(context, asked, options));
   } catch (error) {
     await context.db.query("update pull_requests set merge_asked_by = null where id = $1 and merge_asked_by = $2::jsonb", [
       asked.pullRequest.id,
@@ -348,9 +350,11 @@ export async function mergeAsAsked<T>(
  * Cronk's rules say, where the App isn't installed.
  */
 export async function updateBranch(context: Context, { pullRequest, advice }: Pick<AskedMerge, "pullRequest" | "advice">): Promise<boolean> {
-  const token = await tokenForPullRequest(context, pullRequest, advice);
-  const updated = await updateBranchOnGitHub(context.config, token, pullRequest.listedAs, pullRequest.number, pullRequest.sha);
-  return updated.updated;
+  return throughGitHub(context, async () => {
+    const token = await tokenForPullRequest(context, pullRequest, advice);
+    const updated = await updateBranchOnGitHub(context.config, token, pullRequest.listedAs, pullRequest.number, pullRequest.sha);
+    return updated.updated;
+  });
 }
 
 /**
