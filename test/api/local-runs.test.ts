@@ -1144,6 +1144,45 @@ describe("a local Runner's allowlist", () => {
     );
   });
 
+  test("the default includes head, sed, dotnet and read-only gh, and no gh command that merges or changes settings", () => {
+    expect(defaultAllowedTools).toEqual(
+      expect.arrayContaining([
+        "Bash(head:*)",
+        "Bash(sed:*)",
+        "Bash(dotnet:*)",
+        "Bash(gh pr view:*)",
+        "Bash(gh issue view:*)",
+        "Bash(gh run view:*)",
+      ]),
+    );
+
+    // A `Bash(<prefix>:*)` rule allows any command starting with its prefix.
+    const allows = (command: string) =>
+      defaultAllowedTools.some((rule) => {
+        const prefix = /^Bash\((.*):\*\)$/.exec(rule)?.[1];
+        return prefix !== undefined && (command === prefix || command.startsWith(`${prefix} `));
+      });
+    expect(allows("gh pr view 12")).toBe(true);
+    for (const command of [
+      "gh",
+      "gh pr merge 12 --squash",
+      "gh pr review 12 --approve",
+      "gh pr close 12",
+      "gh repo edit --default-branch dev",
+      "gh repo delete cronkcorp/cronker",
+      "gh api -X PUT repos/o/r/pulls/12/merge",
+      "gh secret set TOKEN",
+      "gh workflow run ci.yml",
+      "gh run rerun 1",
+      "gh issue close 3",
+    ]) {
+      expect(allows(command), command).toBe(false);
+    }
+    expect(defaultAllowedTools.filter((rule) => rule.startsWith("Bash(gh"))).toEqual(
+      expect.not.arrayContaining(["Bash(gh:*)", "Bash(gh api:*)", "Bash(gh pr:*)", "Bash(gh repo:*)"]),
+    );
+  });
+
   test("its User edits it, trimmed and without repeats, and it applies to the Runs claimed from then on", async () => {
     const { ada, runner, machineToken, delegate } = await localSetUp({
       runLimit: 2,
