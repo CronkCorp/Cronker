@@ -4,8 +4,10 @@ import type { Context } from "../context.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
 import { requireUser } from "../identity/sign-ins.js";
 import {
+  announce,
   approvePairing,
   Machine,
+  MachineAnnouncement,
   machineConnected,
   machineDisconnected,
   MachineSelf,
@@ -182,6 +184,35 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
         },
       },
       async (request) => requireMachine(context, request),
+    );
+
+    app.put(
+      "/api/machine/announcement",
+      {
+        schema: {
+          tags: ["Machines"],
+          summary: "Announce what the Machine offers, as its daemon",
+          description:
+            "Called by a Machine's daemon with its Machine token on connecting and whenever what it offers changes: " +
+            "whether it can run Claude, and its Machine models by name, each with its limit on Runs at once and whether " +
+            "it is up (its last check against its server passed). Replaces the last announcement, which Cronk keeps " +
+            "while the Machine is offline and forgets when it is unpaired. A daemon that never announces counts as " +
+            "running Claude with no Machine models. Addresses, keys and model ids are never sent.",
+          security: [{ machineToken: [] }],
+          body: MachineAnnouncement,
+          response: {
+            204: Type.Null(),
+            400: ErrorBody,
+            401: ErrorBody,
+            426: ErrorBody,
+          },
+        },
+      },
+      async (request, reply) => {
+        const machine = await requireMachine(context, request);
+        await announce(context, machine, request.body);
+        return reply.code(204).send(null);
+      },
     );
 
     app.get(

@@ -123,6 +123,7 @@ async function localSetUp({
   const configPath = join(home, "config.json");
   await writeConfig(configPath, {
     limit,
+    models: [],
     cronks: [
       {
         url: cronk.url,
@@ -721,6 +722,7 @@ describe("a daemon too old for Cronk", () => {
     const configPath = join(home, "old.json");
     await writeConfig(configPath, {
       limit: 2,
+      models: [],
       cronks: [
         {
           url: tooOld.url,
@@ -918,7 +920,17 @@ describe("a local Run's Repository", () => {
     const { ticket, run } = await delegate("Nap");
     await eventually(async () => (await runs()).length === 1);
     const [ran] = await runs();
-    // The session report may land after a first advance, counting as a call then.
+    // The session report counts as a call and brings a lost Run back, so it must have landed before the Run goes lost:
+    // landing after, it would leave the Run running when its process goes, and its worktree removed.
+    const sessionPath = `/api/machine/runs/${run.id}/session`;
+    await eventually(async () => {
+      const sent = cronk.logs.filter(
+        (l) => l.msg === "incoming request" && (l.req as { url?: string } | undefined)?.url === sessionPath,
+      );
+      return sent.some((s) =>
+        cronk.logs.some((l) => l.msg === "request completed" && l.reqId === s.reqId),
+      );
+    });
     await eventually(async () => {
       cronk.clock.advance(minutes(40));
       await cronk.checkForLostRuns();

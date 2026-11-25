@@ -148,3 +148,57 @@ test("a local Run's cost shows as an estimate on its Ticket and its Runner's car
   await expect(page.getByRole("region", { name: "Laptop" }).locator(".runner-cost")).toHaveText("≈ $1.37 estimated this month");
   stream.close();
 });
+
+test("a Machine lists the Machine models its daemon announces, live, kept but down while offline, and forgotten on unpairing", async ({
+  page,
+  cronk,
+}) => {
+  await setUp(cronk);
+  const ada = await signIn(cronk);
+  const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
+  const started = await (
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-laptop", os: "linux", daemonVersion: "0.3.0" } })
+  ).json();
+  await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
+  const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
+  const announce = async (models: { name: string; limit: number; up: boolean }[]) => {
+    const response = await cronk.request("PUT", "/api/machine/announcement", {
+      headers: { authorization: `Bearer ${machineToken}` },
+      body: { claude: true, models },
+    });
+    expect(response.status).toBe(204);
+  };
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/runners`);
+  const machines = page.getByRole("region", { name: "Machines" });
+  const row = machines.getByRole("row").filter({ hasText: "ada-laptop" });
+  await expect(machines.getByRole("columnheader", { name: "Machine models" })).toBeVisible();
+  await expect(row).toContainText("No Machine models");
+
+  // The daemon connects and announces, as `cronk-runner run` does: the page hears of it from the Runners stream.
+  const stream = await openMachineStream(cronk, machineToken);
+  await announce([
+    { name: "qwen", limit: 1, up: true },
+    { name: "gpt-oss", limit: 2, up: false },
+  ]);
+  const qwen = row.getByRole("listitem").filter({ hasText: "qwen" });
+  const gptOss = row.getByRole("listitem").filter({ hasText: "gpt-oss" });
+  await expect(qwen).toHaveText("qwen 1 at once Up");
+  await expect(gptOss).toHaveText("gpt-oss 2 at once Down");
+  await expect(row).not.toContainText("No Machine models");
+
+  await announce([{ name: "qwen", limit: 1, up: false }]);
+  await expect(qwen).toHaveText("qwen 1 at once Down");
+  await expect(gptOss).toBeHidden();
+
+  await announce([{ name: "qwen", limit: 1, up: true }]);
+  await expect(qwen).toHaveText("qwen 1 at once Up");
+  // Offline, the model stays listed as set up, but isn't up.
+  stream.close();
+  await expect(row).not.toContainText("Connected");
+  await expect(qwen).toHaveText("qwen 1 at once Down");
+
+  await row.getByRole("button", { name: "Unpair" }).click();
+  await page.getByRole("dialog", { name: "Unpair ada-laptop?" }).getByRole("button", { name: "Unpair" }).click();
+  await expect(machines.getByText("No Machines paired yet.")).toBeVisible();
+});

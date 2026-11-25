@@ -284,21 +284,48 @@ export const Machine = Type.Object({
       "While its daemon's version is older than this Cronk works with, the version to upgrade `cronk-runner` to: its " +
       "calls are refused with `daemon_too_old` until then. Null while its version is fine.",
   }),
+  claude: Type.Boolean({
+    description:
+      "Whether its daemon last announced it can run Claude; true for a daemon that never announced.",
+  }),
+  models: Type.Array(
+    Type.Object({
+      name: Type.String(),
+      limit: Type.Integer({ minimum: 1 }),
+      up: Type.Boolean({
+        description:
+          "Whether it is up: its daemon is connected and last announced its check against its server passed.",
+      }),
+    }),
+    {
+      description:
+        "The Machine models its daemon last announced, by name, kept while it is offline: set up, though not up.",
+    },
+  ),
 });
 export type Machine = Static<typeof Machine>;
 
-type MachineRow = Omit<Machine, "pairedAt" | "lastContactAt" | "upgradeTo"> & {
+type MachineRow = Omit<
+  Machine,
+  "pairedAt" | "lastContactAt" | "upgradeTo" | "models"
+> & {
   pairedAt: Date;
   lastContactAt: Date | null;
+  models: AnnouncedModel[];
 };
 const machineColumns = `machines.id, machines.name, machines.os, machines.daemon_version as "daemonVersion",
   machines.run_limit as limit, machines.paired_at as "pairedAt", machines.last_contact_at as "lastContactAt",
-  machines.connections > 0 as connected,
+  machines.connections > 0 as connected, machines.announces_claude as claude, machines.announced_models as models,
   coalesce((select json_agg(json_build_object('id', runners.id, 'name', runners.name) order by lower(runners.name), runners.id)
     from machine_runners join runners on runners.id = machine_runners.runner_id
     where machine_runners.machine_id = machines.id), '[]') as runners`;
 const presentMachine = (row: MachineRow): Machine => ({
   ...row,
+  models: row.models.map(({ name, limit, up }) => ({
+    name,
+    limit,
+    up: row.connected && up,
+  })),
   pairedAt: row.pairedAt.toISOString(),
   lastContactAt: row.lastContactAt?.toISOString() ?? null,
   upgradeTo: isTooOld(row.daemonVersion) ? minDaemonVersion : null,
@@ -439,7 +466,8 @@ export async function unpairMachine(
     );
     const now = context.clock.now();
     const { rows } = await tx.query<{ name: string }>(
-      "update machines set revoked_at = $3, token_hash = null where id = $1 and owner_id = $2 and revoked_at is null returning name",
+      `update machines set revoked_at = $3, token_hash = null, announces_claude = true, announced_models = '[]'
+       where id = $1 and owner_id = $2 and revoked_at is null returning name`,
       [machineId, userId, now],
     );
     if (!rows[0])
@@ -472,6 +500,77 @@ export async function unpairMachine(
   });
   for (const { runId } of lost) await revokeLocalRunToken(context, runId);
   context.live.endMachines((stream) => stream.machineId === machineId);
+}
+
+/** A Machine model's name: 1 to 50 lower case letters, digits and dashes. */
+export const machineModelNamePattern = "^[a-z0-9-]{1,50}$";
+
+const AnnouncedModel = Type.Object(
+  {
+    name: Type.String({
+      pattern: machineModelNamePattern,
+      description: "Its name on the Machine, as `cronk-runner model add` set it up.",
+    }),
+    limit: Type.Integer({
+      minimum: 1,
+      maximum: 100,
+      description: "The most Runs it runs at once on this Machine.",
+    }),
+    up: Type.Boolean({
+      description: "Whether the daemon's last check against its server passed.",
+    }),
+  },
+  { additionalProperties: false },
+);
+type AnnouncedModel = Static<typeof AnnouncedModel>;
+
+/**
+ * What a Machine's daemon announces it offers: whether it can run Claude, and its Machine models by name. Addresses,
+ * keys and model ids stay on the Machine: the body has no place for them.
+ */
+export const MachineAnnouncement = Type.Object(
+  {
+    claude: Type.Boolean({ description: "Whether it can run Claude." }),
+    models: Type.Array(AnnouncedModel, { maxItems: 50 }),
+  },
+  { additionalProperties: false },
+);
+export type MachineAnnouncement = Static<typeof MachineAnnouncement>;
+
+/**
+ * Keeps what the Machine's daemon announced, replacing its last announcement; a name given twice is refused with
+ * `duplicate_machine_model`. When it changed, the Owner hears each Runner the Machine serves changed, so the Runners
+ * page follows it.
+ */
+export async function announce(
+  context: Context,
+  machine: MachineSelf,
+  input: MachineAnnouncement,
+): Promise<void> {
+  const names = input.models.map((m) => m.name);
+  const twice = names.find((name, i) => names.indexOf(name) !== i);
+  if (twice !== undefined) {
+    throw new ApiError(
+      400,
+      "duplicate_machine_model",
+      `The Machine model ${twice} is announced twice: each name once.`,
+    );
+  }
+  const models = input.models.map(({ name, limit, up }) => ({ name, limit, up }));
+  await transaction(context.db, async (tx) => {
+    const { rowCount } = await tx.query(
+      `update machines set announces_claude = $2, announced_models = $3::jsonb
+       where id = $1 and revoked_at is null
+         and (announces_claude <> $2 or announced_models <> $3::jsonb)`,
+      [machine.id, input.claude, JSON.stringify(models)],
+    );
+    if (!rowCount) return;
+    for (const { id } of machine.runners)
+      context.live.publishToOwner(tx, machine.owner.id, {
+        type: "runner.changed",
+        runnerId: id,
+      });
+  });
 }
 
 /** What a Machine's daemon learns about itself from its token. */
