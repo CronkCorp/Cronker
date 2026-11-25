@@ -371,6 +371,24 @@ describe("a Run of a read-only Step", () => {
     );
   });
 
+  test("ending an OpenCode session on refused edits names OpenCode's edit tools as refused edits", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { run } = await delegate("Fix it anyway");
+    await claim(machineToken, run.id);
+
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "opencode exited with code 0", deniedTools: ["edit", "write", "patch", "Bash(npm publish)", "WebFetch"] },
+    });
+    await cronk.jobsSettled();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).endReason).toBe(
+      "The session ended without calling `finish`: opencode exited with code 0. Its Step is read-only, so its file " +
+        "edits were refused: edit, write, patch. It needed tools outside the Runner's allowlist: Bash(npm publish), " +
+        "WebFetch; widen the allowlist and Retry.",
+    );
+  });
+
   test("of a Step that isn't read-only names refused edits as outside the allowlist", async () => {
     const { ada, project, machineToken, delegate } = await localSetUp();
     await setTriageReadOnly(ada, project, false);
@@ -1300,6 +1318,45 @@ describe("a local Runner's allowlist", () => {
       body: { allowedTools: null },
     });
     expect(reset.allowedTools).toEqual([...defaultAllowedTools]);
+    // The default allowlist translates for OpenCode completely.
+    expect(reset.notForMachineModels).toEqual([]);
+  });
+
+  test("the Runner lists the rules of its allowlist that don't apply to Runs on Machine models, never widened", async () => {
+    const { ada, runner } = await localSetUp();
+    const edited = await ok("PATCH", `/api/runners/${runner.id}`, {
+      cookie: ada,
+      body: {
+        allowedTools: [
+          "Bash(git:*)",
+          "Bash(npm test)",
+          "WebFetch",
+          "WebSearch",
+          "mcp__cronk",
+          "Edit",
+          "Read",
+          "Write(src/**)",
+          "WebFetch(domain:example.com)",
+          "mcp__github",
+          "Bash",
+          "Bash(*)",
+          "Bash(rm -rf *:*)",
+          "Bash(git?:*)",
+        ],
+      },
+    });
+    expect(edited.notForMachineModels).toEqual([
+      "Edit",
+      "Read",
+      "Write(src/**)",
+      "WebFetch(domain:example.com)",
+      "mcp__github",
+      "Bash",
+      "Bash(*)",
+      "Bash(rm -rf *:*)",
+      "Bash(git?:*)",
+    ]);
+    expect((await ok("GET", "/api/runners", { cookie: ada }))[0].notForMachineModels).toEqual(edited.notForMachineModels);
   });
 
   test("an empty or overlong rule is refused, and a Runner of another kind has none", async () => {

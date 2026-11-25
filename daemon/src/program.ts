@@ -113,6 +113,12 @@ export function claudeArguments(
 const deniedToolsMax = 20;
 const deniedToolLength = 200;
 
+/** Denied tools as reported with a Run's end: each shortened to `deniedToolLength`, without repeats, at most `deniedToolsMax`. */
+export function capDeniedTools(names: readonly string[]): string[] {
+  const capped = names.map((name) => (name.length > deniedToolLength ? `${name.slice(0, deniedToolLength - 1)}…` : name));
+  return [...new Set(capped)].slice(0, deniedToolsMax);
+}
+
 /**
  * The tool calls Claude Code denied, from its `result` message's `permission_denials`, as a person reads them: a
  * Bash call as `Bash(<command>)`, any other by its tool name.
@@ -126,18 +132,14 @@ export function deniedTools(message: {
       if (typeof denial?.tool_name !== "string" || !denial.tool_name.trim())
         return [];
       const command = denial.tool_input?.command;
-      const name =
+      return [
         denial.tool_name === "Bash" && typeof command === "string"
           ? `Bash(${command.trim()})`
-          : denial.tool_name.trim();
-      return [
-        name.length > deniedToolLength
-          ? `${name.slice(0, deniedToolLength - 1)}…`
-          : name,
+          : denial.tool_name.trim(),
       ];
     },
   );
-  return [...new Set(names)].slice(0, deniedToolsMax);
+  return capDeniedTools(names);
 }
 
 /**
