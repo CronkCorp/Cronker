@@ -185,7 +185,7 @@ Each Run records what its session cost at Anthropic's list prices once it ends: 
 
 ## 11. Run on your own computer (optional)
 
-A local Runner runs your Agents' Runs with Claude Code on a Machine of your own, such as your laptop, on your Claude subscription. The `cronk-runner` daemon on that Machine keeps a connection to Cronk open, claims the Runs of the local Runners it serves and runs each with `claude -p`; Tickets labelled `local-only` only ever run there. It runs on macOS and Linux, not Windows.
+A local Runner runs your Agents' Runs with Claude Code on a Machine of your own, such as your laptop, on your Claude subscription, or on models other than Claude that you serve yourself (step 12). The `cronk-runner` daemon on that Machine keeps a connection to Cronk open, claims the Runs of the local Runners it serves and runs each with `claude -p`; Tickets labelled `local-only` only ever run there. It runs on macOS and Linux, not Windows.
 
 1. On **Runners**, under **Set up a Runner**, give it a name such as `My laptop`, choose the kind **Local (your own Machine)** and set it up. On the Agent's page, set **Runner** to it.
 2. On the Machine, with Node 22 or later, install the daemon:
@@ -211,13 +211,70 @@ A local Runner runs your Agents' Runs with Claude Code on a Machine of your own,
 
    It only reads: Claude Code's session files under `~/.claude/projects`, and the record the daemon keeps of each Run for a week after it ends, next to its config. Unlike a Transcript in Cronk, what it prints isn't scrubbed for secrets, as it stays on your Machine, in files that hold the same text.
 
-`install`, `run` and `status` first check that `claude` and `git` are on the `PATH` and that Claude Code is signed in (`claude auth login`), and name whatever is missing; `install` installs nothing until they are. The service keeps the `PATH` and the Node that `install` ran with, so run `cronk-runner install` again from your usual shell after installing new tools or another Node. `cronk-runner uninstall` stops the service and removes it. To run the daemon in a terminal instead, use `cronk-runner run`.
+`install`, `run` and `status` first check that `claude` and `git` are on the `PATH` and that Claude Code is signed in (`claude auth login`), and name whatever is missing; `install` installs nothing until they are. A Machine with Machine models (step 12) needs Claude Code only for Runs on Claude: without it, it runs only its Machine models' Runs. The service keeps the `PATH` and the Node that `install` ran with, so run `cronk-runner install` again from your usual shell after installing new tools or another Node. `cronk-runner uninstall` stops the service and removes it. To run the daemon in a terminal instead, use `cronk-runner run`.
 
 A Run of a read-only Step, such as Triage or Investigate on the default board, runs with Claude Code's edit tools refused: it can still run the commands its Runner's allowlist allows, some of which write files, such as `sed -i`. Turn a Step's **read-only** setting on or off under the Project's **Steps**. A daemon older than this setting edits anyway, so upgrade it.
 
 To upgrade it, run `npm install -g cronk-runner@latest`, then `cronk-runner install` again.
 
-## 12. Get your Inbox on your phone (optional)
+## 12. Run on models other than Claude (optional)
+
+A local Runner can run some Steps on a **Machine model**: a model other than Claude, such as Qwen or gpt-oss, served on the Machine, on your network or by a hosted API (ADR 0015). The daemon runs those Runs with [OpenCode](https://opencode.ai) instead of Claude Code. You map model labels to Machine models on your Runner, so a board keeps its labels and one Ticket's Steps can mix Machine models and Claude.
+
+Start with **Triage**. A model that fits in 16 GB, such as `qwen3.5:9b`, has handled Triage well in testing. **Implement is untested** on Machine models: it was barely tried, and never with a real Repository, push or Pull Request.
+
+1. Set up the Machine as in step 11. Then install **OpenCode V2** on it (`opencode --version`) and run `cronk-runner install` again, so the service finds it.
+2. Serve the model with any OpenAI-compatible server, such as [Ollama](https://ollama.com). Cronk never installs, starts or downloads models. Ollama gives a model a small context unless you set one: a Run needs much more, so set `OLLAMA_CONTEXT_LENGTH`, such as `65536`, where the Ollama server starts, and restart it. If you use a Modelfile, `PARAMETER num_ctx 65536` sets it for one model instead. With the model loaded, `ollama ps` shows the context it got.
+3. Add it on the Machine, giving it a name of 1 to 50 lowercase letters, digits and dashes:
+
+   ```sh
+   cronk-runner model add qwen --address http://localhost:11434/v1 --model-id qwen3.5:9b --context-size 65536 --no-key
+   ```
+
+   It asks for anything a flag leaves out. `--limit` sets how many Runs it takes at once (1 by default) and `--time-limit` how many minutes one Run may take (60 by default). A key is asked for, never taken as a flag, and kept in the daemon's config (`~/.config/cronk-runner/config.json` by default, readable only by you); `--key-env VARIABLE` reads it from an environment variable instead, and `--no-key` skips it.
+
+   Before saving, `model add` checks the server: one request asks the model to call a tool, and one long prompt fills about 85% of the context size, to prove the server really keeps that much. The long one can take minutes. A failure says what went wrong and how to fix it, such as a model without tool calls or Ollama's context set too small, and asks whether to save anyway; `--save-anyway` saves without asking.
+4. Check it: `cronk-runner model list` shows each Machine model, whether it is up, and never its key. A running daemon offers a new one within about a minute; the Runners page then lists it under the Machine with an **Up** or **Down** chip. `cronk-runner model remove qwen` stops offering it.
+5. Map a label to it: on **Runners**, under your local Runner's **Machine models**, add the model label (such as `haiku`), pick the Machine model and choose **Save Machine models**. Labels match a Step's model ignoring case, and a change applies to Runs not claimed yet. Labels you don't map still run on Claude.
+6. Delegate a Ticket and watch its Triage Run. Its Run shows the label and the Machine model, such as `haiku (qwen)`, and `cronk-runner logs` follows it as it follows Claude's (`--raw` prints OpenCode's events).
+
+How these Runs behave:
+
+- **No fallback to Claude.** A mapped label's Runs run only on its Machine model. While it is down or full, or its Machine offline, the Ticket waits (*Machine model down or full*); once no Machine serving the Runner has it set up, the Run is refused, naming the label to map again.
+- **Machines without one program.** A Machine without OpenCode, or with V1, keeps running Claude's Runs and offers none of its Machine models; `cronk-runner status` says so. A Machine without Claude Code runs only its Machine models' Runs, and the Runners page shows it as *Doesn't run Claude*.
+- **The allowlist** governs these Runs too, translated for OpenCode with everything unlisted denied. They may read, search and edit in their worktree and get only its `Bash`, `WebFetch` and `WebSearch` rules; a rule that can't be translated is left out, never widened, and listed on the Runner's card as *Not applying to Machine models*. A Run that needed a denied tool says so when it ends: widen the allowlist and Retry.
+- **Ending.** A Run that stops without calling `finish` is resumed once with a reminder, then fails. The time limit counts from its first start, the resume included. A server that only gets retried for 5 minutes fails the Run. Cronk records no cost for these Runs.
+
+What to know before you rely on it:
+
+- ***Not Anthropic* is all that is promised.** These Runs don't go through Claude. A hosted API is a Machine model like any other, and sees what you send it; Cronk and GitHub hold the work as always; other Steps of the same Ticket may run on Claude.
+- **Their own home isn't a sandbox.** Each Run gets a home and environment of its own, without your sign-ins, which guards against accidents only: a program it runs as you can still read your files. For Repositories or sites you don't trust, pair a VM as its own Machine and give the Machine model to that one.
+- **No skills.** Repositories' skills aren't available to these Runs, and a Repository's own OpenCode config and Claude Code settings add no permissions.
+- **Use a revocable key with a spending cap** for a hosted API: the agent's commands can read their environment, key included.
+
+### Serving over your network
+
+To serve a model from another computer, such as one with a bigger GPU, start Ollama there with `OLLAMA_HOST=0.0.0.0` (or one interface's address) and give `model add` that computer's address, such as `http://gpu-box:11434/v1`.
+
+> **Warning:** Ollama checks no keys. Anyone who can reach its port can use it. Keep it on a network you trust, behind a firewall or a VPN, or put an authenticating proxy in front of it and give `model add` the proxy's key.
+
+### NixOS
+
+An example, to check against the NixOS options of your release: serve Ollama with
+
+```nix
+services.ollama = {
+  enable = true;
+  environmentVariables.OLLAMA_CONTEXT_LENGTH = "65536";
+  # To serve over your network (read the warning above):
+  # host = "0.0.0.0";
+  # openFirewall = true;
+};
+```
+
+and install OpenCode through your own configuration, such as `pkgs.opencode` if your channel has V2. `cronk-runner` itself still comes from npm.
+
+## 13. Get your Inbox on your phone (optional)
 
 Each User can add **webhooks** for a Workspace under **Account settings → Webhooks**: a name, an `https` URL and the Inbox kinds it gets. A new webhook gets Questions, *needs you* and Runs gone wrong (failed, lost and unstarted Runs); To review, Unverified, Discovered, Undelegated, New knowledge (Decisions, Terms, Documents and Artifacts an Agent created) and, for Admins, To reassign can be added. Plain `http` is accepted only to `localhost`, `127.0.0.1` or `[::1]`, and only when Cronk itself runs on `http://localhost`. So that a webhook can't be used to probe the network Cronk runs in, a URL whose host is or resolves to a private, loopback, link-local or otherwise non-public address, such as `10.0.0.5`, `192.168.1.10`, `169.254.169.254` or `fd00::1`, is refused, and each delivery checks the address it connects to again, so a host whose DNS changes to one later isn't contacted; redirects aren't followed. The exception is `localhost`, `127.0.0.1` and `[::1]` on a Cronk running on `http://localhost`. To deliver to a receiver on your own network, such as Home Assistant, start Cronk with `CRONK_WEBHOOKS_ALLOW_PRIVATE=true`: only whoever runs the server can set it, and it lets every User's webhooks reach private addresses (still over `https`). A webhook saved with a private address before Cronk refused them gets no deliveries until it is set. Webhooks need `CRONK_SECRET_KEY`, since Cronk keeps each one's secret encrypted to sign with.
 
@@ -312,7 +369,7 @@ Releases are tagged `v0.x.y` on GitHub, with notes listing what changed: [Releas
 
 3. **Check it came up.** Cronk applies new migrations itself when it starts, one start at a time; `docker compose logs cronk` shows them, and then Cronk listening. Upgrade when no Runs are running if you can: a Run whose session can't reach Cronk while it restarts may fail or be lost, and then waits in your Inbox with Retry.
 
-4. **Upgrade the daemon** on each Machine with a local Runner (step 11): `npm install -g cronk-runner@latest`, then `cronk-runner install`.
+4. **Upgrade the daemon** on each Machine with a local Runner (step 11): `npm install -g cronk-runner@latest`, then `cronk-runner install`. On a Machine with Machine models (step 12), keep OpenCode at V2 or later.
 
 To go back, restore the backup into an empty database and check out the release you came from: a newer database can't be used by an older Cronk.
 

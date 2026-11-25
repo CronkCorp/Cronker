@@ -14,7 +14,7 @@ The daemon runs a Machine model's Runs with **OpenCode** (V2), and Claude's with
 
 ## Consequences
 
-- OpenCode is a second program to follow: its version is checked in the preflight, its events are a third Transcript format, and the daemon configures it by `OPENCODE_CONFIG_CONTENT`, which its V2 documentation didn't mention when this was decided. Claude Code and OpenCode are each needed only on a Machine that uses them.
+- OpenCode is a second program to follow: its version is checked in the preflight, its events are a third Transcript format, and the daemon configures it wholly inline by `OPENCODE_CONFIG_CONTENT`, in a home of the Run's own; its V2 documentation didn't mention that variable when this was decided, so an OpenCode upgrade could break it. Claude Code and OpenCode are each needed only on a Machine that uses them.
 - The Runner's allowlist covers both programs. It is translated for OpenCode with everything unlisted denied; a rule that can't be translated is left out, never widened. A Repository's committed Claude Code settings don't add to it.
 - A Machine model's Run gets a home and environment of its own, without the User's sign-ins. That guards against accidents and isn't a sandbox: a program run as the User can still read their files. Work that needs one gets a VM paired as its own Machine.
 - Cronk never installs, starts or downloads models, adds no content filter, and records no cost for these Runs. A Run records the Machine model that ran it, so a label's name doesn't pass for Claude.
