@@ -230,13 +230,13 @@ describe("Reports", () => {
     ]);
   });
 
-  test("a Report of only whitespace given to finish is refused", async () => {
+  test.each(["", "  \n "])("an empty or blank Report or Question given to finish counts as left out (%j)", async (blank) => {
     const { ada, ticket, run, asAgent } = await runningRun();
 
-    const refused = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready", report: "  \n " });
+    await ok("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "ready", report: blank, question: blank });
 
-    expect(refused.status).toBe(400);
-    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    const finished = await ok("GET", `/api/runs/${run.id}`, ada);
+    expect(finished).toEqual(expect.objectContaining({ state: "finished", outcome: "ready", question: null, questionBy: null }));
     expect(await ok("GET", `/api/tickets/${ticket.id}/reports`, ada)).toEqual([]);
   });
 

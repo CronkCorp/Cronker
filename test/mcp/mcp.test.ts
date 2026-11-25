@@ -913,11 +913,10 @@ describe("MCP with an Agent token", () => {
     const run = before.runs[0].id;
 
     await expectRefused(client, [
-      // Length, and a Report that is only spaces.
+      // Length.
       ["finish", { run, outcome: "x".repeat(51) }, /outcome/],
       ["finish", { run, outcome: "" }, /outcome/],
-      ["finish", { run, outcome: "ready", report: "   " }, /report/],
-      ["finish", { run, outcome: "ready", question: "" }, /question/],
+      ["finish", { run, outcome: "ready", report: "x".repeat(500_001) }, /report/],
       // Integer.
       ["merge_pull_request", { run, pullRequest: 1.5 }, /pullRequest/],
     ]);
@@ -928,6 +927,26 @@ describe("MCP with an Agent token", () => {
     expect(after.ticket.statusId).toBe(triage);
     expect(after.reports).toEqual([]);
     expect((await call(client, "finish", { run, outcome: "ready", report: "Clear." })).isError).toBe(false);
+  });
+
+  test("finish takes an empty or blank Question or Report as left out", async () => {
+    const { cookie, ticket, agent, secret } = await workspaceWithTicket();
+    const runner = await post(cookie, "/api/runners", { name: "Fake", kind: "fake" });
+    await cronk.request("PATCH", `/api/agents/${agent.id}`, { cookie, body: { runnerId: runner.id } });
+    const project = await (await cronk.request("GET", `/api/projects/${ticket.projectId}`, { cookie })).json();
+    const status = (name: string) => project.statuses.find((s: { name: string }) => s.name === name).id;
+    await cronk.request("PATCH", `/api/tickets/${ticket.id}`, { cookie, body: { delegateId: agent.id, statusId: status("Triage") } });
+    const client = await connect(secret);
+    const run = (await call(client, "read_ticket", { ticket: "CRONK-1" })).json.runs[0].id;
+
+    const refused = await call(client, "finish", { run, outcome: "needs you", question: " " });
+    expect(refused.isError).toBe(true);
+    expect(refused.json).toEqual(expect.objectContaining({ code: "question_needed" }));
+
+    const { isError, json } = await call(client, "finish", { run, outcome: "ready", question: "", report: "" });
+    expect(isError).toBe(false);
+    expect(json).toEqual(expect.objectContaining({ id: run, state: "finished", outcome: "ready", question: null }));
+    expect((await call(client, "read_ticket", { ticket: "CRONK-1" })).json.reports).toEqual([]);
   });
 
   test("the board, finish and merge tools' inputs carry the routes' field descriptions and limits", async () => {
@@ -971,7 +990,7 @@ describe("MCP with an Agent token", () => {
     expect(finish.properties.outcome).toEqual(expect.objectContaining({ maxLength: 50 }));
     expect(finish.properties.question).toEqual(expect.objectContaining({ maxLength: 100_000 }));
     expect(finish.properties.report).toEqual(
-      expect.objectContaining({ maxLength: 500_000, pattern: "\\S", description: expect.stringContaining("Triage report") }),
+      expect.objectContaining({ maxLength: 500_000, description: expect.stringContaining("Triage report") }),
     );
     const merge = input("merge_pull_request");
     expect(Object.keys(merge.properties).sort()).toEqual(["pullRequest", "run"]);

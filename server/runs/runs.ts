@@ -790,15 +790,16 @@ export async function presentRun(tx: Tx, viewer: Viewer, runId: string): Promise
   return present((await findRunRow(tx, viewer, runId))!);
 }
 
-/** The finish route's body: the Outcome, and for *needs you* the Question, with an optional Report. */
+/**
+ * The finish route's body: the Outcome, and for *needs you* the Question, with an optional Report. An empty or blank
+ * Question or Report counts as left out, since some models send every optional field, empty when they mean none.
+ */
 export const RunFinish = Type.Object({
   outcome: Type.String({ minLength: 1, maxLength: 50, description: "The Outcome's name, matched ignoring case." }),
-  question: Type.Optional(Type.String({ minLength: 1, maxLength: 100_000, description: "For the Assignee, in Markdown." })),
+  question: Type.Optional(Type.String({ maxLength: 100_000, description: "For the Assignee, in Markdown." })),
   report: Type.Optional(
     Type.String({
-      minLength: 1,
       maxLength: 500_000,
-      pattern: "\\S",
       description: "Markdown, added to the Ticket's Reports titled after the Run's Step, such as `Triage report`.",
     }),
   ),
@@ -816,6 +817,9 @@ export async function finishRun(
   input: RunFinish,
 ): Promise<Run> {
   const { db } = context;
+  // An empty or blank optional text field is as good as left out.
+  const givenQuestion = input.question?.trim() ? input.question : undefined;
+  const givenReport = input.report?.trim() ? input.report : undefined;
   return transaction(db, async (tx) => {
     const finishRule = "A Run is finished only by its own Agent, once, while it is running, with an Outcome its Brief offers.";
     const { ticket, run } = await lockOwnRunningRun(tx, caller, runId, {
@@ -858,7 +862,7 @@ export async function finishRun(
       });
     }
 
-    if (outcome.needsYou && !input.question?.trim()) {
+    if (outcome.needsYou && givenQuestion === undefined) {
       throw new ApiError(400, "question_needed", `${outcome.name} hands ${ticket.key} back to its Assignee, so it takes a Question.`, {
         rule: "A Run that finishes with its Step's needs you Outcome says what it needs in a Question.",
         advice: `Finish with ${outcome.name} again, giving a Question that says what you need from the Assignee.`,
@@ -873,7 +877,7 @@ export async function finishRun(
       // A Run completing its Ticket leaves it Unverified, until a User Accepts or Reopens it.
       verification: "unverified",
       beforeMove: async ({ outcome: applied, question: cronksQuestion }, now) => {
-        const question = cronksQuestion ?? input.question ?? null;
+        const question = cronksQuestion ?? givenQuestion ?? null;
         const questionBy: QuestionBy | null = cronksQuestion !== null ? "cronk" : question === null ? null : "agent";
         await freeSlot(context, tx, run.id);
         await tx.query(
@@ -885,8 +889,8 @@ export async function finishRun(
         if (resolves) await conflictResolved(context, tx, ticket);
         // Backported: the Ticket waits for the Backport to link and join the queue, with no other Run here.
         if (backports) await backported(context, tx, ticket);
-        if (input.report !== undefined) {
-          await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: input.report });
+        if (givenReport !== undefined) {
+          await recordReport(context, tx, ticket, run, { title: `${run.step.name} report`, body: givenReport });
         }
         // The Agent's own Question shows on the Ticket as its Comment; Cronk's, at the round limit, shows on the Run
         // and with the Ticket's needs you in the Inbox.

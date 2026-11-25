@@ -63,6 +63,20 @@ describe("asking a Question", () => {
     expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
     expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
   });
+
+  test("an empty or blank Question is refused for needs you as one left out", async () => {
+    const { ada, ticket, run, asAgent, status } = await investigating();
+
+    for (const question of ["", "  \n "]) {
+      const response = await call("POST", `/api/runs/${run.id}/finish`, asAgent, { outcome: "needs you", question });
+
+      expect(response.status).toBe(400);
+      expect(response.json.error.code).toBe("question_needed");
+      expect(response.json.error.rule).toBe("A Run that finishes with its Step's needs you Outcome says what it needs in a Question.");
+    }
+    expect((await ok("GET", `/api/runs/${run.id}`, ada)).state).toBe("running");
+    expect((await ok("GET", `/api/tickets/${ticket.id}`, ada)).statusId).toBe(status("Investigate"));
+  });
 });
 
 /** Finishes the Ticket's running Run with needs you and the Question, and returns the Question's Inbox item. */
