@@ -1529,6 +1529,21 @@
 .runner-allowlist textarea {
   width: 100%;
 }
+.runner-allowlist-skipped {
+  display: grid;
+  gap: var(--space-1);
+}
+.runner-allowlist-skipped ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.runner-allowlist-skipped p {
+  margin: 0;
+}
 .runner-managed-ids {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);

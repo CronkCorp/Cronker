@@ -245,3 +245,43 @@ test("a local Runner's card maps model labels to the Machine models its Machines
   const runners = await (await cronk.request("GET", "/api/runners", { cookie: ada })).json();
   expect(runners[0].machineModels).toEqual([{ label: "haiku", model: "qwen" }]);
 });
+
+test("a local Runner's card lists the allowlist's rules that don't apply to Machine models, once it maps a label to one", async ({
+  page,
+  cronk,
+}) => {
+  await setUp(cronk);
+  const ada = await signIn(cronk);
+  const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
+  const started = await (
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0" } })
+  ).json();
+  await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
+  const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
+  await cronk.request("PUT", "/api/machine/announcement", {
+    headers: { authorization: `Bearer ${machineToken}` },
+    body: { claude: true, models: [{ name: "qwen", limit: 1, up: true }] },
+  });
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/runners`);
+  const card = page.getByRole("region", { name: "Laptop" });
+  const rules = card.getByRole("textbox", { name: "Allowed tools" });
+  await rules.fill("Bash(git:*)\nEdit\nWebFetch\nmcp__github");
+  await card.getByRole("button", { name: "Save allowed tools" }).click();
+  await expect(card.getByText("Saved.")).toBeVisible();
+  const skipped = card.getByRole("group", { name: "Not applying to Machine models" });
+  // No label maps to a Machine model yet.
+  await expect(skipped).toHaveCount(0);
+
+  const mapping = card.getByRole("group", { name: "Machine models" });
+  await mapping.getByRole("button", { name: "Add a model label" }).click();
+  await mapping.getByRole("group", { name: "Machine model of a new label" }).getByLabel("Model label").fill("haiku");
+  await mapping.getByRole("group", { name: "Machine model of haiku", exact: true }).getByLabel("Machine model").selectOption("qwen");
+  await mapping.getByRole("button", { name: "Save Machine models" }).click();
+  await expect(mapping.getByRole("status")).toHaveText("Saved.");
+
+  await expect(skipped.getByRole("listitem")).toHaveText(["Edit", "mcp__github"]);
+  await card.getByRole("button", { name: "Reset to default" }).click();
+  await expect(skipped).toHaveCount(0);
+});

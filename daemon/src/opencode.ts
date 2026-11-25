@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ClaimedRun } from "./api.js";
 import type { MachineModel } from "./config.js";
 import { keyOf } from "./models.js";
-import type { ProgramOutput, RunProgram } from "./program.js";
+import { capDeniedTools, type ProgramOutput, type RunProgram } from "./program.js";
 
 /**
  * OpenCode V2, the program a Run on a Machine model runs as: `opencode run --standalone --format json`, configured
@@ -14,8 +14,8 @@ import type { ProgramOutput, RunProgram } from "./program.js";
  *   makes every other provider unusable however it became known.
  * - Cronk's MCP server is the only one, its tools given to the model directly (`codemode: false`), the Run's token
  *   read from an environment variable the config names, never from the arguments.
- * - Everything is denied, then reading, searching and editing inside the worktrees, Cronk's tools and a fixed set of
- *   commands are allowed. Paths outside the directory the Run works in are denied twice over: by `external_directory`,
+ * - Everything is denied, then reading, searching and editing inside the worktrees, Cronk's tools and the Runner's
+ *   allowlist, translated, are allowed; a Run of a read-only Step is then denied edits. Paths outside the directory the Run works in are denied twice over: by `external_directory`,
  *   which OpenCode checks before a read or edit of one, and by denying absolute paths, as only those name one.
  * - Policies, which only ever tighten, deny the same again, so an agent's rules from elsewhere can't widen them.
  * - A Repository's own `opencode.json` isn't loaded, and would rank below the inline config if it were.
@@ -29,22 +29,46 @@ const mcpServerName = "cronk";
 export const runTokenVariable = "CRONK_RUN_TOKEN";
 export const modelKeyVariable = "CRONK_MODEL_KEY";
 
+/** Cronk's own tools, as Claude Code's allowlist names them; always allowed, so never a rule left out. */
+const cronkRule = /^mcp__cronk(__.*)?$/;
+
+/** What a Runner's allowlist allows a Run on a Machine model, and the rules that don't apply to one. */
+export interface Translation {
+  /** Shell rules: `x *` for `Bash(x:*)`, `x` for `Bash(x)`. */
+  commands: string[];
+  webFetch: boolean;
+  webSearch: boolean;
+  /** The rules left out, as written: they would need widening to translate, or name a tool OpenCode doesn't have. */
+  skipped: string[];
+}
+
 /**
- * The commands a Run on a Machine model may run: `git`, and the read-only `gh` commands of a new Runner's allowlist.
- * The Runner's own allowlist doesn't apply yet.
+ * The Runner's allowlist, Claude Code permission rules, translated for OpenCode. `Bash(x:*)` becomes a shell rule for
+ * `x *` and `Bash(x)` an exact one; `WebFetch` and `WebSearch` allow their tools. Every other rule is left out, never
+ * widened: `Edit`, `Read`, `WebFetch(domain:…)`, other MCP servers, a bare `Bash` and patterns OpenCode reads
+ * differently, a `*` or `?` other than a trailing `:*`. Cronk's own tools are always allowed, so aren't left out.
+ *
+ * Cronk's server has a copy of the rules for the Runner's card (`server/runs/allowlist.ts`); a test keeps them alike.
  */
-export const allowedCommands: readonly string[] = [
-  "git *",
-  "gh pr view *",
-  "gh pr list *",
-  "gh pr diff *",
-  "gh pr checks *",
-  "gh issue view *",
-  "gh issue list *",
-  "gh run view *",
-  "gh run list *",
-  "gh repo view *",
-];
+export function translateAllowlist(rules: readonly string[]): Translation {
+  const translation: Translation = { commands: [], webFetch: false, webSearch: false, skipped: [] };
+  for (const written of rules) {
+    const rule = written.trim();
+    if (!rule || cronkRule.test(rule)) continue;
+    if (rule === "WebFetch") translation.webFetch = true;
+    else if (rule === "WebSearch") translation.webSearch = true;
+    else {
+      const command = /^Bash\((.*)\)$/s.exec(rule)?.[1];
+      const prefix = command?.endsWith(":*") ? command.slice(0, -2).trim() : undefined;
+      const shell = prefix !== undefined ? prefix && `${prefix} *` : command?.trim();
+      if (shell && !/[*?\n]/.test(shell.replace(/ \*$/, ""))) translation.commands.push(shell);
+      else translation.skipped.push(rule);
+    }
+  }
+  translation.commands = [...new Set(translation.commands)];
+  translation.skipped = [...new Set(translation.skipped)];
+  return translation;
+}
 
 type Effect = "allow" | "deny";
 interface Rule {
@@ -53,13 +77,18 @@ interface Rule {
   effect: Effect;
 }
 
+/** OpenCode's tools that edit files, which a Run of a read-only Step is denied whatever else allows them. */
+export const openCodeEditTools = ["edit", "write", "patch"];
+
 /**
- * The Run's permissions, in order; the last rule matching wins. Denied first, everything; then what is allowed; then
- * what is denied whatever came before: paths outside the worktrees, skills and removing OpenCode's worktrees.
+ * The Run's permissions, in order; the last rule matching wins. Denied first, everything; then what is allowed:
+ * reading, searching and editing, Cronk's tools and the Runner's allowlist, translated; then what is denied whatever
+ * came before: paths outside the worktrees, skills, removing OpenCode's worktrees and, for a read-only Step, edits.
  */
-export function permissionsOf(): Rule[] {
+export function permissionsOf(allowlist: readonly string[], readOnly = false): Rule[] {
   const allow = (action: string, resource = "*"): Rule => ({ action, resource, effect: "allow" });
   const deny = (action: string, resource = "*"): Rule => ({ action, resource, effect: "deny" });
+  const translation = translateAllowlist(allowlist);
   return [
     deny("*"),
     allow("read"),
@@ -67,24 +96,29 @@ export function permissionsOf(): Rule[] {
     allow("grep"),
     allow("edit"),
     allow(`${mcpServerName}_*`),
-    ...allowedCommands.map((command) => allow("shell", command)),
+    ...translation.commands.map((command) => allow("shell", command)),
+    ...(translation.webFetch ? [allow("webfetch")] : []),
+    ...(translation.webSearch ? [allow("websearch")] : []),
     // A path outside the directory the Run works in is canonical and absolute; one inside it is relative.
     deny("external_directory"),
     deny("read", "/*"),
     deny("edit", "/*"),
     deny("skill"),
     deny("opencode_worktree_remove"),
+    ...(readOnly ? openCodeEditTools.map((tool) => deny(tool)) : []),
   ];
 }
 
 /**
  * The Run's policies: hard denials that no permission rule, approval or other config lifts. Only the Machine model's
- * provider and Cronk's MCP server may be used, no skill, plugin or web search, and every tool check is denied but those
- * the permissions allow, which then decide.
+ * provider and Cronk's MCP server may be used, no skill or plugin, web search only when the allowlist allows it, and
+ * every tool check is denied but those the permissions allow, which then decide.
  */
-export function policiesOf(): Rule[] {
+export function policiesOf(allowlist: readonly string[], readOnly = false): Rule[] {
   const statement = (action: string, resource: string, effect: Effect): Rule => ({ action, resource, effect });
-  const lifted = permissionsOf().filter((rule) => rule.effect === "allow");
+  const permissions = permissionsOf(allowlist, readOnly);
+  const lifted = permissions.filter((rule) => rule.effect === "allow");
+  const webSearch = lifted.some((rule) => rule.action === "websearch");
   return [
     statement("provider.use", "*", "deny"),
     statement("provider.use", providerId, "allow"),
@@ -92,12 +126,17 @@ export function policiesOf(): Rule[] {
     statement("mcp.use", mcpServerName, "allow"),
     statement("skill.use", "*", "deny"),
     statement("plugin.use", "*", "deny"),
-    statement("websearch.use", "*", "deny"),
+    ...(webSearch ? [] : [statement("websearch.use", "*", "deny")]),
     statement("tool.use", "*", "deny"),
     ...lifted.map((rule) => statement("tool.use", `${rule.action}:${rule.resource}`, "allow")),
-    ...["external_directory:*", "read:/*", "edit:/*", "skill:*", "opencode_worktree_remove:*"].map((resource) =>
-      statement("tool.use", resource, "deny"),
-    ),
+    ...[
+      "external_directory:*",
+      "read:/*",
+      "edit:/*",
+      "skill:*",
+      "opencode_worktree_remove:*",
+      ...(readOnly ? openCodeEditTools.map((tool) => `${tool}:*`) : []),
+    ].map((resource) => statement("tool.use", resource, "deny")),
   ];
 }
 
@@ -140,8 +179,8 @@ export function openCodeConfig(model: MachineModel, claimed: ClaimedRun, hasKey:
     share: "disabled",
     update: "disable",
     autoupdate: false,
-    permissions: permissionsOf(),
-    policies: policiesOf(),
+    permissions: permissionsOf(claimed.allowedTools, claimed.readOnly === true),
+    policies: policiesOf(claimed.allowedTools, claimed.readOnly === true),
   };
 }
 
@@ -163,16 +202,54 @@ function gitIdentity(env: NodeJS.ProcessEnv): Promise<{ name: string; email: str
 /** Quotes a value for a git config file. */
 const gitValue = (value: string) => `"${value.replace(/[\\"]/g, (c) => `\\${c}`).replace(/\n/g, " ")}"`;
 
-/** What a line of `opencode run --format json` says, of what the daemon reads: every event names its session. */
-function readOpenCodeLine(line: string): ProgramOutput {
-  let event: { sessionID?: unknown };
-  try {
-    event = JSON.parse(line) as typeof event;
-  } catch {
-    return {};
-  }
-  // No cost: a made-up estimate would be added to the Run's totals.
-  return typeof event?.sessionID === "string" && event.sessionID ? { sessionId: event.sessionID } : {};
+/** OpenCode's names for tools that older versions, and models, call otherwise. */
+const toolAliases: Record<string, string> = { bash: "shell", apply_patch: "patch" };
+
+/**
+ * A tool call OpenCode denied, as a person reads it, or null for any other: a shell call as `Bash(<command>)`, the web
+ * tools as `WebFetch` and `WebSearch`, as Claude Code's are, and any other by OpenCode's name for it, such as `edit`.
+ * OpenCode ends a denied call as a `tool_use` event whose state is an error saying `Permission denied: <permission>`,
+ * or that the permission needs an approval nobody is present to give.
+ */
+export function deniedToolOf(event: { type?: unknown; part?: unknown }): string | null {
+  if (event.type !== "tool_use" || typeof event.part !== "object" || event.part === null) return null;
+  const part = event.part as { tool?: unknown; state?: { status?: unknown; error?: unknown; input?: unknown } };
+  const error = part.state?.error;
+  if (part.state?.status !== "error" || typeof error !== "string" || !/^Permission (denied\b|\S+ needs approval)/.test(error))
+    return null;
+  if (typeof part.tool !== "string" || !part.tool.trim()) return null;
+  const tool = part.tool.trim().toLowerCase();
+  const name = toolAliases[tool] ?? tool;
+  const command = (part.state.input as { command?: unknown } | undefined)?.command;
+  if (name === "shell" && typeof command === "string") return `Bash(${command.trim()})`;
+  if (name === "webfetch") return "WebFetch";
+  if (name === "websearch") return "WebSearch";
+  return name;
+}
+
+/**
+ * A reader of one Run's `opencode run --format json` output, of what the daemon reads: every event names its session,
+ * and the tool calls denied so far, all of them each time another is.
+ */
+function openCodeReader(): (line: string) => ProgramOutput {
+  const denied: string[] = [];
+  return (line) => {
+    let event: { sessionID?: unknown; type?: unknown; part?: unknown };
+    try {
+      event = JSON.parse(line) as typeof event;
+    } catch {
+      return {};
+    }
+    if (typeof event !== "object" || event === null) return {};
+    // No cost: a made-up estimate would be added to the Run's totals.
+    const said: ProgramOutput = typeof event.sessionID === "string" && event.sessionID ? { sessionId: event.sessionID } : {};
+    const tool = deniedToolOf(event);
+    if (tool !== null) {
+      denied.push(tool);
+      said.deniedTools = capDeniedTools(denied);
+    }
+    return said;
+  };
 }
 
 /** OpenCode, running a Run on the Machine model, its executable `opencode` unless given. */
@@ -220,7 +297,7 @@ export function openCode(model: MachineModel, command = "opencode"): RunProgram 
         },
       };
     },
-    reader: () => readOpenCodeLine,
+    reader: openCodeReader,
     // OpenCode's events become a Transcript in a later version.
     transcript: async () => null,
   };
