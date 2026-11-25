@@ -1,4 +1,5 @@
 import { checkModelName, readConfig, writeConfig, type MachineModel } from "./config.js";
+import { checkModelWorks, type CheckOptions } from "./model-check.js";
 
 /**
  * `cronk-runner model add|list|remove`: the Machine models this Machine offers, kept in the daemon's config, which
@@ -17,6 +18,8 @@ export interface ModelFlags {
   keyEnv?: string;
   /** The model needs no key: don't ask for one. */
   noKey?: boolean;
+  /** Save it even when the server fails the checks, without asking. */
+  saveAnyway?: boolean;
 }
 
 export interface ModelOptions {
@@ -29,6 +32,8 @@ export interface ModelOptions {
 export interface AddOptions extends ModelOptions {
   /** Asks a question and answers what was typed; `hidden` doesn't echo it, as for a key. */
   ask: (question: string, options?: { hidden?: boolean }) => Promise<string>;
+  /** How the server is checked before saving; the checks' own timeouts when left out. */
+  check?: Omit<CheckOptions, "note">;
 }
 
 export const defaultModelLimit = 1;
@@ -89,6 +94,25 @@ export async function addModel(name: string, flags: ModelFlags, options: AddOpti
   } else if (!flags.noKey) {
     const key = (await ask("Key (leave empty for none): ", { hidden: true })).trim();
     if (key) model.key = key;
+  }
+
+  // Try the server before saving, so one that can't do a Run is found now. The key is never printed.
+  print(`Checking ${modelId} at ${address}…`);
+  const failures = await checkModelWorks(model, keyOf(model, options.env ?? process.env), { ...options.check, note: print });
+  if (failures.length > 0) {
+    print(`${name} failed ${failures.length === 1 ? "a check" : "the checks"}:`);
+    for (const failure of failures) print(`- ${failure.what}\n  ${failure.fix}`);
+    let save = flags.saveAnyway === true;
+    if (!save) {
+      const typed = await ask("Save anyway? [y/N]: ").catch(() => "");
+      save = /^y(es)?$/i.test(typed.trim());
+    }
+    if (!save) {
+      print(`Didn't save ${name}. Add it again once the server is put right, or with --save-anyway.`);
+      return 1;
+    }
+  } else {
+    print("It calls tools and keeps its whole context.");
   }
 
   const config = await readConfig(options.configPath);
