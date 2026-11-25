@@ -9,11 +9,13 @@ import { serviceFile, systemdUnitName } from "./service.js";
 
 /**
  * `cronk-runner logs`: follows the Machine's Runs in the terminal, from the session JSONL Claude Code writes for each,
- * found through the Run records the daemon keeps (see `history.ts`). It only reads, so it works from a second terminal
+ * or the OpenCode events the daemon records for a Run on a Machine model, found through the Run records the daemon
+ * keeps (see `history.ts`). It only reads, so it works from a second terminal
  * while the daemon runs in the foreground or as a service.
  *
  * The text is shown as the JSONL holds it, not scrubbed for secrets as Transcripts in Cronk are: it stays on the User's
- * own Machine, read from a file in their own Claude Code config directory that holds the same text.
+ * own Machine, read from a file in their own Claude Code config directory, or the daemon's state directory, that holds
+ * the same text.
  */
 
 export interface LogsOptions {
@@ -25,7 +27,7 @@ export interface LogsOptions {
   print: (line: string) => void;
   /** Prints a line about the following itself, such as a Run starting or ending. */
   note: (line: string) => void;
-  /** Prints the JSONL lines as Claude Code wrote them, instead of readable ones. */
+  /** Prints the JSONL lines as Claude Code or OpenCode wrote them, instead of readable ones. */
   raw?: boolean;
   /** How often the files are read again: every half second when left out. */
   pollMs?: number;
@@ -97,6 +99,52 @@ export function renderLine(line: string): string[] {
   return lines;
 }
 
+/**
+ * The readable lines of one OpenCode event, as the daemon records them for a Run on a Machine model: the agent's text
+ * as it is, a tool call as `[tool] summary` once it has its input, and then, if it failed or was denied, `[error] …`;
+ * an error event as `[error] …`. Steps, reasoning and events of any other kind, or lines that aren't JSON, show
+ * nothing. A call printed while pending and again once ended shows once, so `seen` keeps the calls shown.
+ */
+export function renderOpenCodeLine(line: string, seen = new Set<string>()): string[] {
+  let event: unknown;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (!isObject(event)) return [];
+  const part = isObject(event.part) ? event.part : {};
+  if (event.type === "text") return typeof part.text === "string" && part.text.trim() ? part.text.trim().split("\n") : [];
+  if (event.type === "error") return [`[error] ${oneLine(errorText(event.error))}`.trimEnd()];
+  if (event.type !== "tool_use" || typeof part.tool !== "string") return [];
+  const state = isObject(part.state) ? part.state : {};
+  const id = typeof part.callID === "string" ? part.callID : typeof part.id === "string" ? part.id : null;
+  const lines: string[] = [];
+  const hasInput = isObject(state.input) && Object.keys(state.input).length > 0;
+  if (hasInput && !(id && seen.has(`${id} call`))) {
+    if (id) seen.add(`${id} call`);
+    const summary = summarize(state.input);
+    lines.push(summary ? `[${part.tool}] ${summary}` : `[${part.tool}]`);
+  }
+  const failed = state.status === "error" || (state.error !== undefined && state.error !== null);
+  if (failed && !(id && seen.has(`${id} error`))) {
+    if (id) seen.add(`${id} error`);
+    if (!hasInput && !(id && seen.has(`${id} call`))) lines.push(`[${part.tool}]`);
+    lines.push(`[error] ${oneLine(errorText(state.error) || "the tool call failed")}`);
+  }
+  return lines;
+}
+
+/** An OpenCode error's message: a string, an `{ message }` or an `{ name, data: { message } }`. */
+function errorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (!isObject(error)) return "";
+  const data = isObject(error.data) ? error.data : {};
+  const message = [data.message, error.message].find((value) => typeof value === "string" && value.trim());
+  if (typeof message === "string") return message;
+  return typeof error.name === "string" ? error.name : "";
+}
+
 /** The newest Run whose id is the target, or whose Ticket's key is, ignoring case. */
 export function resolveRun(records: RunRecord[], target: string): RunRecord | undefined {
   const newestFirst = [...records].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
@@ -152,9 +200,11 @@ function follower(options: LogsOptions, prefix: string) {
   const tail = new Tail();
   let path: string | null = null;
   let seen = false;
-  const emit = (line: string) => {
-    if (options.raw) options.print(line);
-    else for (const shown of renderLine(line)) options.print(`${prefix}${shown}`);
+  const shownCalls = new Set<string>();
+  const emit = (line: string, record: RunRecord) => {
+    if (options.raw) return options.print(line);
+    const lines = record.program === "opencode" ? renderOpenCodeLine(line, shownCalls) : renderLine(line);
+    for (const shown of lines) options.print(`${prefix}${shown}`);
   };
   return {
     /** Reads what the session added; true once the Run has ended and all of it was read. */
@@ -163,7 +213,7 @@ function follower(options: LogsOptions, prefix: string) {
       path ??= record.transcriptPath ?? (record.sessionId ? await claudeCode().transcript(options.env, record.sessionId) : null);
       const lines = path ? await tail.read(path, ended) : null;
       if (lines) seen = true;
-      for (const line of lines ?? []) emit(line);
+      for (const line of lines ?? []) emit(line, record);
       if (ended && !seen)
         options.note(
           `${record.ticketKey}: Run ${record.runId} ended, and its session file is gone or was never written.`,

@@ -221,7 +221,8 @@ export function openCode(model: MachineModel, command = "opencode"): RunProgram 
       };
     },
     reader: () => readOpenCodeLine,
-    // OpenCode's events become a Transcript in a later version.
+    // OpenCode keeps its sessions in a database, not a file: its events, as the daemon records them, are the transcript.
+    records: true,
     transcript: async () => null,
   };
 }

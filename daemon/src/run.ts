@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import {
+  appendFile,
   mkdir,
   mkdtemp,
   readdir,
@@ -24,6 +25,7 @@ import {
 import { readConfig, type PairedCronk } from "./config.js";
 import {
   endRunRecord,
+  eventsPathOf,
   historyDirOf,
   pruneRunRecords,
   writeRunRecord,
@@ -526,8 +528,10 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       ticketKey: claimed.ticketKey,
       cronkUrl: cronk.url,
       pid: child.pid ?? null,
+      program: program.name === "opencode" ? "opencode" : "claude",
       sessionId: null,
-      transcriptPath: null,
+      // A program whose output is its transcript has it recorded from the start.
+      transcriptPath: program.records ? eventsPathOf(historyDir, runId) : null,
       startedAt: new Date().toISOString(),
       endedAt: null,
     };
@@ -553,7 +557,22 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     let costUsd: number | undefined;
     let denied: string[] = [];
     const read = program.reader();
+    // Each line of a program that `records` its output is appended to the Run's events file, one write at a time.
+    const events = history.transcriptPath;
+    let eventsWritten: Promise<void> = events
+      ? mkdir(historyDir, { recursive: true, mode: 0o700 })
+          .then(() => writeFile(events, "", { mode: 0o600, flag: "a" }))
+          .catch((error: unknown) =>
+            print(`${claimed.ticketKey}: couldn't record its events: ${(error as Error).message}`),
+          )
+      : Promise.resolve();
     createInterface({ input: child.stdout! }).on("line", (line) => {
+      if (events)
+        eventsWritten = eventsWritten.then(() =>
+          appendFile(events, `${line}\n`).catch((error: unknown) =>
+            print(`${claimed.ticketKey}: couldn't record its events: ${(error as Error).message}`),
+          ),
+        );
       const said = read(line);
       if (!sessionId && said.sessionId) {
         sessionId = said.sessionId;
@@ -565,7 +584,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     });
 
     // The transcript follows the session: uploaded whole whenever its file changed, one upload at a time.
-    let transcriptPath: string | null = null;
+    let transcriptPath: string | null = events;
     let uploaded = "";
     let uploads = true;
     let uploading: Promise<void> = Promise.resolve();
@@ -573,6 +592,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       (uploading = uploading
         .then(async () => {
           if (!uploads || !sessionId) return;
+          await eventsWritten;
           if (!transcriptPath) {
             transcriptPath = await program.transcript(env, sessionId);
             if (!transcriptPath) return;
