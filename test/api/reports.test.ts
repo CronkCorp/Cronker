@@ -91,7 +91,9 @@ async function runningRun(options: StartCronkOptions = {}) {
     // Reading whether a `local` Runner is offline needs its Machines' connections.
     await cronk.applyAhead("0082_machines.sql");
     await cronk.applyAhead("0088_machine_connections.sql");
-    // And a Runner's Machine models, and a Run's.
+    // And a Runner's Machine models, and a Run's, which Machine models its Machines announce, and the Runs they claimed.
+    await cronk.applyAhead("0083_local_runs.sql");
+    await cronk.applyAhead("0089_machine_announcements.sql");
     await cronk.applyAhead("0090_machine_model_mappings.sql");
   }
   const { user, workspace } = await setUp(cronk);
