@@ -48,9 +48,19 @@ function answering(...answers: string[]) {
 }
 
 async function add(name: string, flags: ModelFlags, ...answers: string[]) {
+  return addWith({}, name, flags, ...answers);
+}
+
+async function addWith(env: NodeJS.ProcessEnv, name: string, flags: ModelFlags, ...answers: string[]) {
   const printed: string[] = [];
   const asking = answering(...answers);
-  const code = await addModel(name, flags, { configPath, print: (line) => printed.push(line), ask: asking.ask });
+  const code = await addModel(name, flags, {
+    configPath,
+    env,
+    print: (line) => printed.push(line),
+    ask: asking.ask,
+    check: { toolsTimeoutMs: 5_000, contextTimeoutMs: 5_000 },
+  });
   return { code, printed, asked: asking.asked };
 }
 
@@ -70,7 +80,7 @@ describe("cronk-runner model", () => {
     expect(added.code).toBe(0);
     expect(added.asked.map((a) => a.hidden)).toEqual([false, false, false, false, false, true]);
     expect(added.asked[5]!.question).toMatch(/^Key/);
-    expect(added.printed).toEqual([expect.stringContaining("Added the Machine model qwen.")]);
+    expect(added.printed.at(-1)).toContain("Added the Machine model qwen.");
     expect((await config()).models).toEqual([
       { name: "qwen", address: server.address, modelId: "qwen3.5:9b", contextSize: 65536, limit: 1, timeoutMinutes: 60, key: "sk-secret" },
     ]);
@@ -80,7 +90,7 @@ describe("cronk-runner model", () => {
 
     const printed = await list();
     expect(printed).toEqual([expect.stringMatching(/^qwen: up, qwen3\.5:9b at .*, context 65536, 1 at once, time limit 60 min, key saved$/)]);
-    expect(printed.join("\n")).not.toContain("sk-secret");
+    expect([...printed, ...added.printed].join("\n")).not.toContain("sk-secret");
     expect(server.requests.at(-1)).toEqual({ path: "/v1/models", authorization: "Bearer sk-secret" });
   });
 
@@ -88,8 +98,9 @@ describe("cronk-runner model", () => {
     server = await standInModelServer({ key: "sk-from-env" });
     const flags = { address: server.address, modelId: "gpt-oss:20b", contextSize: "32768", limit: "2", timeoutMinutes: "30" };
 
-    expect((await add("gpt-oss", { ...flags, keyEnv: "OPENAI_KEY" })).asked).toEqual([]);
-    expect((await add("open", { ...flags, noKey: true })).asked).toEqual([]);
+    expect((await addWith({ OPENAI_KEY: "sk-from-env" }, "gpt-oss", { ...flags, keyEnv: "OPENAI_KEY" })).asked).toEqual([]);
+    // The server wants a key this one lacks, so it is saved only because it is told to.
+    expect((await add("open", { ...flags, noKey: true, saveAnyway: true })).asked).toEqual([]);
     expect((await config()).models).toEqual([
       { name: "gpt-oss", address: server.address, modelId: "gpt-oss:20b", contextSize: 32768, limit: 2, timeoutMinutes: 30, keyEnv: "OPENAI_KEY" },
       { name: "open", address: server.address, modelId: "gpt-oss:20b", contextSize: 32768, limit: 2, timeoutMinutes: 30 },
@@ -102,7 +113,7 @@ describe("cronk-runner model", () => {
     expect(JSON.stringify(await config())).not.toContain("sk-from-env");
 
     // Added again under the same name, it is replaced.
-    expect((await add("open", { ...flags, limit: "3", noKey: true })).printed[0]).toContain("Replaced the Machine model open.");
+    expect((await add("open", { ...flags, limit: "3", noKey: true, saveAnyway: true })).printed.at(-1)).toContain("Replaced the Machine model open.");
     expect((await config()).models.map((m: { name: string; limit: number }) => [m.name, m.limit])).toEqual([
       ["gpt-oss", 2],
       ["open", 3],
@@ -110,7 +121,7 @@ describe("cronk-runner model", () => {
   });
 
   test("names are 1 to 50 lower case letters, digits and dashes, and answers are checked", async () => {
-    const flags = { address: "http://localhost:11434/v1", modelId: "qwen", contextSize: "65536", limit: "1", timeoutMinutes: "60", noKey: true };
+    const flags = { address: "http://127.0.0.1:9/v1", modelId: "qwen", contextSize: "65536", limit: "1", timeoutMinutes: "60", noKey: true, saveAnyway: true };
     for (const name of ["Qwen", "", "a".repeat(51), "qwen_3", "qwen 3"]) {
       await expect(add(name, flags)).rejects.toThrow(/isn't a Machine model's name/);
     }
@@ -123,8 +134,109 @@ describe("cronk-runner model", () => {
     await expect(add("q", { ...flags, address: undefined }, "")).rejects.toThrow(/Server address .* is needed/);
   });
 
+  describe("add checks the server before saving", () => {
+    const flags = (address: string): ModelFlags => ({ address, modelId: "qwen3.5:9b", contextSize: "32768", limit: "1", timeoutMinutes: "60" });
+    const saved = async () => {
+      try {
+        return (await config()).models.map((m: { name: string }) => m.name);
+      } catch {
+        return [];
+      }
+    };
+    /** What the checks printed and asked, which must never hold the key. */
+    const shown = (added: { printed: string[]; asked: { question: string }[] }) =>
+      [...added.printed, ...added.asked.map((a) => a.question)].join("\n");
+
+    test("a server that calls tools and keeps its context passes, and the model is saved without a question", async () => {
+      server = await standInModelServer({ key: "sk-secret" });
+      const added = await add("qwen", flags(server.address), "sk-secret");
+
+      expect(added.code).toBe(0);
+      expect(added.asked.map((a) => a.question)).toEqual([expect.stringMatching(/^Key/)]);
+      expect(await saved()).toEqual(["qwen"]);
+      const chats = server.requests.filter((r) => r.path === "/v1/chat/completions");
+      expect(chats).toHaveLength(2);
+      for (const chat of chats) expect(chat.authorization).toBe("Bearer sk-secret");
+      // One asks for a tool call; the other is a prompt close to the context size, the marker at its very start.
+      const [tools, context] = chats.map((c) => c.body as { model: string; tools?: unknown[]; messages: { content: string }[] });
+      expect(tools!.model).toBe("qwen3.5:9b");
+      expect(tools!.tools).toHaveLength(1);
+      const prompt = context!.messages[0]!.content;
+      expect(prompt).toMatch(/^Remember this marker: MARKER-[0-9a-f]{8}\b/);
+      const words = prompt.split(/\s+/).length;
+      expect(words).toBeGreaterThan(32768 * 0.8);
+      expect(words).toBeLessThan(32768 * 0.9);
+      expect(shown(added)).not.toContain("sk-secret");
+    });
+
+    test("a model answering without the tool call fails, and declining to save writes nothing", async () => {
+      server = await standInModelServer({ tools: "refuse" });
+      const added = await add("qwen", { ...flags(server.address), noKey: true }, "n");
+
+      expect(added.code).toBe(1);
+      expect(shown(added)).toContain("answered without calling the tool");
+      expect(shown(added)).toContain("tool support");
+      expect(added.asked.at(-1)!.question).toMatch(/Save anyway\? \[y\/N\]/);
+      expect(await saved()).toEqual([]);
+    });
+
+    test("a server that silently loads a smaller context loses the marker, names Ollama's setting, and saves on a yes", async () => {
+      server = await standInModelServer({ key: "sk-secret", loadedContext: 4096 });
+      const added = await add("qwen", flags(server.address), "sk-secret", "y");
+
+      expect(added.code).toBe(0);
+      const text = shown(added);
+      expect(text).toContain("lost the marker");
+      expect(text).toContain("the server saw 4096");
+      expect(text).toContain("OLLAMA_CONTEXT_LENGTH=32768");
+      expect(text).toContain("num_ctx");
+      expect(text).not.toContain("answered without calling the tool");
+      expect(text).not.toContain("sk-secret");
+      expect(await saved()).toEqual(["qwen"]);
+    });
+
+    test("a server refusing the length fails, its message shown without the key it echoed, and --save-anyway saves without asking", async () => {
+      server = await standInModelServer({ key: "sk-secret", loadedContext: 4096, refuseLength: true });
+      const added = await addWith({ MODEL_KEY: "sk-secret" }, "qwen", { ...flags(server.address), keyEnv: "MODEL_KEY", saveAnyway: true });
+
+      expect(added.code).toBe(0);
+      expect(added.asked).toEqual([]);
+      const text = shown(added);
+      expect(text).toContain("refused a prompt");
+      expect(text).toContain("maximum context length");
+      expect(text).toContain("Bearer ***");
+      expect(text).toContain("OLLAMA_CONTEXT_LENGTH");
+      expect(text).not.toContain("sk-secret");
+      expect(await saved()).toEqual(["qwen"]);
+    });
+
+    test("a server that is down, or can't be reached, is a failed check like any other", async () => {
+      server = await standInModelServer({ key: "sk-secret" });
+      server.setUp(false);
+      const down = await add("qwen", flags(server.address), "sk-secret", "");
+      expect(down.code).toBe(1);
+      expect(shown(down)).toContain("answered 503: loading");
+      expect(shown(down)).toContain("Start the server");
+      // The long request isn't made: it would only say the same.
+      expect(server.requests.filter((r) => r.path === "/v1/chat/completions")).toHaveLength(1);
+      expect(shown(down)).not.toContain("sk-secret");
+
+      const unreachable = await add("gone", { ...flags("http://127.0.0.1:9/v1"), noKey: true }, "yes");
+      expect(unreachable.code).toBe(0);
+      expect(shown(unreachable)).toContain("can't be reached");
+      expect(await saved()).toEqual(["gone"]);
+    });
+
+    test("with no answer to the question, as when its input ended, nothing is saved", async () => {
+      server = await standInModelServer({ tools: "refuse" });
+      const added = await add("qwen", { ...flags(server.address), noKey: true });
+      expect(added.code).toBe(1);
+      expect(await saved()).toEqual([]);
+    });
+  });
+
   test("remove removes one, and list says when there are none", async () => {
-    const flags = { address: "http://127.0.0.1:9/v1", modelId: "qwen", contextSize: "65536", limit: "1", timeoutMinutes: "60", noKey: true };
+    const flags = { address: "http://127.0.0.1:9/v1", modelId: "qwen", contextSize: "65536", limit: "1", timeoutMinutes: "60", noKey: true, saveAnyway: true };
     await add("qwen", flags);
     await add("gpt", flags);
 

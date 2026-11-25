@@ -33,6 +33,7 @@ Usage:
       --time-limit <minutes>       How long one Run may take (60 when not given)
       --key-env <VARIABLE>         Read its key from this environment variable instead of asking for it
       --no-key                     It needs no key
+      --save-anyway                Save it even if its server fails the tool call or context check
   cronk-runner model list          List the Machine models, whether each is up, without their keys
   cronk-runner model remove <name> Stop offering a Machine model`;
 
@@ -54,6 +55,10 @@ function parseModelAdd(args: string[]): { name: string; flags: ModelFlags } | nu
     const arg = args[i]!;
     if (arg === "--no-key") {
       flags.noKey = true;
+      continue;
+    }
+    if (arg === "--save-anyway") {
+      flags.saveAnyway = true;
       continue;
     }
     if (!arg.startsWith("--")) {
