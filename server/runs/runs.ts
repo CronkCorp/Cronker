@@ -20,7 +20,7 @@ import { Cost } from "./costs.js";
 import { isLocalOnly, type RunReports, type RunToStart, type StartResult } from "./runner.js";
 import { askQuestion } from "./questions.js";
 import { RunState, wentWrong } from "./states.js";
-import { inArchivedProject, isBlocked, queueOrder, runnerOffline, waitsForMachineModel } from "./waiting.js";
+import { inArchivedProject, isBlocked, queueOrder, runnerOffline, waitsForMachine } from "./waiting.js";
 import { userName } from "../identity/user.js";
 import { conflictResolved, joinQueueAutonomously, resolvingConflict, resolvingOutcome } from "../pipeline/merge-queue.js";
 import { backported, backportingOutcome, backportOf, queueBackports, type Backport } from "../pipeline/backports.js";
@@ -483,8 +483,8 @@ function runnerChanged(context: Context, tx: Tx, { runnerId, ownerId }: { runner
 /**
  * Whether the Runner has a slot for the Ticket now, after the waiting Tickets ahead of it in the queue:
  * none while its queue is paused by a rate limit, or while it is a `local` Runner with no Machine connected, and none
- * while the Machine model its Step's label is mapped to has no room. Tickets ahead waiting for a Machine model are
- * passed by: they hold no slot.
+ * while the Machine model its Step's label is mapped to has no room, or it needs Claude and no connected Machine runs it.
+ * Tickets ahead waiting for a Machine model or for Claude are passed by: they hold no slot.
  */
 async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<boolean> {
   const { limit, paused } = await lockRunner(tx, runnerId);
@@ -492,7 +492,7 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
   // Read once the Runner is locked: a Machine connecting locks it too, so this sees a connection that committed.
   const { rows: offline } = await tx.query<{ offline: boolean; modelWaits: boolean | null }>(
     `select ${runnerOffline("runners")} as offline,
-       (select ${waitsForMachineModel("tickets")} from tickets where tickets.id = $2) as "modelWaits"
+       (select ${waitsForMachine("tickets")} from tickets where tickets.id = $2) as "modelWaits"
      from runners where id = $1`,
     [runnerId, ticketId],
   );
@@ -501,7 +501,7 @@ async function hasSlotFor(tx: Tx, runnerId: string, ticketId: string): Promise<b
     `select (select count(*) from runs where runner_id = $1 and state = 'running')
        + (select count(*) from tickets waiting join agents on agents.id = waiting.delegate_id
           where agents.runner_id = $1 and waiting.waits_for_run and waiting.id <> $2 and not ${isBlocked("waiting")}
-            and not ${inArchivedProject("waiting")} and not ${waitsForMachineModel("waiting")}
+            and not ${inArchivedProject("waiting")} and not ${waitsForMachine("waiting")}
             and (${queueOrder("waiting")}) < (select ${queueOrder("tickets")} from tickets where id = $2)) as taken`,
     [runnerId, ticketId],
   );
@@ -572,7 +572,7 @@ async function recheck(context: Context, ticketId: string): Promise<RunNeed> {
 
 /**
  * Gives the Runner's free slots to its waiting Tickets, highest Priority first, then the one that entered its
- * Status first, until it is full, passing by those waiting for a Machine model with no room. Call it once a transaction
+ * Status first, until it is full, passing by those waiting for a Machine model with no room or for Claude. Call it once a transaction
  * that freed a slot, unblocked a Ticket or changed what its Machines offer commits. Each Ticket is started in a
  * transaction of its own, so no two Tickets are held at once.
  */
@@ -581,7 +581,7 @@ export async function startWaitingRuns(context: Context, runnerId: string): Prom
     const { rows } = await context.db.query<{ id: string }>(
       `select tickets.id from tickets join agents on agents.id = tickets.delegate_id
        where agents.runner_id = $1 and tickets.waits_for_run and not ${isBlocked("tickets")}
-         and not ${inArchivedProject("tickets")} and not ${waitsForMachineModel("tickets")}
+         and not ${inArchivedProject("tickets")} and not ${waitsForMachine("tickets")}
        order by ${queueOrder("tickets")} limit 1`,
       [runnerId],
     );

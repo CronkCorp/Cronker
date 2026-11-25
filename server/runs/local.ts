@@ -1,6 +1,6 @@
 import type { Context } from "../context.js";
 import { modelIdOf, settingsOf } from "../workspaces/workspaces.js";
-import { machinesWithClaude, machinesWithModel, mappedModelSql, notSetUpReason } from "./machine-models.js";
+import { machinesWithClaude, machinesWithModel, mappedModelSql, needsClaudeReason, notSetUpReason } from "./machine-models.js";
 import type { Runner, StartResult } from "./runner.js";
 
 /**
@@ -44,10 +44,12 @@ export function localRunner(context: Context): Runner {
           },
         };
       }
-      // Only Machines that run Claude hear of it.
-      for (const machineId of await machinesWithClaude(context.db, run.runner.id)) {
-        context.live.sendToMachine(machineId, { type: "run.claimable", runId: run.runId });
+      // Only Machines that run Claude hear of it; with none serving the Runner it is refused here, naming the label.
+      const machineIds = await machinesWithClaude(context.db, run.runner.id);
+      if (machineIds.length === 0) {
+        return { started: false, refusal: { kind: "not_configured", message: needsClaudeReason(run.model, run.runner.name) } };
       }
+      for (const machineId of machineIds) context.live.sendToMachine(machineId, { type: "run.claimable", runId: run.runId });
       return { started: true, reference: {} };
     },
     // Cronk stopped the Run: the Machine holding it is told to kill its process, now if it is connected, else when it

@@ -14,11 +14,16 @@
 // finishing, then finishes on a resume; `linger-then-hang` exits 0 after 800 ms, then hangs on a resume, recording when
 // SIGTERM came. `exit-on-term` hangs until SIGTERM, then exits 0. `retry` says nothing but `session.status` retry
 // events; `retry-mixed` says another event among them every 150 ms. Each log line carries when it started,
-// `startedAt`; one with `terminatedAt` records when a hanging run got SIGTERM.
+// `startedAt`; one with `terminatedAt` records when a hanging run got SIGTERM. Asked `--version`, as the daemon's
+// preflight and announcement ask, it prints $STAND_IN_OPENCODE_VERSION (2.4.0 when unset) and records nothing.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 
 const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write(`${process.env.STAND_IN_OPENCODE_VERSION ?? "2.4.0"}\n`);
+  process.exit(0);
+}
 const config = JSON.parse(process.env.OPENCODE_CONFIG_CONTENT ?? "null");
 const fromEnv = (text) => text.replace(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => process.env[name] ?? "");
 const run = (command, commandArgs, input) => {

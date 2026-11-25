@@ -540,6 +540,7 @@ const waitingReasons = {
   runnerPaused: "Runner rate-limited",
   runnerOffline: "Runner offline: no Machine connected",
   machineModel: "Machine model down or full",
+  claude: "No Machine running Claude connected",
   blocked: "Blocked by another Ticket",
   archived: "Project archived",
 } as const;

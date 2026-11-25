@@ -1,5 +1,6 @@
 import { checkModelName, readConfig, writeConfig, type MachineModel } from "./config.js";
 import { checkModelWorks, type CheckOptions } from "./model-check.js";
+import type { Programs } from "./preflight.js";
 
 /**
  * `cronk-runner model add|list|remove`: the Machine models this Machine offers, kept in the daemon's config, which
@@ -182,8 +183,15 @@ export interface Announcement {
   models: { name: string; limit: number; up: boolean }[];
 }
 
-/** Checks each model's server and makes the announcement: names, limits and whether each is up, nothing else. */
-export async function announcementOf(models: MachineModel[], env: NodeJS.ProcessEnv): Promise<Announcement> {
-  const ups = await Promise.all(models.map((model) => checkModel(model, env)));
-  return { claude: true, models: models.map((model, i) => ({ name: model.name, limit: model.limit, up: ups[i]! })) };
+/**
+ * Checks each model's server and makes the announcement: whether Claude Code is usable, and the models' names, limits
+ * and whether each is up, nothing else. Without a usable OpenCode none of them is up, though each is still announced as
+ * set up.
+ */
+export async function announcementOf(models: MachineModel[], env: NodeJS.ProcessEnv, programs: Programs): Promise<Announcement> {
+  const ups = programs.openCode === "ok" ? await Promise.all(models.map((model) => checkModel(model, env))) : models.map(() => false);
+  return {
+    claude: programs.claude === "ok",
+    models: models.map((model, i) => ({ name: model.name, limit: model.limit, up: ups[i]! })),
+  };
 }

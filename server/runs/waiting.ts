@@ -10,6 +10,7 @@ export const Waiting = Type.Union(
     Type.Literal("runnerPaused"),
     Type.Literal("runnerOffline"),
     Type.Literal("machineModel"),
+    Type.Literal("claude"),
     Type.Literal("blocked"),
     Type.Literal("archived"),
     Type.Null(),
@@ -21,7 +22,9 @@ export const Waiting = Type.Union(
       "`pausedUntil`), `runnerOffline` while its Runner is a `local` one with no " +
       "Machine serving it connected (see the Runner's `offlineSince`), `machineModel` while the Machine model its Step's " +
       "label is mapped to (see `waitingModel`) is set up on a Machine serving its Runner but up with room on none of " +
-      "those connected: the Runner's queue passes it by meanwhile, `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished, `archived` while " +
+      "those connected: the Runner's queue passes it by meanwhile, `claude` while its Step's label is mapped to no Machine " +
+      "model, so it needs Claude, and a Machine serving its Runner runs Claude but none of those connected does: the " +
+      "Runner's queue passes it by meanwhile too, `blocked` while a Ticket blocking it or one of its Sub-Tickets is unfinished, `archived` while " +
       "its Project is archived: nothing starts for it, and the Runner's queue passes it by, until an Admin unarchives it. " +
       "Null when it needs no Run, or has one.",
   },
@@ -102,6 +105,24 @@ const modelWaitedFor = (alias: string) =>
      where agents.id = ${alias}.delegate_id and runners.kind = 'local' and waited.model is not null
        and ${machineModelWaits("runners", "waited.model")})`;
 
+/**
+ * SQL that holds while a Run of the Runner `runners` on the label (an SQL expression) waits for Claude: the label is
+ * mapped to no Machine model, a Machine serving the Runner runs Claude, but no connected one does. With none running
+ * Claude it doesn't wait: its Run is refused, naming the label.
+ */
+export const claudeWaits = (runners: string, label: string) =>
+  `(${mappedModelOf(runners, label)} is null
+    and exists (select 1 from machine_runners claude_on join machines claude on claude.id = claude_on.machine_id
+      where claude_on.runner_id = ${runners}.id and claude.revoked_at is null and claude.announces_claude)
+    and not exists (select 1 from machine_runners claude_on join machines claude on claude.id = claude_on.machine_id
+      where claude_on.runner_id = ${runners}.id and claude.revoked_at is null and claude.announces_claude
+        and claude.connections > 0))`;
+
+/** SQL that holds while the Ticket `alias` would wait for Claude now through its Delegate's `local` Runner. */
+const claudeWaitedFor = (alias: string) =>
+  `exists (select 1 from agents join runners on runners.id = agents.runner_id
+     where agents.id = ${alias}.delegate_id and runners.kind = 'local' and ${claudeWaits("runners", stepLabel(alias))})`;
+
 /** SQL for what the Ticket `alias` waits for, as `Waiting`. */
 export const waitingColumn = (alias: string) =>
   `case when not ${alias}.waits_for_run then null when ${inArchivedProject(alias)} then 'archived'
@@ -111,14 +132,18 @@ export const waitingColumn = (alias: string) =>
      when exists (select 1 from agents join runners on runners.id = agents.runner_id
        where agents.id = ${alias}.delegate_id and runners.paused_until is not null) then 'runnerPaused'
      when ${modelWaitedFor(alias)} is not null then 'machineModel'
+     when ${claudeWaitedFor(alias)} then 'claude'
      else 'runnerSlot' end`;
 
 /** SQL for the Machine model the Ticket `alias` waits for while its `waiting` is `machineModel`; null otherwise. */
 export const waitingModelColumn = (alias: string) =>
   `case when (${waitingColumn(alias)}) = 'machineModel' then ${modelWaitedFor(alias)} end`;
 
-/** SQL that holds while the Ticket `alias` waits for a Machine model with no room, whatever else it waits for. */
-export const waitsForMachineModel = (alias: string) => `(${modelWaitedFor(alias)} is not null)`;
+/**
+ * SQL that holds while the Ticket `alias` waits for what only a Machine offers, whatever else it waits for: a Machine
+ * model with no room, or Claude with no connected Machine running it. The Runner's queue passes it by.
+ */
+export const waitsForMachine = (alias: string) => `(${modelWaitedFor(alias)} is not null or ${claudeWaitedFor(alias)})`;
 
 /**
  * SQL for where the Ticket `alias` stands in its Runner's queue, earliest first: highest Priority, then the

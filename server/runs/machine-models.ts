@@ -34,6 +34,11 @@ export const notSetUpReason = (label: string, model: string, runnerName: string)
   `The label ${label} is mapped to the Machine model ${model}, which no Machine serving ${runnerName} has set up: ` +
   `add it with \`cronk-runner model add ${model}\`, or map the label again on the Runner's card.`;
 
+/** Why a Run on an unmapped label can't run: it needs Claude, and no Machine serving its Runner runs it. */
+export const needsClaudeReason = (label: string, runnerName: string) =>
+  `The label ${label} needs Claude, which no Machine serving ${runnerName} runs: sign in to Claude Code on one of them ` +
+  "(`claude auth login`), or map the label to a Machine model on the Runner's card.";
+
 type Queryable = Pick<Context["db"], "query">;
 
 /** The ids of the Machines serving the Runner, paired or offline, that have the Machine model set up. */
@@ -61,8 +66,8 @@ export async function machinesWithClaude(db: Queryable, runnerId: string): Promi
 
 /**
  * Once what the Runner's Machines offer or its mapping changed: its Runs not claimed yet whose label now needs a
- * Machine model none of them has set up fail, naming the label, and each connected Machine serving it is told again
- * of the Runs it may now claim. Call it once the change committed.
+ * Machine model none of them has set up, or Claude, which none of them runs, fail, naming the label, and each connected
+ * Machine serving it is told again of the Runs it may now claim. Call it once the change committed.
  */
 export async function recheckClaimable(context: Context, runnerIds: string[]): Promise<void> {
   if (runnerIds.length === 0) return;
@@ -79,6 +84,22 @@ export async function recheckClaimable(context: Context, runnerIds: string[]): P
   );
   for (const run of refusable) {
     await runReports(context).endedWithoutFinishing(run.id, `${notSetUpReason(run.model, run.mapped, run.runnerName)} Then Retry.`);
+  }
+  // A Runner left with no Machine at all keeps its Runs: they wait for one to be paired, as before.
+  const { rows: needingClaude } = await context.db.query<{ id: string; model: string; runnerName: string }>(
+    `select runs.id, runs.model, runners.name as "runnerName"
+     from runs join runners on runners.id = runs.runner_id
+     where runs.state = 'running' and runs.runner_id = any($1::uuid[]) and runners.kind = 'local'
+       and ${mappedModelSql("runners", "runs")} is null
+       and not exists (select 1 from local_runs where local_runs.run_id = runs.id)
+       and exists (select 1 from machine_runners join machines on machines.id = machine_runners.machine_id
+         where machine_runners.runner_id = runners.id and machines.revoked_at is null)
+       and not exists (select 1 from machine_runners join machines on machines.id = machine_runners.machine_id
+         where machine_runners.runner_id = runners.id and machines.revoked_at is null and machines.announces_claude)`,
+    [runnerIds],
+  );
+  for (const run of needingClaude) {
+    await runReports(context).endedWithoutFinishing(run.id, `${needsClaudeReason(run.model, run.runnerName)} Then Retry.`);
   }
   const { rows: machines } = await context.db.query<{ id: string; runnerIds: string[] }>(
     `select machines.id, array_agg(machine_runners.runner_id) as "runnerIds"
