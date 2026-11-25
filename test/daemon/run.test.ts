@@ -171,6 +171,8 @@ async function localSetUp({
       lostCheckMs?: number;
       killGraceMs?: number;
       branchWaitMs?: number;
+      timeLimitMs?: number;
+      retryWindowMs?: number;
     } = {},
   ) => {
     daemon = runDaemon({
@@ -183,6 +185,8 @@ async function localSetUp({
       lostCheckMs: more.lostCheckMs,
       killGraceMs: more.killGraceMs,
       branchWaitMs: more.branchWaitMs,
+      timeLimitMs: more.timeLimitMs,
+      retryWindowMs: more.retryWindowMs,
       ...(more.remote ? { remoteFor: () => more.remote! } : {}),
       transcriptMs: 50,
     });
@@ -792,11 +796,16 @@ describe("a Run on a Machine model, through OpenCode", () => {
       ADA_SECRET: "not for the Run",
       ANTHROPIC_API_KEY: "sk-ant-not-for-the-Run",
     };
-    const startOn = async (mode: string, more: { heartbeatMs?: number; killGraceMs?: number } = {}) => {
+    const startOn = async (
+      mode: string,
+      more: { heartbeatMs?: number; killGraceMs?: number; timeLimitMs?: number; retryWindowMs?: number } = {},
+    ) => {
       await useMode(mode);
       return setup.start("hang", more.heartbeatMs, {
         remote: setup.remote,
         killGraceMs: more.killGraceMs,
+        timeLimitMs: more.timeLimitMs,
+        retryWindowMs: more.retryWindowMs,
         env,
       });
     };
@@ -1150,6 +1159,142 @@ describe("a Run on a Machine model, through OpenCode", () => {
       last.kill("SIGKILL");
     }
   }, 30_000);
+
+  /** The Run once it is in the state. */
+  const until = (runState: (id: string) => Promise<{ state: string }>, runId: string, state: string) =>
+    eventually(async () => {
+      const run = await runState(runId);
+      return run.state === state && run;
+    }, 15_000) as Promise<Record<string, unknown>>;
+
+  test("an opencode that exits cleanly without finish is resumed once on the same session, reminded of finish and its Run id, and can finish then", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns } = await onMachineModel();
+    await startOn("exit-then-finish");
+    await mapToQwen();
+
+    const { run } = await delegate("Forgetful qwen");
+
+    const finished = await until(runState, run.id, "finished");
+    expect(finished.outcome).toBe("ready");
+    const [first, resumed, ...more] = await opencodeRuns();
+    expect(more).toEqual([]);
+    const sessionId = `ses_stand_in_${first.pid}`;
+    expect(resumed.args.slice(0, -1)).toEqual([...first.args.slice(0, -1), "--session", sessionId]);
+    expect(resumed.args.at(-1)).toContain(`Your Run id is ${run.id}`);
+    expect(resumed.args.at(-1)).toContain("`finish`");
+    // The resume runs as the first did: same config and environment, no secret in its arguments.
+    expect(resumed.config).toEqual(first.config);
+    expect(resumed.env.CRONK_RUN_TOKEN).toBe(first.env.CRONK_RUN_TOKEN);
+    expect(JSON.stringify(resumed.args)).not.toContain(first.env.CRONK_RUN_TOKEN);
+    expect((await readRunRecord(join(home, "runs", "history"), run.id))?.sessionId).toBe(sessionId);
+    // Its record, and so its Transcript, holds both processes' events: the first's, then the resume's.
+    await eventually(async () => daemon!.held().length === 0);
+    const events = (await readFile(join(home, "runs", "history", `${run.id}.events.jsonl`), "utf8")).split("\n").filter(Boolean);
+    expect(events.map((line) => JSON.parse(line).type)).toEqual(
+      ["step_start", "text", "step_start", "text", "tool_use", "tool_use", "tool_use", "step_finish"],
+    );
+    expect(new Set(events.map((line) => JSON.parse(line).sessionID))).toEqual(new Set([sessionId]));
+    const { entries } = await ok("GET", `/api/transcripts/${finished.transcriptId}/entries`, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null }) => e.text ?? e.toolName)).toEqual([
+      "Looking at the Ticket.",
+      "Looking at the Ticket.",
+      "bash",
+      "bash",
+      "cronk_finish",
+    ]);
+  });
+
+  test("an opencode that still doesn't finish once resumed fails the Run as before, resumed only once", async () => {
+    const { startOn, mapToQwen, delegate, runState, opencodeRuns, scratch } = await onMachineModel();
+    await startOn("exit:0");
+    await mapToQwen();
+
+    const { run } = await delegate("Stubbornly silent qwen");
+
+    const failed = await until(runState, run.id, "failed");
+    expect(failed.endReason).toBe("The session ended without calling `finish`: opencode exited with code 0");
+    const ran = await opencodeRuns();
+    expect(ran).toHaveLength(2);
+    expect(ran[1].args).toContain("--session");
+    await eventually(async () => (await readdir(scratch)).length === 0);
+  });
+
+  test("a Run that finished, was stopped or whose opencode exited with an error isn't resumed", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns, useMode } = await onMachineModel();
+    await startOn("finish");
+    await mapToQwen();
+
+    // Finished: Cronk refuses the heartbeat, so the clean exit ends it.
+    const finished = await delegate("Finishing qwen");
+    await until(runState, finished.run.id, "finished");
+    await eventually(async () => daemon!.held().length === 0);
+    expect(await opencodeRuns()).toHaveLength(1);
+
+    // Stopped: killed by the daemon, it exits cleanly all the same.
+    await useMode("exit-on-term");
+    const stopped = await delegate("Stopped qwen");
+    await eventually(async () => (await opencodeRuns()).length === 2);
+    await ok("PATCH", `/api/tickets/${stopped.ticket.id}`, ada, { delegateId: null });
+    await until(runState, stopped.run.id, "stopped");
+    await eventually(async () => daemon!.held().length === 0);
+
+    // Exited with an error.
+    await useMode("exit:3");
+    const erred = await delegate("Erring qwen");
+    await until(runState, erred.run.id, "failed");
+    await eventually(async () => daemon!.held().length === 0);
+
+    expect(await opencodeRuns()).toHaveLength(3);
+  });
+
+  test("a Run past its Machine model's time limit, counted from its first start with the resume included, is killed and fails saying so", async () => {
+    const { startOn, mapToQwen, delegate, runState, opencodeRuns } = await onMachineModel();
+    // The first run lingers 800 ms before exiting without finish; the resume hangs.
+    await startOn("linger-then-hang", { timeLimitMs: 1_500, killGraceMs: 200 });
+    await mapToQwen();
+
+    const { run } = await delegate("Looping qwen");
+
+    const failed = await until(runState, run.id, "failed");
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: it ran past its time limit of 60 minutes",
+    );
+    const lines = await opencodeRuns();
+    const [first, resumed] = lines.filter((line) => line.args);
+    const { terminatedAt } = lines.find((line) => line.terminatedAt);
+    expect(resumed.args).toContain("--session");
+    // Killed at the limit after the first start, not a whole limit after the resume's.
+    expect(terminatedAt - first.startedAt).toBeGreaterThanOrEqual(1_400);
+    expect(terminatedAt - resumed.startedAt).toBeLessThan(1_400);
+  });
+
+  test("a Run whose opencode says nothing but retries for the window is killed and fails, saying its server stopped answering", async () => {
+    const { startOn, mapToQwen, delegate, runState, opencodeRuns, scratch } = await onMachineModel();
+    await startOn("retry", { retryWindowMs: 500, killGraceMs: 200 });
+    await mapToQwen();
+
+    const { run } = await delegate("Unanswered qwen");
+
+    const failed = await until(runState, run.id, "failed");
+    expect(failed.endReason).toBe("The session ended without calling `finish`: its server stopped answering");
+    expect(await opencodeRuns()).toHaveLength(1);
+    await eventually(async () => (await readdir(scratch)).length === 0);
+  });
+
+  test("retries among other events don't end the Run", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns } = await onMachineModel();
+    await startOn("retry-mixed", { retryWindowMs: 500, killGraceMs: 200 });
+    await mapToQwen();
+
+    const { ticket, run } = await delegate("Struggling qwen");
+    await eventually(async () => (await opencodeRuns()).length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    expect((await runState(run.id)).state).toBe("running");
+    expect(daemon!.held()).toEqual([run.id]);
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+    await until(runState, run.id, "stopped");
+  });
 
   test("its record is OpenCode's events, in a file readable by its User alone, uploaded as the Run's Transcript, shown by `cronk-runner logs` and removed with the Run's history after a week", async () => {
     const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });

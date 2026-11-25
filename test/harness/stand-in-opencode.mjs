@@ -9,7 +9,12 @@
 // in its Brief through the MCP server and headers its config gives, `{env:…}` read as OpenCode does, and exits 0;
 // `exit:<code>` exits with that code without finishing; `denied` ends shell, edit, write, patch and webfetch calls as
 // OpenCode 2.4 ends a call its permissions deny, an allowed call and a failed one among them, and exits 0 without
-// finishing; `hang`s until killed; or `hang-hard`s, ignoring SIGTERM, until SIGKILL.
+// finishing; `hang`s until killed; or `hang-hard`s, ignoring SIGTERM, until SIGKILL. Run with `--session <id>`, as a
+// resume is, it says that session's id and runs in the mode after `-then-`: `exit-then-finish` exits 0 without
+// finishing, then finishes on a resume; `linger-then-hang` exits 0 after 800 ms, then hangs on a resume, recording when
+// SIGTERM came. `exit-on-term` hangs until SIGTERM, then exits 0. `retry` says nothing but `session.status` retry
+// events; `retry-mixed` says another event among them every 150 ms. Each log line carries when it started,
+// `startedAt`; one with `terminatedAt` records when a hanging run got SIGTERM.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 
@@ -41,16 +46,34 @@ if (branch !== null) {
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("STAND_IN_OPENCODE_")));
 appendFileSync(
   process.env.STAND_IN_OPENCODE_LOG,
-  `${JSON.stringify({ args, cwd: process.cwd(), pid: process.pid, env, config, repository })}\n`,
+  `${JSON.stringify({ args, cwd: process.cwd(), pid: process.pid, startedAt: Date.now(), env, config, repository })}\n`,
 );
 
-const sessionID = `ses_stand_in_${process.pid}`;
+const resuming = args.includes("--session");
+const sessionID = resuming ? args[args.indexOf("--session") + 1] : `ses_stand_in_${process.pid}`;
 const say = (type, more = {}) => process.stdout.write(`${JSON.stringify({ type, timestamp: Date.now(), sessionID, ...more })}\n`);
 say("step_start");
 say("text", { part: { type: "text", text: "Looking at the Ticket." } });
 
-const mode = process.env.STAND_IN_OPENCODE_MODE ?? "finish";
-if (mode === "hang" || mode === "hang-hard") {
+const given = process.env.STAND_IN_OPENCODE_MODE ?? "finish";
+const [first, then] = given.split("-then-");
+const mode = then === undefined ? given : resuming ? then : first === "linger" ? "linger" : "exit:0";
+if (mode === "linger") {
+  setTimeout(() => process.exit(0), 800);
+} else if (mode === "hang" && then !== undefined) {
+  process.on("SIGTERM", () => {
+    appendFileSync(process.env.STAND_IN_OPENCODE_LOG, `${JSON.stringify({ pid: process.pid, terminatedAt: Date.now() })}\n`);
+    process.exit(143);
+  });
+  setInterval(() => {}, 1000);
+} else if (mode === "exit-on-term") {
+  process.on("SIGTERM", () => process.exit(0));
+  setInterval(() => {}, 1000);
+} else if (mode === "retry" || mode === "retry-mixed") {
+  let attempt = 0;
+  setInterval(() => say("session.status", { status: { type: "retry", attempt: ++attempt, message: "Connection refused" } }), 50);
+  if (mode === "retry-mixed") setInterval(() => say("text", { part: { type: "text", text: "thinking" } }), 150);
+} else if (mode === "hang" || mode === "hang-hard") {
   if (mode === "hang-hard") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else if (mode === "denied") {

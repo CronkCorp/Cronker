@@ -32,6 +32,13 @@ export interface RunProgram {
    */
   transcript(env: NodeJS.ProcessEnv, sessionId: string): Promise<string | null>;
   /**
+   * The arguments that resume the session once, after the program exited cleanly while its Run still runs in Cronk,
+   * from those it first ran with: the same session, told to call `finish`. A program without it isn't resumed.
+   */
+  resume?(args: string[], sessionId: string, runId: string): string[];
+  /** How long the Run may run, from its first start with any resume included; no limit when left out. */
+  timeLimitMinutes?: number;
+  /**
    * Whether its output, line by line, is the session's transcript, as it writes none of its own: the daemon then
    * records each line to a file of the Run's, readable by its User alone, which it uploads and `cronk-runner logs` reads.
    */
@@ -46,6 +53,8 @@ export interface ProgramOutput {
   costUsd?: number;
   /** The tool calls the program denied, as a person reads them; replaces any said before. */
   deniedTools?: string[];
+  /** The line only said the program is retrying a request to its server; any other line says it got further. */
+  retrying?: boolean;
 }
 
 /** The name Cronk's MCP server goes by in a Run's `--mcp-config`, so `mcp__cronk` allows its tools. */

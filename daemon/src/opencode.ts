@@ -202,6 +202,17 @@ function gitIdentity(env: NodeJS.ProcessEnv): Promise<{ name: string; email: str
 /** Quotes a value for a git config file. */
 const gitValue = (value: string) => `"${value.replace(/[\\"]/g, (c) => `\\${c}`).replace(/\n/g, " ")}"`;
 
+/**
+ * Whether an event of `opencode run --format json` only says OpenCode is retrying a request to its server, which it
+ * does by itself without end while the server doesn't answer: a `retry` event, or one whose session status is `retry`.
+ * Kept in one place, as no event recorded from OpenCode V2 shows the shape yet.
+ */
+export function isRetryEvent(event: unknown): boolean {
+  if (typeof event !== "object" || event === null) return false;
+  const e = event as { type?: unknown; status?: { type?: unknown }; properties?: { status?: { type?: unknown } } };
+  return e.type === "retry" || e.status?.type === "retry" || e.properties?.status?.type === "retry";
+}
+
 /** OpenCode's names for tools that older versions, and models, call otherwise. */
 const toolAliases: Record<string, string> = { bash: "shell", apply_patch: "patch" };
 
@@ -229,7 +240,7 @@ export function deniedToolOf(event: { type?: unknown; part?: unknown }): string 
 
 /**
  * A reader of one Run's `opencode run --format json` output, of what the daemon reads: every event names its session,
- * and the tool calls denied so far, all of them each time another is.
+ * whether it only says OpenCode is retrying, and the tool calls denied so far, all of them each time another is.
  */
 function openCodeReader(): (line: string) => ProgramOutput {
   const denied: string[] = [];
@@ -242,7 +253,10 @@ function openCodeReader(): (line: string) => ProgramOutput {
     }
     if (typeof event !== "object" || event === null) return {};
     // No cost: a made-up estimate would be added to the Run's totals.
-    const said: ProgramOutput = typeof event.sessionID === "string" && event.sessionID ? { sessionId: event.sessionID } : {};
+    const said: ProgramOutput = {
+      ...(typeof event.sessionID === "string" && event.sessionID ? { sessionId: event.sessionID } : {}),
+      ...(isRetryEvent(event) ? { retrying: true } : {}),
+    };
     const tool = deniedToolOf(event);
     if (tool !== null) {
       denied.push(tool);
@@ -251,6 +265,14 @@ function openCodeReader(): (line: string) => ProgramOutput {
     return said;
   };
 }
+
+/**
+ * What a resumed session is told in place of the Brief: that it ended without `finish`, and the Run id to call it with.
+ */
+export const reminderOf = (runId: string) =>
+  `You ended your turn without calling Cronk's \`finish\` tool, so the Run is still running. Your Run id is ${runId}. ` +
+  "Call `finish` now with that Run id and one of the Outcomes your Brief offers. If you can't go on, choose the Outcome " +
+  "that hands the Ticket back and give a Question saying what you need.";
 
 /** OpenCode, running a Run on the Machine model, its executable `opencode` unless given. */
 export function openCode(model: MachineModel, command = "opencode"): RunProgram {
@@ -301,5 +323,8 @@ export function openCode(model: MachineModel, command = "opencode"): RunProgram 
     // OpenCode keeps its sessions in a database, not a file: its events, as the daemon records them, are the transcript.
     records: true,
     transcript: async () => null,
+    // The same arguments, title included so a daemon starting again still finds the process, on the same session.
+    resume: (args, sessionId, runId) => [...args.slice(0, -1), "--session", sessionId, reminderOf(runId)],
+    timeLimitMinutes: model.timeoutMinutes,
   };
 }

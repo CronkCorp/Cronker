@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import {
   appendFile,
   mkdir,
@@ -45,7 +45,10 @@ import { repositoryCache, type RunWorkspace } from "./repositories.js";
  * The worktrees are removed once the Run ended, unless it is lost and may yet come back: then they are kept until
  * Cronk says otherwise.
  * A Run stopped in Cronk is killed and its stop confirmed. Each running process is recorded in the state directory,
- * so a daemon starting again kills those it left behind and reports their Runs ended. Each Run is also remembered in
+ * so a daemon starting again kills those it left behind and reports their Runs ended.
+ * A program that can resume (OpenCode) and exits cleanly while its Run still runs in Cronk is resumed once on the same
+ * session with a reminder to call `finish`. Its Run is killed once past its time limit, counted from the first start,
+ * and once the program's output has been nothing but retries of its server for five minutes. Each Run is also remembered in
  * the state directory's `history/` for a week after it ends, for `cronk-runner logs`.
  * About once a minute it reads the config again for its Machine models and checks each one's server, and it announces
  * what the Machine offers (whether it runs Claude, and each model's name, limit and whether it is up) to each Cronk on
@@ -92,6 +95,10 @@ export interface RunOptions {
    * to every Cronk: every minute when left out.
    */
   modelCheckMs?: number;
+  /** The time limit of every Run whose program has one, in place of its own: the Machine model's when left out. */
+  timeLimitMs?: number;
+  /** How long a program's output may be nothing but retries before its Run is killed: five minutes when left out. */
+  retryWindowMs?: number;
 }
 
 /** Where the bare clones live unless the options say otherwise. */
@@ -152,6 +159,7 @@ export function runDaemon(options: RunOptions): RunningDaemon {
   const killGraceMs = options.killGraceMs ?? 10_000;
   const lostCheckMs = options.lostCheckMs ?? heartbeatMs;
   const branchWaitMs = options.branchWaitMs ?? 5 * 60_000;
+  const retryWindowMs = options.retryWindowMs ?? 5 * 60_000;
   const repositories = repositoryCache({
     directory: options.cacheDir ?? defaultCacheDir(env),
     remoteFor: options.remoteFor,
@@ -445,8 +453,11 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     }, heartbeatMs);
 
     let directory: string | undefined;
-    let child: ReturnType<typeof spawn>;
+    let child: ChildProcess;
     let identity: string;
+    /** What the program first ran with, which a resume runs with again. */
+    let args: string[];
+    let programEnv: NodeJS.ProcessEnv;
     try {
       if (claimed.machineModel) {
         // Read now, as the config may have changed since the last check; a Machine model never falls back to Claude.
@@ -472,13 +483,15 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         workspace: workspace.env,
       });
       identity = prepared.identity;
+      args = prepared.args;
+      programEnv = prepared.env;
       if (abort.signal.aborted) throw new Error("it was stopped");
       print(
         `${claimed.ticketKey}: running Run ${runId} with ${claimed.machineModel ?? claimed.modelId}.`,
       );
-      child = spawn(program.command, prepared.args, {
+      child = spawn(program.command, args, {
         cwd: workspace.cwd,
-        env: prepared.env,
+        env: programEnv,
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
@@ -501,15 +514,16 @@ export function runDaemon(options: RunOptions): RunningDaemon {
     };
 
     const recordPath = join(stateDir, `${runId}.json`);
-    const recorded =
-      child.pid === undefined
+    /** Records the program's running process, the resumed one in place of the first. */
+    const recordProcess = (pid: number | undefined) =>
+      pid === undefined
         ? Promise.resolve()
         : mkdir(stateDir, { recursive: true, mode: 0o700 })
             .then(() => {
               const record: ProcessRecord = {
                 runId,
                 cronkUrl: cronk.url,
-                pid: child.pid!,
+                pid,
                 directory: runDirectory,
                 identity,
               };
@@ -546,18 +560,20 @@ export function runDaemon(options: RunOptions): RunningDaemon {
         );
       }));
     void saveHistory({});
+    // The history first, so a daemon starting again after this one dies finds a recorded process's history to end.
+    const firstPid = child.pid;
+    let recorded = historySaved.then(() => recordProcess(firstPid));
     let lastError = "";
-    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
-      const lines = chunk.trim().split("\n");
-      lastError = lines.at(-1) ?? lastError;
-    });
     let sessionId: string | null = null;
     let sessionReported: Promise<unknown> = Promise.resolve();
     /** What the program said the session cost, in US dollars; none if it ended without saying. */
     let costUsd: number | undefined;
     let denied: string[] = [];
+    /** Since when the program's output has been nothing but retries; null while it gets further. */
+    let retryingSince: number | null = null;
     const read = program.reader();
-    // Each line of a program that `records` its output is appended to the Run's events file, one write at a time.
+    // Each line of a program that `records` its output is appended to the Run's events file, one write at a time,
+    // from every process of the Run: a resume's lines follow the first process's.
     const events = history.transcriptPath;
     let eventsWritten: Promise<void> = events
       ? mkdir(historyDir, { recursive: true, mode: 0o700 })
@@ -566,22 +582,37 @@ export function runDaemon(options: RunOptions): RunningDaemon {
             print(`${claimed.ticketKey}: couldn't record its events: ${(error as Error).message}`),
           )
       : Promise.resolve();
-    createInterface({ input: child.stdout! }).on("line", (line) => {
-      if (events)
-        eventsWritten = eventsWritten.then(() =>
-          appendFile(events, `${line}\n`).catch((error: unknown) =>
-            print(`${claimed.ticketKey}: couldn't record its events: ${(error as Error).message}`),
-          ),
-        );
-      const said = read(line);
-      if (!sessionId && said.sessionId) {
-        sessionId = said.sessionId;
-        sessionReported = report("session", { sessionId }).catch(() => {});
-        void saveHistory({ sessionId });
-      }
-      if (said.costUsd !== undefined) costUsd = said.costUsd;
-      if (said.deniedTools) denied = said.deniedTools;
-    });
+    /** Reads what a process of the program says, and ends the Run, or resumes it, once the process ended. */
+    const attach = (spawned: ChildProcess) => {
+      lastError = "";
+      retryingSince = null;
+      spawned.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
+        const lines = chunk.trim().split("\n");
+        lastError = lines.at(-1) ?? lastError;
+      });
+      createInterface({ input: spawned.stdout! }).on("line", (line) => {
+        if (events)
+          eventsWritten = eventsWritten.then(() =>
+            appendFile(events, `${line}\n`).catch((error: unknown) =>
+              print(`${claimed.ticketKey}: couldn't record its events: ${(error as Error).message}`),
+            ),
+          );
+        const said = read(line);
+        if (!sessionId && said.sessionId) {
+          sessionId = said.sessionId;
+          sessionReported = report("session", { sessionId }).catch(() => {});
+          void saveHistory({ sessionId });
+        }
+        if (said.costUsd !== undefined) costUsd = said.costUsd;
+        if (said.deniedTools) denied = said.deniedTools;
+        retryingSince = said.retrying ? (retryingSince ?? Date.now()) : null;
+      });
+      spawned.on(
+        "error",
+        (error) => void end(`couldn't run ${program.command}: ${error.message}`),
+      );
+      spawned.on("close", (code, signal) => void closed(code, signal));
+    };
 
     // The transcript follows the session: uploaded whole whenever its file changed, one upload at a time.
     let transcriptPath: string | null = events;
@@ -641,24 +672,62 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       transcriptMs,
     );
 
-    let killed = false;
+    /** Whether the daemon is stopping the Run, so it isn't resumed, and why it killed it, if not for a stop. */
+    let stopping = false;
+    let killReason: string | undefined;
+    let killedProcess: ChildProcess | undefined;
     kill = () => {
-      if (killed || child.exitCode !== null || child.signalCode !== null)
+      stopping = true;
+      const current = child;
+      if (
+        killedProcess === current ||
+        current.exitCode !== null ||
+        current.signalCode !== null
+      )
         return;
-      killed = true;
-      child.kill("SIGTERM");
+      killedProcess = current;
+      current.kill("SIGTERM");
       // A process that ignores SIGTERM, or hangs on it, doesn't outlive the grace.
       setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null)
-          child.kill("SIGKILL");
+        if (current.exitCode === null && current.signalCode === null)
+          current.kill("SIGKILL");
       }, killGraceMs).unref();
     };
+    /** Kills the program for a reason its Run's end then reports. */
+    const killFor = (reason: string) => {
+      killReason ??= reason;
+      kill();
+    };
+    // Counted from the first start, a resume included.
+    const timeLimit =
+      program.timeLimitMinutes === undefined
+        ? undefined
+        : setTimeout(
+            () =>
+              killFor(
+                `it ran past its time limit of ${program.timeLimitMinutes} minutes`,
+              ),
+            options.timeLimitMs ?? program.timeLimitMinutes * 60_000,
+          );
+    // A program retrying a server that doesn't answer would otherwise wait for its time limit, or forever.
+    const retryCheck = setInterval(
+      () => {
+        if (
+          retryingSince !== null &&
+          Date.now() - retryingSince >= retryWindowMs
+        )
+          killFor("its server stopped answering");
+      },
+      Math.min(10_000, Math.max(10, retryWindowMs / 10)),
+    );
     let done = false;
     const end = async (reason: string) => {
       if (done) return;
       done = true;
       clearInterval(heartbeat);
       clearInterval(transcriptTimer);
+      clearInterval(retryCheck);
+      clearTimeout(timeLimit);
       // Once more after the process ended, so the Transcript in Cronk is complete.
       await uploadTranscript();
       // A Run its agent finished ended already in Cronk, which then leaves it as it is; the cost is recorded either way.
@@ -690,16 +759,56 @@ export function runDaemon(options: RunOptions): RunningDaemon {
       resolveEnded();
       claimWaiting();
     };
-    child.on(
-      "error",
-      (error) => void end(`couldn't run ${program.command}: ${error.message}`),
-    );
-    child.on("close", (code, signal) => {
+    let resumed = false;
+    /**
+     * Resumes a program that exited cleanly once, if it can be and its Run still runs in Cronk, as when a small model
+     * ended its turn without calling `finish`; otherwise ends the Run with how the program ended.
+     */
+    const closed = async (code: number | null, signal: NodeJS.Signals | null) => {
+      if (done) return;
       const how = signal
         ? `${program.name} was killed by ${signal}`
         : `${program.name} exited with code ${code}`;
-      void end(code !== 0 && lastError ? `${how}: ${lastError}` : how);
-    });
+      const session = sessionId;
+      if (code === 0 && !stopping && !resumed && program.resume && session) {
+        resumed = true;
+        // One its agent finished, or a User stopped, is refused with `run_stopped`; any error counts the same.
+        const running = await report("heartbeat").then(
+          () => true,
+          () => false,
+        );
+        if (running && !stopping && !done) {
+          print(
+            `${claimed.ticketKey}: Run ${runId} ended without calling finish; resuming its session once.`,
+          );
+          try {
+            child = spawn(
+              program.command,
+              program.resume(args, session, runId),
+              {
+                cwd: runWorkspace.cwd,
+                env: programEnv,
+                stdio: ["ignore", "pipe", "pipe"],
+              },
+            );
+          } catch (error) {
+            void end(
+              `couldn't resume ${program.command}: ${(error as Error).message}`,
+            );
+            return;
+          }
+          attach(child);
+          const pid = child.pid;
+          recorded = recorded.then(() => recordProcess(pid));
+          void saveHistory({ pid: pid ?? null });
+          return;
+        }
+      }
+      void end(
+        killReason ?? (code !== 0 && lastError ? `${how}: ${lastError}` : how),
+      );
+    };
+    attach(child);
   }
 
   /** Asks Cronk about a lost Run until it says the Run won't come back, then cleans up. */
