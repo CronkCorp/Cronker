@@ -31,7 +31,11 @@ test("the toolbar, keys and Markdown shortcuts format the text, and the Document
   await page.keyboard.press("End");
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Shift+ControlOrMeta+ArrowLeft");
-  await text.evaluate((element) => {
+  // The editor takes the selection from the page on `selectionchange`, which comes later: wait for the selection, then
+  // a frame for that event, so the paste doesn't land on an empty selection.
+  await expect.poll(() => text.evaluate(() => window.getSelection()?.toString())).toBe("Brief");
+  await text.evaluate(async (element) => {
+    await new Promise(requestAnimationFrame);
     const transfer = new DataTransfer();
     transfer.setData("text/plain", "https://example.com/brief");
     element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
