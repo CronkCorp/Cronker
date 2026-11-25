@@ -123,6 +123,8 @@ describe("starting Runs", () => {
           "CRONK-1's Assignee as a Discovered Ticket.",
         "- Give your Run id when you create an Artifact with `create_artifact`, so it is linked to CRONK-1.",
         "- Don't merge pull requests on GitHub directly.",
+        "- This Step is read-only: don't change files in the Repository, and don't describe a change as made. Say in " +
+          "your Report what should change instead.",
       ].join("\n"),
     );
     expect(brief.brief).toMatch(/^Triage this Ticket so the next Steps can work on it without asking\./);
