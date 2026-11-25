@@ -219,12 +219,15 @@ async function localSetUp({
     });
     return ticket;
   };
-  /** How the stand-in was run, once per run. */
-  const runs = async () =>
-    (await readFile(log, "utf8"))
+  /** How the stand-in was run, once per run; a line the stand-in is still writing waits for the next read. */
+  const runs = async () => {
+    const text = await readFile(log, "utf8");
+    return text
+      .slice(0, text.lastIndexOf("\n") + 1)
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
+  };
   const runState = (runId: string) => ok("GET", `/api/runs/${runId}`, ada);
   /** Lets a `wait-finish` stand-in go on to finish. */
   const go = () => writeFile(`${log}.go`, "");
