@@ -444,6 +444,7 @@ describe("Runners and Agents", () => {
         managedAgents: null,
         budgetPerRun: null,
         allowedTools: null,
+        notForMachineModels: null,
         machineModels: null,
         costThisMonth: [],
         createdAt: expect.any(String),

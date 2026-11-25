@@ -605,9 +605,11 @@ function AllowedTools({ runner, onChanged }: { runner: Runner; onChanged: (runne
       <h3>Allowed tools</h3>
       <p className="muted small">
         The tools its Runs may use without asking, one Claude Code permission rule per line, such as{" "}
-        <code>Bash(git:*)</code>. Edits are accepted. A Run that needs a tool outside the list fails, naming it: widen the
-        list and Retry. Cronk's own tools (<code>mcp__cronk</code>) are always allowed, and a Repository's committed Claude
-        Code settings add their own rules.
+        <code>Bash(git:*)</code>. A Run that needs a tool outside the list fails, naming it: widen the list and Retry.
+        Cronk's own tools (<code>mcp__cronk</code>) are always allowed. Runs on Claude have their edits accepted, and a
+        Repository's committed Claude Code settings add their own rules. Runs on Machine models may read, search and edit
+        in their worktree, and get only the <code>Bash</code>, <code>WebFetch</code> and <code>WebSearch</code> rules;
+        the Repository's settings add nothing.
       </p>
       <form onSubmit={onSubmit}>
         <Field label="Allowed tools">
@@ -620,6 +622,18 @@ function AllowedTools({ runner, onChanged }: { runner: Runner; onChanged: (runne
             onChange={(event) => setText(event.target.value)}
           />
         </Field>
+        {(runner.machineModels ?? []).length > 0 && (runner.notForMachineModels ?? []).length > 0 && (
+          <div className="runner-allowlist-skipped" role="group" aria-label="Not applying to Machine models">
+            <p className="muted small">Not applying to Machine models, as they would need widening:</p>
+            <ul>
+              {runner.notForMachineModels!.map((rule) => (
+                <li key={rule}>
+                  <code>{rule}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <Actions>
           <Saved shown={saved} />
           <FormError error={error} />

@@ -51,3 +51,23 @@ export const defaultAllowedTools: readonly string[] = [
   "Bash(gh repo view:*)",
   "mcp__cronk",
 ];
+
+/**
+ * The rules of an allowlist that don't apply to Runs on Machine models, as written, for the Runner's card. The daemon
+ * translates the allowlist for OpenCode (`translateAllowlist` in `daemon/src/opencode.ts`, which can't share code with
+ * the server; a test keeps the two alike): `Bash(x:*)` and `Bash(x)` become shell rules and `WebFetch` and `WebSearch`
+ * allow their tools. Every other rule is left out, never widened: `Edit`, `Read`, `WebFetch(domain:…)`, other MCP
+ * servers, a bare `Bash` and patterns OpenCode reads differently, a `*` or `?` other than a trailing `:*`. Cronk's own
+ * tools are always allowed, so aren't listed.
+ */
+export function notForMachineModels(rules: readonly string[]): string[] {
+  const skipped = rules.flatMap((written) => {
+    const rule = written.trim();
+    if (!rule || /^mcp__cronk(__.*)?$/.test(rule) || rule === "WebFetch" || rule === "WebSearch") return [];
+    const command = /^Bash\((.*)\)$/s.exec(rule)?.[1];
+    const prefix = command?.endsWith(":*") ? command.slice(0, -2).trim() : undefined;
+    const shell = prefix !== undefined ? prefix && `${prefix} *` : command?.trim();
+    return shell && !/[*?\n]/.test(shell.replace(/ \*$/, "")) ? [] : [rule];
+  });
+  return [...new Set(skipped)];
+}
