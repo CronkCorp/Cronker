@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import {
   access,
   chmod,
+  stat,
   mkdir,
   mkdtemp,
   readdir,
@@ -17,8 +18,8 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig, type MachineModel } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
-import { readRunRecord } from "../../daemon/src/history.js";
-import { followRun } from "../../daemon/src/logs.js";
+import { pruneRunRecords, readRunRecord } from "../../daemon/src/history.js";
+import { followRun, followRunning } from "../../daemon/src/logs.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { daemonVersion } from "../../daemon/src/version.js";
 import { minutes } from "../harness/clock.js";
@@ -224,6 +225,11 @@ async function localSetUp({
     });
     return ticket;
   };
+  /** Turns the Triage Step's read-only setting on or off, keeping the rest of the Step. */
+  const triageReadOnly = async (readOnly: boolean) => {
+    const step = project.statuses.find((s: { id: string }) => s.id === triage).step;
+    await ok("PUT", `/api/projects/${project.id}/statuses/${triage}/step`, ada, { ...step, readOnly });
+  };
   /** How the stand-in was run, once per run; a line the stand-in is still writing waits for the next read. */
   const runs = async () => {
     const text = await readFile(log, "utf8");
@@ -249,6 +255,7 @@ async function localSetUp({
     start,
     delegate,
     delegateOffline,
+    triageReadOnly,
     runOf,
     runs,
     runState,
@@ -406,8 +413,9 @@ const exists = (path: string) =>
 
 describe("cronk-runner run", () => {
   test("claims a delegated Run and runs claude with the Brief, model, stream-json, Cronk's MCP server, edits accepted and the Runner's allowlist; finish finishes the Run", async () => {
-    const { ada, start, delegate, runs, runState, scratch } =
+    const { ada, start, delegate, triageReadOnly, runs, runState, scratch } =
       await localSetUp();
+    await triageReadOnly(false);
     start("finish");
 
     const { run } = await delegate("Run me locally");
@@ -470,7 +478,9 @@ describe("cronk-runner run", () => {
   });
 
   test("the edited allowlist is passed, Cronk's own tools always with it", async () => {
-    const { ada, runner, start, delegate, runs, runState } = await localSetUp();
+    const { ada, runner, start, delegate, triageReadOnly, runs, runState } =
+      await localSetUp();
+    await triageReadOnly(false);
     await ok("PATCH", `/api/runners/${runner.id}`, ada, {
       allowedTools: ["Bash(git:*)", "Bash(cargo test:*)"],
     });
@@ -488,6 +498,51 @@ describe("cronk-runner run", () => {
       "Bash(cargo test:*)",
       "mcp__cronk",
     ]);
+  });
+
+  test("a Run of a read-only Step runs claude accepting no edits, the edit tools disallowed and out of the allowlist", async () => {
+    const { ada, runner, start, delegate, runs, runState } = await localSetUp();
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, {
+      allowedTools: ["Bash(git:*)", "Edit", "Write(src/**)", "Read"],
+    });
+    start("finish");
+
+    // Triage is read-only on a new Project's board.
+    const { run } = await delegate("Look only");
+
+    await eventually(async () => (await runState(run.id)).state === "finished");
+    const [ran] = await runs();
+    expect(ran.args.slice(ran.args.indexOf("--permission-mode"))).toEqual([
+      "--permission-mode",
+      "default",
+      "--disallowedTools",
+      "Edit",
+      "Write",
+      "MultiEdit",
+      "NotebookEdit",
+      "--allowedTools",
+      "Bash(git:*)",
+      "Read",
+      "mcp__cronk",
+    ]);
+    const brief = await ok("GET", `/api/runs/${run.id}/brief`, ada);
+    expect(brief.text).toContain("This Step is read-only");
+  });
+
+  test("a Run of a read-only Step whose edit was refused fails saying the Step is read-only, not to widen the allowlist", async () => {
+    const { start, delegate, runState } = await localSetUp();
+    start("edit-denied:src/bug.ts");
+
+    const { run } = await delegate("Fix it anyway");
+
+    const failed = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 0. Its Step is read-only, so its file " +
+        "edits were refused: Edit.",
+    );
   });
 
   test("a claude that ends on a tool outside the allowlist fails the Run naming it", async () => {
@@ -994,7 +1049,7 @@ describe("a Run on a Machine model, through OpenCode", () => {
     }, 15_000) as Promise<Record<string, unknown>>;
 
   test("an opencode that exits cleanly without finish is resumed once on the same session, reminded of finish and its Run id, and can finish then", async () => {
-    const { startOn, mapToQwen, delegate, runState, opencodeRuns } = await onMachineModel();
+    const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns } = await onMachineModel();
     await startOn("exit-then-finish");
     await mapToQwen();
 
@@ -1013,6 +1068,21 @@ describe("a Run on a Machine model, through OpenCode", () => {
     expect(resumed.env.CRONK_RUN_TOKEN).toBe(first.env.CRONK_RUN_TOKEN);
     expect(JSON.stringify(resumed.args)).not.toContain(first.env.CRONK_RUN_TOKEN);
     expect((await readRunRecord(join(home, "runs", "history"), run.id))?.sessionId).toBe(sessionId);
+    // Its record, and so its Transcript, holds both processes' events: the first's, then the resume's.
+    await eventually(async () => daemon!.held().length === 0);
+    const events = (await readFile(join(home, "runs", "history", `${run.id}.events.jsonl`), "utf8")).split("\n").filter(Boolean);
+    expect(events.map((line) => JSON.parse(line).type)).toEqual(
+      ["step_start", "text", "step_start", "text", "tool_use", "tool_use", "tool_use", "step_finish"],
+    );
+    expect(new Set(events.map((line) => JSON.parse(line).sessionID))).toEqual(new Set([sessionId]));
+    const { entries } = await ok("GET", `/api/transcripts/${finished.transcriptId}/entries`, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null }) => e.text ?? e.toolName)).toEqual([
+      "Looking at the Ticket.",
+      "Looking at the Ticket.",
+      "bash",
+      "bash",
+      "cronk_finish",
+    ]);
   });
 
   test("an opencode that still doesn't finish once resumed fails the Run as before, resumed only once", async () => {
@@ -1105,6 +1175,94 @@ describe("a Run on a Machine model, through OpenCode", () => {
     expect(daemon!.held()).toEqual([run.id]);
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
     await until(runState, run.id, "stopped");
+  });
+
+  test("its record is OpenCode's events, in a file readable by its User alone, uploaded as the Run's Transcript, shown by `cronk-runner logs` and removed with the Run's history after a week", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });
+    await startOn("finish");
+    await mapToQwen();
+
+    const { ticket, run } = await delegate("Record qwen");
+
+    const finished = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "finished" && state;
+    });
+    await eventually(async () => daemon!.held().length === 0);
+    const historyDir = join(home, "runs", "history");
+    const events = join(historyDir, `${run.id}.events.jsonl`);
+    expect(await readRunRecord(historyDir, run.id)).toEqual(
+      expect.objectContaining({ program: "opencode", transcriptPath: events, endedAt: expect.any(String) }),
+    );
+    expect((await stat(events)).mode & 0o777).toBe(0o600);
+    expect((await stat(historyDir)).mode & 0o777).toBe(0o700);
+    const lines = (await readFile(events, "utf8")).split("\n").filter(Boolean);
+    expect(lines.map((line) => JSON.parse(line).type)).toEqual(["step_start", "text", "tool_use", "tool_use", "tool_use", "step_finish"]);
+
+    // Converted in Cronk, complete after the Run's end.
+    const transcript = await ok("GET", `/api/transcripts/${finished.transcriptId}`, ada);
+    expect(transcript).toEqual(expect.objectContaining({ runId: run.id, entryCount: 4 }));
+    const { entries } = await ok("GET", `/api/transcripts/${transcript.id}/entries`, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null; toolResult: string | null }) => [e.text ?? e.toolName, e.toolResult])).toEqual([
+      ["Looking at the Ticket.", null],
+      ["bash", "README.md\n"],
+      ["bash", "Error: The user has specified a rule which prevents you from using this specific tool call."],
+      ["cronk_finish", "Finished."],
+    ]);
+
+    // `cronk-runner logs`, by its Ticket's key and by its id, readable or raw.
+    const logs = async (target: string, raw = false) => {
+      const printed: string[] = [];
+      expect(await followRun(target, { historyDir, env: {}, print: (l) => printed.push(l), note: () => {}, raw, pollMs: 20 })).toBe(0);
+      return printed;
+    };
+    const readable = [
+      "Looking at the Ticket.",
+      "[bash] List the files",
+      "[bash] curl https://example.com",
+      "[error] The user has specified a rule which prevents you from using this specific tool call.",
+      `[cronk_finish] ${run.id}`,
+    ].map((line) => `${ticket.key}  ${line}`);
+    expect(await logs(ticket.key)).toEqual(readable);
+    expect(await logs(run.id)).toEqual(readable);
+    expect(await logs(run.id, true)).toEqual(lines);
+
+    // Kept for a week after the Run ended, then removed with its record.
+    await pruneRunRecords(historyDir, Date.now() + 6 * 24 * 60 * 60 * 1000);
+    await access(events);
+    await pruneRunRecords(historyDir, Date.now() + 8 * 24 * 60 * 60 * 1000);
+    expect(await readdir(historyDir)).toEqual([]);
+  });
+
+  test("its record is uploaded and followed as the Run goes", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });
+    await startOn("hang", { heartbeatMs: 60_000, killGraceMs: 200 });
+    await mapToQwen();
+    const historyDir = join(home, "runs", "history");
+    const printed: string[] = [];
+    const notes: string[] = [];
+    const abort = new AbortController();
+    const following = followRunning({
+      historyDir,
+      env: {},
+      print: (line) => printed.push(line),
+      note: (line) => notes.push(line),
+      pollMs: 20,
+      signal: abort.signal,
+    });
+
+    const { ticket, run } = await delegate("Watch qwen");
+
+    const live = await eventually(async () => (await runState(run.id)).transcriptId as string | null);
+    expect(daemon!.held()).toEqual([run.id]);
+    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(1);
+    await eventually(async () => printed.length > 0);
+    expect(printed).toEqual([`${ticket.key}  Looking at the Ticket.`]);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+    await eventually(async () => notes.includes(`${ticket.key}: Run ${run.id} ended.`));
+    abort.abort();
+    expect(await following).toBe(0);
   });
 });
 

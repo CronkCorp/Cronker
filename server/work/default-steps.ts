@@ -10,6 +10,8 @@ export interface DefaultStep {
   brief: string;
   model: string;
   labelRule?: LabelRule;
+  /** Whether its Runs may not change files; off unless set. */
+  readOnly?: boolean;
   outcomes: { name: string; status: string; default?: boolean; needsYou?: boolean; countsAsRound?: boolean }[];
 }
 
@@ -61,6 +63,7 @@ export const defaultSteps: Record<string, DefaultStep> = {
   Triage: {
     brief: triage,
     model: "haiku",
+    readOnly: true,
     outcomes: [
       { name: "ready", status: "Ready", default: true },
       { name: "needs you", status: "Backlog", needsYou: true },
@@ -69,6 +72,7 @@ export const defaultSteps: Record<string, DefaultStep> = {
   Investigate: {
     brief: investigate,
     model: "sonnet",
+    readOnly: true,
     outcomes: [
       { name: "done", status: "Implement", default: true },
       { name: "needs you", status: "Backlog", needsYou: true },

@@ -13,9 +13,11 @@ export interface RunRecord {
   cronkUrl: string;
   /** The program's process's pid. */
   pid: number | null;
-  /** Claude Code's session id, once its stream said it. */
+  /** The program the Run ran as, whose JSONL its transcript is: `claude` for records written before it was kept. */
+  program: "claude" | "opencode";
+  /** The program's session id, once its output said it. */
   sessionId: string | null;
-  /** The session's JSONL, once the daemon found it. */
+  /** The session's JSONL, once the daemon found it: Claude Code's own, or the OpenCode events the daemon records. */
   transcriptPath: string | null;
   startedAt: string;
   /** When the Run ended here; null while it runs, or if the daemon running it stopped unexpectedly. */
@@ -27,6 +29,13 @@ export const keepEndedMs = 7 * 24 * 60 * 60 * 1000;
 
 /** The history directory under the state directory. */
 export const historyDirOf = (stateDir: string): string => join(stateDir, "history");
+
+/**
+ * Where the daemon records the output of a Run whose program writes no transcript of its own (OpenCode): beside the
+ * Run's record, readable by its User alone, and removed with it.
+ */
+export const eventsPathOf = (dir: string, runId: string): string => join(dir, `${runId}.events.jsonl`);
+const eventsSuffix = ".events.jsonl";
 
 /** Writes the record whole, readable by its User alone, through a rename so a reader never sees half of it. */
 export async function writeRunRecord(dir: string, record: RunRecord): Promise<void> {
@@ -80,13 +89,27 @@ export function isRunning(record: RunRecord): boolean {
 
 /**
  * Removes the records of Runs that ended more than `keepMs` ago, those of Runs whose process went without an end
- * (a daemon stopped unexpectedly) counting from their start.
+ * (a daemon stopped unexpectedly) counting from their start, with the events recorded of each, and events whose
+ * record is gone.
  */
 export async function pruneRunRecords(dir: string, now = Date.now(), keepMs = keepEndedMs): Promise<void> {
+  const kept = new Set<string>();
   for (const record of await readRunRecords(dir)) {
     const since = record.endedAt ?? (isRunning(record) ? null : record.startedAt);
-    if (since !== null && now - Date.parse(since) > keepMs)
+    if (since !== null && now - Date.parse(since) > keepMs) {
       await rm(join(dir, `${record.runId}.json`), { force: true });
+      await rm(eventsPathOf(dir, record.runId), { force: true });
+    } else {
+      kept.add(record.runId);
+    }
+  }
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    if (!name.endsWith(eventsSuffix)) continue;
+    const runId = name.slice(0, -eventsSuffix.length);
+    if (kept.has(runId)) continue;
+    // A record written just now, after the listing above, keeps its events.
+    if (await readRunRecord(dir, runId)) continue;
+    await rm(join(dir, name), { force: true });
   }
 }
 
@@ -99,6 +122,7 @@ function parse(text: string): RunRecord | null {
     ticketKey: record.ticketKey,
     cronkUrl: typeof record.cronkUrl === "string" ? record.cronkUrl : "",
     pid: typeof record.pid === "number" ? record.pid : null,
+    program: record.program === "opencode" ? "opencode" : "claude",
     sessionId: typeof record.sessionId === "string" ? record.sessionId : null,
     transcriptPath: typeof record.transcriptPath === "string" ? record.transcriptPath : null,
     startedAt: record.startedAt,

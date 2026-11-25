@@ -491,7 +491,8 @@ export function machineRoutes(context: Context): FastifyPluginAsyncTypebox {
           tags: ["Machines"],
           summary: "Upload a claimed Run's transcript, as a Machine's daemon",
           description:
-            "The daemon uploads the Run's whole Claude Code transcript, the JSONL file as it is " +
+            "The daemon uploads the Run's whole transcript, the JSONL file as it is: Claude Code's, or for a Run on a " +
+            "Machine model the OpenCode events it recorded " +
             "(`content-type: application/x-ndjson`, up to 256 MB), as the Run goes and once more after its process " +
             "ends. Like the Transcript hook's upload (`PUT /api/transcripts/sessions/{sessionId}`), it replaces what " +
             "Cronk held for the Run's session, by the Run's Agent, but takes the Machine token, so it works after the " +

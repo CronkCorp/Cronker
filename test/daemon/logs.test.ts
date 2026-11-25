@@ -10,7 +10,15 @@ import {
   writeRunRecord,
   type RunRecord,
 } from "../../daemon/src/history.js";
-import { daemonLogCommand, followRun, followRunning, renderLine, resolveRun, summarize } from "../../daemon/src/logs.js";
+import {
+  daemonLogCommand,
+  followRun,
+  followRunning,
+  renderLine,
+  renderOpenCodeLine,
+  resolveRun,
+  summarize,
+} from "../../daemon/src/logs.js";
 
 /** `cronk-runner logs` on its own: rendering Claude Code's JSONL, finding Runs by key, and following their files. */
 
@@ -34,6 +42,7 @@ const record = (fields: Partial<RunRecord> = {}): RunRecord => ({
   ticketKey: "CRONK-12",
   cronkUrl: "https://cronk.example.com",
   pid: process.pid,
+  program: "claude",
   sessionId: null,
   transcriptPath: null,
   startedAt: "2026-11-24T10:00:00.000Z",
@@ -107,6 +116,40 @@ describe("Run records", () => {
 
     await pruneRunRecords(historyDir, now);
     expect((await readdir(historyDir)).sort()).toEqual(["recent.json", "running.json"]);
+  });
+
+  test("take the OpenCode events recorded of their Run with them, and events whose record is gone", async () => {
+    const now = Date.parse("2026-11-24T12:00:00.000Z");
+    await mkdir(historyDir, { recursive: true });
+    for (const runId of ["recent", "old", "unrecorded"]) await writeFile(join(historyDir, `${runId}.events.jsonl`), "{}\n");
+    await writeRunRecord(historyDir, record({ runId: "recent", program: "opencode", endedAt: "2026-11-20T00:00:00.000Z" }));
+    await writeRunRecord(historyDir, record({ runId: "old", program: "opencode", endedAt: "2026-11-10T00:00:00.000Z" }));
+
+    await pruneRunRecords(historyDir, now);
+
+    expect((await readdir(historyDir)).sort()).toEqual(["recent.events.jsonl", "recent.json"]);
+  });
+});
+
+describe("renderOpenCodeLine", () => {
+  const event = (type: string, more: Record<string, unknown> = {}) => JSON.stringify({ type, sessionID: "ses_1", ...more });
+  const tool = (callID: string, state: Record<string, unknown>) =>
+    event("tool_use", { part: { type: "tool", callID, tool: "bash", state } });
+
+  test("prints the agent's text, a tool call once with its summary, its error, and error events", () => {
+    const seen = new Set<string>();
+    expect(renderOpenCodeLine(event("text", { part: { type: "text", text: "Looking.\nAt it." } }), seen)).toEqual(["Looking.", "At it."]);
+    expect(renderOpenCodeLine(tool("c1", { status: "pending", input: { command: "ls" } }), seen)).toEqual(["[bash] ls"]);
+    expect(renderOpenCodeLine(tool("c1", { status: "completed", input: { command: "ls" }, output: "a" }), seen)).toEqual([]);
+    expect(renderOpenCodeLine(tool("c2", { status: "error", input: { command: "curl x" }, error: "Denied." }), seen)).toEqual([
+      "[bash] curl x",
+      "[error] Denied.",
+    ]);
+    expect(renderOpenCodeLine(event("error", { error: { name: "APIError", data: { message: "Server gone." } } }), seen)).toEqual([
+      "[error] Server gone.",
+    ]);
+    for (const quiet of [event("step_start"), event("reasoning", { part: { text: "hm" } }), event("step_finish"), "{half"])
+      expect(renderOpenCodeLine(quiet, seen)).toEqual([]);
   });
 });
 

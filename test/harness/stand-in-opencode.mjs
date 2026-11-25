@@ -3,7 +3,8 @@
 // it was run to the JSON-lines file in $STAND_IN_OPENCODE_LOG: its arguments, working directory, pid, environment (but
 // its own variables), the config in $OPENCODE_CONFIG_CONTENT and, run in a git worktree, the branch, the password git's
 // credential helpers give for $STAND_IN_OPENCODE_CREDENTIAL_URL, what `gh` printed and the git identity. It prints
-// `--format json` events, each naming its session, and then, as $STAND_IN_OPENCODE_MODE says: `finish`es the Run named
+// `--format json` events, each naming its session: a step's start and the agent's text, and, finishing, a command run,
+// one denied and the call to `finish`. Then, as $STAND_IN_OPENCODE_MODE says: `finish`es the Run named
 // in its Brief through the MCP server and headers its config gives, `{env:…}` read as OpenCode does, and exits 0;
 // `exit:<code>` exits with that code without finishing; `hang`s until killed; or `hang-hard`s, ignoring SIGTERM, until
 // SIGKILL. Run with `--session <id>`, as a resume is, it says that session's id and runs in the mode after `-then-`:
@@ -47,6 +48,7 @@ const resuming = args.includes("--session");
 const sessionID = resuming ? args[args.indexOf("--session") + 1] : `ses_stand_in_${process.pid}`;
 const say = (type, more = {}) => process.stdout.write(`${JSON.stringify({ type, timestamp: Date.now(), sessionID, ...more })}\n`);
 say("step_start");
+say("text", { part: { type: "text", text: "Looking at the Ticket." } });
 
 const given = process.env.STAND_IN_OPENCODE_MODE ?? "finish";
 const [first, then] = given.split("-then-");
@@ -73,6 +75,9 @@ if (mode === "linger") {
   process.stderr.write("stand-in opencode gave up\n");
   process.exit(Number(mode.slice(5)));
 } else {
+  const tool = (callID, name, state) => say("tool_use", { part: { type: "tool", callID, tool: name, state } });
+  tool("call_ls", "bash", { status: "completed", input: { command: "ls", description: "List the files" }, output: "README.md\n" });
+  tool("call_curl", "bash", { status: "error", input: { command: "curl https://example.com" }, error: "The user has specified a rule which prevents you from using this specific tool call." });
   const brief = args.at(-1);
   const runId = /Run id is ([0-9a-f-]{36})/.exec(brief)[1];
   const server = config.mcp.servers.cronk;
@@ -87,7 +92,7 @@ if (mode === "linger") {
   };
   await rpc(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "stand-in-opencode", version: "0" } });
   const result = await rpc(2, "tools/call", { name: "finish", arguments: { run: runId, outcome: "ready" } });
-  say("tool_use", { part: { tool: "cronk_finish", state: { status: result.result?.isError ? "error" : "completed" } } });
+  tool("call_finish", "cronk_finish", { status: result.result?.isError ? "error" : "completed", input: { run: runId, outcome: "ready" }, output: "Finished." });
   say("step_finish");
   process.exit(0);
 }

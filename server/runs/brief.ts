@@ -66,6 +66,11 @@ export const conciseReportsRule =
   "findings, what you verified and anything the next Run or User needs, in as few lines as you can. Leave out the " +
   "working, such as a step-by-step log of what you read or tried.";
 
+/** The rule a Brief of a read-only Step carries. */
+export const readOnlyRule =
+  "- This Step is read-only: don't change files in the Repository, and don't describe a change as made. Say in your " +
+  "Report what should change instead.";
+
 /** The Backport a Run of a Merge Step makes, as its Brief names it. */
 export interface BriefBackport {
   release: string;
@@ -159,6 +164,7 @@ export function buildBrief(
       `${ticketKey}'s Assignee as a Discovered Ticket.`,
     `- Give your Run id when you create an Artifact with \`create_artifact\`, so it is linked to ${ticketKey}.`,
     "- Don't merge pull requests on GitHub directly.",
+    ...(step.readOnly ? [readOnlyRule] : []),
     ...(conciseReports ? [conciseReportsRule] : []),
   ].join("\n");
 

@@ -8,9 +8,10 @@ import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { mcpResource } from "../oauth/authorizations.js";
 import type { Brief } from "../runs/brief.js";
 import { revokeLocalRunToken } from "../runs/local.js";
-import { reviveLostRun, runReports } from "../runs/runs.js";
+import { readOnlyRun, reviveLostRun, runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { convertClaudeCode } from "../transcripts/claude-code.js";
+import { convertOpenCode } from "../transcripts/opencode.js";
 import { uploadTranscript, type Transcript } from "../transcripts/transcripts.js";
 import { claimableRunsFor, machinesWithModel, mappedModelSql, notSetUpReason } from "../runs/machine-models.js";
 import { modelIdOf, type ModelId } from "../workspaces/workspaces.js";
@@ -74,6 +75,11 @@ export const ClaimedRun = Type.Object({
       "The Runner's allowlist as it stood at the claim: the tools the Run may use without asking, for `claude " +
       "--allowedTools` with `--permission-mode acceptEdits`.",
   }),
+  readOnly: Type.Boolean({
+    description:
+      "Whether the Run's Step was read-only when the Run started: the program must refuse the Run's file edits, " +
+      "whatever the allowlist says. A daemon too old to know the field edits anyway.",
+  }),
 });
 export type ClaimedRun = Static<typeof ClaimedRun>;
 
@@ -110,8 +116,9 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       runnerId: string;
       runnerName: string;
       machineModel: string | null;
+      readOnly: boolean;
     }>(
-      `select runs.state, runners.allowed_tools as "allowedTools", runners.id as "runnerId", runners.name as "runnerName",
+      `select runs.state, runs.read_only as "readOnly", runners.allowed_tools as "allowedTools", runners.id as "runnerId", runners.name as "runnerName",
          ${mappedModelSql("runners", "runs")} as "machineModel", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
          projects.key || '-' || tickets.number as "ticketKey", tickets.id as "ticketId", tickets.project_id as "projectId"
        from runs join tickets on tickets.id = runs.ticket_id join projects on projects.id = tickets.project_id
@@ -204,6 +211,7 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
         token,
         mcpUrl: mcpResource(context),
         allowedTools: run.allowedTools ?? [],
+        readOnly: run.readOnly,
       },
       repositories: await repositoriesOf(tx, run.projectId, run.ticketId),
     };
@@ -430,6 +438,11 @@ export const LocalRunEnded = Type.Object({
 });
 export type LocalRunEnded = Static<typeof LocalRunEnded>;
 
+/** The tools that edit files, as a program names them when it denies them: Claude Code's, and OpenCode's in lower case. */
+const fileEditTools = new Set(["edit", "write", "multiedit", "notebookedit", "patch"]);
+
+const isFileEdit = (tool: string) => fileEditTools.has(tool.toLowerCase());
+
 /**
  * Reports that the `claude` process of a Run the Machine holds ended, which also confirms any stop. A Run its agent
  * didn't finish fails with the reason, naming any tools outside its Runner's allowlist it was denied; one that ended
@@ -443,8 +456,16 @@ export async function reportEnd(context: Context, machine: MachineSelf, runId: s
   if (running) {
     let reason = `The session ended without calling \`finish\`: ${end.reason.trim()}`;
     const denied = [...new Set((end.deniedTools ?? []).map((tool) => tool.trim()).filter(Boolean))];
-    if (denied.length) {
-      reason += `. It needed ${denied.length === 1 ? "a tool" : "tools"} outside the Runner's allowlist: ${denied.join(", ")}; widen the allowlist and Retry.`;
+    // A read-only Step's file edits are refused whatever the allowlist says, so widening it wouldn't help.
+    const edits = (await readOnlyRun(context.db, runId)) ? denied.filter(isFileEdit) : [];
+    const outside = denied.filter((tool) => !edits.includes(tool));
+    if (edits.length) {
+      reason += `. Its Step is read-only, so its file edits were refused: ${edits.join(", ")}`;
+    }
+    if (outside.length) {
+      reason += `. It needed ${outside.length === 1 ? "a tool" : "tools"} outside the Runner's allowlist: ${outside.join(", ")}; widen the allowlist and Retry.`;
+    } else if (edits.length) {
+      reason += ".";
     }
     await reports.endedWithoutFinishing(runId, reason);
   }
@@ -462,8 +483,8 @@ export async function reportEnd(context: Context, machine: MachineSelf, runId: s
 }
 
 /**
- * Stores the Claude Code transcript of a Run the Machine holds, its JSONL file as it is, as the Transcript of the
- * Run's session, by the Run's Agent, replacing what Cronk held, as the Transcript hook's upload does. It works after
+ * Stores the transcript of a Run the Machine holds, its JSONL file as it is, as the Transcript of the Run's session:
+ * Claude Code's for a Run on Claude, and OpenCode's events, as the daemon recorded them, for a Run on a Machine model, by the Run's Agent, replacing what Cronk held, as the Transcript hook's upload does. It works after
  * the Run ended, when the Run's own token is revoked, so the daemon's last upload is complete. A Run with no session
  * reported yet is refused with `no_session`.
  */
@@ -474,12 +495,20 @@ export async function uploadRunTranscript(
   jsonl: string,
 ): Promise<{ transcript: Transcript; created: boolean }> {
   await heldRun(context, machine, runId);
-  const { rows } = await context.db.query<{ agentId: string; workspaceId: string; sessionId: string | null }>(
-    `select agent_id as "agentId", workspace_id as "workspaceId", session_id as "sessionId" from runs where id = $1`,
+  const { rows } = await context.db.query<{
+    agentId: string;
+    workspaceId: string;
+    sessionId: string | null;
+    machineModel: string | null;
+  }>(
+    `select agent_id as "agentId", workspace_id as "workspaceId", session_id as "sessionId",
+       machine_model as "machineModel"
+     from runs where id = $1`,
     [runId],
   );
   const run = rows[0];
   if (!run) throw noSuchRun();
-  if (!run.sessionId) throw new ApiError(409, "no_session", "This Run has no Claude Code session yet: report its session first.");
-  return uploadTranscript(context, { id: run.agentId, workspace: { id: run.workspaceId } }, run.sessionId, convertClaudeCode(jsonl));
+  if (!run.sessionId) throw new ApiError(409, "no_session", "This Run has no session yet: report its session first.");
+  const entries = run.machineModel === null ? convertClaudeCode(jsonl) : convertOpenCode(jsonl);
+  return uploadTranscript(context, { id: run.agentId, workspace: { id: run.workspaceId } }, run.sessionId, entries);
 }

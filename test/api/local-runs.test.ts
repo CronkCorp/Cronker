@@ -205,6 +205,8 @@ describe("claiming a local Run", () => {
       mcpUrl: `${cronk.url}/mcp`,
       repositories: [],
       allowedTools: [...defaultAllowedTools],
+      // Triage is read-only on the default board.
+      readOnly: true,
     });
     // A Project listing no Repositories needs no GitHub App.
     expect(cronk.github.apiCalls).toEqual([]);
@@ -323,6 +325,90 @@ describe("claiming a local Run", () => {
     const refused = await ok("GET", `/api/runs/${run.id}`, { cookie: ada });
     expect(refused.state).toBe("refused");
     expect(refused.endReason).toContain("no model id for the label haiku");
+  });
+});
+
+describe("a Run of a read-only Step", () => {
+  /** Turns the Triage Step's read-only setting on or off, keeping the rest of the Step. */
+  const setTriageReadOnly = async (
+    ada: string,
+    project: { id: string; statuses: { name: string; id: string; step: unknown }[] },
+    readOnly: boolean,
+  ) => {
+    const triage = project.statuses.find((s) => s.name === "Triage")!;
+    await ok("PUT", `/api/projects/${project.id}/statuses/${triage.id}/step`, {
+      cookie: ada,
+      body: { ...(triage.step as object), readOnly },
+    });
+  };
+
+  test("is claimed read-only as its Step stood when it started, whatever the Step says since", async () => {
+    const { ada, project, machineToken, delegate } = await localSetUp({ runLimit: 2, machineLimit: 2 });
+    const { run: readOnly } = await delegate("Look only");
+    await setTriageReadOnly(ada, project, false);
+    const { run: editing } = await delegate("Fix it");
+    await setTriageReadOnly(ada, project, true);
+
+    expect((await claim(machineToken, readOnly.id)).json.readOnly).toBe(true);
+    expect((await claim(machineToken, editing.id)).json.readOnly).toBe(false);
+  });
+
+  test("ending on refused edits fails saying the Step is read-only, naming other tools outside the allowlist apart", async () => {
+    const { ada, machineToken, delegate } = await localSetUp();
+    const { run } = await delegate("Fix it anyway");
+    await claim(machineToken, run.id);
+
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0", deniedTools: ["Edit", "Bash(npm publish)", "Write"] },
+    });
+    await cronk.jobsSettled();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 0. Its Step is read-only, so its file " +
+        "edits were refused: Edit, Write. It needed a tool outside the Runner's allowlist: Bash(npm publish); widen " +
+        "the allowlist and Retry.",
+    );
+  });
+
+  test("of a Step that isn't read-only names refused edits as outside the allowlist", async () => {
+    const { ada, project, machineToken, delegate } = await localSetUp();
+    await setTriageReadOnly(ada, project, false);
+    const { run } = await delegate("Fix it");
+    await claim(machineToken, run.id);
+
+    await ok("POST", `/api/machine/runs/${run.id}/end`, {
+      token: machineToken,
+      body: { reason: "claude exited with code 0", deniedTools: ["Edit"] },
+    });
+    await cronk.jobsSettled();
+
+    expect((await ok("GET", `/api/runs/${run.id}`, { cookie: ada })).endReason).toBe(
+      "The session ended without calling `finish`: claude exited with code 0. It needed a tool outside the Runner's " +
+        "allowlist: Edit; widen the allowlist and Retry.",
+    );
+  });
+
+  test("finished with a Report has Cronk's note that the Step was read-only added to it", async () => {
+    const { ada, project, machineToken, delegate } = await localSetUp({ runLimit: 2, machineLimit: 2 });
+    const { ticket, run } = await delegate("Look only");
+    await setTriageReadOnly(ada, project, false);
+    const { ticket: other, run: editing } = await delegate("Fix it");
+    for (const [r, report] of [
+      [run, "Fixed the parser."],
+      [editing, "Fixed the parser."],
+    ] as const) {
+      const { token } = (await claim(machineToken, r.id)).json;
+      await ok("POST", `/api/runs/${r.id}/finish`, { token, body: { outcome: "ready", report } });
+    }
+
+    const [readOnlyReport] = await ok("GET", `/api/tickets/${ticket.id}/reports`, { cookie: ada });
+    expect(readOnlyReport.body).toBe(
+      "Fixed the parser.\n\n_This Run's Step was read-only: its file edits were refused, so nothing it describes as " +
+        "changed was kept._",
+    );
+    const [editingReport] = await ok("GET", `/api/tickets/${other.id}/reports`, { cookie: ada });
+    expect(editingReport.body).toBe("Fixed the parser.");
   });
 });
 
