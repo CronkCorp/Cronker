@@ -181,7 +181,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
                 <span>
                   on <span className="mono">{ofRun.ticket.key}</span> {ofRun.ticket.title}
                 </span>
-                <ModelLabel model={ofRun.run.model} />
+                <ModelLabel model={ofRun.run.model} machineModel={ofRun.run.machineModel} />
               </>
             )}
             {!transcript.runId && (

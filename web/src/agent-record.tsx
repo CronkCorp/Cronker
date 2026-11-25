@@ -93,7 +93,7 @@ function RecordRow({ entry, agent }: { entry: RecordEntry; agent: RecordAgent })
           <KindLabel kind="Run" /> <RunState state={entry.state as Parameters<typeof RunState>[0]["state"]} />{" "}
           {ticketLink(entry.ticket)}{" "}
           <span>
-            {entry.step} · <ModelLabel model={entry.model} />
+            {entry.step} · <ModelLabel model={entry.model} machineModel={entry.machineModel} />
           </span>
           {entry.outcome && <span> · {entry.outcome}</span>} {when}
           {entry.transcript && (

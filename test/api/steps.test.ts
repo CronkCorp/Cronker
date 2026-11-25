@@ -154,7 +154,7 @@ describe("the default board's Steps", () => {
 
   test("an existing Project's Steps on Statuses named Triage or Investigate become read-only, and its other Steps don't", async () => {
     await cronk.stop();
-    cronk = await startCronk({ migrateBefore: "0090_read_only_steps.sql" });
+    cronk = await startCronk({ migrateBefore: "0091_read_only_steps.sql" });
     const { workspace } = await setUp(cronk);
     const cookie = await signIn(cronk);
     // As a Cronk before read-only Steps wrote a Project, its Statuses named in any case, each with a Step.

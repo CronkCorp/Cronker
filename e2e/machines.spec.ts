@@ -202,3 +202,46 @@ test("a Machine lists the Machine models its daemon announces, live, kept but do
   await page.getByRole("dialog", { name: "Unpair ada-laptop?" }).getByRole("button", { name: "Unpair" }).click();
   await expect(machines.getByText("No Machines paired yet.")).toBeVisible();
 });
+
+test("a local Runner's card maps model labels to the Machine models its Machines offer, kept on reload", async ({ page, cronk }) => {
+  await setUp(cronk);
+  const ada = await signIn(cronk);
+  const runner = await (await cronk.request("POST", "/api/runners", { cookie: ada, body: { name: "Laptop", kind: "local" } })).json();
+  const started = await (
+    await cronk.request("POST", "/api/machines/pairings", { body: { name: "ada-gpu", os: "linux", daemonVersion: "0.3.0" } })
+  ).json();
+  await cronk.request("POST", "/api/machines/pairings/approve", { cookie: ada, body: { userCode: started.userCode, runnerIds: [runner.id] } });
+  const { machineToken } = await (await cronk.request("POST", "/api/machines/pairings/poll", { body: { deviceCode: started.deviceCode } })).json();
+  const announced = await cronk.request("PUT", "/api/machine/announcement", {
+    headers: { authorization: `Bearer ${machineToken}` },
+    body: { claude: true, models: [{ name: "qwen", limit: 1, up: true }, { name: "gpt-oss", limit: 1, up: false }] },
+  });
+  expect(announced.status).toBe(204);
+
+  await signInInBrowser(page, cronk);
+  await page.goto(`${cronk.url}/runners`);
+  const mapping = page.getByRole("region", { name: "Laptop" }).getByRole("group", { name: "Machine models" });
+  await expect(mapping.getByRole("button", { name: "Add a model label" })).toBeVisible();
+
+  await mapping.getByRole("button", { name: "Add a model label" }).click();
+  const row = mapping.getByRole("group", { name: "Machine model of a new label" });
+  await row.getByLabel("Model label").fill("haiku");
+  await mapping.getByRole("group", { name: "Machine model of haiku", exact: true }).getByLabel("Machine model").selectOption("qwen");
+  await mapping.getByRole("button", { name: "Add a model label" }).click();
+  const twice = mapping.getByRole("group", { name: "Machine model of a new label" });
+  await twice.getByLabel("Model label").fill("HAIKU");
+  await mapping.getByRole("group", { name: "Machine model of HAIKU", exact: true }).getByLabel("Machine model").selectOption("gpt-oss");
+  await mapping.getByRole("button", { name: "Save Machine models" }).click();
+  await expect(mapping.getByRole("alert")).toContainText("The label HAIKU is mapped twice");
+
+  await mapping.getByRole("group", { name: "Machine model of HAIKU", exact: true }).getByRole("button", { name: "Remove" }).click();
+  await mapping.getByRole("button", { name: "Save Machine models" }).click();
+  await expect(mapping.getByRole("status")).toHaveText("Saved.");
+
+  await page.reload();
+  const saved = page.getByRole("region", { name: "Laptop" }).getByRole("group", { name: "Machine model of haiku", exact: true });
+  await expect(saved.getByLabel("Model label")).toHaveValue("haiku");
+  await expect(saved.getByLabel("Machine model")).toHaveValue("qwen");
+  const runners = await (await cronk.request("GET", "/api/runners", { cookie: ada })).json();
+  expect(runners[0].machineModels).toEqual([{ label: "haiku", model: "qwen" }]);
+});

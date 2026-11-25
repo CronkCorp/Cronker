@@ -1,5 +1,6 @@
 import type { Context } from "../context.js";
 import { modelIdOf, settingsOf } from "../workspaces/workspaces.js";
+import { machinesWithClaude, machinesWithModel, mappedModelSql, notSetUpReason } from "./machine-models.js";
 import type { Runner, StartResult } from "./runner.js";
 
 /**
@@ -13,11 +14,24 @@ export function localRunner(context: Context): Runner {
     // Its Runs run on the Owner's own Machine, so `local-only` Tickets go to it.
     cloud: false,
     async start(run): Promise<StartResult> {
+      const { rows } = await context.db.query<{ workspaceId: string; machineModel: string | null }>(
+        `select runs.workspace_id as "workspaceId", ${mappedModelSql("runners", "runs")} as "machineModel"
+         from runs join runners on runners.id = runs.runner_id where runs.id = $1`,
+        [run.runId],
+      );
+      const machineModel = rows[0]?.machineModel ?? null;
+      if (machineModel) {
+        // A label mapped to a Machine model needs no model id, and never falls back to Claude: only Machines that
+        // have the Machine model set up hear of the Run, and with none it is refused here, naming the label.
+        const machineIds = await machinesWithModel(context.db, run.runner.id, machineModel);
+        if (machineIds.length === 0) {
+          return { started: false, refusal: { kind: "not_configured", message: notSetUpReason(run.model, machineModel, run.runner.name) } };
+        }
+        for (const machineId of machineIds) context.live.sendToMachine(machineId, { type: "run.claimable", runId: run.runId });
+        return { started: true, reference: {} };
+      }
       // The Machine passes `claude` a model id, never a label: a label the Workspace doesn't map is refused here,
       // where its Admin can see why, rather than on the Machine.
-      const { rows } = await context.db.query<{ workspaceId: string }>(`select workspace_id as "workspaceId" from runs where id = $1`, [
-        run.runId,
-      ]);
       const workspaceId = rows[0]?.workspaceId;
       if (workspaceId && !modelIdOf(await settingsOf(context.db, workspaceId), run.model.trim())) {
         return {
@@ -30,7 +44,10 @@ export function localRunner(context: Context): Runner {
           },
         };
       }
-      context.live.sendToMachines(run.runner.id, { type: "run.claimable", runId: run.runId });
+      // Only Machines that run Claude hear of it.
+      for (const machineId of await machinesWithClaude(context.db, run.runner.id)) {
+        context.live.sendToMachine(machineId, { type: "run.claimable", runId: run.runId });
+      }
       return { started: true, reference: {} };
     },
     // Cronk stopped the Run: the Machine holding it is told to kill its process, now if it is connected, else when it

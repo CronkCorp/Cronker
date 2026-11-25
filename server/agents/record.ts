@@ -24,6 +24,9 @@ const RecordRun = Type.Object({
   ticket: TicketRef,
   step: Type.String({ description: "The name of the Step's Status, as it was when the Run started." }),
   model: Type.String(),
+  machineModel: Type.Union([Type.String(), Type.Null()], {
+    description: "The Machine model it ran on, such as `qwen`; null for a Run on Claude.",
+  }),
   state: Type.String(),
   outcome: Type.Union([Type.String(), Type.Null()]),
   endedAt: Type.Union([At, Type.Null()]),
@@ -176,7 +179,7 @@ function branches(viewer: Viewer): { sql: string; value: string | string[] } {
   const sql = `
     select runs.started_at as at, 2 as rank, runs.seq as tiebreak, runs.id::text as id,
       jsonb_build_object('kind', 'run', 'id', runs.id, 'ticket', ${ticketRef("tickets", "projects")},
-        'step', runs.status_name, 'model', runs.model, 'state', runs.state, 'outcome', runs.outcome,
+        'step', runs.status_name, 'model', runs.model, 'machineModel', runs.machine_model, 'state', runs.state, 'outcome', runs.outcome,
         'endedAt', runs.ended_at,
         'transcript', (select jsonb_build_object('id', transcripts.id,
             'slug', ${slugColumn("transcript", "transcripts.id", "agents.name")})

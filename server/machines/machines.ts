@@ -7,6 +7,7 @@ import { ApiError } from "../http/errors.js";
 import { isUuid } from "../http/ids.js";
 import { hashSecret, issueSecret } from "../identity/secrets.js";
 import { revokeLocalRunToken } from "../runs/local.js";
+import { machineModelNamePattern, recheckClaimable } from "../runs/machine-models.js";
 import { noSuchRunner } from "../runs/runners.js";
 import { startWaitingRuns, stopRunningRun } from "../runs/runs.js";
 
@@ -472,6 +473,12 @@ export async function unpairMachine(
     );
     if (!rows[0])
       throw new ApiError(404, "not_found", "You have no such Machine.");
+    const { rows: served } = await tx.query<{ runnerId: string }>(
+      `select runner_id as "runnerId" from machine_runners where machine_id = $1`,
+      [machineId],
+    );
+    // Runs needing a Machine model only it had set up fail once it is gone.
+    afterCommit(tx, () => recheckClaimable(context, served.map((r) => r.runnerId)));
     for (const ticket of held) {
       await stopRunningRun(
         context,
@@ -502,8 +509,6 @@ export async function unpairMachine(
   context.live.endMachines((stream) => stream.machineId === machineId);
 }
 
-/** A Machine model's name: 1 to 50 lower case letters, digits and dashes. */
-export const machineModelNamePattern = "^[a-z0-9-]{1,50}$";
 
 const AnnouncedModel = Type.Object(
   {
@@ -570,6 +575,8 @@ export async function announce(
         type: "runner.changed",
         runnerId: id,
       });
+    // Runs needing a Machine model it now offers are told to it, and those needing one no Machine has any more fail.
+    afterCommit(tx, () => recheckClaimable(context, machine.runners.map((r) => r.id)));
   });
 }
 

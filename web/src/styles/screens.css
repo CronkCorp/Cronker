@@ -1515,6 +1515,7 @@
   border-top: 1px solid var(--border);
 }
 .runner-managed,
+.runner-machine-models,
 .runner-allowlist {
   display: grid;
   gap: var(--space-3);

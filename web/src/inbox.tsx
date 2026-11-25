@@ -31,7 +31,7 @@ import { MovedOnDependents } from "./reopen.js";
 import { Link } from "./router.js";
 import { Actor } from "./ui/actor.js";
 import { Actions, Banner, Button, CommentButton, EmptyState, Field, FormError, LiveIndicator, PageHead, RelativeTime, workspaceCrumb } from "./ui/controls.js";
-import { DecisionStatusPill, Key, KindLabel, RunState, StatusPill } from "./ui/labels.js";
+import { DecisionStatusPill, Key, KindLabel, ModelLabel, RunState, StatusPill } from "./ui/labels.js";
 import { ArtifactFrame } from "./embed.js";
 import { Dialog, DialogActions, DialogClose } from "./ui/overlays.js";
 import { FieldPicker, MultiFilterPicker } from "./ui/picker.js";
@@ -762,7 +762,7 @@ function RunGoneWrong({
       </p>
       {found && (
         <p className="detail-line">
-          <Actor actor={{ kind: "agent", name: found.agent.name }} /> ran it on <span className="model-label">{found.model}</span>, started{" "}
+          <Actor actor={{ kind: "agent", name: found.agent.name }} /> ran it on <ModelLabel model={found.model} machineModel={found.machineModel} />, started{" "}
           <RelativeTime at={found.startedAt} />
           {found.sessionUrl && (
             <>

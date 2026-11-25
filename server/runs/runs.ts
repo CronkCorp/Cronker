@@ -51,6 +51,11 @@ export const Run = Type.Object({
   ),
   agent: Type.Object({ id: Type.String({ format: "uuid" }), name: Type.String() }),
   model: Type.String({ description: "The label of the model the Step wanted when the Run started." }),
+  machineModel: Type.Union([Type.String(), Type.Null()], {
+    description:
+      "The Machine model a `local` Runner's Machine ran it on, by name, as its Runner mapped the label at the claim, " +
+      "such as `qwen` for `haiku (qwen)`: kept after the mapping changes. Null for a Run on Claude, and before the claim.",
+  }),
   state: RunState,
   outcome: Type.Union([Type.String(), Type.Null()], { description: "The Outcome its Agent finished it with." }),
   question: Type.Union([Type.String(), Type.Null()], {
@@ -98,7 +103,7 @@ type Row = Omit<Run, "startedAt" | "endedAt" | "lastCallAt"> & {
 
 const columns = `runs.id, runs.ticket_id as "ticketId",
   json_build_object('statusId', runs.status_id, 'name', runs.status_name) as step,
-  json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.state, runs.outcome,
+  json_build_object('id', agents.id, 'name', agents.name) as agent, runs.model, runs.machine_model as "machineModel", runs.state, runs.outcome,
   runs.question, runs.question_by as "questionBy", runs.end_reason as "endReason", runs.session_url as "sessionUrl",
   case when runs.cost_amount is not null
     then json_build_object('amount', runs.cost_amount, 'currency', runs.cost_currency, 'estimate', runs.cost_estimate) end as cost,

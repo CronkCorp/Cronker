@@ -12,6 +12,7 @@ import { readOnlyRun, reviveLostRun, runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { convertClaudeCode } from "../transcripts/claude-code.js";
 import { uploadTranscript, type Transcript } from "../transcripts/transcripts.js";
+import { claimableRunsFor, machinesWithModel, mappedModelSql, notSetUpReason } from "../runs/machine-models.js";
 import { modelIdOf, type ModelId } from "../workspaces/workspaces.js";
 import type { MachineSelf } from "./machines.js";
 
@@ -22,16 +23,9 @@ import type { MachineSelf } from "./machines.js";
  * id, heartbeats while the process runs, and reports the process's end.
  */
 
-/** A claimable Run, as the Machine's event stream announces it. */
+/** The claimable Runs this Machine offers what they need for, as its event stream announces them. */
 export async function claimableRuns(context: Context, machine: MachineSelf): Promise<string[]> {
-  const { rows } = await context.db.query<{ id: string }>(
-    `select runs.id from runs
-     where runs.state = 'running' and runs.runner_id = any($1::uuid[])
-       and not exists (select 1 from local_runs where local_runs.run_id = runs.id)
-     order by runs.started_at, runs.id`,
-    [machine.runners.map((r) => r.id)],
-  );
-  return rows.map((r) => r.id);
+  return claimableRunsFor(context.db, machine.id, machine.runners.map((r) => r.id));
 }
 
 export const RepositoryToken = Type.Object({
@@ -58,7 +52,20 @@ export const ClaimedRun = Type.Object({
   runId: Type.String({ format: "uuid" }),
   ticketKey: Type.String({ description: "The Run's Ticket, such as `CRONK-12`." }),
   brief: Type.String({ description: "The Run's Brief, as `claude -p` is given it." }),
-  modelId: Type.String({ description: "The model id the Step's label stands for in the Workspace, for `claude --model`." }),
+  modelId: Type.Optional(
+    Type.String({
+      description:
+        "The model id the Step's label stands for in the Workspace, for `claude --model`. Left out for a Run on a " +
+        "Machine model, which has `machineModel` instead.",
+    }),
+  ),
+  machineModel: Type.Optional(
+    Type.String({
+      description:
+        "The Machine model the Runner maps the Step's label to, by its name on the Machine, for a Run that runs on it " +
+        "rather than on Claude. Left out for a Run on Claude, which has `modelId` instead.",
+    }),
+  ),
   token: Type.String({ description: "An Agent token of the Run's Agent, minted for this Run and revoked once it ends." }),
   mcpUrl: Type.String({ format: "uri", description: "Cronk's MCP server, which the Run reaches with the token." }),
   repositories: Type.Array(ClaimedRepository, { description: "The Project's Repositories, which the Run works in." }),
@@ -88,8 +95,9 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
   const result = await transaction(context.db, async (tx) => {
     const now = context.clock.now();
     // The Machine first, then the Run: two claims by one Machine at once count each other.
-    const { rows: machines } = await tx.query<{ limit: number }>(
-      "select run_limit as limit from machines where id = $1 and revoked_at is null for update",
+    const { rows: machines } = await tx.query<{ limit: number; claude: boolean; models: { name: string; limit: number }[] }>(
+      `select run_limit as limit, announces_claude as claude, announced_models as models
+       from machines where id = $1 and revoked_at is null for update`,
       [machine.id],
     );
     if (!machines[0]) throw noSuchRun();
@@ -104,9 +112,13 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       ticketId: string;
       projectId: string;
       allowedTools: string[] | null;
+      runnerId: string;
+      runnerName: string;
+      machineModel: string | null;
       readOnly: boolean;
     }>(
-      `select runs.state, runs.read_only as "readOnly", runners.allowed_tools as "allowedTools", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
+      `select runs.state, runs.read_only as "readOnly", runners.allowed_tools as "allowedTools", runners.id as "runnerId", runners.name as "runnerName",
+         ${mappedModelSql("runners", "runs")} as "machineModel", runs.workspace_id as "workspaceId", workspaces.model_ids as "modelIds", runs.agent_id as "agentId", runs.model, runs.brief,
          projects.key || '-' || tickets.number as "ticketKey", tickets.id as "ticketId", tickets.project_id as "projectId"
        from runs join tickets on tickets.id = runs.ticket_id join projects on projects.id = tickets.project_id
          join workspaces on workspaces.id = runs.workspace_id join runners on runners.id = runs.runner_id
@@ -121,13 +133,37 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
     if (run.state !== "running" || claimed) {
       throw new ApiError(409, "run_not_claimable", "This Run was claimed already, or is no longer running.");
     }
-    const { rows: held } = await tx.query<{ count: string }>(
-      `select count(*) from local_runs join runs on runs.id = local_runs.run_id
+    // The mapping is read now, so a change applies to Runs not claimed yet. A Run on a Machine model is claimed only by
+    // a Machine that has it set up, within its limit there; with no Machine serving the Runner having it, it fails.
+    const machineModel = run.machineModel;
+    const offered = machineModel ? machines[0].models.find((m) => m.name === machineModel) : undefined;
+    if (machineModel && !offered) {
+      const elsewhere = await machinesWithModel(tx, run.runnerId, machineModel);
+      if (elsewhere.length === 0) return { refused: notSetUpReason(run.model, machineModel, run.runnerName), claimed: null, repositories: [] };
+      throw new ApiError(
+        409,
+        "machine_model_missing",
+        `This Run needs the Machine model ${machineModel}, which this Machine hasn't set up: another Machine serving its Runner claims it.`,
+      );
+    }
+    if (!machineModel && !machines[0].claude) {
+      throw new ApiError(409, "machine_runs_no_claude", "This Run needs Claude, which this Machine doesn't run.");
+    }
+    const { rows: held } = await tx.query<{ count: string; onModel: string }>(
+      `select count(*), count(*) filter (where runs.machine_model = $2) as "onModel"
+       from local_runs join runs on runs.id = local_runs.run_id
        where local_runs.machine_id = $1 and runs.state = 'running'`,
-      [machine.id],
+      [machine.id, machineModel],
     );
     if (Number(held[0]!.count) >= machines[0].limit) {
       throw new ApiError(409, "machine_limit_reached", `This Machine already runs ${machines[0].limit} Runs, its limit.`);
+    }
+    if (offered && Number(held[0]!.onModel) >= offered.limit) {
+      throw new ApiError(
+        409,
+        "machine_model_limit_reached",
+        `This Machine already runs ${offered.limit} Runs on ${offered.name}, its limit for that Machine model.`,
+      );
     }
     // A Run waiting to be claimed already counts against its Runner's limit, so this holds only once the limit was
     // lowered below its running Runs: those claimed run on, and the rest wait for them to end.
@@ -140,8 +176,17 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
     if (runner[0] && Number(runner[0].claimed) >= runner[0].limit) {
       throw new ApiError(409, "runner_limit_reached", `This Run's Runner already runs ${runner[0].limit} Runs, its limit.`);
     }
-    const modelId = modelIdOf(run, run.model.trim());
-    if (!modelId) return { unmapped: run.model, claimed: null, repositories: [] };
+    const modelId = machineModel ? null : modelIdOf(run, run.model.trim());
+    if (!machineModel && !modelId) {
+      return {
+        refused:
+          `The Workspace has no model id for the label ${run.model}, so the Machine can't tell Claude Code which model ` +
+          "to run: an Admin sets one in the Workspace's settings, then Retry.",
+        code: "no_model_id",
+        claimed: null,
+        repositories: [],
+      };
+    }
     const token = issueSecret("agent");
     const { rows: tokens } = await tx.query<{ id: string }>(
       `insert into agent_tokens (agent_id, name, access, token_hash, created_at) values ($1, $2, 'write', $3, $4) returning id`,
@@ -153,15 +198,15 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       tokens[0]!.id,
       now,
     ]);
-    // Claimed is as good as a call: the Run's clock towards lost starts now.
-    await tx.query("update runs set last_call_at = $2 where id = $1", [runId, now]);
+    // Claimed is as good as a call: the Run's clock towards lost starts now. Its Machine model is kept as it was.
+    await tx.query("update runs set last_call_at = $2, machine_model = $3 where id = $1", [runId, now, machineModel]);
     return {
-      unmapped: null,
+      refused: null,
       claimed: {
         runId,
         ticketKey: run.ticketKey,
         brief: run.brief.text,
-        modelId,
+        ...(machineModel ? { machineModel } : { modelId: modelId! }),
         token,
         mcpUrl: mcpResource(context),
         allowedTools: run.allowedTools ?? [],
@@ -194,12 +239,10 @@ export async function claimRun(context: Context, machine: MachineSelf, runId: st
       })),
     } satisfies ClaimedRun;
   }
-  // The label lost its model id after the Run started: the Run can't run, so it fails, saying why.
-  const reason =
-    `The Workspace has no model id for the label ${result.unmapped}, so the Machine can't tell Claude Code which model ` +
-    "to run: an Admin sets one in the Workspace's settings, then Retry.";
+  // The label lost its model id, or its Machine model, after the Run started: the Run can't run, so it fails, saying why.
+  const reason = result.code === "no_model_id" ? result.refused : `${result.refused} Then Retry.`;
   await runReports(context).endedWithoutFinishing(runId, reason);
-  throw new ApiError(409, "no_model_id", reason);
+  throw new ApiError(409, result.code ?? "machine_model_not_set_up", reason);
 }
 
 type Queryable = Pick<Context["db"], "query">;
