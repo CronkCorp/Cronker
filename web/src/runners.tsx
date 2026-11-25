@@ -323,6 +323,7 @@ function RunnerSettings({
         <Saved shown={limitSaved} />
         <FormError error={limit.error} />
       </form>
+      {runner.kind === "local" && <MachineModelMappings runner={runner} machines={machines} onChanged={onChanged} />}
       {runner.kind === "local" && <AllowedTools runner={runner} onChanged={onChanged} />}
       {runner.kind === "subscription" && (
         <div className="runner-triggers">
@@ -499,6 +500,88 @@ function RunnerSettings({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * A `local` Runner's mapping of model labels to Machine models: a row per label, in the mono face, with a select of
+ * the Machine models the Machines serving it offer, each with a ghost Remove, then **Add a model label** and **Save
+ * Machine models**. A Run of a mapped label runs only on its Machine model, never on Claude.
+ */
+function MachineModelMappings({ runner, machines, onChanged }: { runner: Runner; machines: Machine[]; onChanged: (runner: Runner) => void }) {
+  const savedRows = runner.machineModels ?? [];
+  const shown = JSON.stringify(savedRows);
+  const [rows, setRows] = useState(() => savedRows.map((m, key) => ({ ...m, key })));
+  const [next, setNext] = useState(savedRows.length);
+  // A save here or elsewhere, as another tab's, shows the mapping as saved.
+  useEffect(() => {
+    const saved = JSON.parse(shown) as { label: string; model: string }[];
+    setRows(saved.map((m, key) => ({ ...m, key })));
+    setNext(saved.length);
+  }, [shown]);
+  const { save, busy, error, saved } = useSave();
+  const offered = [...new Set(machines.flatMap((m) => m.models.map((model) => model.name)))].sort();
+  const edit = (key: number, change: Partial<{ label: string; model: string }>) =>
+    setRows((all) => all.map((row) => (row.key === key ? { ...row, ...change } : row)));
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void save(async () => onChanged(await api.setMachineModels(runner.id, rows.map(({ label, model }) => ({ label, model })))));
+  };
+  return (
+    <div className="runner-machine-models" role="group" aria-label="Machine models">
+      <h3>Machine models</h3>
+      <p className="muted small">
+        The model labels its Runs run on a Machine model rather than on Claude. A Run of a mapped label is claimed only by
+        a Machine offering its Machine model, and never falls back to Claude; with none set up, it can't start. Labels
+        match a Step's model ignoring case. A change applies to Runs not claimed yet.
+      </p>
+      <form onSubmit={onSubmit} className="model-ids">
+        {rows.map((row) => (
+          <div key={row.key} className="form-row model-id-row" role="group" aria-label={`Machine model of ${row.label || "a new label"}`}>
+            <Field label="Model label">
+              <input required className="mono" value={row.label} onChange={(event) => edit(row.key, { label: event.target.value })} />
+            </Field>
+            <Field label="Machine model">
+              <select required className="mono" value={row.model} onChange={(event) => edit(row.key, { model: event.target.value })}>
+                <option value="" disabled>
+                  Choose one
+                </option>
+                {[...new Set([...offered, ...(row.model ? [row.model] : [])])].map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Button variant="ghost" size="small" onClick={() => setRows((all) => all.filter((r) => r.key !== row.key))}>
+              Remove
+            </Button>
+          </div>
+        ))}
+        {offered.length === 0 && rows.length === 0 ? (
+          <p className="muted small">No Machine serving it offers a Machine model yet: add one with <code>cronk-runner model add</code>.</p>
+        ) : (
+          <div>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setRows((all) => [...all, { label: "", model: "", key: next }]);
+                setNext(next + 1);
+              }}
+            >
+              Add a model label
+            </Button>
+          </div>
+        )}
+        <FormError error={error} />
+        <Actions>
+          <Saved shown={saved} />
+          <Button type="submit" disabled={busy}>
+            Save Machine models
+          </Button>
+        </Actions>
+      </form>
+    </div>
   );
 }
 

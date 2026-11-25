@@ -36,12 +36,16 @@ export interface ClaimedRepository extends RepositoryToken {
   startBranch: string | null;
 }
 
-/** What claiming a Run answers: what the daemon needs to run `claude` for it. */
+/**
+ * What claiming a Run answers: what the daemon needs to run it. A Run on Claude has `modelId`, for `claude --model`;
+ * a Run on a Machine model has `machineModel`, its name on this Machine, instead.
+ */
 export interface ClaimedRun {
   runId: string;
   ticketKey: string;
   brief: string;
-  modelId: string;
+  modelId?: string;
+  machineModel?: string;
   token: string;
   mcpUrl: string;
   repositories: ClaimedRepository[];

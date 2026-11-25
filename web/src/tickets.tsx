@@ -788,7 +788,7 @@ function RunCard({
       </div>
       <Actor actor={{ kind: "agent", name: latest.agent.name }} />
       <p className="small">
-        {latest.step.name} <ModelLabel model={latest.model} />
+        {latest.step.name} <ModelLabel model={latest.model} machineModel={latest.machineModel} />
         {latest.cost && <> · {costText(latest.cost)}</>}
       </p>
       {latest.endReason && <p className="small">{latest.endReason}</p>}
@@ -1913,7 +1913,7 @@ function RunEntry({ run, project, arrived }: { run: Run; project: Project; arriv
       <p className="entry-line">
         <KindLabel kind="Run" /> <RunState state={run.state} />{" "}
         <span>
-          {run.step.name} · <span className="actor-agent-name">{run.agent.name}</span> · <ModelLabel model={run.model} />
+          {run.step.name} · <span className="actor-agent-name">{run.agent.name}</span> · <ModelLabel model={run.model} machineModel={run.machineModel} />
         </span>
         {run.outcome && (
           <span>
