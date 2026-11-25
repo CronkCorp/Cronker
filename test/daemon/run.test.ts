@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import {
   access,
   chmod,
+  stat,
   mkdir,
   mkdtemp,
   readdir,
@@ -17,8 +18,8 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig, type MachineModel } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
-import { readRunRecord } from "../../daemon/src/history.js";
-import { followRun } from "../../daemon/src/logs.js";
+import { pruneRunRecords, readRunRecord } from "../../daemon/src/history.js";
+import { followRun, followRunning } from "../../daemon/src/logs.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { daemonVersion } from "../../daemon/src/version.js";
 import { minutes } from "../harness/clock.js";
@@ -976,6 +977,94 @@ describe("a Run on a Machine model, through OpenCode", () => {
       last.kill("SIGKILL");
     }
   }, 30_000);
+
+  test("its record is OpenCode's events, in a file readable by its User alone, uploaded as the Run's Transcript, shown by `cronk-runner logs` and removed with the Run's history after a week", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });
+    await startOn("finish");
+    await mapToQwen();
+
+    const { ticket, run } = await delegate("Record qwen");
+
+    const finished = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "finished" && state;
+    });
+    await eventually(async () => daemon!.held().length === 0);
+    const historyDir = join(home, "runs", "history");
+    const events = join(historyDir, `${run.id}.events.jsonl`);
+    expect(await readRunRecord(historyDir, run.id)).toEqual(
+      expect.objectContaining({ program: "opencode", transcriptPath: events, endedAt: expect.any(String) }),
+    );
+    expect((await stat(events)).mode & 0o777).toBe(0o600);
+    expect((await stat(historyDir)).mode & 0o777).toBe(0o700);
+    const lines = (await readFile(events, "utf8")).split("\n").filter(Boolean);
+    expect(lines.map((line) => JSON.parse(line).type)).toEqual(["step_start", "text", "tool_use", "tool_use", "tool_use", "step_finish"]);
+
+    // Converted in Cronk, complete after the Run's end.
+    const transcript = await ok("GET", `/api/transcripts/${finished.transcriptId}`, ada);
+    expect(transcript).toEqual(expect.objectContaining({ runId: run.id, entryCount: 4 }));
+    const { entries } = await ok("GET", `/api/transcripts/${transcript.id}/entries`, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null; toolResult: string | null }) => [e.text ?? e.toolName, e.toolResult])).toEqual([
+      ["Looking at the Ticket.", null],
+      ["bash", "README.md\n"],
+      ["bash", "Error: The user has specified a rule which prevents you from using this specific tool call."],
+      ["cronk_finish", "Finished."],
+    ]);
+
+    // `cronk-runner logs`, by its Ticket's key and by its id, readable or raw.
+    const logs = async (target: string, raw = false) => {
+      const printed: string[] = [];
+      expect(await followRun(target, { historyDir, env: {}, print: (l) => printed.push(l), note: () => {}, raw, pollMs: 20 })).toBe(0);
+      return printed;
+    };
+    const readable = [
+      "Looking at the Ticket.",
+      "[bash] List the files",
+      "[bash] curl https://example.com",
+      "[error] The user has specified a rule which prevents you from using this specific tool call.",
+      `[cronk_finish] ${run.id}`,
+    ].map((line) => `${ticket.key}  ${line}`);
+    expect(await logs(ticket.key)).toEqual(readable);
+    expect(await logs(run.id)).toEqual(readable);
+    expect(await logs(run.id, true)).toEqual(lines);
+
+    // Kept for a week after the Run ended, then removed with its record.
+    await pruneRunRecords(historyDir, Date.now() + 6 * 24 * 60 * 60 * 1000);
+    await access(events);
+    await pruneRunRecords(historyDir, Date.now() + 8 * 24 * 60 * 60 * 1000);
+    expect(await readdir(historyDir)).toEqual([]);
+  });
+
+  test("its record is uploaded and followed as the Run goes", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });
+    await startOn("hang", { heartbeatMs: 60_000, killGraceMs: 200 });
+    await mapToQwen();
+    const historyDir = join(home, "runs", "history");
+    const printed: string[] = [];
+    const notes: string[] = [];
+    const abort = new AbortController();
+    const following = followRunning({
+      historyDir,
+      env: {},
+      print: (line) => printed.push(line),
+      note: (line) => notes.push(line),
+      pollMs: 20,
+      signal: abort.signal,
+    });
+
+    const { ticket, run } = await delegate("Watch qwen");
+
+    const live = await eventually(async () => (await runState(run.id)).transcriptId as string | null);
+    expect(daemon!.held()).toEqual([run.id]);
+    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(1);
+    await eventually(async () => printed.length > 0);
+    expect(printed).toEqual([`${ticket.key}  Looking at the Ticket.`]);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+    await eventually(async () => notes.includes(`${ticket.key}: Run ${run.id} ended.`));
+    abort.abort();
+    expect(await following).toBe(0);
+  });
 });
 
 describe("cronk-runner logs", () => {

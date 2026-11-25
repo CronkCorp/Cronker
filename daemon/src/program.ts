@@ -26,8 +26,16 @@ export interface RunProgram {
   ): Promise<{ args: string[]; identity: string; env: NodeJS.ProcessEnv }>;
   /** A reader of one Run's output, line by line, answering what each line said. */
   reader(): (line: string) => ProgramOutput;
-  /** Where the transcript of the session is, once the program wrote it; null until then. */
+  /**
+   * Where the transcript of the session is, once the program wrote it; null until then. Not asked of a program that
+   * `records` its output.
+   */
   transcript(env: NodeJS.ProcessEnv, sessionId: string): Promise<string | null>;
+  /**
+   * Whether its output, line by line, is the session's transcript, as it writes none of its own: the daemon then
+   * records each line to a file of the Run's, readable by its User alone, which it uploads and `cronk-runner logs` reads.
+   */
+  records?: boolean;
 }
 
 /** What a line of a program's output said: each field only when the line said it. */
