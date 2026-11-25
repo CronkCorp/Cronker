@@ -23,7 +23,7 @@ Usage:
   cronk-runner install             Run \`cronk-runner run\` as a service that starts at login (macOS and Linux)
   cronk-runner uninstall           Stop that service and remove it
   cronk-runner logs [<key|run id>] Follow the Runs running now, or one Run (also one that ended this past week)
-      --raw                        Print Claude Code's JSONL as it is, instead of readable lines
+      --raw                        Print Claude Code's JSONL or OpenCode's events as they are, instead of readable lines
       --daemon                     Follow the daemon's own log as a service instead
   cronk-runner model add <name>    Offer a Machine model: a model served on this Machine, your network or a hosted API
       --address <url>              Its OpenAI-compatible server, such as http://localhost:11434/v1

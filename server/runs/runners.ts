@@ -8,7 +8,7 @@ import { userViewer } from "../identity/viewers.js";
 import { findProject } from "../work/projects.js";
 import { ModelLabel } from "../workspaces/model-ids.js";
 import { Cost, costTotalsSql } from "./costs.js";
-import { defaultAllowedTools } from "./allowlist.js";
+import { defaultAllowedTools, notForMachineModels } from "./allowlist.js";
 import { runsInCloud } from "./runner.js";
 import { managedAgentsWebhookUrl, setUpManagedAgents } from "./managed-agents.js";
 import { recheckWaiting, startWaitingRuns, stopRunningRun, waitingTickets, type WaitingTicket } from "./runs.js";
@@ -103,7 +103,14 @@ export const RunnerRecord = Type.Object({
     description:
       "For a `local` Runner, its allowlist: the Claude Code permission rules, such as `Bash(git:*)`, for the tools its " +
       "Runs may use without asking, passed to `claude` as `--allowedTools` with `--permission-mode acceptEdits`. Cronk's " +
-      "own MCP tools (`mcp__cronk`) are always allowed. Null for other kinds.",
+      "own MCP tools (`mcp__cronk`) are always allowed. Runs on Machine models get it translated for OpenCode " +
+      "(`notForMachineModels`). Null for other kinds.",
+  }),
+  notForMachineModels: Type.Union([Type.Array(Type.String()), Type.Null()], {
+    description:
+      "For a `local` Runner, the rules of its allowlist that don't apply to Runs on Machine models, as written: only " +
+      "`Bash(x:*)`, `Bash(x)`, `WebFetch` and `WebSearch` translate for OpenCode, and the rest are left out, never " +
+      "widened. Null for other kinds.",
   }),
   machineModels: Type.Union([Type.Array(MachineModelMappingRecord), Type.Null()], {
     description:
@@ -122,7 +129,10 @@ export const RunnerRecord = Type.Object({
 export type RunnerRecord = Static<typeof RunnerRecord>;
 
 type TriggerRow = Omit<Trigger, "createdAt" | "routineUrl"> & { createdAt: string };
-type Row = Omit<RunnerRecord, "createdAt" | "pausedUntil" | "offlineSince" | "triggers" | "managedAgents" | "cloud"> & {
+type Row = Omit<
+  RunnerRecord,
+  "createdAt" | "pausedUntil" | "offlineSince" | "triggers" | "managedAgents" | "cloud" | "notForMachineModels"
+> & {
   managedAgents: Omit<NonNullable<RunnerRecord["managedAgents"]>, "webhookUrl"> | null;
   createdAt: Date;
   pausedUntil: Date | null;
@@ -152,6 +162,7 @@ const columns = (now: string) => `id, name, kind, run_limit as limit,
 const present = (context: Context, row: Row): RunnerRecord => ({
   ...row,
   cloud: runsInCloud(context.runners, row.kind),
+  notForMachineModels: row.allowedTools && notForMachineModels(row.allowedTools),
   managedAgents: row.managedAgents && { ...row.managedAgents, webhookUrl: managedAgentsWebhookUrl(context, row.id) },
   pausedUntil: row.pausedUntil?.toISOString() ?? null,
   offlineSince: row.offlineSince?.toISOString() ?? null,

@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import {
   access,
   chmod,
+  stat,
   mkdir,
   mkdtemp,
   readdir,
@@ -17,8 +18,8 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { writeConfig, type MachineModel } from "../../daemon/src/config.js";
 import { defaultAllowedTools } from "../../server/runs/allowlist.js";
-import { readRunRecord } from "../../daemon/src/history.js";
-import { followRun } from "../../daemon/src/logs.js";
+import { pruneRunRecords, readRunRecord } from "../../daemon/src/history.js";
+import { followRun, followRunning } from "../../daemon/src/logs.js";
 import { runDaemon, type RunningDaemon } from "../../daemon/src/run.js";
 import { daemonVersion } from "../../daemon/src/version.js";
 import { minutes } from "../harness/clock.js";
@@ -829,7 +830,7 @@ describe("a Run on a Machine model, through OpenCode", () => {
     return { ...setup, useMode, startOn, opencodeRuns, mapToQwen, env };
   }
 
-  test("runs opencode with the Brief, the Machine model as its only server and the fixed permissions, in a home and environment of its own; finish finishes the Run, its session reported and no cost", async () => {
+  test("runs opencode with the Brief, the Machine model as its only server and the Runner's allowlist translated, in a home and environment of its own; finish finishes the Run, its session reported and no cost", async () => {
     const { ada, startOn, mapToQwen, delegate, runState, opencodeRuns, runs, scratch, goodTokens } =
       await onMachineModel();
     await startOn("finish");
@@ -903,36 +904,52 @@ describe("a Run on a Machine model, through OpenCode", () => {
         { action: "grep", resource: "*", effect: "allow" },
         { action: "edit", resource: "*", effect: "allow" },
         { action: "cronk_*", resource: "*", effect: "allow" },
-        ...[
-          "git *",
-          "gh pr view *",
-          "gh pr list *",
-          "gh pr diff *",
-          "gh pr checks *",
-          "gh issue view *",
-          "gh issue list *",
-          "gh run view *",
-          "gh run list *",
-          "gh repo view *",
-        ].map((resource) => ({ action: "shell", resource, effect: "allow" })),
+        // The Runner's allowlist, the default, translated whole.
+        ...defaultAllowedTools
+          .filter((rule) => rule !== "mcp__cronk")
+          .map((rule) => ({ action: "shell", resource: `${/^Bash\((.*):\*\)$/.exec(rule)![1]} *`, effect: "allow" })),
         { action: "external_directory", resource: "*", effect: "deny" },
         { action: "read", resource: "/*", effect: "deny" },
         { action: "edit", resource: "/*", effect: "deny" },
         { action: "skill", resource: "*", effect: "deny" },
         { action: "opencode_worktree_remove", resource: "*", effect: "deny" },
+        // Triage is read-only: edits are denied last, whatever allows them.
+        { action: "edit", resource: "*", effect: "deny" },
+        { action: "write", resource: "*", effect: "deny" },
+        { action: "patch", resource: "*", effect: "deny" },
       ],
-      policies: expect.arrayContaining([
+      policies: [
         { action: "provider.use", resource: "*", effect: "deny" },
         { action: "provider.use", resource: "machine", effect: "allow" },
         { action: "mcp.use", resource: "*", effect: "deny" },
         { action: "mcp.use", resource: "cronk", effect: "allow" },
         { action: "skill.use", resource: "*", effect: "deny" },
+        { action: "plugin.use", resource: "*", effect: "deny" },
+        { action: "websearch.use", resource: "*", effect: "deny" },
         { action: "tool.use", resource: "*", effect: "deny" },
-        { action: "tool.use", resource: "shell:git *", effect: "allow" },
-        { action: "tool.use", resource: "skill:*", effect: "deny" },
-        { action: "tool.use", resource: "opencode_worktree_remove:*", effect: "deny" },
-        { action: "tool.use", resource: "external_directory:*", effect: "deny" },
-      ]),
+        ...["read:*", "glob:*", "grep:*", "edit:*", "cronk_*:*"].map((resource) => ({
+          action: "tool.use",
+          resource,
+          effect: "allow",
+        })),
+        ...defaultAllowedTools
+          .filter((rule) => rule !== "mcp__cronk")
+          .map((rule) => ({
+            action: "tool.use",
+            resource: `shell:${/^Bash\((.*):\*\)$/.exec(rule)![1]} *`,
+            effect: "allow",
+          })),
+        ...[
+          "external_directory:*",
+          "read:/*",
+          "edit:/*",
+          "skill:*",
+          "opencode_worktree_remove:*",
+          "edit:*",
+          "write:*",
+          "patch:*",
+        ].map((resource) => ({ action: "tool.use", resource, effect: "deny" })),
+      ],
     });
 
     // A home of the Run's own in its scratch directory, outside the worktree, and only the environment it needs.
@@ -953,6 +970,109 @@ describe("a Run on a Machine model, through OpenCode", () => {
     expect(ran.repository.gh).toBe(`gh pr view with ${ran.repository.password}`);
     expect(ran.repository.gitName).toBe("Ada Lovelace");
     await eventually(async () => (await readdir(scratch)).length === 0);
+  });
+
+  test("the Runner's allowlist governs opencode: shell, exact and web rules translate, the rest are left out, and the Repository's own settings add nothing", async () => {
+    const { ada, project, runner, startOn, mapToQwen, delegate, runState, opencodeRuns } = await onMachineModel();
+    // The Repository commits its own OpenCode and Claude Code settings, allowing everything.
+    const seed = join(home, "seed");
+    await git(seed, "checkout", "--quiet", "main");
+    await mkdir(join(seed, ".claude"), { recursive: true });
+    await writeFile(join(seed, "opencode.json"), JSON.stringify({ permissions: [{ action: "*", resource: "*", effect: "allow" }] }));
+    await writeFile(join(seed, ".claude", "settings.json"), JSON.stringify({ permissions: { allow: ["Bash", "WebFetch"] } }));
+    await git(seed, "add", "opencode.json", ".claude/settings.json");
+    await git(seed, "-c", "user.name=Ada", "-c", "user.email=ada@example.com", "commit", "--quiet", "-m", "settings");
+    await git(seed, "push", "--quiet", join(home, "cronker.git"), "main");
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${triage.id}/step`, ada, { ...triage.step, readOnly: false });
+    await ok("PATCH", `/api/runners/${runner.id}`, ada, {
+      allowedTools: [
+        "Bash(git:*)",
+        "Bash(gh pr view:*)",
+        "Bash(npm test)",
+        "WebFetch",
+        "WebSearch",
+        "mcp__cronk",
+        "Edit",
+        "Read(./secrets/**)",
+        "WebFetch(domain:example.com)",
+        "mcp__github",
+        "Bash",
+        "Bash(*)",
+        "Bash(rm -rf *:*)",
+      ],
+    });
+    await startOn("finish");
+    await mapToQwen();
+
+    const { run } = await delegate("On qwen");
+    await eventually(async () => (await runState(run.id)).state === "finished");
+
+    const [ran] = await opencodeRuns();
+    expect(ran.repository.configFiles).toEqual(["opencode.json", ".claude/settings.json"]);
+    expect(ran.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
+    const allow = (action: string, resource = "*") => ({ action, resource, effect: "allow" });
+    const deny = (action: string, resource = "*") => ({ action, resource, effect: "deny" });
+    expect(ran.config.permissions).toEqual([
+      deny("*"),
+      allow("read"),
+      allow("glob"),
+      allow("grep"),
+      allow("edit"),
+      allow("cronk_*"),
+      allow("shell", "git *"),
+      allow("shell", "gh pr view *"),
+      allow("shell", "npm test"),
+      allow("webfetch"),
+      allow("websearch"),
+      deny("external_directory"),
+      deny("read", "/*"),
+      deny("edit", "/*"),
+      deny("skill"),
+      deny("opencode_worktree_remove"),
+    ]);
+    // Web search is allowed by policy too, and each allowed tool lifted; nothing else is.
+    expect(ran.config.policies.filter((rule: { effect: string }) => rule.effect === "allow")).toEqual([
+      allow("provider.use", "machine"),
+      allow("mcp.use", "cronk"),
+      ...["read:*", "glob:*", "grep:*", "edit:*", "cronk_*:*", "shell:git *", "shell:gh pr view *", "shell:npm test"].map(
+        (resource) => allow("tool.use", resource),
+      ),
+      allow("tool.use", "webfetch:*"),
+      allow("tool.use", "websearch:*"),
+    ]);
+    expect(ran.config.policies).not.toContainEqual(deny("websearch.use"));
+    expect(ran.config.policies.at(-1)).toEqual(deny("tool.use", "opencode_worktree_remove:*"));
+  });
+
+  test("an opencode that ends on denied tools fails the Run naming them, and on a read-only Run its refused edits apart", async () => {
+    const { ada, project, startOn, mapToQwen, delegate, runState } = await onMachineModel();
+    await startOn("denied");
+    await mapToQwen();
+
+    // Triage is read-only.
+    const { run: readOnly } = await delegate("Look only");
+    const lookedOnly = await eventually(async () => {
+      const state = await runState(readOnly.id);
+      return state.state === "failed" && state;
+    });
+    expect(lookedOnly.endReason).toBe(
+      "The session ended without calling `finish`: opencode exited with code 0. Its Step is read-only, so its file " +
+        "edits were refused: edit, write, patch. It needed tools outside the Runner's allowlist: Bash(npm publish), " +
+        "Bash(rm -rf build), WebFetch; widen the allowlist and Retry.",
+    );
+
+    const triage = project.statuses.find((s: { name: string }) => s.name === "Triage");
+    await ok("PUT", `/api/projects/${project.id}/statuses/${triage.id}/step`, ada, { ...triage.step, readOnly: false });
+    const { run: editing } = await delegate("Fix it");
+    const failed = await eventually(async () => {
+      const state = await runState(editing.id);
+      return state.state === "failed" && state;
+    });
+    expect(failed.endReason).toBe(
+      "The session ended without calling `finish`: opencode exited with code 0. It needed tools outside the Runner's " +
+        "allowlist: Bash(npm publish), Bash(rm -rf build), edit, write, patch, WebFetch; widen the allowlist and Retry.",
+    );
   });
 
   test("an opencode that exits without finish fails the Run with the exit reason", async () => {
@@ -1039,6 +1159,94 @@ describe("a Run on a Machine model, through OpenCode", () => {
       last.kill("SIGKILL");
     }
   }, 30_000);
+
+  test("its record is OpenCode's events, in a file readable by its User alone, uploaded as the Run's Transcript, shown by `cronk-runner logs` and removed with the Run's history after a week", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });
+    await startOn("finish");
+    await mapToQwen();
+
+    const { ticket, run } = await delegate("Record qwen");
+
+    const finished = await eventually(async () => {
+      const state = await runState(run.id);
+      return state.state === "finished" && state;
+    });
+    await eventually(async () => daemon!.held().length === 0);
+    const historyDir = join(home, "runs", "history");
+    const events = join(historyDir, `${run.id}.events.jsonl`);
+    expect(await readRunRecord(historyDir, run.id)).toEqual(
+      expect.objectContaining({ program: "opencode", transcriptPath: events, endedAt: expect.any(String) }),
+    );
+    expect((await stat(events)).mode & 0o777).toBe(0o600);
+    expect((await stat(historyDir)).mode & 0o777).toBe(0o700);
+    const lines = (await readFile(events, "utf8")).split("\n").filter(Boolean);
+    expect(lines.map((line) => JSON.parse(line).type)).toEqual(["step_start", "text", "tool_use", "tool_use", "tool_use", "step_finish"]);
+
+    // Converted in Cronk, complete after the Run's end.
+    const transcript = await ok("GET", `/api/transcripts/${finished.transcriptId}`, ada);
+    expect(transcript).toEqual(expect.objectContaining({ runId: run.id, entryCount: 4 }));
+    const { entries } = await ok("GET", `/api/transcripts/${transcript.id}/entries`, ada);
+    expect(entries.map((e: { text: string | null; toolName: string | null; toolResult: string | null }) => [e.text ?? e.toolName, e.toolResult])).toEqual([
+      ["Looking at the Ticket.", null],
+      ["bash", "README.md\n"],
+      ["bash", "Error: The user has specified a rule which prevents you from using this specific tool call."],
+      ["cronk_finish", "Finished."],
+    ]);
+
+    // `cronk-runner logs`, by its Ticket's key and by its id, readable or raw.
+    const logs = async (target: string, raw = false) => {
+      const printed: string[] = [];
+      expect(await followRun(target, { historyDir, env: {}, print: (l) => printed.push(l), note: () => {}, raw, pollMs: 20 })).toBe(0);
+      return printed;
+    };
+    const readable = [
+      "Looking at the Ticket.",
+      "[bash] List the files",
+      "[bash] curl https://example.com",
+      "[error] The user has specified a rule which prevents you from using this specific tool call.",
+      `[cronk_finish] ${run.id}`,
+    ].map((line) => `${ticket.key}  ${line}`);
+    expect(await logs(ticket.key)).toEqual(readable);
+    expect(await logs(run.id)).toEqual(readable);
+    expect(await logs(run.id, true)).toEqual(lines);
+
+    // Kept for a week after the Run ended, then removed with its record.
+    await pruneRunRecords(historyDir, Date.now() + 6 * 24 * 60 * 60 * 1000);
+    await access(events);
+    await pruneRunRecords(historyDir, Date.now() + 8 * 24 * 60 * 60 * 1000);
+    expect(await readdir(historyDir)).toEqual([]);
+  });
+
+  test("its record is uploaded and followed as the Run goes", async () => {
+    const { ada, startOn, mapToQwen, delegate, runState } = await onMachineModel({ repository: false });
+    await startOn("hang", { heartbeatMs: 60_000, killGraceMs: 200 });
+    await mapToQwen();
+    const historyDir = join(home, "runs", "history");
+    const printed: string[] = [];
+    const notes: string[] = [];
+    const abort = new AbortController();
+    const following = followRunning({
+      historyDir,
+      env: {},
+      print: (line) => printed.push(line),
+      note: (line) => notes.push(line),
+      pollMs: 20,
+      signal: abort.signal,
+    });
+
+    const { ticket, run } = await delegate("Watch qwen");
+
+    const live = await eventually(async () => (await runState(run.id)).transcriptId as string | null);
+    expect(daemon!.held()).toEqual([run.id]);
+    expect((await ok("GET", `/api/transcripts/${live}`, ada)).entryCount).toBe(1);
+    await eventually(async () => printed.length > 0);
+    expect(printed).toEqual([`${ticket.key}  Looking at the Ticket.`]);
+
+    await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: null });
+    await eventually(async () => notes.includes(`${ticket.key}: Run ${run.id} ended.`));
+    abort.abort();
+    expect(await following).toBe(0);
+  });
 });
 
 describe("cronk-runner logs", () => {

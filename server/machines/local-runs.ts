@@ -11,6 +11,7 @@ import { revokeLocalRunToken } from "../runs/local.js";
 import { readOnlyRun, reviveLostRun, runReports } from "../runs/runs.js";
 import { sessionIdOf } from "../runs/session-ids.js";
 import { convertClaudeCode } from "../transcripts/claude-code.js";
+import { convertOpenCode } from "../transcripts/opencode.js";
 import { uploadTranscript, type Transcript } from "../transcripts/transcripts.js";
 import { claimableRunsFor, machinesWithModel, mappedModelSql, notSetUpReason } from "../runs/machine-models.js";
 import { modelIdOf, type ModelId } from "../workspaces/workspaces.js";
@@ -482,8 +483,8 @@ export async function reportEnd(context: Context, machine: MachineSelf, runId: s
 }
 
 /**
- * Stores the Claude Code transcript of a Run the Machine holds, its JSONL file as it is, as the Transcript of the
- * Run's session, by the Run's Agent, replacing what Cronk held, as the Transcript hook's upload does. It works after
+ * Stores the transcript of a Run the Machine holds, its JSONL file as it is, as the Transcript of the Run's session:
+ * Claude Code's for a Run on Claude, and OpenCode's events, as the daemon recorded them, for a Run on a Machine model, by the Run's Agent, replacing what Cronk held, as the Transcript hook's upload does. It works after
  * the Run ended, when the Run's own token is revoked, so the daemon's last upload is complete. A Run with no session
  * reported yet is refused with `no_session`.
  */
@@ -494,12 +495,20 @@ export async function uploadRunTranscript(
   jsonl: string,
 ): Promise<{ transcript: Transcript; created: boolean }> {
   await heldRun(context, machine, runId);
-  const { rows } = await context.db.query<{ agentId: string; workspaceId: string; sessionId: string | null }>(
-    `select agent_id as "agentId", workspace_id as "workspaceId", session_id as "sessionId" from runs where id = $1`,
+  const { rows } = await context.db.query<{
+    agentId: string;
+    workspaceId: string;
+    sessionId: string | null;
+    machineModel: string | null;
+  }>(
+    `select agent_id as "agentId", workspace_id as "workspaceId", session_id as "sessionId",
+       machine_model as "machineModel"
+     from runs where id = $1`,
     [runId],
   );
   const run = rows[0];
   if (!run) throw noSuchRun();
-  if (!run.sessionId) throw new ApiError(409, "no_session", "This Run has no Claude Code session yet: report its session first.");
-  return uploadTranscript(context, { id: run.agentId, workspace: { id: run.workspaceId } }, run.sessionId, convertClaudeCode(jsonl));
+  if (!run.sessionId) throw new ApiError(409, "no_session", "This Run has no session yet: report its session first.");
+  const entries = run.machineModel === null ? convertClaudeCode(jsonl) : convertOpenCode(jsonl);
+  return uploadTranscript(context, { id: run.agentId, workspace: { id: run.workspaceId } }, run.sessionId, entries);
 }
