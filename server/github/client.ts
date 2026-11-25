@@ -9,8 +9,28 @@ import type { AppCredentials } from "./app.js";
  * `github_unavailable`.
  */
 
-const unavailable = (detail: string) =>
-  new ApiError(502, "github_unavailable", `GitHub couldn't be reached or refused Cronk's request: ${detail}`);
+/**
+ * GitHub couldn't be reached or refused Cronk's request. An outage is GitHub not answering at all, answering with a
+ * server error (5xx) or with its rate limit (`limit`), which `GitHubStatus` (`status.ts`) waits out; any other refusal,
+ * such as a 401 or 404, is GitHub's answer and no outage.
+ */
+export class GitHubUnavailable extends ApiError {
+  constructor(
+    detail: string,
+    readonly outage: boolean,
+    readonly limit: RateLimited | null = null,
+  ) {
+    super(502, "github_unavailable", `GitHub couldn't be reached or refused Cronk's request: ${detail}`);
+  }
+}
+
+const unavailable = (detail: string, outage = false, limit: RateLimited | null = null) => new GitHubUnavailable(detail, outage, limit);
+
+/** Throws GitHub's rate limit as an outage, before an answer that is otherwise a refusal (a 403) is read as one. */
+function throwIfLimited(response: Response, what: string): void {
+  const limit = rateLimitOf(response);
+  if (limit) throw unavailable(`${what} answered ${response.status}, GitHub's rate limit`, true, limit);
+}
 
 /** The path under a base address that may itself have a path, such as GitHub Enterprise Server's `/api/v3`. */
 export function under(base: URL, path: string): URL {
@@ -31,12 +51,15 @@ async function call(url: URL, init: RequestInit = {}): Promise<Response> {
       signal: AbortSignal.timeout(15_000),
     });
   } catch (error) {
-    throw unavailable(error instanceof Error ? error.message : String(error));
+    throw unavailable(error instanceof Error ? error.message : String(error), true);
   }
 }
 
 async function jsonOf<T>(response: Response, what: string): Promise<T> {
-  if (!response.ok) throw unavailable(`${what} answered ${response.status}`);
+  if (!response.ok) {
+    throwIfLimited(response, what);
+    throw unavailable(`${what} answered ${response.status}`, response.status >= 500);
+  }
   try {
     return (await response.json()) as T;
   } catch {
@@ -207,6 +230,7 @@ export interface RepositoryOnGitHub {
 /** A repository by GitHub's id, as an installation covering it sees it now; nothing if it no longer covers it. */
 export async function repositoryById({ github }: Config, token: string, id: number): Promise<RepositoryOnGitHub | undefined> {
   const response = await call(under(github.apiUrl, `/repositories/${id}`), { headers: { authorization: `Bearer ${token}` } });
+  throwIfLimited(response, "/repositories");
   if (response.status === 404 || response.status === 403) return undefined;
   return jsonOf<RepositoryOnGitHub>(response, "/repositories");
 }
@@ -239,6 +263,7 @@ export async function pullRequestOnGitHub(
   number: number,
 ): Promise<PullRequestOnGitHub | undefined> {
   const response = await call(under(github.apiUrl, pullPath(fullName, number)), { headers: { authorization: `Bearer ${token}` } });
+  throwIfLimited(response, "The Pull Request");
   if (response.status === 404 || response.status === 403) return undefined;
   return jsonOf<PullRequestOnGitHub>(response, "The Pull Request");
 }
@@ -287,6 +312,7 @@ export async function updateBranchOnGitHub(
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify({ expected_head_sha: expectedHeadSha }),
   });
+  throwIfLimited(response, "The branch update");
   if (response.status === 403 || response.status === 405 || response.status === 409 || response.status === 422) {
     const body = (await response.json().catch(() => ({}))) as { message?: unknown };
     return { updated: false, status: response.status, message: typeof body.message === "string" ? body.message : "" };

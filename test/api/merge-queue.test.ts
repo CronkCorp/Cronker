@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { seconds } from "../harness/clock.js";
 import { addMember, createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
@@ -1311,5 +1312,36 @@ describe("a head conflicting with its base branch", () => {
 
     expect(refused.status).toBe(409);
     expect(refused.json).toMatchObject({ error: { code: "nothing_to_resolve" } });
+  });
+});
+
+describe("while GitHub is unavailable", () => {
+  test("the queue asks GitHub nothing until the wait ends, its heads waiting as they were, then merges them", async () => {
+    const { inReview, merge, read, status, website } = await queueSetting();
+    const onCronker = await inReview();
+    const onWebsite = await inReview({ repository: website });
+    await merge(onCronker.ticket.id);
+    await merge(onWebsite.ticket.id);
+    cronk.github.unavailable = true;
+
+    await cronk.checkQueue();
+    // The first head met the outage; the other queue's head waits rather than asking GitHub too.
+    const calls = cronk.github.apiCalls.length;
+    for (let i = 0; i < 2; i++) {
+      cronk.clock.advance(seconds(10));
+      await cronk.checkQueue();
+    }
+
+    expect(cronk.github.apiCalls).toHaveLength(calls);
+    for (const { ticket } of [onCronker, onWebsite]) {
+      expect(await read(ticket.id)).toMatchObject({ statusId: status("Merge"), queue: { position: 1, state: "queued" } });
+    }
+
+    cronk.github.unavailable = false;
+    cronk.clock.advance(seconds(10));
+    await cronk.checkQueue();
+
+    expect(cronk.github.merges.map((m) => `${m.repository}#${m.number}`).sort()).toEqual(["cronkcorp/cronker#101", "cronkcorp/website#102"]);
+    expect(await read(onCronker.ticket.id)).toMatchObject({ statusId: status("Done"), verification: "verified" });
   });
 });

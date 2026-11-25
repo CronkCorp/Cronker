@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { seconds } from "../harness/clock.js";
 import { createGitHubApp, setUp, signIn } from "../harness/flows.js";
 import { startCronk, type StartedCronk } from "../harness/start-cronk.js";
 
@@ -573,5 +574,46 @@ describe("an Agent's merge making another Pull Request conflicting", () => {
     // It stays in In Review, only marked.
     expect(await ok("GET", `/api/tickets/${other.id}`, ada)).toMatchObject({ statusId: status("In Review"), conflicts: ["main"] });
     expect((await ok("GET", `/api/tickets/${other.id}/pull-requests`, ada))[0].conflict).toMatchObject({ branch: "main", sha: "m1" });
+  });
+});
+
+describe("while GitHub is unavailable", () => {
+  test("a merge meeting an outage marks GitHub unavailable; the next is refused without asking it, until the wait ends", async () => {
+    const { merge, run, ada } = await mergeRunning();
+    cronk.github.unavailable = true;
+
+    const failed = await merge();
+    expect(failed.status).toBe(502);
+    expect(failed.json.error.code).toBe("github_unavailable");
+    const calls = cronk.github.apiCalls.length;
+
+    const waiting = await merge();
+    expect(waiting.status).toBe(503);
+    expect(waiting.json.error).toMatchObject({
+      code: "github_unavailable",
+      rule: "Cronk doesn't ask GitHub again while it waits out an outage or GitHub's rate limit.",
+      retryAt: new Date(cronk.clock.now().getTime() + seconds(30)).toISOString(),
+    });
+    expect(cronk.github.apiCalls).toHaveLength(calls);
+    expect(await ok("GET", `/api/runs/${run.id}`, ada)).toMatchObject({ state: "running" });
+
+    cronk.github.unavailable = false;
+    cronk.clock.advance(seconds(30));
+    const merged = await merge();
+
+    expect(merged.status).toBe(200);
+    expect(merged.json).toMatchObject({ state: "finished", outcome: "merged" });
+  });
+
+  test("GitHub refusing a merge is no outage: the next merge asks it at once", async () => {
+    const { merge, cronker } = await mergeRunning();
+    cronker.mergeMethods = { merge: false, squash: false, rebase: false };
+    const refusedByGitHub = await merge();
+    expect(refusedByGitHub.status).toBe(409);
+    const calls = cronk.github.apiCalls.length;
+    cronker.mergeMethods = { merge: true, squash: true, rebase: true };
+
+    expect((await merge()).status).toBe(200);
+    expect(cronk.github.apiCalls.length).toBeGreaterThan(calls);
   });
 });

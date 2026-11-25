@@ -290,6 +290,8 @@ export interface StandInGitHub {
   refuseNextRedelivery(): void;
   /** While true, GitHub's API answers every call with 503, as during an outage. */
   unavailable: boolean;
+  /** Rate-limits every call to GitHub's API until `until` by the clock, as `rateLimitIssues` does the issues list. */
+  rateLimit(until: Date, options?: { status?: 403 | 429; header?: "reset" | "retry-after" }): void;
   /** Every call made to GitHub's API, oldest first, as `METHOD /path` without the query, to count what Cronk asks. */
   apiCalls: string[];
   stop(): Promise<void>;
@@ -389,6 +391,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
   type Limit = { until: Date; status: 403 | 429; header: "reset" | "retry-after"; only?: "comments" };
   let issuesLimit: Limit | undefined;
   let linksLimit: Limit | undefined;
+  let apiLimit: Limit | undefined;
   const rateLimited = (response: ServerResponse, limit: Limit) => {
     const resetSeconds = Math.ceil(limit.until.getTime() / 1000);
     const headers: Record<string, string> =
@@ -502,6 +505,9 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
       refuseRedelivery = true;
     },
     unavailable: false,
+    rateLimit(until, { status = 403, header = "reset" } = {}) {
+      apiLimit = { until, status, header };
+    },
     apiCalls: [],
     stop: async () => {},
   };
@@ -568,6 +574,7 @@ export async function startStandInGitHub(clock: Clock): Promise<StandInGitHub> {
     const bearer = /^(?:Bearer|token) (.+)$/.exec(request.headers.authorization ?? "")?.[1];
     if (url.pathname.startsWith("/api/v3/")) github.apiCalls.push(`${request.method} ${path}`);
     if (github.unavailable && url.pathname.startsWith("/api/v3/")) return json(response, 503, { message: "Service Unavailable" });
+    if (apiLimit && clock.now() < apiLimit.until && url.pathname.startsWith("/api/v3/")) return rateLimited(response, apiLimit);
 
     // Web: the manifest form a browser posts to create a GitHub App.
     if (request.method === "POST" && /^\/(?:settings|organizations\/[^/]+\/settings)\/apps\/new$/.test(path)) {

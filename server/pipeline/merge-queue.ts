@@ -334,9 +334,12 @@ const waiting: QueueState[] = ["queued", "waiting-for-checks"];
  * first, unless Cronk is already asking GitHub about it. A head that fails or that GitHub refuses leaves the queue, as
  * the module says; one GitHub says is behind its base branch has its branch updated, then waits for the new commit's
  * checks; one that isn't ready yet waits for a later pass. Heads of Projects archived or with Pull Request automation
- * off since wait too. Given Pull Requests, it acts only on the heads among them, as a delivery about them asks.
+ * off since wait too. Given Pull Requests, it acts only on the heads among them, as a delivery about them asks. While
+ * GitHub is unavailable (`github/status.ts`) every head waits, and the pass asks GitHub nothing; entries
+ * rejoining, which asks GitHub nothing, still do.
  */
 export async function queuePass(context: Context, only?: { pullRequestIds: number[] }): Promise<void> {
+  const githubUnavailable = () => context.githubStatus.waitingUntil(context.clock.now()) !== null;
   const wanted = (entry: Head & { active: boolean }) => entry.active && (!only || only.pullRequestIds.includes(Number(entry.pullRequestId)));
   // Entries that stepped aside and wait for their resolving commits' checks rejoin first, at the front of their queues.
   const { rows: aside } = await context.db.query<Head & { active: boolean }>(
@@ -355,6 +358,7 @@ export async function queuePass(context: Context, only?: { pullRequestIds: numbe
      order by pull_requests.repository_id, coalesce(pull_requests.base_branch, ''), merge_queue.state = 'queued', merge_queue.seq`,
   );
   for (const head of heads) {
+    if (githubUnavailable()) return;
     if (!waiting.includes(head.state) || !wanted(head)) continue;
     await mergeHead(context, head);
   }

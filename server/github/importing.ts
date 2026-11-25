@@ -6,7 +6,6 @@ import { userViewer, type Viewer } from "../identity/viewers.js";
 import { recordChanges } from "../work/changes.js";
 import { indexMentions } from "../work/mentions.js";
 import { findProject, projectNotFound, statusesOf } from "../work/projects.js";
-import { retryAt } from "../runs/subscription.js";
 import { blocksTransitively, recordRelationChanges } from "../work/relations.js";
 import { lockTickets, writeTicket, type LockedTicket } from "../work/ticket-writes.js";
 import { distinctLabels, findTicketRef } from "../work/tickets.js";
@@ -25,6 +24,7 @@ import {
   type RateLimited,
 } from "./client.js";
 import { installationCovering, tokenFor } from "./installations.js";
+import { limitLifts } from "./status.js";
 import { referencedNumbers, rewriteMarkdown, rewritePlain } from "./issue-references.js";
 
 /**
@@ -305,19 +305,6 @@ async function importNextPage(context: Context, importId: string): Promise<void>
       [job.id, imported, skipped, page.more, ends, clock.now(), [...unmatched]],
     );
   });
-}
-
-/** The longest wait for GitHub's rate limit to lift, as for `Retry-After`: a day. */
-const longestPauseMs = 24 * 60 * 60 * 1000;
-
-/**
- * When GitHub's rate limit lifts: its `Retry-After` when it gives one, else its `X-RateLimit-Reset` (seconds since the
- * epoch), else a minute from now; never in the past, and a day at most.
- */
-function limitLifts(now: Date, limit: { retryAfter: string | null; reset: string | null }): Date {
-  const reset = limit.reset?.trim() ?? "";
-  if (limit.retryAfter !== null || !/^\d+$/.test(reset)) return retryAt(now, limit.retryAfter);
-  return new Date(Math.min(Math.max(Number(reset) * 1000, now.getTime()), now.getTime() + longestPauseMs));
 }
 
 /** Where an issue goes by its state: open, closed as completed, or closed as not planned. */

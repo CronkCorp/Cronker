@@ -2,6 +2,7 @@ import type { AttachmentStorage } from "./attachments/storage.js";
 import type { Clock } from "./clock.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
+import type { GitHubStatus } from "./github/status.js";
 import type { InstallationListings, InstallationTokens } from "./github/installations.js";
 import type { Jobs } from "./jobs.js";
 import type { LookupFunction } from "node:net";
@@ -21,6 +22,8 @@ export interface Context {
   installationTokens: InstallationTokens;
   /** What GitHub last said the App's installations cover, kept for a few minutes. */
   installationListings: InstallationListings;
+  /** Whether GitHub's API is available, or Cronk is waiting out an outage or its rate limit. */
+  githubStatus: GitHubStatus;
   /** Where Attachments' bytes are kept. */
   attachments: AttachmentStorage;
   /** Work done after a change commits, without the response waiting for it. */

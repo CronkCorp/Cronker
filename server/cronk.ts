@@ -12,6 +12,7 @@ import { createPool, droppedConnectionMessage, migrate, reportDroppedConnection 
 import { backfillMentions } from "./work/mentions.js";
 import { issueSetupCode } from "./identity/setup.js";
 import { InstallationListings, InstallationTokens } from "./github/installations.js";
+import { GitHubStatus } from "./github/status.js";
 import { replayFailedDeliveries } from "./github/webhooks.js";
 import { Jobs } from "./jobs.js";
 import { runImports } from "./github/importing.js";
@@ -93,6 +94,7 @@ export async function createCronk({
       runners: {},
       installationTokens: new InstallationTokens(clock),
       installationListings: new InstallationListings(clock),
+      githubStatus: new GitHubStatus(),
       attachments: directoryStorage(config.attachments.directory),
       jobs: new Jobs(),
       resolver,
@@ -105,6 +107,10 @@ export async function createCronk({
     const app = await buildApp(context, { logStream });
     log = app.log;
     context.jobs.onError = (error, key) => app.log.error({ err: error, job: key }, "A job after a change failed.");
+    context.githubStatus.onChange = (change) =>
+      change.kind === "unavailable"
+        ? app.log.warn({ until: change.until, reason: change.reason }, "GitHub is unavailable; Cronk waits before asking it again.")
+        : app.log.info("GitHub is available again.");
     endConnectionsOnClose(app);
     await issueSetupCode(db, app.log);
     const notifier = new InboxNotifier(context, (error) => app.log.error(error));
