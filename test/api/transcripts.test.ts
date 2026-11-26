@@ -528,6 +528,8 @@ describe("a Run's Transcript", () => {
     await cronk.applyAhead("0093_project_default_agent.sql");
     // Reading a Ticket says whether it is archived.
     await cronk.applyAhead("0094_ticket_archiving.sql");
+    // Creating a Project writes its Steps' Runner.
+    await cronk.applyAhead("0095_step_runners.sql");
     const { workspace, ada, ticket, agent, status } = await adaWithAgent();
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { delegateId: agent.id });
     await ok("PATCH", `/api/tickets/${ticket.id}`, ada, { statusId: status("Triage") });

@@ -94,6 +94,8 @@ describe("the upgrade", () => {
     await cronk.applyAhead("0084_cost_estimates.sql");
     // Creating a Project writes its Steps' read-only setting.
     await cronk.applyAhead("0091_read_only_steps.sql");
+    // And their Runner.
+    await cronk.applyAhead("0095_step_runners.sql");
     const { workspace } = await setUp(cronk);
     const ada = { cookie: await signIn(cronk) };
     const project = await ok("POST", `/api/workspaces/${workspace.id}/projects`, ada, { name: "Cronker", key: "CRONK" });
