@@ -8,7 +8,8 @@ import type { AddressInfo } from "node:net";
  *
  * A chat request offering tools gets a tool call, unless told to refuse them; any other answers with the marker
  * (`MARKER-<hex>`) it kept. It counts each word of a prompt as a token and, like Ollama, silently drops the start of a
- * prompt longer than its loaded context, or refuses the length outright when told to.
+ * prompt longer than its loaded context, or refuses the length outright when told to. Told to think, it reasons first,
+ * as Qwen3.5 or gpt-oss do, counting the reasoning against the request's `max_tokens` and cut off once it runs out.
  */
 export interface StandInModelServer {
   /** Its address as a Machine model is set up with, such as `http://127.0.0.1:1234/v1`. */
@@ -27,6 +28,14 @@ export interface StandInModelOptions {
   loadedContext?: number;
   /** Refuse a prompt longer than its loaded context with a 400, echoing the request's authorization, as some do. */
   refuseLength?: boolean;
+  /** Answer as a thinking model: so many tokens (words) of reasoning before the answer, which ends with it. */
+  thinking?: {
+    tokens: number;
+    /** Where the reasoning goes: `reasoning` as Ollama puts it, `reasoning_content` as vLLM does, or nowhere. */
+    field?: "reasoning" | "reasoning_content" | "none";
+    /** Leave `content` empty, giving the marker only at the end of the reasoning. */
+    noContent?: boolean;
+  };
 }
 
 export async function standInModelServer(options: StandInModelOptions = {}): Promise<StandInModelServer> {
@@ -54,14 +63,43 @@ export async function standInModelServer(options: StandInModelOptions = {}): Pro
       return json(200, { object: "list", data: [{ id: "qwen3.5:9b", object: "model" }] });
     }
     if (request.method === "POST" && request.url === "/v1/chat/completions") {
-      const chat = body as { model?: string; messages?: { content?: string }[]; tools?: { function: { name: string } }[] };
-      const reply = (message: Record<string, unknown>, promptTokens: number) =>
-        json(200, {
+      const chat = body as {
+        model?: string;
+        max_tokens?: number;
+        messages?: { content?: string }[];
+        tools?: { function: { name: string } }[];
+      };
+      const reply = (message: Record<string, unknown>, promptTokens: number) => {
+        const thinking = options.thinking;
+        if (!thinking) {
+          return json(200, {
+            object: "chat.completion",
+            model: chat.model,
+            choices: [{ index: 0, message: { role: "assistant", ...message }, finish_reason: message.tool_calls ? "tool_calls" : "stop" }],
+            usage: { prompt_tokens: promptTokens, completion_tokens: 5 },
+          });
+        }
+        // The reasoning comes first; the answer's own words, a marker the model kept among them, at its end.
+        const answerText = String(message.content ?? "");
+        const reasoning = [...Array.from({ length: thinking.tokens }, () => "hmm"), ...answerText.split(/\s+/).filter(Boolean)];
+        const budget = chat.max_tokens ?? Infinity;
+        const cut = reasoning.length > budget;
+        const field = thinking.field ?? "reasoning";
+        const shown = (cut ? reasoning.slice(0, budget) : reasoning).join(" ");
+        const answered = cut ? { content: "" } : thinking.noContent ? { ...message, content: "" } : message;
+        return json(200, {
           object: "chat.completion",
           model: chat.model,
-          choices: [{ index: 0, message: { role: "assistant", ...message }, finish_reason: message.tool_calls ? "tool_calls" : "stop" }],
-          usage: { prompt_tokens: promptTokens, completion_tokens: 5 },
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", ...answered, ...(field === "none" ? {} : { [field]: shown }) },
+              finish_reason: cut ? "length" : answered.tool_calls ? "tool_calls" : "stop",
+            },
+          ],
+          usage: { prompt_tokens: promptTokens, completion_tokens: cut ? budget : reasoning.length + 5 },
         });
+      };
       if (chat.tools?.length) {
         if (options.tools === "refuse") return reply({ content: "It is noon in UTC." }, 20);
         const tool = chat.tools[0]!.function.name;
