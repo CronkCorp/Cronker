@@ -29,7 +29,7 @@ import { useArrivals, useLatest, useLiveEvents } from "./live.js";
 import { keys } from "./live-queries.js";
 import { keyBelongsElsewhere } from "./keys.js";
 import { Link, navigate, useFragmentTarget } from "./router.js";
-import { keepGroupSubTickets, storedGroupSubTickets } from "./storage.js";
+import { keepGroupSubTickets, keepTicketsView, storedGroupSubTickets } from "./storage.js";
 import { matchesText } from "./ticket-text.js";
 import { ProjectArtifacts } from "./artifacts.js";
 import { ProjectReleases } from "./releases.js";
@@ -248,6 +248,10 @@ export function ProjectScreen({
   const [group, setGroup] = useState(storedGroupSubTickets);
   const areas = { documents: "documents", glossary: "terms", decisions: "decisions", artifacts: "artifacts" } as const;
   usePlace(view in areas ? areas[view as keyof typeof areas] : "project", projectId);
+  // The board or the List, once shown, is what the links to a Project's Tickets open next, on this browser.
+  useEffect(() => {
+    if (view === "board" || view === "list") keepTicketsView(view);
+  }, [view]);
 
   const projectQuery = useQuery({ queryKey: keys.project(projectId), queryFn: () => api.project(projectId) });
   // A Project of another of the User's Workspaces isn't shown under this one's name.
@@ -305,7 +309,7 @@ export function ProjectScreen({
     return (
       <div className="page page-settings">
         <PageHead
-          crumbs={[home, { label: <span className="mono">{project.key}</span>, to: base }]}
+          crumbs={[home, { label: <span className="mono">{project.key}</span>, to: to.tickets(project) }]}
           title="Project settings"
           actions={<ProjectMenu project={project} workspace={workspace} onChange={setProject} />}
         />
@@ -1838,6 +1842,6 @@ function KindSelect(props: ComponentProps<"select">) {
 export function knowledgeCrumbs(workspace: Workspace, project: ProjectSummary | null, page: ReactNode) {
   const home = workspaceCrumb(workspace);
   return project
-    ? [home, { label: <span className="mono">{project.key}</span>, to: addresses.project(workspace, project.key) }, { label: page }]
+    ? [home, { label: <span className="mono">{project.key}</span>, to: addresses.tickets(workspace, project.key) }, { label: page }]
     : [home, { label: page }];
 }

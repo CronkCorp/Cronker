@@ -193,7 +193,7 @@ export function ArtifactScreen({
   const list = to.place(artifact.projectId ? { kind: "project", id: artifact.projectId } : { kind: "workspace", id: artifact.workspaceId }, "artifacts");
   const crumbs = [
     workspaceCrumb(workspace),
-    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.project(project) }] : []),
+    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.tickets(project) }] : []),
     { label: "Artifacts", to: list },
   ];
   return (

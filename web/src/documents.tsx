@@ -302,7 +302,7 @@ export function DocumentScreen({
   const home = document.ticketId ? (ticket ? to.ticket(ticket) : `/tickets/${document.ticketId}`) : to.place(listedIn, "documents");
   const crumbs = [
     workspaceCrumb(workspace),
-    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.project(project) }] : []),
+    ...(project ? [{ label: <span className="mono">{project.key}</span>, to: to.tickets(project) }] : []),
     document.ticketId
       ? { label: <span className="mono">{ticket?.key ?? "Its Ticket"}</span>, to: home }
       : { label: "Documents", to: home },

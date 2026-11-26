@@ -129,11 +129,11 @@ export function landingProject(workspaceId: string, projects: ProjectSummary[]):
   );
 }
 
-/** Where opening a Workspace leads: its active Project's board, or its Projects overview when it has no Project. */
+/** Where opening a Workspace leads: its active Project's Tickets, in the remembered view, or its Projects overview when it has no Project. */
 export async function workspaceLanding(workspace: WorkspaceSummary): Promise<string> {
   const projects = await api.projects(workspace.id).catch((): ProjectSummary[] => []);
   const project = landingProject(workspace.id, projects);
-  return project ? addresses.project(workspace, project.key) : addresses.workspace(workspace);
+  return project ? addresses.tickets(workspace, project.key) : addresses.workspace(workspace);
 }
 
 /** Below this width the sidebar is a strip with a menu, which neither hides nor shows; as in `frame.css`. */
@@ -245,7 +245,7 @@ function Sidebar({
             <InboxLink key={current.id} workspaceId={current.id} current={area === "inbox"} />
             {activeProject && (
               // The board, the List, a Ticket and Project settings are all the Project's Tickets' pages.
-              <SideLink to={to.project(activeProject)} current={area === "project"}>
+              <SideLink to={to.tickets(activeProject)} current={area === "project"}>
                 Tickets
               </SideLink>
             )}
@@ -360,7 +360,7 @@ function WorkspaceProjectSwitcher({
   const archived = own.filter((p) => p.archivedAt !== null);
   const openBoard = (id: string) => {
     const project = own.find((p) => p.id === id);
-    if (current && project) navigate(addresses.project(current, project.key));
+    if (current && project) navigate(addresses.tickets(current, project.key));
   };
   const projectItem = (p: ProjectSummary) => (
     <MenuRadioItem key={p.id} value={p.id}>

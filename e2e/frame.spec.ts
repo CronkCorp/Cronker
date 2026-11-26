@@ -142,3 +142,38 @@ test("the active Project is remembered across a Workspace page, and `/` opens it
   await expect(page.getByRole("heading", { name: "Website", level: 1 })).toBeVisible();
   await expect(page).toHaveURL(/\/projects\/WEB$/);
 });
+
+test("the List or board last shown is what the links to a Project's Tickets open, across a reload", async ({ page, cronk }) => {
+  const { workspace } = await setUp(cronk);
+  const cookie = await signIn(cronk);
+  await cronk.request("POST", `/api/workspaces/${workspace.id}/projects`, { cookie, body: { name: "Cronker", key: "CRONK" } });
+
+  await page.goto(cronk.url);
+  await page.getByLabel("Email").fill("ada@example.com");
+  await page.getByLabel("Password").fill("correct horse battery");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const sidebar = page.getByRole("navigation", { name: "Sidebar" });
+  const views = page.getByRole("navigation", { name: "Project views" });
+  await expect(page.getByRole("heading", { name: "Cronker", level: 1 })).toBeVisible();
+  await expect(page).toHaveURL(/\/projects\/CRONK$/);
+
+  await views.getByRole("link", { name: "List" }).click();
+  await expect(page).toHaveURL(/\/projects\/CRONK\/list$/);
+
+  // The sidebar's Tickets link follows at once, from another page.
+  await sidebar.getByRole("link", { name: /^Inbox/ }).click();
+  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
+  await sidebar.getByRole("link", { name: "Tickets" }).click();
+  await expect(page).toHaveURL(/\/projects\/CRONK\/list$/);
+
+  // `/` opens the List after a new visit.
+  await page.goto(cronk.url);
+  await expect(page).toHaveURL(/\/projects\/CRONK\/list$/);
+
+  // Back on the board, the board is what opens.
+  await views.getByRole("link", { name: "Board" }).click();
+  await expect(page).toHaveURL(/\/projects\/CRONK$/);
+  await page.goto(cronk.url);
+  await expect(page.getByRole("heading", { name: "Cronker", level: 1 })).toBeVisible();
+  await expect(page).toHaveURL(/\/projects\/CRONK$/);
+});

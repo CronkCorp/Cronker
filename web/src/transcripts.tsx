@@ -136,7 +136,7 @@ export function TranscriptScreen({ workspace, transcriptId }: { workspace: Works
   const run = ofRun?.run;
   if (ofRun) {
     crumbs.push(
-      { label: <span className="mono">{ofRun.project.key}</span>, to: to.project(ofRun.project) },
+      { label: <span className="mono">{ofRun.project.key}</span>, to: to.tickets(ofRun.project) },
       { label: <span className="mono">{ofRun.ticket.key}</span>, to: to.ticket(ofRun.ticket) },
     );
   } else {

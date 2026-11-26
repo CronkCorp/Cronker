@@ -94,3 +94,27 @@ export function storedActiveProject(workspaceId: string): string | null {
 export function keepActiveProject(workspaceId: string, projectId: string): void {
   safely(() => localStorage.setItem(activeProjectKey(workspaceId), projectId));
 }
+
+/** How a Project's Tickets are shown: as the board, or as the List. */
+export type TicketsView = "board" | "list";
+
+const ticketsViewKey = "cronk_tickets_view";
+const ticketsViewListeners = new Set<() => void>();
+
+/** The Tickets view last chosen on this browser; the board when none was, or storage can't be read. */
+export function storedTicketsView(): TicketsView {
+  return safely(() => localStorage.getItem(ticketsViewKey)) === "list" ? "list" : "board";
+}
+
+/** Keeps the Tickets view on this browser, for every Project, so the links to a Project's Tickets open it. */
+export function keepTicketsView(view: TicketsView): void {
+  if (view === storedTicketsView()) return;
+  safely(() => (view === "list" ? localStorage.setItem(ticketsViewKey, "list") : localStorage.removeItem(ticketsViewKey)));
+  for (const listener of ticketsViewListeners) listener();
+}
+
+/** Calls `listener` whenever this page keeps a new Tickets view; returns what stops it. */
+export function onTicketsView(listener: () => void): () => void {
+  ticketsViewListeners.add(listener);
+  return () => ticketsViewListeners.delete(listener);
+}
