@@ -300,9 +300,7 @@ export function TicketScreen({
               {ticket.description ? (
                 <Markdown text={ticket.description} mentions={ticket.mentions} />
               ) : (
-                <p className="muted">
-                  {canWrite ? `No description. Edit adds one; Markdown and Ticket keys such as ${project.key}-1 work.` : "No description."}
-                </p>
+                <p className="muted">No description.</p>
               )}
             </section>
           )}
