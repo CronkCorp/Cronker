@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { LiveEvent, RunnerEvent } from "../../server/live/live.js";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "./api.js";
-import { invalidations } from "./live-queries.js";
+import { coalescedInvalidation, invalidations } from "./live-queries.js";
 
 /**
  * Live updates: one server-sent event stream per Workspace, and one for the User's own Runners, each shared by
@@ -182,15 +182,21 @@ export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, refetchOnReconnect: false } },
 });
 
+/** How long the keys events make stale are gathered before the queries refetch, so a burst refetches each once. */
+const invalidationWaitMs = 150;
+
 /**
  * Makes stale what each event of the Workspace's stream changed (`invalidations`, the Live invalidation table), so
- * every query shown refetches. Called once, for the Workspace shown.
+ * every query shown refetches, gathering the keys of events close together so each query refetches once. Called once,
+ * for the Workspace shown.
  */
 export function useLiveInvalidation(workspaceId: string): void {
   const client = useQueryClient();
-  useLiveEvents(workspaceId, (event) => {
-    for (const queryKey of invalidations(event)) void client.invalidateQueries({ queryKey });
-  });
+  const [batch] = useState(() =>
+    coalescedInvalidation((queryKey) => void client.invalidateQueries({ queryKey }), invalidationWaitMs),
+  );
+  useEffect(() => () => batch.cancel(), [batch]);
+  useLiveEvents(workspaceId, (event) => batch.add(invalidations(event)));
 }
 
 /** Calls `onEvent` with each event of the User's own Runners' stream while the component is shown. */
