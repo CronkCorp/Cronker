@@ -173,7 +173,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
     {
       title: "Read a Ticket",
       description:
-        "A Ticket of your Workspace with its fields (`backport` saying, while it waits in Merge for its change to reach its Release's release branch, whether a Run is backporting it or the backport was opened), the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
+        "A Ticket of your Workspace with its fields (`archived` saying whether a User archived it; `backport` saying, while it waits in Merge for its change to reach its Release's release branch, whether a Run is backporting it or the backport was opened), the Ticket and Decision keys and Term names its description mentions and, as `mentionedIn`, " +
         "the texts mentioning it (other Tickets, Comments, Documents, Reports, Terms and Decisions you can read); " +
         "as `knowledge`, the Terms (with their definitions and words to avoid) and Decisions (key, title and status; " +
         "read one with `read_decision` for its reasoning) its description and Comments mention, each once; " +
@@ -233,15 +233,20 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           .min(1)
           .optional()
           .describe("Only these kinds. All when left out."),
+        includeArchived: z
+          .boolean()
+          .optional()
+          .describe("Finds archived Tickets too, each marked `archived`. Left out by default."),
       },
       annotations: { readOnlyHint: true },
     },
-    ({ query, project, kinds }) =>
+    ({ query, project, kinds, includeArchived }) =>
       answer(async () => {
         const { id } = await ownWorkspace();
         const params = new URLSearchParams({ q: query });
         if (project) params.set("project", (await projectByKey(project, ", or leave the Project out")).id);
         if (kinds) params.set("kinds", kinds.join(","));
+        if (includeArchived) params.set("includeArchived", "true");
         return get(`/api/workspaces/${id}/search?${params}`);
       }),
   );
@@ -251,7 +256,8 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
     {
       title: "List Tickets",
       description:
-        "Tickets of your Workspace, by Project in board order, narrowed by whichever filters are given. " +
+        "Tickets of your Workspace, by Project in board order, narrowed by whichever filters are given, each saying " +
+        "whether it is `archived`; archived Tickets are left out unless `archived` asks for them. " +
         "Read one with `read_ticket` for its description and Comments.",
       inputSchema: {
         project: z.string().optional().describe("A Project's key, such as `ABC`. All Projects when left out."),
@@ -262,6 +268,10 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           .string()
           .optional()
           .describe("A Release's name, such as `v0.3.0`, ignoring case, or `none` for Tickets without one."),
+        archived: z
+          .enum(["exclude", "include", "only"])
+          .optional()
+          .describe("`exclude` leaves archived Tickets out, as when left out; `include` lists them too; `only` lists them alone."),
       },
       annotations: { readOnlyHint: true },
     },
@@ -290,10 +300,11 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           if (filter.priority) query.set("priority", filter.priority);
           if (filter.label) query.set("label", filter.label);
           if (filter.release) query.set("release", filter.release);
+          if (filter.archived) query.set("archived", filter.archived);
           const found = await get<TicketSummary[]>(`/api/projects/${project.id}/tickets?${query}`);
           const statusName = new Map(project.statuses.map((s) => [s.id, s.name]));
           tickets.push(
-            ...found.map(({ id, key, title, statusId, priority, labels, release, assigneeId, dueDate, estimate }) => ({
+            ...found.map(({ id, key, title, statusId, priority, labels, release, assigneeId, dueDate, estimate, archived }) => ({
               id,
               key,
               title,
@@ -304,6 +315,7 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
               assigneeId,
               dueDate,
               estimate,
+              archived,
             })),
           );
         }
@@ -1535,6 +1547,30 @@ export function buildMcpServer(api: Api, level: TokenAccess): McpServer {
           return send("POST", `/api/tickets/${found.id}/dismiss`);
         }),
     );
+
+    for (const archive of [true, false]) {
+      server.registerTool(
+        archive ? "archive_ticket" : "unarchive_ticket",
+        {
+          title: archive ? "Archive a Ticket" : "Unarchive a Ticket",
+          description: archive
+            ? "With a Full token: archives a Ticket in a Done or Canceled Status, as your Owner would: it leaves the " +
+              "board, the Ticket lists and search unless they ask for archived Tickets, and stays readable by its key, " +
+              "its Status, Assignee, Delegation, Relations and Runs unchanged. The Change names you with no Run. Refused " +
+              "for a Ticket in any other Status (`ticket_not_archivable`), an Unverified one (`ticket_unverified`) and " +
+              "one already archived (`ticket_already_archived`)."
+            : "With a Full token: returns an archived Ticket to the board and the Ticket lists, in the Status it was " +
+              "archived in, as your Owner would. The Change names you with no Run. Refused for a Ticket that isn't " +
+              "archived (`ticket_not_archived`).",
+          inputSchema: { ticket: ticketArgument },
+        },
+        ({ ticket }) =>
+          answer(async () => {
+            const found = await ticketByKeyOrId(ticket);
+            return send("POST", `/api/tickets/${found.id}/${archive ? "archive" : "unarchive"}`);
+          }),
+      );
+    }
 
     server.registerTool(
       "add_relation",

@@ -150,6 +150,8 @@ describe("MCP with an Agent token", () => {
       "delete_term",
       "delete_artifact",
       "dismiss_ticket",
+      "archive_ticket",
+      "unarchive_ticket",
       "add_relation",
       "remove_relation",
     ];
@@ -235,6 +237,25 @@ describe("MCP with an Agent token", () => {
     expect(removed).toMatchObject({ isError: false, json: { removed: related.json.id } });
     const relations = await (await cronk.request("GET", `/api/tickets/${ticket.id}/relations`, { cookie })).json();
     expect(JSON.stringify(relations)).not.toContain(related.json.id);
+  });
+
+  test("a Full token archives and unarchives a Ticket, which read_ticket, list_tickets and search mark archived", async () => {
+    const { cookie, agent, ticket } = await workspaceWithTicket("write");
+    const full = await post(cookie, `/api/agents/${agent.id}/tokens`, { name: "full", access: "full" });
+    const client = await connect(full.secret);
+    await call(client, "move_ticket", { ticket: "CRONK-1", status: "Done" });
+
+    expect(await call(client, "archive_ticket", { ticket: "CRONK-1" })).toMatchObject({ isError: false, json: { archived: true } });
+
+    expect((await call(client, "read_ticket", { ticket: "CRONK-1" })).json.ticket).toMatchObject({ id: ticket.id, archived: true });
+    const keys = async (args: Record<string, unknown>) =>
+      (await call(client, "list_tickets", { project: "CRONK", ...args })).json.map((t: { key: string; archived: boolean }) => [t.key, t.archived]);
+    expect(await keys({})).toEqual([["CRONK-2", false]]);
+    expect(await keys({ archived: "only" })).toEqual([["CRONK-1", true]]);
+    const found = await call(client, "search", { query: "read", kinds: ["ticket"], includeArchived: true });
+    expect(found.json.map((r: { ticketKey: string; archived: boolean }) => [r.ticketKey, r.archived])).toContainEqual(["CRONK-1", true]);
+
+    expect(await call(client, "unarchive_ticket", { ticket: "CRONK-1" })).toMatchObject({ isError: false, json: { archived: false } });
   });
 
   test("an Agent reads a Ticket by key with its Comments and Relations", async () => {

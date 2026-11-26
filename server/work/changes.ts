@@ -21,6 +21,7 @@ export const ChangedBy = ActorOrCronk;
  * requested changes or a merge conflict on a Pull Request, before the `status` Change moving it. `transcriptDeleted` marks a User deleting
  * the Transcript of one of the Ticket's Runs, or of a session outside a Run that named the Ticket. `runStopped` marks
  * Cronk stopping the Ticket's running Run when nothing else about the Ticket changed, as when its Project is archived.
+ * `archived` and `unarchived` mark a User, or an Agent with a Full token, archiving the Ticket and unarchiving it.
  * `release` shows the Ticket tagged with a Release (from null), untagged (to null) or moved between two, each as
  * `{ id, name }` named then.
  */
@@ -53,6 +54,8 @@ export const changeFields = [
   "sentBack",
   "transcriptDeleted",
   "runStopped",
+  "archived",
+  "unarchived",
 ] as const;
 export type ChangeField = (typeof changeFields)[number];
 

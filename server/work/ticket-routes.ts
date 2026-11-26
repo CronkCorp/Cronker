@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { Context } from "../context.js";
 import { authenticateAgent } from "../agents/tokens.js";
 import { ApiError, ErrorBody } from "../http/errors.js";
+import { literals } from "../literals.js";
 import { requireUser } from "../identity/sign-ins.js";
 import { requireCaller } from "../identity/callers.js";
 import { requireHuman, requireOwnerAct, requireOwnerCaller } from "../identity/acts.js";
@@ -17,6 +18,8 @@ import { placeOfComment, placeOfTicket } from "../knowledge/places.js";
 import { acceptTicket, Completion, completionOf, ReopenPreview, reopenPreview, reopenTicket, TicketReopen } from "./verification.js";
 import { addRelation, Relation, RelationCreate, relationsOf, removeRelation, TicketRelations } from "./relations.js";
 import {
+  archivedFilters,
+  archiveTicket,
   createTicket,
   dismissTicket,
   editTicket,
@@ -82,6 +85,11 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
             label: Type.Optional(Type.String({ description: "Matched ignoring case." })),
             release: Type.Optional(
               Type.String({ description: "A Release's name, matched ignoring case, or `none` for Tickets without one." }),
+            ),
+            archived: Type.Optional(
+              literals(archivedFilters, {
+                description: "`exclude` leaves archived Tickets out, as by default; `include` lists them too; `only` lists them alone.",
+              }),
             ),
           }),
           response: { 200: TicketList, 401: ErrorBody, 404: ErrorBody },
@@ -192,6 +200,41 @@ export function ticketRoutes(context: Context): FastifyPluginAsyncTypebox {
         return dismissTicket(context, agent ?? (await requireCaller(context, request)), request.params.ticketId);
       },
     );
+
+    for (const archive of [true, false]) {
+      app.post(
+        `/api/tickets/:ticketId/${archive ? "archive" : "unarchive"}`,
+        {
+          schema: {
+            tags: ["Tickets"],
+            summary: archive ? "Archive a Ticket" : "Unarchive a Ticket",
+            description: archive
+              ? "Archives a Ticket in a Done or Canceled Status: it leaves the board, the Ticket lists and search unless " +
+                "they ask for archived Tickets, and stays readable by its key with everything it holds. Its Status, " +
+                "Assignee, Delegation, Relations and Runs don't change. Needs Write; refused for a Ticket in any other " +
+                "Status (`ticket_not_archivable`), an Unverified one (`ticket_unverified`) and one already archived " +
+                "(`ticket_already_archived`). While archived it isn't moved or tagged with a Release (`ticket_archived`). " +
+                "An Agent with a Full token archives as its Owner would; any other Agent gets `full_token_needed`."
+              : "Returns an archived Ticket to the board and the Ticket lists, in the Status it was archived in, with " +
+                "nothing else changed. Needs Write; refused for a Ticket that isn't archived (`ticket_not_archived`). " +
+                "An Agent with a Full token unarchives as its Owner would; any other Agent gets `full_token_needed`.",
+            params: Type.Object({ ticketId: Type.String() }),
+            response: { 200: Ticket, 401: ErrorBody, 403: ErrorBody, 404: ErrorBody, 409: ErrorBody },
+          },
+        },
+        async (request) => {
+          const agent = await authenticateAgent(context, request);
+          if (agent) {
+            requireOwnerAct(agent, {
+              act: archive ? "archiving a Ticket" : "unarchiving a Ticket",
+              rule: "Archiving a Ticket is its Users' act, like moving it to Done or Canceled.",
+            });
+          }
+          const caller = agent ?? (await requireCaller(context, request));
+          return archiveTicket(context, caller, request.params.ticketId, archive);
+        },
+      );
+    }
 
     app.post(
       "/api/tickets/:ticketId/merge",

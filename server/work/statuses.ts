@@ -198,21 +198,24 @@ async function checkOutcomeTargets(tx: Tx, project: Project, board: Draft[]): Pr
 /** A Status holding Tickets can't go: they'd be left without a Status. */
 async function checkNoTicketsIn(tx: Tx, project: Project, board: Draft[]): Promise<void> {
   const kept = board.flatMap((s) => (s.id ? [s.id] : []));
-  const { rows: occupied } = await tx.query<{ name: string; ticketCount: number }>(
-    `select statuses.name, count(*)::int as "ticketCount"
+  // Archived Tickets hold their Status too, though off the board: they are counted, and named as archived.
+  const { rows: occupied } = await tx.query<{ name: string; ticketCount: number; archivedCount: number }>(
+    `select statuses.name, count(*)::int as "ticketCount",
+       count(*) filter (where tickets.archived_at is not null)::int as "archivedCount"
      from statuses join tickets on tickets.status_id = statuses.id
      where statuses.project_id = $1 and not (statuses.id = any($2::uuid[]))
      group by statuses.id, statuses.name`,
     [project.id, kept],
   );
   if (occupied[0]) {
-    const { name, ticketCount } = occupied[0];
+    const { name, ticketCount, archivedCount } = occupied[0];
+    const held =
+      ticketCount === 1 ? `${name} holds 1 Ticket${archivedCount ? ", archived" : ""}.` : `${name} holds ${ticketCount} Tickets${archivedCount ? `, ${archivedCount} of them archived` : ""}.`;
+    const unarchive = archivedCount === 0 ? "" : ticketCount === 1 ? "Unarchive it and m" : archivedCount === 1 ? "Unarchive the archived one and m" : "Unarchive the archived ones and m";
     throw new ApiError(
       409,
       "status_has_tickets",
-      ticketCount === 1
-        ? `${name} holds 1 Ticket. Move it to another Status before removing ${name}.`
-        : `${name} holds ${ticketCount} Tickets. Move them to another Status before removing ${name}.`,
+      `${held} ${unarchive || "M"}ove ${ticketCount === 1 ? "it" : "them"} to another Status before removing ${name}.`,
     );
   }
 }

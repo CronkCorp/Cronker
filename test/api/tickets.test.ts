@@ -79,6 +79,7 @@ describe("creating a Ticket", () => {
       backport: null,
       queue: null,
       blockedByHidden: 0,
+      archived: false,
       mentions: [],
       mentionedIn: [],
       knowledge: { terms: [], decisions: [] },

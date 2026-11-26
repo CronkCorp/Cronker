@@ -222,6 +222,11 @@ export const TicketSummary = Type.Object({
       "How many more unfinished Tickets block this one that the caller can't read, such as those of a private " +
       "Project: counted, so the Ticket shows as blocked, but never named.",
   }),
+  archived: Type.Boolean({
+    description:
+      "Whether a User archived the Ticket, in its Done or Canceled Status: it is left off the board, the Ticket lists " +
+      "and search unless they ask for archived Tickets, and stays readable by its key.",
+  }),
 });
 export type TicketSummary = Static<typeof TicketSummary>;
 
@@ -318,7 +323,8 @@ const ticketColumnsSql = (reach: Reach) => `tickets.id, tickets.project_id as "p
       join projects source_projects on source_projects.id = sources.project_id
       where sources.id = tickets.discovered_from_ticket_id and ${reach("sources")}),
     'runId', tickets.discovered_in_run_id,
-    'waiting', tickets.discovery_waits) end as discovered`;
+    'waiting', tickets.discovery_waits) end as discovered,
+  tickets.archived_at is not null as archived`;
 
 /**
  * SQL for the Ticket `alias`'s first entry in the Merge Queue, one Cronk is acting on or that stepped aside if any,
@@ -711,7 +717,12 @@ export interface TicketFilter {
   label?: string;
   /** A Release's name, ignoring case, or `none` for Tickets without one. */
   release?: string;
+  /** Whether archived Tickets are left out (the default), listed with the rest or listed alone. */
+  archived?: ArchivedFilter;
 }
+
+export const archivedFilters = ["exclude", "include", "only"] as const;
+export type ArchivedFilter = (typeof archivedFilters)[number];
 
 export async function listTickets(
   db: Db,
@@ -727,7 +738,9 @@ export async function listTickets(
     params.push(value);
     where.push(condition(`$${params.length}`));
   };
-  const { statusId, assigneeId, priority, label, release } = filter;
+  const { statusId, assigneeId, priority, label, release, archived = "exclude" } = filter;
+  if (archived === "exclude") where.push("tickets.archived_at is null");
+  else if (archived === "only") where.push("tickets.archived_at is not null");
   // An id that can't be a record's id matches nothing, like one of another Project.
   const unknownStatus = statusId !== undefined && !isUuid(statusId);
   const unknownAssignee = assigneeId !== undefined && assigneeId !== "none" && !isUuid(assigneeId);
@@ -879,6 +892,7 @@ export async function editTicketIn(
     if (edit.description !== undefined) next.description = edit.description;
     if (edit.statusId !== undefined) {
       await checkStatus(tx, ticket.projectId, edit.statusId);
+      if (edit.statusId !== ticket.statusId && ticket.archived) throw ticketArchived(ticket.key, "moved");
       if (edit.statusId !== ticket.statusId && ticket.verification === "unverified") {
         throw new ApiError(
           409,
@@ -962,6 +976,10 @@ export async function editTicketIn(
       edit.release === undefined
         ? undefined
         : await releaseToTag(tx, ticket.projectId, edit.release, ticket.release?.id ?? null, { completed });
+    // Tagging could send a completed Ticket on to be backported, out of the Status it is archived in.
+    if (ticket.archived && releaseId !== undefined && releaseId !== (ticket.release?.id ?? null)) {
+      throw ticketArchived(ticket.key, "tagged with a Release");
+    }
     const backport =
       releaseId && releaseId !== ticket.release?.id && completed && next.statusId === ticket.statusId
         ? await backportOnTagging(context, tx, ticket, releaseId)
@@ -1217,6 +1235,62 @@ export async function dismissTicket(context: Context, caller: Caller, ticketId: 
     });
     await settleDiscoveredSubTickets(context, tx, ticket, actor, now);
     return fullTicket(tx, caller, { ...ticket, discovered: { ...ticket.discovered, waiting: false } });
+  });
+}
+
+/** Refusal for changing an archived Ticket in a way that would take it out of the Status it is archived in. */
+function ticketArchived(key: string, act: string): ApiError {
+  return new ApiError(409, "ticket_archived", `${key} is archived, so it isn't ${act}.`, {
+    rule: "An archived Ticket stays in the Done or Canceled Status it was archived in until a User unarchives it.",
+    advice: `Unarchive ${key} first.`,
+  });
+}
+
+/**
+ * A User, or an Agent with a Full token as its Owner's act, archives a Ticket in a Done or Canceled Status: it leaves
+ * the board, the Ticket lists and search, keeping its Status, Assignee, Delegation, Relations and Runs. Refused for a
+ * Ticket in any other Status, an Unverified one and one already archived. Unarchiving returns it as it was.
+ */
+export async function archiveTicket(context: Context, caller: Caller, ticketId: string, archive: boolean): Promise<Ticket> {
+  const { db, clock } = context;
+  return transaction(db, async (tx) => {
+    const ticket = await findTicketRow(tx, caller, ticketId, { lock: true });
+    if (!ticket) throw ticketNotFound();
+    await requireWrite(tx, caller, ticket);
+    if (archive && ticket.archived) {
+      throw new ApiError(409, "ticket_already_archived", `${ticket.key} is already archived.`);
+    }
+    if (!archive && !ticket.archived) {
+      throw new ApiError(409, "ticket_not_archived", `${ticket.key} isn't archived.`);
+    }
+    if (archive) {
+      const status = (await statusesOf(tx, ticket.projectId)).find((s) => s.id === ticket.statusId)!;
+      if (status.kind !== "done" && status.kind !== "canceled") {
+        throw new ApiError(409, "ticket_not_archivable", `${ticket.key} is in ${status.name}, so it isn't archived.`, {
+          rule: "Only a Ticket in a Done or Canceled Status is archived.",
+          advice: `Finish or cancel ${ticket.key} first.`,
+        });
+      }
+      if (ticket.verification === "unverified") {
+        throw new ApiError(409, "ticket_unverified", `${ticket.key} was completed by a Run and is Unverified, so it isn't archived yet.`, {
+          rule: "A Ticket a Run completed is archived once a User Accepts it.",
+          advice: "Accept it, or Reopen it with a Comment saying why.",
+        });
+      }
+    }
+    const actor: ChangeActor = caller.kind === "user" ? caller.id : { kind: "agent", id: caller.id, runId: null };
+    const now = clock.now();
+    await tx.query(
+      "update tickets set archived_at = $2, archived_by = $3, archived_by_agent = $4 where id = $1",
+      archive
+        ? [ticket.id, now, caller.kind === "user" ? caller.id : null, caller.kind === "agent" ? caller.id : null]
+        : [ticket.id, null, null, null],
+    );
+    await writeTicket(context, tx, ticket, actor, {}, {
+      at: now,
+      changes: [{ field: archive ? "archived" : "unarchived", from: null, to: null }],
+    });
+    return fullTicket(tx, caller, { ...ticket, archived: archive });
   });
 }
 

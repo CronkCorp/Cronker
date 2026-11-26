@@ -160,7 +160,8 @@ const releasesSql = (where: string) => `
         'title', tickets.title, 'statusId', tickets.status_id, 'done', statuses.kind = 'done')
       order by tickets.number) filter (where tickets.id is not null), '[]'::json) as tickets
   from releases join projects on projects.id = releases.project_id
-  left join tickets on tickets.release_id = releases.id
+  -- An archived Ticket is left out of its Release's counts and Tickets, as off the board; its release notes keep it.
+  left join tickets on tickets.release_id = releases.id and tickets.archived_at is null
   left join statuses on statuses.id = tickets.status_id
   where ${where}
   group by releases.id, projects.key`;
